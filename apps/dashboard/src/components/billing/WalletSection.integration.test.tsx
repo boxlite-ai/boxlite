@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     details: Record<string, unknown>
   }>,
   redeemCoupon: vi.fn(),
+  emailVerified: true,
   setAutomaticTopUp: vi.fn(),
   topUpWallet: vi.fn(),
   invoicesQuery: vi.fn(),
@@ -51,11 +52,11 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
-  useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-without-card' } }),
+  useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-without-card', name: 'Acme Labs' } }),
 }))
 
 vi.mock('react-oidc-context', () => ({
-  useAuth: () => ({ user: { profile: { email_verified: true } } }),
+  useAuth: () => ({ user: { profile: { email_verified: mocks.emailVerified } } }),
 }))
 
 vi.mock('@/hooks/queries/billingQueries', () => ({
@@ -179,6 +180,8 @@ describe('WalletSection top-up checkout', () => {
     mocks.historiesPending = false
     mocks.walletPending = false
     mocks.topUpPending = false
+    mocks.emailVerified = true
+    mocks.redeemCoupon.mockReset()
   })
 
   afterEach(() => {
@@ -656,5 +659,65 @@ describe('WalletSection top-up checkout', () => {
     expect(topUpButton?.disabled).toBe(true)
     expect(topUpButton?.querySelector('[role="status"]')).not.toBeNull()
     expect(discountRibbon?.parentElement?.previousElementSibling).toBe(topUpButton)
+  })
+
+  async function renderCouponLink(linkCouponCode?: string, onCouponRedeemed = vi.fn()) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection linkCouponCode={linkCouponCode} onCouponRedeemed={onCouponRedeemed} />)
+    })
+    await flush()
+    const input = host.querySelector<HTMLInputElement>('input[placeholder="Enter coupon code"]')
+    const redeem = [...host.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Redeem',
+    )
+    return { host, input, redeem, onCouponRedeemed }
+  }
+
+  it('opens the coupon form filled in from a coupon link and redeems it for the named organization', async () => {
+    mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')
+
+    const { host, input, redeem, onCouponRedeemed } = await renderCouponLink('ACME50')
+
+    expect(input?.value).toBe('ACME50')
+    expect(host.textContent).toContain('Credits go to Acme Labs')
+    await act(async () => redeem!.click())
+    await flush()
+    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
+    expect(mocks.redeemCoupon).toHaveBeenCalledWith({ organizationId: 'org-without-card', couponCode: 'ACME50' })
+    expect(onCouponRedeemed).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('Coupon redeemed')
+  })
+
+  it('keeps the coupon form folded without a coupon link code', async () => {
+    const { host, input } = await renderCouponLink()
+
+    expect(input).toBeNull()
+    expect(host.textContent).toContain('Have a coupon code?')
+  })
+
+  it('shows a rejected coupon link code and keeps it for another try', async () => {
+    mocks.redeemCoupon.mockRejectedValue(new Error('Coupon not found'))
+
+    const { host, input, redeem, onCouponRedeemed } = await renderCouponLink('NOPE')
+
+    await act(async () => redeem!.click())
+    await flush()
+    expect(host.textContent).toContain('Coupon not found')
+    expect(onCouponRedeemed).not.toHaveBeenCalled()
+    expect(input?.value).toBe('NOPE')
+  })
+
+  it('asks to verify the email before redeeming a coupon link code', async () => {
+    mocks.emailVerified = false
+
+    const { host, input, redeem } = await renderCouponLink('ACME50')
+
+    expect(host.textContent).toContain('Verify your email to redeem coupon code ACME50')
+    expect(input).toBeNull()
+    expect(redeem).toBeUndefined()
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
   })
 })

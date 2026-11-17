@@ -24,6 +24,7 @@ import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
 import Boxes from './pages/Boxes'
+import Redeem from './pages/Redeem'
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
 import { BoxSessionProvider } from './providers/BoxSessionProvider'
@@ -137,6 +138,7 @@ function App() {
         }
       />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
+      <Route path={RoutePath.REDEEM} element={<Redeem />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
       <Route

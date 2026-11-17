@@ -253,13 +253,18 @@ function Count({ value }: { value?: number }) {
  * Main wallet section component displaying balance, payment methods, billing history, and credit activity.
  * Manages state for top-ups, auto-reload settings, and coupon redemption.
  *
+ * @param linkCouponCode - A code from a coupon link (`/redeem?code=`); it opens the coupon form filled in.
+ * @param onCouponRedeemed - Called after any coupon redeems successfully.
  * @returns The complete wallet section component
  */
-export function WalletSection() {
+export function WalletSection({
+  linkCouponCode,
+  onCouponRedeemed,
+}: { linkCouponCode?: string; onCouponRedeemed?: () => void } = {}) {
   const { selectedOrganization } = useSelectedOrganization()
   const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
-  const [couponCode, setCouponCode] = useState<string>('')
+  const [couponCode, setCouponCode] = useState<string>(linkCouponCode ?? '')
   const [redeemCouponError, setRedeemCouponError] = useState<string | null>(null)
   const [redeemCouponSuccess, setRedeemCouponSuccess] = useState<string | null>(null)
   const [oneTimeTopUpAmount, setOneTimeTopUpAmount] = useState<number | undefined>(undefined)
@@ -267,7 +272,7 @@ export function WalletSection() {
   // Both are folded by default: one is a setting you touch once, the other a
   // one-shot action. Neither earns six rows of the panel on every visit.
   const [autoReloadOpen, setAutoReloadOpen] = useState(false)
-  const [couponOpen, setCouponOpen] = useState(false)
+  const [couponOpen, setCouponOpen] = useState(Boolean(linkCouponCode))
   const walletQuery = useOwnerWalletQuery({ refetchOnMount: 'always' })
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
   const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
@@ -323,11 +328,12 @@ export function WalletSection() {
         setRedeemCouponSuccess(null)
       }, 3000)
       setCouponCode('')
+      onCouponRedeemed?.()
     } catch (error) {
       setRedeemCouponError(String(error))
       console.error('Failed to redeem coupon:', error)
     }
-  }, [selectedOrganization, couponCode, redeemCouponMutation])
+  }, [selectedOrganization, couponCode, redeemCouponMutation, onCouponRedeemed])
 
   const saveAutomaticTopUpDisabled = useMemo(() => {
     if (setAutomaticTopUpMutation.isPending) {
@@ -668,6 +674,15 @@ export function WalletSection() {
 
               <BalanceThresholdBanner wallet={wallet} plan={planQuery.data} />
 
+              {!user?.profile.email_verified && linkCouponCode && (
+                <>
+                  <div className="my-5 h-px bg-border" />
+                  <p className="font-sans text-meta text-muted-foreground">
+                    Verify your email to redeem coupon code {linkCouponCode}.
+                  </p>
+                </>
+              )}
+
               {user?.profile.email_verified && (
                 <>
                   <div className="my-5 h-px bg-border" />
@@ -694,7 +709,7 @@ export function WalletSection() {
                           <span className="font-sans text-meta text-success">{redeemCouponSuccess}</span>
                         ) : (
                           <span className="font-sans text-meta text-muted-foreground">
-                            Enter a coupon code to redeem your credits.
+                            Credits go to {selectedOrganization?.name ?? 'this organization'}.
                           </span>
                         )}
                       </div>
