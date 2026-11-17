@@ -109,9 +109,7 @@ for (const home of ['aws', 'gcp'] as const) {
     assert.equal(environment.FILESTORE_SUPPORTED, home === 'gcp' ? 'true' : 'false')
     assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
     if (home === 'gcp') {
-      assert.deepEqual(JSON.parse(environment.FILESTORE_INSTANCES), [
-        { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
-      ])
+      assert.deepEqual(JSON.parse(environment.FILESTORE_INSTANCES), [])
     }
   })
 }
@@ -333,7 +331,7 @@ test('AWS never deploys Filestore instances from stage configuration', () => {
   assert.equal(Object.hasOwn(configured.environment, 'FILESTORE_INSTANCES'), false)
 })
 
-test('GCP materializes the default Filestore placement and derives its project', () => {
+test('GCP leaves Filestore instances empty when not configured', () => {
   const unset = apiEnvironmentFrom({
     environment: { ...base, FILESTORE_INSTANCES: undefined },
     declaration: groups([]),
@@ -343,21 +341,8 @@ test('GCP materializes the default Filestore placement and derives its project',
   })
 
   assert.equal(unset.environment.FILESTORE_SUPPORTED, 'true')
-  assert.deepEqual(unset.filestoreProjects, ['boxlite-dev-project'])
-  assert.deepEqual(JSON.parse(unset.environment.FILESTORE_INSTANCES), [
-    { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
-  ])
-
-  const stage = apiEnvironmentFrom({
-    environment: { ...base, FILESTORE_INSTANCES: undefined },
-    declaration: groups([]),
-    region: 'us-east5',
-    stage: 'stage',
-    home: 'gcp',
-  })
-  assert.deepEqual(JSON.parse(stage.environment.FILESTORE_INSTANCES), [
-    { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' },
-  ])
+  assert.deepEqual(unset.filestoreProjects, [])
+  assert.equal(unset.environment.FILESTORE_INSTANCES, '[]')
 
   const production = apiEnvironmentFrom({
     environment: { ...base, FILESTORE_INSTANCES: undefined },

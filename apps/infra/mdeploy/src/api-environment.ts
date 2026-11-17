@@ -321,17 +321,7 @@ const runnerDiskExpansionFrom = (environment: Environment): Record<string, strin
   }
 }
 
-const defaultFilestoreInstances = (stage: string): string | undefined => {
-  if (stage === 'dev') {
-    return JSON.stringify([{ instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' }])
-  }
-  if (stage === 'stage') {
-    return JSON.stringify([
-      { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' },
-    ])
-  }
-  return undefined
-}
+  // Example: FILESTORE_INSTANCES='[{"instance":"boxlite-dev-shared","project_id":"boxlite-dev-project","zone":"us-east5-a"}]'
 
 function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {
   if (home !== 'gcp' || !raw) return []
@@ -403,8 +393,7 @@ export const apiEnvironmentFrom = ({
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
   validateCiChannels(values, addresses)
   const configuredFilestoreInstances = environment.FILESTORE_INSTANCES?.trim()
-  const filestoreInstances =
-    configuredFilestoreInstances ?? defaultFilestoreInstances(stage) ?? (home === 'gcp' ? '[]' : undefined)
+  const filestoreInstances = configuredFilestoreInstances ?? (home === 'gcp' ? '[]' : undefined)
   const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home)
   const apiValues =
     home === 'gcp'

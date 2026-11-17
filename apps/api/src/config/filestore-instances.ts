@@ -14,9 +14,7 @@ export interface FilestoreInstancesConfig {
 export const FILESTORE_INSTANCE_NAME_PATTERN = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const GCP_PROJECT_ID_PATTERN = /^[a-z](?:[a-z0-9-]{4,28}[a-z0-9])?$/
 const GCP_ZONE_PATTERN = /^[a-z]+(?:-[a-z0-9]+)*\d+-[a-z]$/
-const DEFAULT_FILESTORE_INSTANCES: FilestoreInstanceConfig[] = [
-  { instance: 'boxlite-dev-shared', projectId: 'boxlite-dev-project', zone: 'us-east5-a' },
-]
+// Example: '[{"instance":"boxlite-dev-shared","project_id":"boxlite-dev-project","zone":"us-east5-a"}]'
 
 function parseFilestoreInstance(value: unknown): FilestoreInstanceConfig {
   if (typeof value !== 'object' || value === null) {
@@ -50,7 +48,7 @@ function parseFilestoreInstance(value: unknown): FilestoreInstanceConfig {
 export function parseFilestoreInstances(env: NodeJS.ProcessEnv = process.env): FilestoreInstancesConfig {
   const raw = env.FILESTORE_INSTANCES?.trim()
   if (raw === undefined) {
-    return { instances: DEFAULT_FILESTORE_INSTANCES.map((instance) => ({ ...instance })) }
+    return { instances: [] }
   }
   if (!raw) {
     return { instances: [] }

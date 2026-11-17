@@ -1,10 +1,8 @@
 import { parseFilestoreInstances } from './filestore-instances'
 
 describe('filestore instances configuration', () => {
-  it('uses the temporary development default when the variable is unset', () => {
-    expect(parseFilestoreInstances({})).toEqual({
-      instances: [{ instance: 'boxlite-dev-shared', projectId: 'boxlite-dev-project', zone: 'us-east5-a' }],
-    })
+  it('returns no instances when the variable is unset', () => {
+    expect(parseFilestoreInstances({})).toEqual({ instances: [] })
   })
 
   it('accepts an explicit empty variable as a disabled deployment', () => {
