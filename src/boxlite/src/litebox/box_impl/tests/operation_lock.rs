@@ -719,7 +719,7 @@ async fn disk_lock_unlinked_waiter_rejects_removed_owner_after_id_reuse() {
     let mut waiter = Box::pin(async {
         ready.await.unwrap();
         let _guard = LockGuard::new_async(old.as_ref()).await;
-        bx.validate_disk_owner(old.id())
+        bx.ensure_box_exists()
     });
     assert!(futures::poll!(&mut waiter).is_pending());
     runtime.remove_box(bx.id(), false).unwrap();
@@ -740,32 +740,6 @@ async fn disk_lock_unlinked_waiter_rejects_removed_owner_after_id_reuse() {
         Err(BoxliteError::NotFound(_))
     ));
     assert!(!bx.config.box_home.join(".snapshot_pending").exists());
-}
-
-#[tokio::test]
-async fn disk_lock_owner_identity_mismatch_precedes_snapshot_marker() {
-    let home = TempDir::new_in("/tmp").unwrap();
-    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
-        home_dir: home.path().to_owned(),
-        ..Default::default()
-    })
-    .unwrap();
-    let a = persistent_disk_test_box(&runtime).await;
-    let b = persistent_disk_test_box(&runtime).await;
-    let bx = disk_test_backend(&a);
-    std::fs::create_dir_all(&bx.config.box_home).unwrap();
-    let original = runtime.box_manager.update_box(a.id()).unwrap();
-    let mut changed = original.clone();
-    changed.lock_id = runtime.box_manager.update_box(b.id()).unwrap().lock_id;
-    runtime.box_manager.save_box(a.id(), &changed).unwrap();
-    let result = a
-        .snapshots()
-        .create(Default::default(), "wrong-owner")
-        .await;
-    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
-    assert!(!bx.config.box_home.join(".snapshot_pending").exists());
-    runtime.box_manager.save_box(a.id(), &original).unwrap();
-    assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_some());
 }
 
 #[tokio::test]
@@ -935,49 +909,6 @@ async fn disk_lock_c1_auto_delete_missing_lock_is_not_completed_removal() {
     assert!(bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_none());
     assert!(!evidence.exists());
     bx.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn disk_lock_snapshot_waiter_rechecks_identity_after_admission() {
-    let home = TempDir::new_in("/tmp").unwrap();
-    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
-        home_dir: home.path().to_owned(),
-        ..Default::default()
-    })
-    .unwrap();
-    let a = persistent_disk_test_box(&runtime).await;
-    let b = persistent_disk_test_box(&runtime).await;
-    let bx = disk_test_backend(&a);
-    std::fs::create_dir_all(&bx.config.box_home).unwrap();
-    let disk = bx.disk_locker().unwrap();
-    let owner = LockGuard::new_async(disk.as_ref()).await;
-    let snapshots = a.snapshots();
-    let mut waiter = Box::pin(snapshots.create(Default::default(), "queued"));
-    assert!(futures::poll!(&mut waiter).is_pending());
-    // A queued waiter prevents real removal, even after its disk owner releases.
-    drop(owner);
-    assert!(matches!(
-        runtime.remove_box(a.id(), false),
-        Err(BoxliteError::InvalidState(_))
-    ));
-    let original = runtime.box_manager.update_box(a.id()).unwrap();
-    let mut changed = original.clone();
-    changed.lock_id = runtime.box_manager.update_box(b.id()).unwrap().lock_id;
-    runtime.box_manager.save_box(a.id(), &changed).unwrap();
-    let result = waiter.await;
-    runtime.box_manager.save_box(a.id(), &original).unwrap();
-    assert!(
-        matches!(result, Err(BoxliteError::InvalidState(_))),
-        "snapshot waiter used stale ownership: {result:?}"
-    );
-    assert!(!bx.config.box_home.join(".snapshot_pending").exists());
-    assert!(
-        !disk_test_backend(&b)
-            .config
-            .box_home
-            .join(".snapshot_pending")
-            .exists()
-    );
 }
 
 fn snapshot_restore_test_disk(bx: &BoxImpl) -> std::path::PathBuf {

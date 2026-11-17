@@ -192,9 +192,9 @@ cancellation leaves a later synchronous shutdown or runtime Drop able to retry.
 Disk APIs use the runtime's shared lock manager with persisted box lock IDs in
 an independent `<home>/locks/disk/` namespace, serializing operations across handles.
 Blocking acquisition follows disk → lifecycle → short state guard order, with
-persisted ownership rechecked after disk admission and before disk side effects.
+box existence rechecked after disk admission and before disk side effects.
 Clone, export, and snapshot mutations share `with_disk_admission` for acquisition
-and ownership rechecks, keeping new entry points on the same admission path.
+and existence rechecks, keeping new entry points on the same admission path.
 If a batch clone fails after staging begins, every unprovisioned staging
 directory is cleaned up, while successfully provisioned clones are retained.
 Snapshot restore queues for disk → lifecycle admission, rechecks that the box is

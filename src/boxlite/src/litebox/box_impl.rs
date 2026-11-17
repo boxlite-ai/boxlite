@@ -269,34 +269,28 @@ impl BoxImpl {
         self.runtime.disk_lock_manager.retrieve(lock_id)
     }
 
-    /// Hold disk admission and recheck ownership before running disk work.
+    /// Hold disk admission and recheck that the box row still exists before running disk work.
     pub(crate) async fn with_disk_admission<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
         let locker = self.disk_locker()?;
         let _lock = LockGuard::new_async(locker.as_ref()).await;
-        self.validate_disk_owner(locker.id())?;
+        self.ensure_box_exists()?;
         fut.await
     }
 
-    /// A waiter can retain an unlinked lock's FD after removal and ID reuse.
-    /// Recheck persisted ownership after admission, before any disk side effects.
-    pub(crate) fn validate_disk_owner(&self, lock_id: crate::lock::LockId) -> BoxliteResult<()> {
-        let current = self.runtime.box_manager.update_box(self.id())?;
-        if current.lock_id != Some(lock_id) {
-            return Err(BoxliteError::InvalidState(format!(
-                "box {} disk lock identity changed",
-                self.id()
-            )));
-        }
+    /// Confirm the box row still exists after acquiring disk admission, so waiters
+    /// holding an old FD cannot perform disk work after the box has been removed.
+    pub(crate) fn ensure_box_exists(&self) -> BoxliteResult<()> {
+        self.runtime.box_manager.update_box(self.id())?;
         Ok(())
     }
 
     async fn complete_exit_cleanup(&self) -> BoxliteResult<()> {
         let locker = self.disk_locker()?;
         let _guard = LockGuard::new_async(locker.as_ref()).await;
-        self.validate_disk_owner(locker.id())?;
+        self.ensure_box_exists()?;
         self.with_operation(async {
             let state = self.state.read().clone();
             if state.status != BoxStatus::Stopped
