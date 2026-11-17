@@ -194,7 +194,7 @@ test('the AWS role is composed from the account id, as every other workflow does
     // from `vars.AWS_ACCOUNT_ID`, and the role name bootstrap actually creates.
     assert.match(
       source,
-      /role-to-assume: arn:aws:iam::\$\{\{ vars\.AWS_ACCOUNT_ID \}\}:role\/boxlite-(?:\$\{\{ [^}]+ \}\}|[a-z0-9-]+)-github-deploy/,
+      /role-to-assume: arn:aws:iam::\$\{\{ (?:vars\.AWS_ACCOUNT_ID|inputs\.aws-account-id) \}\}:role\/boxlite-(?:\$\{\{ [^}]+ \}\}|[a-z0-9-]+)-github-deploy/,
       `${name} does not compose the role ARN`,
     )
     assert.doesNotMatch(
@@ -270,7 +270,11 @@ test('every job or shared action restores the stage declaration before reading i
         if (step.uses?.startsWith('actions/checkout@')) restored = false
         if (step.uses === './.github/actions/setup-infra') {
           assert.ok(step.with.stages, file)
-          assert.equal(step.with['stage-config'], '$' + '{{ vars.' + name + ' }}')
+          // Composite caller bindings are checked before expansion in composite-context.test.ts.
+          assert.ok(
+            ['${{ inputs.stage-config }}', '$' + '{{ vars.' + name + ' }}'].includes(step.with['stage-config']),
+            file + ': setup must receive the target declaration',
+          )
           restored = true
         }
         if (/npm run (--silent )?(mstage|mbuild|mdeploy|runner:)/.test(step.run ?? '')) {

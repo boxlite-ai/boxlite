@@ -73,6 +73,10 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/mbuild
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           command: ${{ inputs.command }}
           tag: ${{ inputs.tag }}
           stage: ${{ inputs.stage }}

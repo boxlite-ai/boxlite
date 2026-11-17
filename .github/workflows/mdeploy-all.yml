@@ -485,6 +485,10 @@ jobs:
         if: steps.plan.outputs.api == 'build'
         uses: ./.github/actions/mbuild
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           command: publish
           tag: ${{ needs.resolve.outputs.sha }}
           stage: ${{ inputs.stage }}
@@ -502,6 +506,10 @@ jobs:
         if: steps.plan.outputs.runner == 'build'
         uses: ./.github/actions/build-staged-runner
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
           stage: ${{ inputs.stage }}
           sha: ${{ needs.resolve.outputs.sha }}
 
@@ -509,6 +517,11 @@ jobs:
         if: needs.resolve.outputs.version != ''
         uses: ./.github/actions/mdeploy
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           ref: ${{ inputs.ref }}
           stage: ${{ inputs.stage }}
           sha: ${{ needs.resolve.outputs.sha }}
@@ -539,6 +552,11 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/mdeploy
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           ref: ${{ inputs.ref }}
           stage: ${{ inputs.stage }}
           sha: ${{ needs.resolve.outputs.sha }}

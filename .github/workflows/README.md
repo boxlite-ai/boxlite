@@ -278,6 +278,16 @@ state. A new commit or editing/deleting the only acknowledgment returns the PR t
 In [`.github/actions/`](../actions). Each replaces a step bundle that was previously copied into
 every consumer.
 
+Deployment composites receive stage configuration and cloud identity settings through explicit inputs.
+The calling job binds the target Environment, reads its `vars`, and supplies those values with `with`;
+for example, `gcp-deployer: ${{ vars.GCP_DEPLOYER }}` becomes `${{ inputs.gcp-deployer }}` inside the action.
+Composite action manifests have a narrower context set than workflows and cannot reference `vars` directly.
+
+The reusable image workflow carries the promotion source declaration separately through `stage-config-from`.
+
+The mdeploy tests parse composite-step input expressions against the Runner's supported contexts and check every caller's configuration bindings.
+Run them with `make test:apps:mdeploy`; workflow lint alone does not exercise loading a local action manifest.
+
 | Action | Sites | Used by |
 | --- | --- | --- |
 | `mbuild` | 2 | mdeploy-all plan/build and the reusable mbuild workflow |
