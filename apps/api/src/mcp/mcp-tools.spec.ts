@@ -148,6 +148,15 @@ describe('McpTools.register', () => {
  * someone decides whether OAuth callers may reach it.
  */
 const API_KEY_ONLY = [
+  'createAgent',
+  'getAgent',
+  'getAgentTurn',
+  'closeAgent',
+  'sendAgentTurn',
+  'getAgentEvents',
+  'respondAgentRequest',
+  'steerAgentTurn',
+  'interruptAgentTurn',
   'enableSsh',
   'configureSsh',
   'exportBox',

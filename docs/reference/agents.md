@@ -33,8 +33,8 @@ and `SimpleBox`. Each SDK retains its error conventions.
 ### Failure contract
 
 Rust, the CLI and C calls on a local runtime run the operations listed in
-[OpenCode on a local runtime](#opencode-on-a-local-runtime). Other SDKs and remote
-runtimes return unsupported errors before agent execution.
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Rust can also use
+these operations over the Box REST API. Other SDKs return unsupported errors.
 
 | SDK | Error behavior |
 |---|---|
@@ -59,8 +59,8 @@ Rust, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 insi
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
-answers, or with `Execution` when it lacks the `opencode service` commands. Remote
-runtimes and the other SDKs return `Unsupported`. `agent.id()` returns the `ses_…`
+answers, or with `Execution` when it lacks the `opencode service` commands. Other
+SDKs return `Unsupported`. `agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
 
 ```text
@@ -174,7 +174,11 @@ These records define SDK data types. The
 [REST design](../contributing/investigations/2026-10-28-agent-rest-api-design.md)
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
-headers. Agent HTTP routes and REST client support are unavailable.
+headers. The REST server exposes these routes, and the Rust REST client forwards
+agent operations to them. Close and interrupt return HTTP 204 without a snapshot;
+read a resource separately when its current state is needed. The remote Rust
+`requests()` method remains unsupported, although turn snapshots can include
+pending requests. The CLI does not provide interactive request handling.
 
 ### Example: handle operation errors
 

@@ -14,6 +14,8 @@ mod install;
 mod opencode;
 /// Shared JSON conversion for agent API consumers.
 pub mod records;
+#[cfg(feature = "rest")]
+mod rest;
 #[cfg(feature = "test-support")]
 mod test_support;
 mod types;
@@ -44,6 +46,9 @@ const TURN_POLL_INTERVAL: Duration = Duration::from_millis(500);
 trait AgentBackend: Send + Sync + std::fmt::Debug {
     /// Implementation and version named in errors, such as `OpenCode 2.2`.
     fn adapter(&self) -> &str;
+
+    /// Stable implementation name used by the wire contract.
+    fn implementation(&self) -> &str;
 
     /// The native agent ID that `Agents::get` accepts.
     fn id(&self) -> &str;
@@ -163,6 +168,13 @@ impl Agents {
         if self.test_backend {
             return Ok(Agent::for_test());
         }
+        #[cfg(feature = "rest")]
+        if let Ok(remote) = Arc::clone(&self.box_backend)
+            .as_any_arc()
+            .downcast::<crate::rest::litebox::RestBox>()
+        {
+            return rest::create(&remote, agent, &options).await;
+        }
         match agent {
             opencode::IMPLEMENTATION => {
                 self.require_local_runtime()?;
@@ -182,6 +194,13 @@ impl Agents {
         #[cfg(feature = "test-support")]
         if self.test_backend {
             return Ok(Agent::for_test());
+        }
+        #[cfg(feature = "rest")]
+        if let Ok(remote) = Arc::clone(&self.box_backend)
+            .as_any_arc()
+            .downcast::<crate::rest::litebox::RestBox>()
+        {
+            return rest::get(&remote, agent_id).await;
         }
         self.require_local_runtime()?;
         if !opencode::is_session_id(agent_id) {
@@ -250,6 +269,11 @@ impl Agent {
     /// The agent ID to pass to [`Agents::get`], such as from another process.
     pub fn id(&self) -> &str {
         self.backend.id()
+    }
+
+    /// The agent implementation name, such as `opencode`.
+    pub fn implementation(&self) -> &str {
+        self.backend.implementation()
     }
 
     /// Stop admissions and close the agent loop.

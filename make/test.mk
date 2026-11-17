@@ -557,6 +557,7 @@ test\:unit\:gvproxy:
 # error mapping checks. The server target supplies its own Python dependencies.
 test\:unit\:openapi:
 	@$(MAKE) test:unit:openapi:server
+	@. .venv/bin/activate && uv run --with pyyaml --with jsonschema --python .venv/bin/python python -m unittest discover -s openapi/tests -p 'test_*.py' -v
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 

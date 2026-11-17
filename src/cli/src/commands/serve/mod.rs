@@ -1895,8 +1895,8 @@ async fn get_or_attach_main_session(
 
 fn build_router(state: Arc<AppState>) -> Router {
     use handlers::{
-        advanced, boxes, config, executions, files, images, me, metrics, network, snapshots, ssh,
-        volumes,
+        advanced, agents, boxes, config, executions, files, images, me, metrics, network,
+        snapshots, ssh, volumes,
     };
 
     Router::new()
@@ -1938,6 +1938,15 @@ fn build_router(state: Arc<AppState>) -> Router {
                 .delete(boxes::remove_box)
                 .head(boxes::head_box),
         )
+        .route("/v1/boxes/{box_id}/agents", post(agents::create))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}", get(agents::get))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/close", post(agents::close))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns", post(agents::send))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/events", get(agents::events))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/requests/{request_id}/respond", post(agents::respond))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}", get(agents::get_turn))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/steer", post(agents::steer))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/interrupt", post(agents::interrupt))
         // Box lifecycle
         .route("/v1/boxes/{box_id}/network/inbound", put(network::set_inbound))
         .route("/v1/boxes/{box_id}/network/outbound", put(network::set_outbound))
@@ -2105,6 +2114,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
 
 #[cfg(test)]
 mod tests {
+    mod agents;
     use super::*;
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;

@@ -2,6 +2,9 @@
 
 Expose Box-owned agents and turns through nine HTTP operations, with shared snapshots, resumable events and explicit control actions.
 
+The [REST implementation design](2026-11-17-agent-rest-implementation.md) supersedes
+the close and interrupt responses below: both return HTTP 204 without a snapshot.
+
 ## Details
 
 This is a REST contract design for [the agent API](../../reference/agents.md)
