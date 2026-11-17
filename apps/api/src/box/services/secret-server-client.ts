@@ -104,12 +104,12 @@ export class SecretServerClient {
         idsByName.has(entry.name) ||
         typeof entry.secret_id !== 'string' ||
         !UUID.test(entry.secret_id) ||
-        ids.has(entry.secret_id)
+        ids.has(entry.secret_id.toLowerCase())
       ) {
         throw new Error('Invalid secret mapping')
       }
       idsByName.set(entry.name, entry.secret_id)
-      ids.add(entry.secret_id)
+      ids.add(entry.secret_id.toLowerCase())
     }
     return payload.map(({ name, hosts, headers, placeholder }) => ({
       name,

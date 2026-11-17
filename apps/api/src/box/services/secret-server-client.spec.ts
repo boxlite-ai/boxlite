@@ -161,6 +161,39 @@ describe('SecretServerClient HTTP boundary', () => {
     })
   })
 
+  it.each([
+    ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'],
+    ['AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+  ])('rejects the same UUID with different casing: %s and %s', async (firstId, secondId) => {
+    respond = (response) =>
+      response.end(
+        JSON.stringify({
+          secrets: [
+            { name: 'first', secret_id: firstId },
+            { name: 'second', secret_id: secondId },
+          ],
+        }),
+      )
+    await expect(client(url).storeBoxSecrets('Ab12Cd34Ef56', 'org', 'user', secrets)).rejects.toMatchObject({
+      status: 503,
+    })
+  })
+
+  it('accepts distinct UUIDs with uppercase spelling', async () => {
+    const firstId = 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'
+    respond = (response) =>
+      response.end(
+        JSON.stringify({
+          secrets: [
+            { name: 'first', secret_id: firstId },
+            { name: 'second', secret_id: ids[1] },
+          ],
+        }),
+      )
+    const references = await client(url).storeBoxSecrets('Ab12Cd34Ef56', 'org', 'user', secrets)
+    expect(references.map(({ secretId }) => secretId)).toEqual([firstId, ids[1]])
+  })
+
   it('rejects malformed JSON', async () => {
     respond = (response) => response.end('value-marker')
     await expect(client(url).storeBoxSecrets('Ab12Cd34Ef56', 'org', 'user', secrets)).rejects.toMatchObject({
