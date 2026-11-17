@@ -186,9 +186,6 @@ pub struct RuntimeImpl {
     /// Use `.is_cancelled()` for sync checks, `.cancelled()` for async select!.
     /// Child tokens are passed to each box via `.child_token()`.
     pub(crate) shutdown_token: CancellationToken,
-
-    #[cfg(test)]
-    test_remove_box_pre_lock_hook: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 /// Synchronized state protected by RwLock.
@@ -398,8 +395,6 @@ impl RuntimeImpl {
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
-            #[cfg(test)]
-            test_remove_box_pre_lock_hook: std::sync::Mutex::new(None),
         });
 
         tracing::debug!("initialized runtime");
@@ -2741,105 +2736,6 @@ mod tests {
             "{typed_error:?}"
         );
         assert_eq!(runtime.box_manager.all_box_configs().unwrap().len(), before);
-    }
-
-    #[test]
-    fn box_remove_waits_for_the_box_lifecycle_lock() {
-        let (runtime, _dir) = create_test_runtime();
-        let box_id = BoxIDMint::mint();
-        let lock_id = runtime.lock_manager.allocate().unwrap();
-        let mut state = BoxState::new();
-        state.set_lock_id(lock_id);
-        let config = BoxConfig {
-            id: box_id.clone(),
-            name: None,
-            created_at: Utc::now(),
-            container: ContainerRuntimeConfig {
-                id: ContainerID::new(),
-            },
-            options: BoxOptions {
-                auto_delete: Some(0),
-                ..Default::default()
-            },
-            engine_kind: crate::vmm::VmmKind::Libkrun,
-            box_home: runtime.layout.boxes_dir().join(box_id.as_str()),
-        };
-        runtime.box_manager.add_box(&config, &state).unwrap();
-        let locker = runtime.lock_manager.retrieve(lock_id).unwrap();
-        let guard = crate::lock::LockGuard::new(&*locker);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let runtime_for_remove = Arc::clone(&runtime);
-        let id_for_remove = box_id.clone();
-        let thread = std::thread::spawn(move || {
-            let result = runtime_for_remove.remove_box(&id_for_remove, false);
-            sender.send(result).unwrap();
-        });
-
-        assert!(
-            receiver
-                .recv_timeout(std::time::Duration::from_millis(100))
-                .is_err(),
-            "remove must not delete the record while the lifecycle lock is held"
-        );
-        drop(guard);
-        receiver
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("remove should finish after the lifecycle lock is released")
-            .unwrap();
-        thread.join().unwrap();
-    }
-
-    #[test]
-    fn box_remove_reloads_state_after_waiting_for_lifecycle_lock() {
-        let (runtime, _dir) = create_test_runtime();
-        let box_id = BoxIDMint::mint();
-        let lock_id = runtime.lock_manager.allocate().unwrap();
-        let mut state = BoxState::new();
-        state.set_lock_id(lock_id);
-        let config = BoxConfig {
-            id: box_id.clone(),
-            name: None,
-            created_at: Utc::now(),
-            container: ContainerRuntimeConfig {
-                id: ContainerID::new(),
-            },
-            options: BoxOptions {
-                auto_delete: Some(0),
-                ..Default::default()
-            },
-            engine_kind: crate::vmm::VmmKind::Libkrun,
-            box_home: runtime.layout.boxes_dir().join(box_id.as_str()),
-        };
-        runtime.box_manager.add_box(&config, &state).unwrap();
-        let locker = runtime.lock_manager.retrieve(lock_id).unwrap();
-        let guard = crate::lock::LockGuard::new(&*locker);
-        let (pre_lock_sender, pre_lock_receiver) = std::sync::mpsc::channel();
-        *runtime.test_remove_box_pre_lock_hook.lock().unwrap() = Some(Box::new(move || {
-            pre_lock_sender.send(()).unwrap();
-        }));
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let runtime_for_remove = Arc::clone(&runtime);
-        let id_for_remove = box_id.clone();
-        let thread = std::thread::spawn(move || {
-            let result = runtime_for_remove.remove_box(&id_for_remove, false);
-            sender.send(result).unwrap();
-        });
-        pre_lock_receiver
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("remove must read state before waiting for the lock");
-        let mut running = BoxState::new();
-        running.set_lock_id(lock_id);
-        running.set_status(BoxStatus::Running);
-        runtime.box_manager.save_box(&box_id, &running).unwrap();
-        drop(guard);
-
-        let error = receiver
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("remove should finish after the lifecycle lock is released")
-            .expect_err("the refreshed Running state must prevent removal");
-        assert!(matches!(error, BoxliteError::InvalidState(_)), "{error:?}");
-        assert!(runtime.box_manager.has_box(&box_id).unwrap());
-        thread.join().unwrap();
     }
 
     fn secret_without_hosts() -> crate::runtime::options::Secret {

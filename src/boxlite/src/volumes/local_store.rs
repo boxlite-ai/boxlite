@@ -677,7 +677,10 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
         let options = BoxOptions {
             volumes: vec![VolumeSpec {
                 read_only: true,
@@ -714,7 +717,10 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
         let payload = runtime
             .layout
             .volumes_dir()
@@ -771,7 +777,10 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
         for directory in [STAGING_DIR, TRASH_DIR] {
             let operation = runtime
                 .layout
@@ -811,7 +820,10 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
         std::fs::remove_file(
             runtime
                 .layout
@@ -843,7 +855,10 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let good = runtime.local_volume_store.create(Some("workspace")).unwrap();
+        let good = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
         let bad_id = Uuid::new_v4().to_string();
         let bad_path = runtime.layout.volumes_dir().join(&bad_id);
         std::fs::create_dir_all(&bad_path).unwrap();
@@ -924,7 +939,10 @@ mod tests {
         }
         assert_eq!(volumes.len(), 1);
         runtime.local_volume_store.get(&volumes[0].id).unwrap();
-        runtime.local_volume_store.remove(&volumes[0].id, false).unwrap();
+        runtime
+            .local_volume_store
+            .remove(&volumes[0].id, false)
+            .unwrap();
     }
 
     fn seed_raw_volume(root: &Path, id: &str, name: &str) {
@@ -981,7 +999,10 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let good = runtime.local_volume_store.create(Some("workspace")).unwrap();
+        let good = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
         let root = runtime.layout.volumes_dir();
         let bad_id = Uuid::new_v4().to_string();
         seed_raw_volume(&root, &bad_id, "unrelated");
@@ -1023,7 +1044,10 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
         let box_id = crate::runtime::id::BoxIDMint::mint();
         let mut config = BoxConfig {
             id: box_id.clone(),
@@ -1071,7 +1095,10 @@ mod tests {
         assert!(matches!(error, BoxliteError::InvalidState(_)), "{error:?}");
 
         runtime.box_manager.remove_box(&box_id).unwrap();
-        runtime.local_volume_store.remove(&volume.id, false).unwrap();
+        runtime
+            .local_volume_store
+            .remove(&volume.id, false)
+            .unwrap();
         let error = runtime
             .local_volume_store
             .add_box_with_resolved_volumes(

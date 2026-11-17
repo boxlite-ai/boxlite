@@ -523,9 +523,12 @@ mod tests {
             ..Default::default()
         };
 
-        let resolved =
-            resolve_user_volumes(&options.volumes, &options.mounts, &runtime.local_volume_store)
-                .expect("resolve a managed volume through the local store");
+        let resolved = resolve_user_volumes(
+            &options.volumes,
+            &options.mounts,
+            &runtime.local_volume_store,
+        )
+        .expect("resolve a managed volume through the local store");
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].guest_path, "/data");
         let expected = runtime
