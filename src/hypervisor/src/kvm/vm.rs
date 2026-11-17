@@ -386,6 +386,23 @@ mod tests {
 
     #[test]
     #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn vm_snapshot_without_pit_leaves_destination_pit_untouched() {
+        let source = KvmVm::new().unwrap();
+        let mut state = source.save_state().unwrap();
+        state.pit = None;
+        let destination = KvmVm::new().unwrap();
+        let mut pit = destination.fd.get_pit2().unwrap();
+        pit.channels[2].count = 0x7654;
+        pit.channels[2].mode = 3;
+        destination.fd.set_pit2(&pit).unwrap();
+        destination.restore_state(&state).unwrap();
+        let actual = destination.fd.get_pit2().unwrap();
+        assert_eq!(actual.channels[2].count, pit.channels[2].count);
+        assert_eq!(actual.channels[2].mode, pit.channels[2].mode);
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
     fn vm_snapshot_platform_values_survive_restore() {
         let source = KvmVm::new().unwrap();
         let mut programmed = source.save_state().unwrap();

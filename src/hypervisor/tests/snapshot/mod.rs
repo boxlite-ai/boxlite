@@ -122,30 +122,144 @@ fn platform_postcard_round_trips_created_and_absent_pit() {
 #[test]
 fn cpu_postcard_enforces_flexible_array_bounds() {
     let mut state = cpu();
-    for count in [65536, 65537] {
+    for count in [0, 65535, 65536, 65537] {
         state.xsave.resize(count, 0x12345678);
         let bytes = postcard::to_allocvec(&state).unwrap();
         assert_eq!(
             postcard::from_bytes::<X86VcpuState>(&bytes).is_ok(),
-            count == 65536
+            count <= 65536
         );
     }
     state.xsave.clear();
-    for count in [256, 257] {
+    for count in [0, 255, 256, 257] {
         state.cpuid.resize(count, Default::default());
         let bytes = postcard::to_allocvec(&state).unwrap();
         assert_eq!(
             postcard::from_bytes::<X86VcpuState>(&bytes).is_ok(),
-            count == 256
+            count <= 256
         );
     }
     state.cpuid.clear();
-    for count in [4096, 4097] {
+    for count in [0, 4095, 4096, 4097] {
         state.msrs.resize(count, Default::default());
         let bytes = postcard::to_allocvec(&state).unwrap();
         assert_eq!(
             postcard::from_bytes::<X86VcpuState>(&bytes).is_ok(),
-            count == 4096
+            count <= 4096
+        );
+    }
+}
+
+#[test]
+fn fpu_postcard_rejects_non_abi_lengths() {
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Fpu(#[serde(with = "super::fpu_serde")] kvm_bindings::kvm_fpu);
+    struct Blob<'a>(&'a [u8]);
+    impl serde::Serialize for Blob<'_> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_bytes(self.0)
+        }
+    }
+    let state = Fpu(cpu().fpu);
+    let encoded = postcard::to_allocvec(&state).unwrap();
+    assert_eq!(postcard::from_bytes::<Fpu>(&encoded).unwrap(), state);
+    // Obtain the ABI payload from the production serializer, not a second
+    // implementation of the FPU layout or its postcard length prefix.
+    let payload: &[u8] = postcard::from_bytes(&encoded).unwrap();
+    for len in [0, payload.len() - 1, payload.len() + 1] {
+        let mut wrong = payload.to_vec();
+        wrong.resize(len, 0);
+        let bytes = postcard::to_allocvec(&Blob(&wrong)).unwrap();
+        assert!(postcard::from_bytes::<Fpu>(&bytes).is_err(), "length {len}");
+    }
+}
+
+#[test]
+fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
+    use crate::{MemoryRegion, Vcpu, VcpuExit, VcpuHandle, Vm, X86Vcpu, X86Vm};
+    struct Backend;
+    struct Cpu;
+    #[derive(Clone)]
+    struct Handle;
+    impl VcpuHandle for Handle {
+        fn kick(&self) -> crate::Result<()> {
+            panic!("unexpected kick")
+        }
+    }
+    impl Vcpu for Cpu {
+        type Handle = Handle;
+        fn run(&mut self) -> crate::Result<VcpuExit<'_>> {
+            panic!("unexpected guest entry")
+        }
+        fn complete_pending_io(&mut self) -> crate::Result<()> {
+            panic!("unexpected I/O completion")
+        }
+        fn handle(&self) -> Handle {
+            Handle
+        }
+    }
+    impl X86Vcpu for Cpu {
+        fn set_cpu_features(
+            &mut self,
+            _: &[crate::X86CpuidEntry],
+            _: &[crate::X86Msr],
+        ) -> crate::Result<()> {
+            panic!("unexpected boot features")
+        }
+        fn set_boot_registers(&mut self, _: &crate::X86BootRegisters) -> crate::Result<()> {
+            panic!("unexpected boot registers")
+        }
+    }
+    impl Vm for Backend {
+        type Vcpu = Cpu;
+        unsafe fn map_memory(&self, _: &MemoryRegion) -> crate::Result<()> {
+            panic!("unexpected map")
+        }
+        fn unmap_memory(&self, _: &MemoryRegion) -> crate::Result<()> {
+            panic!("unexpected unmap")
+        }
+        fn set_irq_line(&self, _: u32, _: bool) -> crate::Result<()> {
+            panic!("unexpected IRQ")
+        }
+        fn create_vcpu(&self, _: u32) -> crate::Result<Cpu> {
+            panic!("unexpected vCPU creation")
+        }
+    }
+    impl X86Vm for Backend {
+        fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+            panic!("unexpected boot CPUID")
+        }
+    }
+    let platform = X86VmState {
+        irqchips: [
+            X86IrqchipState::pic(0, Default::default()),
+            X86IrqchipState::pic(1, Default::default()),
+            X86IrqchipState::ioapic(Default::default()),
+        ],
+        pit: None,
+        clock: Default::default(),
+    };
+    for error in [
+        Backend.save_state().unwrap_err(),
+        Backend.restore_state(&platform).unwrap_err(),
+    ] {
+        assert!(matches!(error, crate::Error::CreateVm(ref source)
+            if source.kind() == std::io::ErrorKind::Unsupported && source.raw_os_error().is_none()));
+    }
+    for (operation, error) in [
+        (
+            "save CPU state (unsupported backend)",
+            Cpu.save_state().unwrap_err(),
+        ),
+        (
+            "restore CPU state (unsupported backend)",
+            Cpu.restore_state(&cpu()).unwrap_err(),
+        ),
+    ] {
+        assert!(
+            matches!(error, crate::Error::ConfigureVcpu { id: 0, operation: actual, ref source }
+            if actual == operation && source.kind() == std::io::ErrorKind::Unsupported
+                && source.raw_os_error().is_none())
         );
     }
 }

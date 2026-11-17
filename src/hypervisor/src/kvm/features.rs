@@ -186,6 +186,45 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_cpuid_accepts_counts_just_below_and_at_the_limit() {
+        let entry = kvm_cpuid_entry2 {
+            function: 7,
+            eax: 42,
+            ..Default::default()
+        };
+        for len in [1, KVM_MAX_CPUID_ENTRIES - 1, KVM_MAX_CPUID_ENTRIES] {
+            let entries = vec![entry; len];
+            assert_eq!(snapshot_cpuid(&entries).unwrap().as_slice(), entries);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_msrs_skips_x2apic_and_unavailable_indices_without_losing_later_values() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(
+            vm.supported_cpuid(),
+            &[X86Msr {
+                index: 0xc0000102,
+                value: 0x12345678,
+            }],
+        )
+        .unwrap();
+        assert!(snapshot_msrs(&cpu.fd, &[]).unwrap().is_empty());
+        let entries = snapshot_msrs(
+            &cpu.fd,
+            &[0x7ff, 0x800, 0xbff, 0xc00, 0x10, u32::MAX, 0xc0000102],
+        )
+        .unwrap();
+        assert_eq!(
+            entries.iter().map(|e| e.index).collect::<Vec<_>>(),
+            [0x10, 0xc0000102]
+        );
+        assert_eq!(entries[1].data, 0x12345678);
+    }
+
+    #[test]
     fn supported_cpuid_omits_unrepresentable_stateful_entries() {
         let entries = [
             kvm_cpuid_entry2 {

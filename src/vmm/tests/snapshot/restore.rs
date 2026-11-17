@@ -355,7 +355,31 @@ fn malformed_images_are_refused_before_creating_a_host_vm() {
 }
 
 #[test]
+<<<<<<< HEAD
 fn invalid_ram_lengths_are_refused_before_creating_a_host_vm() {
+=======
+fn oversized_ram_is_refused_before_allocation() {
+    const CHILD: &str = "BOXLITE_SNAPSHOT_RAM_LIMIT_CHILD";
+    const TEST: &str = "snapshot::restore::tests::oversized_ram_is_refused_before_allocation";
+    const COMPLETE: &str = "BOXLITE_SNAPSHOT_RAM_LIMIT_COMPLETE";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "RAM admission subprocess failed: {output:?}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.lines().any(|line| line.ends_with(COMPLETE)),
+            "RAM admission subprocess did not complete the test: {stdout}"
+        );
+        return;
+    }
+>>>>>>> 7e901ce6c (test(vmm): cover snapshot admission, exports and multi-vCPU restore)
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
     write_image(&path);
@@ -523,6 +547,83 @@ fn kvm_export_destroy_restore_resume_continues_counter() {
     assert!(counter(&destination) > counter(&source));
     drop(restored);
 }
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
+    let config = crate::VmConfig {
+        vcpu_count: 3,
+        memory_mib: 1,
+        kernel: "unused".into(),
+        cmdline: String::new(),
+        initramfs: None,
+        disks: vec![],
+        filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
+    };
+    let vm = Vm::with_backend(
+        config,
+        boxlite_hypervisor::KvmVm::new,
+        |ram, _| {
+            // Only the BSP receives boot registers; APs wait for INIT/SIPI.
+            // inc dword [0x8000]; jmp back, with per-worker state checked below.
+            Ok(crate::flat_guest::load(
+                ram.memory(),
+                &[0xff, 0x05, 0x00, 0x80, 0x00, 0x00, 0xeb, 0xf8],
+            ))
+        },
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let destination = dir.path().join("destination");
+    let resumed = dir.path().join("resumed");
+    let mut handle = vm.spawn().unwrap();
+    thread::sleep(Duration::from_millis(20));
+    handle.pause().unwrap();
+    handle.export(&source).unwrap();
+    drop(handle);
+
+    let read_machine = |path: &Path| {
+        let mut file = File::open(path).unwrap();
+        let header = image::Header::read(&mut file).unwrap();
+        assert_eq!(header.vcpus, 3);
+        let machine = header.read_machine(&mut file).unwrap();
+        assert_eq!(machine.vcpus.len(), 3);
+        machine
+    };
+    let before = read_machine(&source);
+    // LAPIC IDs distinguish even the two APs that have identical reset registers.
+    for i in 0..3 {
+        for j in i + 1..3 {
+            assert_ne!(before.vcpus[i].state.lapic, before.vcpus[j].state.lapic);
+        }
+    }
+    assert!(counter(&source) > 0);
+    let mut restored = Vm::from_state(&source).unwrap();
+    assert_eq!(restored.status(), VmStatus::Paused);
+    restored.export(&destination).unwrap();
+    let after = read_machine(&destination);
+    for (id, (before, after)) in before.vcpus.iter().zip(&after.vcpus).enumerate() {
+        assert_eq!(before.id as usize, id);
+        assert_eq!(after.id as usize, id);
+        assert_eq!(before.state.regs, after.state.regs, "vCPU {id} registers");
+        assert_eq!(before.state.sregs, after.state.sregs, "vCPU {id} sregs");
+        assert_eq!(before.state.lapic, after.state.lapic, "vCPU {id} LAPIC");
+        assert_eq!(before.state.cpuid, after.state.cpuid, "vCPU {id} CPUID");
+        assert_eq!(before.state.mp_state, after.state.mp_state, "vCPU {id} MP");
+    }
+    assert_eq!(counter(&source), counter(&destination));
+    restored.resume().unwrap();
+    thread::sleep(Duration::from_millis(20));
+    restored.pause().unwrap();
+    restored.export(&resumed).unwrap();
+    assert!(counter(&resumed) > counter(&source));
+    drop(restored);
+}
+
 fn counter(path: &Path) -> u32 {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = File::open(path).unwrap();
@@ -532,4 +633,71 @@ fn counter(path: &Path) -> u32 {
     let mut bytes = [0; 4];
     file.read_exact(&mut bytes).unwrap();
     u32::from_le_bytes(bytes)
+}
+
+#[test]
+fn invalid_machine_payloads_and_empty_ram_never_create_a_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let missing =
+        from_path::<Backend>(&path, || panic!("created host for missing file")).unwrap_err();
+    assert!(matches!(missing, Error::Snapshot(ref e) if e.kind() == io::ErrorKind::NotFound));
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    let encoded = machine().encode().unwrap();
+    for payload in [&[][..], &encoded[..encoded.len() - 1]] {
+        image::write(&path, 3, payload, &ram).unwrap();
+        let error =
+            from_path::<Backend>(&path, || panic!("created host for invalid machine")).unwrap_err();
+        assert!(matches!(error, Error::Snapshot(_)));
+        fs::remove_file(&path).unwrap();
+    }
+    image::write(&path, 3, &encoded, &ram).unwrap();
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[16..24].copy_from_slice(&0u64.to_le_bytes());
+    bytes.truncate(32 + encoded.len());
+    fs::write(&path, bytes).unwrap();
+    let error = from_path::<Backend>(&path, || panic!("created host for empty RAM")).unwrap_err();
+    assert!(matches!(error, Error::AllocateMemory { bytes: 0, .. }));
+}
+
+#[test]
+fn machine_read_propagates_truncation_after_header_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    write_image(&path);
+    let mut file = File::open(&path).unwrap();
+    let header = image::Header::read(&mut file).unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(32 + header.machine_len - 1)
+        .unwrap();
+    let error = header.read_machine(&mut file).unwrap_err();
+    assert!(matches!(error, Error::Snapshot(ref e) if e.kind() == io::ErrorKind::UnexpectedEof));
+}
+
+#[test]
+fn valid_vcpu_count_boundaries_reach_host_creation() {
+    let dir = tempfile::tempdir().unwrap();
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    for count in [1, crate::config::MAX_VCPUS - 1, crate::config::MAX_VCPUS] {
+        let mut state = machine();
+        let cpu = state.vcpus[0].state.clone();
+        state.vcpus = (0..count)
+            .map(|id| VcpuRecord {
+                id,
+                state: cpu.clone(),
+            })
+            .collect();
+        let path = dir.path().join(format!("image-{count}"));
+        image::write(&path, count.into(), &state.encode().unwrap(), &ram).unwrap();
+        let mut created = false;
+        let result = from_path::<Backend>(&path, || {
+            created = true;
+            Err(failure())
+        });
+        assert!(created, "valid count {count} was rejected: {result:?}");
+        assert!(result.is_err());
+    }
 }

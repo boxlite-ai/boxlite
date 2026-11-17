@@ -337,6 +337,14 @@ fn device_less_configuration_rejects_every_device_kind() {
                 ..
             })
         ));
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        assert!(matches!(
+            crate::Vm::new_device_less(config),
+            Err(Error::Control {
+                reason: ControlReason::UnsupportedDevice,
+                ..
+            })
+        ));
     }
 }
 
@@ -615,4 +623,129 @@ fn pause_resume_and_export_commands_interrupt_the_supervisor_wait() {
         });
         parking.mailbox.lock().unwrap().commands.clear();
     }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn export_supervisor_rechecks_lifecycle_and_device_admission() {
+    let parking = Parking::new();
+    let ram = crate::memory::GuestRam::new(&[(vm_memory::GuestAddress(0), 4096)]).unwrap();
+    let host = crate::mock_vm::MockVm::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    for (status, devices, reason) in [
+        (VmStatus::Running, false, ControlReason::InvalidState),
+        (VmStatus::Paused, true, ControlReason::UnsupportedDevice),
+    ] {
+        parking.mailbox.lock().unwrap().status = status;
+        let (tx, rx) = mpsc::channel();
+        parking.send(ParkCommand::Export(path.clone(), tx));
+        crate::Vm::export_pending(&parking, &host, &ram, 1, devices);
+        assert!(
+            matches!(rx.recv().unwrap(), Err(Error::Control { operation: "export", reason: actual }) if actual == reason)
+        );
+        assert!(parking.mailbox.lock().unwrap().commands.is_empty());
+        assert!(!path.exists());
+    }
+    for (status, requested) in [(VmStatus::Running, true), (VmStatus::Paused, false)] {
+        let mut mailbox = parking.mailbox.lock().unwrap();
+        mailbox.status = status;
+        mailbox.requested = requested;
+        drop(mailbox);
+        assert!(matches!(
+            crate::Vm::export_image(&parking, &host, &ram, 1, &path),
+            Err(Error::Control {
+                operation: "export",
+                reason: ControlReason::InvalidState
+            })
+        ));
+        assert!(parking.mailbox.lock().unwrap().captures.is_empty());
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn terminal_parking_rejects_queued_and_new_export_commands() {
+    let parking = Parking::new();
+    let (tx, rx) = mpsc::channel();
+    parking.send(ParkCommand::Export("unused".into(), tx));
+    parking.stop();
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(Error::Control {
+            operation: "export",
+            reason: ControlReason::TerminalOutcome
+        })
+    ));
+    let (tx, rx) = mpsc::channel();
+    parking.send(ParkCommand::Export("unused".into(), tx));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(Error::Control {
+            operation: "export",
+            reason: ControlReason::InvalidState
+        })
+    ));
+    assert!(parking.mailbox.lock().unwrap().commands.is_empty());
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn cancelled_capture_returns_a_terminal_error_without_an_image() {
+    let parking = Parking::new();
+    {
+        let mut state = parking.mailbox.lock().unwrap();
+        state.status = VmStatus::Paused;
+        state.requested = true;
+    }
+    let ram = crate::memory::GuestRam::new(&[(vm_memory::GuestAddress(0), 4096)]).unwrap();
+    let host = crate::mock_vm::MockVm::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    thread::scope(|scope| {
+        let caller = scope.spawn(|| crate::Vm::export_image(&parking, &host, &ram, 1, &path));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some((id, reply)) = parking.mailbox.lock().unwrap().captures.pop_front() {
+                assert_eq!(id, 0);
+                drop(reply); // A lost owning worker must not strand the exporter.
+                break;
+            }
+            if Instant::now() >= deadline {
+                parking.stop();
+                panic!("capture was not queued");
+            }
+            thread::yield_now();
+        }
+        assert!(matches!(
+            caller.join().unwrap(),
+            Err(Error::Control {
+                operation: "export",
+                reason: ControlReason::TerminalOutcome
+            })
+        ));
+    });
+    assert!(!path.exists());
+}
+
+#[test]
+fn control_and_snapshot_errors_keep_their_public_messages_and_causes() {
+    use std::error::Error as _;
+    for (reason, message) in [
+        (ControlReason::InvalidState, "invalid state"),
+        (
+            ControlReason::UnsupportedDevice,
+            "operation requires a device-less VM",
+        ),
+        (ControlReason::DeadlineTimeout, "parking deadline expired"),
+        (ControlReason::TerminalOutcome, "the VM is stopping"),
+    ] {
+        assert_eq!(reason.to_string(), message);
+        let error = reason.for_operation("export");
+        assert_eq!(error.to_string(), format!("export: {message}"));
+        assert!(error.source().is_none());
+    }
+    let error = Error::Snapshot(io::Error::new(io::ErrorKind::PermissionDenied, "denied"));
+    assert_eq!(error.to_string(), "memory snapshot failed");
+    assert_eq!(error.source().unwrap().to_string(), "denied");
 }

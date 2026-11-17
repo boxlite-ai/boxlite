@@ -109,7 +109,7 @@ fn machine_state_length_limit_is_checked_in_the_header() {
     image::write(&path, 1, b"", &ram).unwrap();
     let mut header = fs::read(&path).unwrap()[..32].to_vec();
     let limit = u64::from(crate::config::MAX_VCPUS) * (512 << 10) + (64 << 10);
-    for machine_len in [limit, limit + 1] {
+    for machine_len in [limit - 1, limit, limit + 1] {
         header[24..32].copy_from_slice(&machine_len.to_le_bytes());
         fs::write(&path, &header).unwrap();
         File::options()
@@ -119,7 +119,7 @@ fn machine_state_length_limit_is_checked_in_the_header() {
             .set_len(32 + machine_len + 4096)
             .unwrap();
         let result = image::Header::read(&mut File::open(&path).unwrap());
-        if machine_len == limit {
+        if machine_len <= limit {
             assert!(result.is_ok(), "length at the limit must be admitted");
         } else {
             let error = result.expect_err("oversized machine state admitted by header");
@@ -145,4 +145,51 @@ fn final_buffer_flush_failure_removes_partial_target() {
         .is_err()
     );
     assert!(!path.exists());
+}
+
+#[test]
+fn ram_length_boundary_is_checked_without_allocating_ram() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    image::write(&path, 1, b"machine", &ram).unwrap();
+    let original = fs::read(&path).unwrap();
+    let limit = u64::from(crate::memory::MAX_MEMORY_MIB) << 20;
+    for len in [limit - 1, limit, limit + 1] {
+        let mut bytes = original.clone();
+        bytes[16..24].copy_from_slice(&len.to_le_bytes());
+        fs::write(&path, bytes).unwrap();
+        // Sparse length only: admission must not require populating 3 GiB.
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(32 + 7 + len)
+            .unwrap();
+        let result = image::Header::read(&mut File::open(&path).unwrap());
+        if len <= limit {
+            assert_eq!(result.unwrap().ram_len, len);
+        } else {
+            assert!(matches!(result, Err(crate::Error::Snapshot(ref e))
+                if e.kind() == io::ErrorKind::InvalidInput
+                    && e.to_string() == "RAM length exceeds memory limit"));
+        }
+    }
+}
+
+#[test]
+fn failed_cleanup_reports_both_write_and_removal_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let error = image::create(&path, |_| {
+        // Replace the new target with a directory so remove_file fails,
+        // independently of host permissions (including when running as root).
+        fs::remove_file(&path)?;
+        fs::create_dir(&path)?;
+        Err(io::Error::other("injected write failure"))
+    })
+    .unwrap_err();
+    assert!(matches!(error, crate::Error::Snapshot(ref e)
+        if e.to_string().contains("injected write failure; removing incomplete image:")));
+    assert!(path.is_dir());
 }
