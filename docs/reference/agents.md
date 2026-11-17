@@ -32,7 +32,7 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Rust, the CLI and C calls on a local runtime run the operations listed in
+Rust, the CLI, C and Go calls on a local runtime run the operations listed in
 [OpenCode on a local runtime](#opencode-on-a-local-runtime). Other SDKs and remote
 runtimes return unsupported errors before agent execution.
 
@@ -41,7 +41,7 @@ runtimes return unsupported errors before agent execution.
 | Rust | `Err(BoxliteError::Unsupported(…))` naming the operation or option; no panic |
 | Python | `UnsupportedError` on awaiting operations or reading a property |
 | Node.js | Rejected operation promises; synchronous getter/event errors |
-| Go | `*Error` with `Code: ErrUnsupported` and no result |
+| Go | Calls/getters return typed core `*Error` values and no result on failure; invalid arguments fail before submission; canceled calls return the context error |
 | C | Invalid arguments return `InvalidArgument` synchronously without a callback; accepted async calls return `Ok` and deliver core errors through the drain callback; getters return core errors synchronously |
 | CLI | `boxlite agent …` reports the error on stderr and exits with code 1 |
 
@@ -54,13 +54,13 @@ on failure.
 
 ### OpenCode on a local runtime
 
-Rust, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
+Rust, the CLI, C and Go calls on a local runtime forward agents to OpenCode 2.2 inside the Box
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
 answers, or with `Execution` when it lacks the `opencode service` commands. Remote
-runtimes and the other SDKs return `Unsupported`. `agent.id()` returns the `ses_…`
+runtimes, Python and Node.js return `Unsupported`. `agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
 
 ```text
@@ -175,6 +175,65 @@ These records define SDK data types. The
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
 headers. Agent HTTP routes and REST client support are unavailable.
+
+### Go JSON mapping
+
+Go's internal agent converters use the core's snake_case JSON fields. Nullable
+strings become empty strings, a null turn result becomes nil, and null capability
+limits remain nil while a reported zero remains a pointer to zero.
+
+Empty record arrays remain non-nil empty slices. Optional `json.RawMessage` data
+normalizes absent or top-level null to nil; false, zero, empty collections and
+nested nulls retain their JSON values.
+
+Required event data and permission arguments preserve literal JSON null.
+Answers and explicit permission responses
+use different tagged records, so an answer cannot grant permission.
+
+Retention is read from `idempotency_retention_seconds` using checked decimal
+conversion to `time.Duration`, without a float64 intermediate. Sub-nanosecond
+fractions are truncated; negative or out-of-range values return an error.
+
+Go calls and getters use the C SDK and these converters. One runtime drainer
+dispatches asynchronous completions; getters copy their JSON synchronously.
+Both event methods return a stream after the native subscription connects.
+
+Agent namespaces are acquired lazily. Closing a Box releases its local Box handle;
+an acquired namespace, agent or turn remains usable until `Runtime.Close`.
+Agent wrappers must not be copied after first use. Garbage collection releases
+local handles as a fallback, and `Runtime.Close` deterministically releases them.
+`Agent.Close` invokes the core operation; it does not release the local handle.
+
+Cancellation stops the Go wait, not submitted agent work. Late native handles
+are released, including results already buffered when cancellation wins.
+`Runtime.Close` wakes pending calls with `ErrRuntimeClosed` and rejects new calls.
+
+### Go event streams
+
+Open events before sending work: `agent.Events(ctx, AgentEventsOptions{})` waits
+for native `on_open`. Opening errors return a nil stream. The opening context
+also controls the subscription after connection.
+
+`Next(ctx)` permits one reader; concurrent reads return `ErrInvalidState`.
+Canceling that read returns its context error without consuming an event or
+canceling the subscription. A stream retains at most 64 events and 4 MiB of
+copied JSON. Oversized records are rejected before copying. Count or byte overflow
+cancels the subscription with `ErrResourceExhausted`, preserving its accepted prefix.
+Callbacks never wait for a reader, so a slow stream cannot block other calls.
+
+A native end returns buffered events followed by sticky `io.EOF` or the native
+error. Canceling the subscription context preserves buffered events, followed by
+its context error. The first recorded error wins; completed native EOF is final.
+`Close` discards unread events, wakes readers and requests native cancellation
+without waiting. It preserves an earlier error and otherwise produces `io.EOF`.
+Closing a stream does not interrupt agent work.
+
+`Runtime.Close` discards buffers and makes reads return `ErrRuntimeClosed`.
+It cancels connected subscriptions before joining the ordinary drainer, then
+alone drains their terminal callbacks. Pending connects do not hold shutdown
+open; their callback state is released after native runtime destruction.
+Garbage collection requests stream closure as a fallback; deterministic cleanup
+uses stream or runtime `Close`.
 
 ### Example: handle operation errors
 

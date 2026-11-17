@@ -533,6 +533,20 @@ test\:integration\:c\:agents:
 	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
 		cargo test -p boxlite-c --lib c_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
 
+# Local, three-language acceptance with the shared scripted OpenCode model.
+# Kept separate from archive integration and hosted CI.
+test\:integration\:go\:agents:
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
+		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
+	@$(MAKE) dev:go
+	@mkdir -p sdks/c/tests/build
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
+	@cd sdks/c/tests/build && cmake --build . --target test_agents_opencode -j
+	@cd sdks/go && go test -c -tags boxlite_dev,boxlite_agent_vm -o ../../target/debug/go-agent-vm
+	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
+		BOXLITE_GO_AGENT_VM_BIN="$(PROJECT_ROOT)/target/debug/go-agent-vm" \
+		cargo test -p boxlite-c --lib go_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
+
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
@@ -671,8 +685,8 @@ test\:all\:c:
 # Go SDK unit tests.
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
-	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
+	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
+	@cd sdks/go && go test -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.

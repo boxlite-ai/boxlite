@@ -28,7 +28,14 @@ const drainTimeoutMs = 100
 
 // Runtime manages BoxLite boxes. Create one with NewRuntime.
 type Runtime struct {
-	handle *C.CBoxliteRuntime
+	handle         *C.CBoxliteRuntime
+	closeOnce      sync.Once
+	agentMu        sync.RWMutex
+	agentClosed    bool
+	agentHandles   map[agentResource]struct{}
+	agentStreamsMu sync.Mutex
+	agentStreams   map[uintptr]*agentSubscription
+	agentBuffers   map[*agentSubscription]struct{}
 
 	drainMu   sync.Mutex
 	drainOnce sync.Once
@@ -99,23 +106,50 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 
 // Close releases the runtime. Implements io.Closer.
 //
-// Order matters: closing the `r.closing` channel first wakes every in-flight
-// async caller that's parked on its result channel. They return
-// ErrRuntimeClosed and release their per-call resources before the drain
-// goroutine and native runtime are stopped.
+// Closing admission wakes pending agent calls before the drainer stops.
+// Native agent handles are released after dispatch joins and before the native
+// runtime is freed; detached cleanup state makes that release idempotent.
 func (r *Runtime) Close() error {
-	if r.handle == nil {
-		return nil
-	}
-
-	r.closingOnce.Do(func() {
-		if r.closing != nil {
-			close(r.closing)
+	r.closeOnce.Do(func() {
+		r.agentMu.Lock()
+		r.agentClosed = true
+		r.closingOnce.Do(func() {
+			if r.closing != nil {
+				close(r.closing)
+			}
+		})
+		r.agentMu.Unlock()
+		// Cancel connected producers before joining: a continuously nonempty C
+		// queue can keep drain running past its timeout until producers stop.
+		for _, s := range r.agentStreamSnapshot() {
+			s.shutdown()
+		}
+		for _, s := range r.agentBufferSnapshot() {
+			s.shutdown()
+		}
+		r.stopDrain()
+		r.drainAgentTerminals()
+		r.agentMu.Lock()
+		handles := make([]agentResource, 0, len(r.agentHandles))
+		for h := range r.agentHandles {
+			handles = append(handles, h)
+		}
+		r.agentMu.Unlock()
+		for _, h := range handles {
+			h.release()
+		}
+		r.agentMu.Lock()
+		if r.handle != nil {
+			C.boxlite_runtime_free(r.handle)
+			r.handle = nil
+		}
+		r.agentMu.Unlock()
+		// Native destruction drops untransferred opens; their tokens are safe
+		// to release only after no further native callback can be dispatched.
+		for _, s := range r.agentStreamSnapshot() {
+			s.runtimeEnded()
 		}
 	})
-	r.stopDrain()
-	C.boxlite_runtime_free(r.handle)
-	r.handle = nil
 	return nil
 }
 

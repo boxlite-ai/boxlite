@@ -455,6 +455,37 @@ the box keeps running in the runtime.
 
 ## Development
 
+Agent record conversion uses the [shared JSON mapping](../../docs/reference/agents.md#go-json-mapping).
+The fixture in `testdata/agents.json` comes from the Rust core's record functions;
+the Rust test checks it for drift and the Go tests check conversion against it.
+Agent calls, getters and subscriptions reach the C SDK and Rust core.
+Open events before sending; `Events` returns only after connection. Streams allow
+one `Next` reader and bound buffered JSON to 64 events/4 MiB; overflow preserves
+the accepted prefix and ends with `ErrResourceExhausted`. Stream `Close` is
+non-blocking and does not interrupt work. See [Go event streams](../../docs/reference/agents.md#go-event-streams).
+
+`Box.Agents()` acquires its native namespace on first use. Agent and turn wrappers
+must not be copied after first use; `Runtime.Close` releases all their native handles.
+`Agent.Close` requests the core close operation, which may return `ErrUnsupported`;
+it does not free the local handle. Canceling a context stops the wait without
+canceling submitted work. See [Go ownership and cancellation](../../docs/reference/agents.md#go-json-mapping).
+
+The Go unit and coverage targets build the C SDK with its `test-support` feature and add
+the `boxlite_agent_test` Go build tag. These tests cross the real C/core boundary
+using a deterministic backend, without a VM. Normal `make dev:go` builds exclude
+these test entry points; hosted tests do not verify OpenCode in a real VM.
+
+```bash
+make test:unit:go FILTER=Agent
+make test:unit:rust FILTER=go_json_fixture_matches_core_records
+# Race checks for agent calls, streams and ownership
+make test:unit:go FILTER=Agent RACE=1
+```
+
+After an intentional core format change, regenerate the fixture with
+`BOXLITE_UPDATE_AGENT_FIXTURES=1 make test:unit:rust FILTER=go_json_fixture_matches_core_records`,
+then review the JSON diff and rerun both suites.
+
 Build from source (requires Rust toolchain):
 
 ```bash
@@ -488,3 +519,16 @@ runtime create operation saves the option; `Box.Start(ctx)` keeps that saved val
 Runner reads its feature ENV at startup and chooses this creation option only for
 eligible Cloud requests on supported hosts. This adds no start options or change
 to default local creation. Changing organization policy affects future creates.
+
+Local agent VM acceptance uses the same scripted model and OpenCode 2.2.2 binary
+as the C/Rust tests, comparing normalized results, usage and first-event
+identity relationships. It checks unsupported operations, getters and a running
+turn completing after its local handle is released. It is outside hosted CI.
+
+```bash
+BOXLITE_TEST_OPENCODE_BINARY=/absolute/path/to/linux/opencode make test:integration:go:agents
+```
+
+The target builds C and Go callers, then runs the Rust comparison harness.
+The OpenCode binary must match the VM architecture and use glibc Linux; the
+Debian test image, VM support and complete runtime artifacts must be available.

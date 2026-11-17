@@ -10,7 +10,7 @@ pub(super) struct TestBackend {
 }
 
 impl TestBackend {
-    fn complete(&self, text: &str) -> AgentTurnState {
+    fn complete(&self, text: &str, data: Option<serde_json::Value>) -> AgentTurnState {
         let state = AgentTurnState {
             id: "turn-1".into(),
             agent_id: "agent-1".into(),
@@ -21,7 +21,7 @@ impl TestBackend {
                 status: AgentTurnStatus::Completed,
                 outcome: Some(AgentOutcome::Answer),
                 text: Some(text.into()),
-                data: None,
+                data,
                 artifacts: vec![],
                 usage: None,
                 error: None,
@@ -65,8 +65,8 @@ impl AgentBackend for TestBackend {
             steering: vec![],
         })
     }
-    async fn send(&self, text: &str, _: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
-        Ok(self.complete(text))
+    async fn send(&self, text: &str, options: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
+        Ok(self.complete(text, options.data.clone()))
     }
     async fn turn(&self, id: &str) -> BoxliteResult<AgentTurnState> {
         self.turn
@@ -93,7 +93,7 @@ impl AgentBackend for TestBackend {
         _: &AgentControlOptions,
     ) -> BoxliteResult<AgentTurnState> {
         match (id, response) {
-            ("request-1", AgentResponse::Answer { text, .. }) => Ok(self.complete(&text)),
+            ("request-1", AgentResponse::Answer { text, data }) => Ok(self.complete(&text, data)),
             _ => Err(BoxliteError::InvalidArgument(
                 "expected answer to request-1".into(),
             )),
@@ -101,7 +101,47 @@ impl AgentBackend for TestBackend {
     }
     async fn events(&self, options: &AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         use futures::StreamExt;
+        let event = |kind: String| AgentEvent {
+            cursor: None,
+            agent_id: self.id().into(),
+            turn_id: None,
+            kind,
+            data: serde_json::json!({}),
+        };
+        if let Some(size) = options
+            .after
+            .as_deref()
+            .and_then(|s| s.strip_prefix("bytes:"))
+        {
+            let mut items = Vec::new();
+            for size in size.split(',') {
+                let size: usize = size
+                    .parse()
+                    .map_err(|_| BoxliteError::InvalidArgument("invalid test size".into()))?;
+                let mut item = event("sized".into());
+                item.data = serde_json::json!("");
+                let overhead = records::event(&item).to_string().len();
+                let padding = size.checked_sub(overhead).ok_or_else(|| {
+                    BoxliteError::InvalidArgument("test size below record overhead".into())
+                })?;
+                item.data = serde_json::json!("x".repeat(padding));
+                items.push(Ok(item));
+            }
+            return Ok(Box::pin(futures::stream::iter(items)));
+        }
         match options.after.as_deref() {
+            Some("open-pending") => std::future::pending().await,
+            Some("many") => Ok(Box::pin(futures::stream::iter(
+                (0..128)
+                    .map(|n| Ok(event(n.to_string())))
+                    .collect::<Vec<_>>(),
+            ))),
+            Some("continuous") => {
+                let item = event("tick".into());
+                Ok(Box::pin(futures::stream::repeat_with(move || {
+                    Ok(item.clone())
+                })))
+            }
             Some("open-error") => Err(BoxliteError::Network("test open failed".into())),
             Some("pending") => Ok(Box::pin(futures::stream::pending())),
             Some("read-error") => Ok(Box::pin(futures::stream::iter(vec![
