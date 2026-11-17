@@ -357,7 +357,8 @@ const converge = ({
   const result = spawnSync('bash', ['-c', enforce], {
     encoding: 'utf8',
     env: {
-      PATH: `${binDir}:/usr/bin:/bin`,
+      PATH: `${binDir}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
+      NOSYSBASHRC: '1',
       BOXLITE_RUNNER_ENV_FILE: envFile,
       RESTARTS: restarts,
     },
@@ -440,7 +441,13 @@ const mountDataDisk = ({ work, probe, device = join(work, 'disk') }: { work: str
   const calls = join(work, 'calls')
   const result = spawnSync('bash', ['-c', `set -euo pipefail\n${renderDataDiskMount({ device, mountPoint: home, fstab })}`], {
     encoding: 'utf8',
-    env: { PATH: `${bin}:/usr/bin:/bin`, PROBE: String(probe), CALLS: calls, MOUNTED: join(work, 'mounted') },
+    env: {
+      PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
+      NOSYSBASHRC: '1',
+      PROBE: String(probe),
+      CALLS: calls,
+      MOUNTED: join(work, 'mounted'),
+    },
   })
   return {
     code: result.status,

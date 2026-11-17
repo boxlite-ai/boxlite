@@ -50,7 +50,7 @@ test('the public workflow forwards every component selection through preview and
         })
         const result = spawnSync('bash', ['-c', script], {
           encoding: 'utf8',
-          env: { PATH: `${directory}:${process.env.PATH}`, COMPONENTS: components, TRACE: trace },
+          env: { PATH: `${directory}:${process.env.PATH}`, NOSYSBASHRC: '1', COMPONENTS: components, TRACE: trace },
         })
         assert.equal(result.status, 0, result.stderr)
         assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n'), [

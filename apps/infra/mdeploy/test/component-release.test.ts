@@ -21,6 +21,7 @@ test('API-only releases skip Runner attachments while every selection still requ
         encoding: 'utf8',
         env: {
           PATH: `${directory}:${process.env.PATH}`,
+          NOSYSBASHRC: '1',
           VERSION: 'v1.2.3',
           COMPONENTS: components,
           GITHUB_REPOSITORY: 'example/fixture',

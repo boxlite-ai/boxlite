@@ -63,7 +63,7 @@ for path in "$@"; do
   resolved=$(realpath -m -- "$path")
   [[ "$resolved" == "$FIXTURE_ROOT/"* ]] || exit 91
 done
-exec /bin/rm "$@"
+PATH="\${PATH#*:}" exec rm "$@"
 `, { mode: 0o755 })
   const env = {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home, TMPDIR: temp,

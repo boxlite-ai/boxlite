@@ -183,7 +183,7 @@ const generatedScript = (callerScript: string): string => {
   try {
     const result = runShell(
       manylinuxAssembly(),
-      { PATH: '/usr/bin:/bin', RUNNER_TEMP: dir, BUILD_SCRIPT: callerScript, TARGET: 'linux-x64-gnu' },
+      { PATH: `/usr/bin:/bin:${process.env.PATH ?? ''}`, RUNNER_TEMP: dir, BUILD_SCRIPT: callerScript, TARGET: 'linux-x64-gnu' },
       dir,
     )
     assert.equal(result.status, 0, `assembly failed: ${result.stderr}`)
@@ -265,7 +265,7 @@ for (const cached of [true, false]) {
         writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
       }
       const result = runShell(String(readAction('run-in-manylinux').runs.steps[0].run), {
-        PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir,
+        PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ''}`, RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir,
         BUILD_SCRIPT: '', TARGET: 'linux-arm64-gnu', TRACE: join(dir, 'trace'),
         SCCACHE_DIR: join(dir, 'sccache'),
         ARGS: join(dir, 'args'), OWNER_ARGS: join(dir, 'owner-args'),
@@ -300,7 +300,7 @@ for (const status of [0, 17]) {
         writeFileSync(join(dir, name), `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "$TRACE"\n`, { mode: 0o755 })
       }
       const result = runShell(generatedScript(`exit ${status}`), {
-        PATH: `${dir}:/usr/bin:/bin`, CARGO_HOME: dir, TRACE: join(dir, 'trace'),
+        PATH: `${dir}:/usr/bin:/bin:${process.env.PATH ?? ''}`, CARGO_HOME: dir, TRACE: join(dir, 'trace'),
       }, dir)
       assert.equal(result.status, status)
       assert.match(readFileSync(join(dir, 'trace'), 'utf8'), /sccache --stop-server\n$/)
@@ -357,7 +357,7 @@ const sccacheEnvironment = ({
     const result = runShell(
       String(step.run),
       {
-        PATH: `${binDir}:/usr/bin:/bin`,
+        PATH: `${binDir}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
         GITHUB_ENV: envFile,
         GITHUB_WORKSPACE: dir,
         RUNNER_TEMP: dir,
@@ -437,7 +437,7 @@ test('compiler cache save reuses the lockfile hash captured before container bui
       assert.ok(step.run && step.id, 'cache preparation must expose its result')
       const output = join(directory, step.id)
       const env = Object.fromEntries(Object.entries<string>(step.env ?? {}).map(([name, value]) => [name, evaluate(value)]))
-      const result = runShell(evaluate(step.run), { ...env, PATH: '/usr/bin:/bin', GITHUB_OUTPUT: output }, directory)
+      const result = runShell(evaluate(step.run), { ...env, PATH: `/usr/bin:/bin:${process.env.PATH ?? ''}`, GITHUB_OUTPUT: output }, directory)
       assert.equal(result.status, 0, result.stderr)
       context.steps[step.id] = { outputs: Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map((line) => {
         const separator = line.indexOf('=')
@@ -640,7 +640,7 @@ const restoreDeclaration = ({
     const result = runShell(
       String(step.run),
       {
-        PATH: `${binDir}:/usr/bin:/bin`,
+        PATH: `${binDir}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
         RUNNER_TEMP: runnerTemp,
         STAGES: stages,
         BOXLITE_MSTAGE_BOXLITE_APP_CONFIG: config,

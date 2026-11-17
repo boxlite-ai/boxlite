@@ -447,14 +447,24 @@ exit "$CARGO_STATUS"
     if (runner === 'nextest') {
       writeFileSync(join(directory, 'cargo-nextest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     }
-    // Isolate tool discovery so an installed nextest cannot hide the fallback.
-    const result = spawnSync('/usr/bin/make', [
+    // Isolate tool discovery so an installed nextest cannot hide the fallback:
+    // the child PATH carries the fixture fakes first, then only the directories
+    // of the real tools the glue needs (make, sh, jq, mktemp) — never the full
+    // inherited PATH, where an installed cargo/nextest would change the branch.
+    const resolve = (tool: string): string => {
+      const found = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim()
+      if (!found) throw new Error(`${tool} is required by the CLI glue test but was not found`)
+      return dirname(found)
+    }
+    const makePath = spawnSync('sh', ['-c', 'command -v make'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/make'
+    const toolsDir = [resolve('sh'), resolve('jq'), resolve('mktemp')].filter((dir, index, all) => all.indexOf(dir) === index).join(':')
+    const result = spawnSync(makePath, [
       '-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli',
       'NEXTEST_PROFILE=ci', `SCRIPT_DIR=${join(REPO_ROOT, 'scripts')}`,
     ], {
       cwd: REPO_ROOT,
       env: {
-        ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode),
+        ...process.env, PATH: `${directory}:${toolsDir}`, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode),
         CARGO_BIN_EXE_boxlite: '', CARGO_TEST_BIN: binary,
         CARGO_ARTIFACT: JSON.stringify({
           reason: 'compiler-artifact', target: { name: 'boxlite', kind: ['bin'] },
@@ -648,12 +658,13 @@ exec "$@"
         writeFileSync(join(bin, 'uname'), '#!/bin/sh\necho Linux\n', { mode: 0o755 })
         writeFileSync(join(directory, 'scripts/util.sh'), '#!/bin/sh\necho x86_64-unknown-linux-musl\n', { mode: 0o755 })
         writeFileSync(join(bin, 'make'), `#!/bin/sh
-printf 'make %s\\nwrapper=%s\\ncache=%s\\n' "$*" "\${RUSTC_WRAPPER:-}" "\${SCCACHE_DIR:-}" >> "$TRACE"
-if [ "$1" = runtime ]; then
+ECHO=\$(command -v echo)
+printf 'make %s\\nwrapper=%s\\ncache=%s\\n' "$*" "\${RUSTC_WRAPPER:-}" "\${SCCACHE_DIR:-}" >> "\$TRACE"
+if [ "\$1" = runtime ]; then
   if [ -n "\${RUSTC_WRAPPER:-}" ]; then
-    "$RUSTC_WRAPPER" /bin/echo compiler-invoked >> "$TRACE"
+    "\$RUSTC_WRAPPER" "\$ECHO" compiler-invoked >> "\$TRACE"
   else
-    /bin/echo compiler-invoked >> "$TRACE"
+    echo compiler-invoked >> "\$TRACE"
   fi
 fi
 `, { mode: 0o755 })
@@ -665,12 +676,14 @@ fi
           .replaceAll('/host', host)
         const env = {
           ...Object.fromEntries(Object.entries<string>(config.linux.environment).map(([name, value]) => [name, relocate(value)])),
-          PATH: `${bin}:${pythonBin}:${dirname(wrapper)}:/usr/bin:/bin`, HOME: join(directory, 'home'),
+          PATH: `${bin}:${pythonBin}:${dirname(wrapper)}:/usr/bin:/bin:${process.env.PATH ?? ''}`, HOME: join(directory, 'home'),
           TRACE: trace, PYTHON_BIN: pythonBin, INSTALL_SUCCEEDS: String(source === 'pip'),
           BOXLITE_HOST_SCCACHE_DIR: sharedCache ? '/runner cache/sccache' : '',
           BOXLITE_HOST_SCCACHE_BIN: source === 'host' ? '/runner tools/sccache' : '',
         }
-        const result = spawnSync('bash', ['-e', '-c', relocate(config['before-all'].join('\n'))], {
+        // --noprofile/--norc keep the fixture PATH intact: NixOS bash sources
+        // /etc/bashrc even non-interactively and would rebuild PATH from $HOME.
+        const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-c', relocate(config['before-all'].join('\n'))], {
           cwd: directory, env, encoding: 'utf8', timeout: 10_000,
         })
         assert.equal(result.status, 0, result.stderr)
@@ -678,8 +691,8 @@ fi
         assert.ok(calls.includes(`wrapper=${wrapper}\n`), 'runtime must use the stable wrapper from the wheel environment')
         assert.ok(calls.includes(`cache=${cache}\n`), 'runtime must use the configured disk cache')
         assert.match(calls, /compiler-invoked\n/, 'both installed and fallback wrappers must invoke the compiler')
-        assert.equal(calls.includes('installed-wrapper /bin/echo'), source === 'pip', 'standalone wheels must install a published package')
-        assert.equal(calls.includes('host-wrapper /bin/echo'), source === 'host', 'CI wheels must execute the verified host binary')
+        assert.equal(calls.includes('installed-wrapper '), source === 'pip', 'standalone wheels must install a published package')
+        assert.equal(calls.includes('host-wrapper '), source === 'host', 'CI wheels must execute the verified host binary')
         assert.equal(lstatSync(wrapper).isSymbolicLink(), source === 'pip')
         if (source === 'host') {
           assert.ok(!calls.includes('pip '), 'the verified host binary needs no second installation')
@@ -694,7 +707,7 @@ fi
             'a local build must not create a host link, including a dangling one')
         }
         if (!installSucceeds) assert.match(result.stdout, /WARNING: sccache not available/)
-        const stop = spawnSync('bash', ['-e', '-c', relocate(config.linux['before-test'] ?? '')], {
+        const stop = spawnSync('bash', ['--noprofile', '--norc', '-e', '-c', relocate(config.linux['before-test'] ?? '')], {
           cwd: directory, env, encoding: 'utf8', timeout: 10_000,
         })
         assert.equal(stop.status, 0, 'the pass-through fallback must tolerate server shutdown')
