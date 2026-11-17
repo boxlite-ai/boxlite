@@ -909,7 +909,8 @@ uses a single title, concise explanation and at most one primary action. Workflo
 steps live in the guide rather than being repeated below a second empty-state heading. Successful browser
 connection offers the same guide for the current BoxLite organization. The success
 entry survives removal of the authorization route parameter and clears when a new
-attempt starts or the organization changes. The callback guide uses the confirmed
+attempt starts, the organization changes, or a connection is successfully deleted.
+Failed deletion preserves the existing completion guidance. The callback guide uses the confirmed
 connection result without requiring dashboard organization context.
 
 The guide shows a compact organization context and an example workflow diff:
