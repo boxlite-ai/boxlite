@@ -26,6 +26,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 boxlite = { workspace = true, features = ["rest", "test-support"] }
+boxlite-test-utils = { path = "../../src/test-utils" }
 
 [build-dependencies]
 cbindgen = "0.29"

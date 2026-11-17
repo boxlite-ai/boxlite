@@ -36,6 +36,7 @@ include_directories(${BOXLITE_INCLUDE_DIR})
 # lives in the Go SDK + runner integration suite.
 set(TEST_TARGETS
     test_agents
+    test_agents_opencode
     test_simple_api
     test_null_callback
     test_socket_address
@@ -72,7 +73,9 @@ enable_testing()
 
 # Register tests
 foreach(TARGET ${TEST_TARGETS})
-    add_test(NAME ${TARGET} COMMAND ${TARGET})
+    if(NOT "${TARGET}" STREQUAL "test_agents_opencode")
+        add_test(NAME ${TARGET} COMMAND ${TARGET})
+    endif()
 endforeach()
 
 # Label integration tests (require VM)

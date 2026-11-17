@@ -1,19 +1,18 @@
-//! JSON records for `boxlite agent`, in the shapes documented under "C JSON
-//! fields" in `docs/reference/agents.md`.
+//! Shared JSON records for agent API consumers.
 //!
-//! The CLI owns these shapes so the public `boxlite::agents` types stay free of
-//! serialization contracts; enum names are the documented snake_case strings.
+//! Field names and enum spellings follow the C JSON contract in
+//! `docs/reference/agents.md`.
 
-use boxlite::agents::{
+use super::{
     AgentCapabilities, AgentConfig, AgentEvent, AgentOutcome, AgentRequest, AgentRequestKind,
     AgentResponse, AgentResult, AgentState, AgentStatus, AgentSteeringReceipt, AgentSteeringStatus,
     AgentTurnState, AgentTurnStatus,
 };
-use boxlite::{BoxliteError, BoxliteResult};
+use crate::{BoxliteError, BoxliteResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub(super) fn agent_state(state: &AgentState) -> Value {
+pub fn agent_state(state: &AgentState) -> Value {
     json!({
         "id": state.id,
         "status": agent_status(state.status),
@@ -25,7 +24,7 @@ pub(super) fn agent_state(state: &AgentState) -> Value {
     })
 }
 
-pub(super) fn turn_state(state: &AgentTurnState) -> Value {
+pub fn turn_state(state: &AgentTurnState) -> Value {
     json!({
         "id": state.id,
         "agent_id": state.agent_id,
@@ -37,7 +36,7 @@ pub(super) fn turn_state(state: &AgentTurnState) -> Value {
     })
 }
 
-pub(super) fn result(result: &AgentResult) -> Value {
+pub fn result(result: &AgentResult) -> Value {
     json!({
         "turn_id": result.turn_id,
         "status": turn_status(result.status),
@@ -53,7 +52,7 @@ pub(super) fn result(result: &AgentResult) -> Value {
     })
 }
 
-pub(super) fn receipt(receipt: &AgentSteeringReceipt) -> Value {
+pub fn receipt(receipt: &AgentSteeringReceipt) -> Value {
     let status = match receipt.status {
         AgentSteeringStatus::Accepted => "accepted",
         AgentSteeringStatus::Applied => "applied",
@@ -63,7 +62,7 @@ pub(super) fn receipt(receipt: &AgentSteeringReceipt) -> Value {
     json!({ "id": receipt.id, "turn_id": receipt.turn_id, "status": status })
 }
 
-pub(super) fn requests(requests: &[AgentRequest]) -> Value {
+pub fn requests(requests: &[AgentRequest]) -> Value {
     let records = requests.iter().map(|request| {
         let kind = match &request.kind {
             AgentRequestKind::Question { text, schema } => {
@@ -78,7 +77,7 @@ pub(super) fn requests(requests: &[AgentRequest]) -> Value {
     Value::Array(records.collect())
 }
 
-pub(super) fn config(config: &AgentConfig) -> Value {
+pub fn config(config: &AgentConfig) -> Value {
     let mut record = json!({ "tools": config.tools, "mcp": config.mcp });
     let optional = [
         ("model", config.model.clone().map(Value::String)),
@@ -99,7 +98,7 @@ pub(super) fn config(config: &AgentConfig) -> Value {
     record
 }
 
-pub(super) fn capabilities(capabilities: &AgentCapabilities) -> Value {
+pub fn capabilities(capabilities: &AgentCapabilities) -> Value {
     json!({
         "operations": capabilities.operations,
         "input_kinds": capabilities.input_kinds,
@@ -110,7 +109,7 @@ pub(super) fn capabilities(capabilities: &AgentCapabilities) -> Value {
     })
 }
 
-pub(super) fn event(event: &AgentEvent) -> Value {
+pub fn event(event: &AgentEvent) -> Value {
     json!({
         "cursor": event.cursor,
         "agent_id": event.agent_id,
@@ -121,7 +120,7 @@ pub(super) fn event(event: &AgentEvent) -> Value {
 }
 
 /// Parse `--agent-config`; unknown fields are rejected rather than ignored.
-pub(super) fn parse_config(value: Value) -> BoxliteResult<AgentConfig> {
+pub fn parse_config(value: Value) -> BoxliteResult<AgentConfig> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ConfigRecord {
@@ -151,7 +150,7 @@ pub(super) fn parse_config(value: Value) -> BoxliteResult<AgentConfig> {
 }
 
 /// Parse the `respond` argument: an answer or a permission decision.
-pub(super) fn parse_response(value: Value) -> BoxliteResult<AgentResponse> {
+pub fn parse_response(value: Value) -> BoxliteResult<AgentResponse> {
     #[derive(Deserialize)]
     #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
     enum ResponseRecord {
