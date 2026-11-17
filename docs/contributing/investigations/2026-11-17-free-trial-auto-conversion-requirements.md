@@ -12,10 +12,12 @@ Offer each eligible user a seven-day free trial of a selected self-serve paid mo
 
 - The trial lasts exactly seven days, starting when trial creation succeeds and ending at the same time of day seven days later.
 - A real user can receive only one self-service first-subscription trial across all organizations:
-  - Creating or joining another organization, or registering again, does not restore eligibility.
+  - Creating or joining another organization, or registering again with a linked identity, does not restore eligibility.
   - Members of the same organization cannot claim separate trials for that organization.
   - A previous trial, paid subscription, or trial whose conversion payment failed consumes the user's self-service eligibility.
   - An existing free user who has never subscribed remains eligible.
+- Commerce links eligibility through the verified OIDC subject, organization, and provider card fingerprint. A deliberately new OIDC subject combined with a new card has no reliable identity link in this issue and is outside the enforceable repeat-registration guarantee.
+- A paid row recorded before subscriber identity was available blocks a later trial in the same organization. Such a legacy row cannot consume eligibility across other organizations because it has no user identity to match.
 - Only standard, self-serve paid monthly plans participate. Custom plans, offline contracts, free tiers, and special pricing do not.
 - The user selects one plan when starting the trial. That plan and its locked-in price define the later conversion.
 - The system records the trial eligibility decision, selected plan, start time, and end time.

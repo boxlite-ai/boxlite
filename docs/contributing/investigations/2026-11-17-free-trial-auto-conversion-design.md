@@ -64,15 +64,19 @@ The module performs the complete grant behind one use-case interface:
 4. Insert one active trial with immutable plan, price, quota, start, and exact seven-day end.
 5. Invoke `ReconcileSubscriptionCredits` with the durable trial ID. Its trial candidate derives the expiring quota grant from that row and reuses the existing exactly-once grant key.
 
-Repeated activation of the same current trial is a no-op and never moves its end. A user with prior paid history receives no trial but can still purchase. No administrator route, UI, or public grant operation is included.
+Repeated activation of the same current trial is a no-op and never moves its end. A user with attributable prior paid history receives no trial but can still purchase. No administrator route, UI, or public grant operation is included.
+
+Commerce enforces repeat-registration protection only when an OIDC subject, organization, or card fingerprint links the attempts. A deliberately new OIDC subject combined with a new card has no reliable identity link in the current system; adding such an identity capability is outside this issue.
 
 ## Durable records
 
 Extend the existing subscription row with nullable fields rather than creating a second lifecycle store:
 
 - Trial user/source, start/end, conversion state, locked amount, and locked quota.
-- Subscriber user ID and provider payment fingerprint, including ordinary paid starts so previous paid history consumes self-service eligibility.
+- Subscriber user ID and provider payment fingerprint, including ordinary paid starts so attributable previous paid history consumes self-service eligibility.
 - Existing organization, plan, status, subscription anchor, cancellation, and chain fields remain authoritative.
+
+There is no identity backfill for pre-migration paid rows. Any active or terminated legacy row blocks a later trial in that same organization even when its new identity fields are null. A legacy row cannot block a trial in another organization because Commerce has no subscriber identity to associate with it.
 
 Partial unique indexes apply only to `first_subscription` trials. Existing paid rows and future administrator sources do not inherit those constraints. All money and entitlement writes join the existing Commerce transaction and lock order.
 
@@ -119,7 +123,7 @@ Existing BoxLite caches retain their current 30–60 second convergence behavior
 
 | Invariant | Enforcement |
 | --- | --- |
-| One self-service trial per real user, organization, and card | OIDC identity, paid/trial history, ordered advisory locks, independent unique indexes |
+| One self-service trial per linked user, organization, and card | OIDC identity, attributable paid/trial history, legacy same-organization rows, ordered advisory locks, independent unique indexes |
 | Trial time never extends through retry | Immutable active-trial timestamps and current-trial replay |
 | Client cannot choose price, quota, or payment state | Server catalog, durable grant fields, provider records |
 | Browser return or pending payment grants nothing | Verified card setup and actual payment state only |
