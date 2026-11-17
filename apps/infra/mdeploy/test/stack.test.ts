@@ -106,7 +106,7 @@ test('retention is resolved once, and only a self-hosted ClickHouse accepts one'
 })
 
 /**
- * A fleet of the given control-plane names, shaped as `fleetFrom` shapes one.
+ * A fleet of the given control-plane names, shaped as `runnerFleetFrom` shapes one.
  *
  * The first slot keeps the resource name `Runner`; every later one is numbered.
  * Copied in that detail on purpose — a test that invented its own naming would

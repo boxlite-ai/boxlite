@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -18,8 +18,65 @@ import { load } from 'js-yaml'
 import { parseBase } from 'mstage/config'
 import { variableNameFor } from 'mstage/config-variable'
 
-const workflow = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)), 'utf8')
+const workflow = readFileSync(
+  fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)),
+  'utf8',
+)
 const ENV_CONFIG = fileURLToPath(new URL('../../mstage.env.json', import.meta.url))
+
+test('the public workflow forwards every component selection through preview and apply', () => {
+  const parsed = load(workflow) as any
+  const apply = parsed.jobs.deploy.steps.find((step: any) => step.name === 'Apply')
+  assert.equal(apply.env.COMPONENTS, '${{ inputs.components }}')
+  const directory = mkdtempSync(join(tmpdir(), 'mdeploy-components-'))
+  try {
+    const trace = join(directory, 'arguments')
+    const npm = join(directory, 'npm')
+    writeFileSync(npm, '#!/bin/bash\nprintf "%s\\n" "$@" > "$TRACE"\n')
+    chmodSync(npm, 0o755)
+    for (const components of ['api', 'runner', 'api+runner'])
+      for (const applying of [false, true]) {
+        const script = apply.run.replace(/\$\{\{([^}]+)\}\}/g, (_match: string, expression: string) => {
+          if (expression.trim() === 'inputs.stage') return 'dev'
+          if (expression.trim() === 'inputs.apply') return String(applying)
+          if (expression.includes('inputs.confirm')) return '--confirm'
+          throw new Error(`Unexpected workflow expression: ${expression}`)
+        })
+        const result = spawnSync('bash', ['-c', script], {
+          encoding: 'utf8',
+          env: { PATH: `${directory}:${process.env.PATH}`, COMPONENTS: components, TRACE: trace },
+        })
+        assert.equal(result.status, 0, result.stderr)
+        assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n'), [
+          'run',
+          'mdeploy',
+          '--',
+          '--stage',
+          'dev',
+          '--components',
+          components,
+          applying ? '--confirm' : '--diff',
+        ])
+      }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('component-specific artifact and cloud checks stay aligned with the public selection', () => {
+  const parsed = load(workflow) as any
+  const steps = parsed.jobs.plan.steps
+  const gate = steps.findIndex((step: any) => step.name === 'Check component deployment support')
+  assert.ok(gate > steps.findIndex((step: any) => step.name === 'Resolve the stage'))
+  assert.ok(gate < steps.findIndex((step: any) => step.name === 'Federate an AWS identity'))
+  assert.equal(steps[gate].if, "inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'")
+  assert.notEqual(spawnSync('bash', ['-c', steps[gate].run]).status, 0)
+  const images = parsed.jobs.deploy.steps.find((step: any) => step.name === 'Verify the images')
+  assert.equal(images.if, "inputs.components != 'runner'")
+  const release = parsed.jobs.resolve.steps.find((step: any) => step.name === 'Require the release this tag names')
+  assert.equal(release.env.COMPONENTS, '${{ inputs.components }}')
+  assert.ok(release.run.indexOf('"$COMPONENTS" = \'api\'') < release.run.indexOf('tarball='))
+})
 
 /** What the workflow runs, with the commentary that discusses it removed. */
 const commands = workflow
@@ -79,7 +136,10 @@ const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml']
 
 test('a GCP identity is federated by the action that also gives gcloud its own credential', () => {
   for (const name of GCP_FEDERATING_WORKFLOWS) {
-    const source = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+    const source = readFileSync(
+      fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)),
+      'utf8',
+    )
     const runs = source
       .split('\n')
       .filter((line) => !/^\s*#/.test(line))
@@ -119,7 +179,8 @@ test('a GCP identity is federated by the action that also gives gcloud its own c
  * Both new workflows are checked here so the two cannot drift apart.
  */
 test('the AWS role is composed from the account id, as every other workflow does', () => {
-  const read = (name: string) => readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+  const read = (name: string) =>
+    readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
   for (const [name, source] of [
     ['mdeploy-all.yml', workflow],
     ['mbuild.yml', read('mbuild.yml')],
@@ -133,7 +194,11 @@ test('the AWS role is composed from the account id, as every other workflow does
       /role-to-assume: arn:aws:iam::\$\{\{ vars\.AWS_ACCOUNT_ID \}\}:role\/boxlite-(?:\$\{\{ [^}]+ \}\}|[a-z0-9-]+)-github-deploy/,
       `${name} does not compose the role ARN`,
     )
-    assert.doesNotMatch(source, /vars\.AWS_DEPLOY_ROLE_ARN|vars\.AWS_ECR_PUSH_ROLE_ARN/, `${name} reads an undefined variable`)
+    assert.doesNotMatch(
+      source,
+      /vars\.AWS_DEPLOY_ROLE_ARN|vars\.AWS_ECR_PUSH_ROLE_ARN/,
+      `${name} reads an undefined variable`,
+    )
   }
 })
 
@@ -169,7 +234,10 @@ test('a read is retried and the apply is not', () => {
 })
 
 test('the digest and the image check are not retried, because their answer is not transient', () => {
-  const between = commands.slice(commands.indexOf('Verify the stage configuration'), commands.indexOf('- name: Confirm'))
+  const between = commands.slice(
+    commands.indexOf('Verify the stage configuration'),
+    commands.indexOf('- name: Confirm'),
+  )
   assert.doesNotMatch(between, /for attempt in/)
 })
 
@@ -190,7 +258,8 @@ test('a protected stage is confirmed, and the confirmation reaches mdeploy', () 
 })
 
 test('every job that reads a declaration is given one first', () => {
-  const read = (file: string) => readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${file}`, import.meta.url)), 'utf8')
+  const read = (file: string) =>
+    readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${file}`, import.meta.url)), 'utf8')
   const name = variableNameFor(parseBase('mstage.env.json', readFileSync(ENV_CONFIG, 'utf8')).app)
   for (const [file, source] of [
     ['mdeploy-all.yml', workflow],
@@ -305,7 +374,10 @@ test('a callee trusts no ref it was handed, and resolves none of its own', () =>
    * where the value enters, which is what `build-apps-api-image.yml` does with
    * the same guarantee from the same caller.
    */
-  const mbuild = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)), 'utf8')
+  const mbuild = readFileSync(
+    fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)),
+    'utf8',
+  )
   assert.doesNotMatch(mbuild, /^ {2}workflow_dispatch:$/m, 'a dispatcher could hand it an unproved ref')
   assert.match(mbuild, /^ {2}workflow_call:$/m, 'nothing can reach it at all')
   assert.doesNotMatch(mbuild, /actions\/resolve-ref/, 'it resolves a ref its caller already resolved')
