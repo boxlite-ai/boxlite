@@ -426,6 +426,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
       expect.arrayContaining([
         {
           hostname: 'shop1.app.boxlite.test',
+          kind: 'platform',
           url: 'https://shop1.app.boxlite.test',
           target: { type: 'app', app: box.id },
         },
@@ -528,6 +529,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     expect(held.domains).toEqual([
       {
         hostname: `demo1.${APP_DOMAIN}`,
+        kind: 'platform',
         url: `https://demo1.${APP_DOMAIN}`,
         target: { type: 'box', box: box.id, port: 3000 },
       },
@@ -684,6 +686,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     expect(held.domains).toHaveLength(limit + 2)
     expect(held.domains.find((domain) => domain.hostname === 'app.customer.example')).toEqual({
       hostname: 'app.customer.example',
+      kind: 'custom',
       url: 'https://app.customer.example',
       target: null,
     })

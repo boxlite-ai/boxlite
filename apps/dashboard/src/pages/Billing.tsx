@@ -7,6 +7,7 @@
 import { TabIcon } from '@/components/ui/TabIcon'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
+import { PlansSection } from '@/components/billing/PlansSection'
 import { PlanSection } from '@/components/billing/PlanSection'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
@@ -14,8 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
 
 const TAB_PANE = 'py-6'
@@ -78,7 +78,7 @@ function BillingComingSoon() {
 }
 
 /**
- * One page, three tabs — the arrangement in the design. Each tab is a section
+ * One page, four tabs — the arrangement in the design. Each tab is a section
  * that keeps its own hooks; this only composes and switches them. Critical wallet
  * warnings stay above the tabs; identity and payment guidance stays in Overview.
  */
@@ -86,7 +86,16 @@ function Billing() {
   usePageTitle('Billing')
   const config = useConfig()
   // Controlled, so the page-level balance warning can send the user to Wallet.
-  const [tab, setTab] = useState('overview')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const tab =
+    requestedTab && ['overview', 'plans', 'usage', 'wallet'].includes(requestedTab) ? requestedTab : 'overview'
+  const setTab = (value: string) =>
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      next.set('tab', value)
+      return next
+    })
 
   if (!config.billingApiUrl) {
     return <BillingComingSoon />
@@ -103,27 +112,38 @@ function Billing() {
           <div className="mt-4 w-full empty:hidden">
             <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
           </div>
-          <TabsList variant="underline" aria-label="Billing views" className="mt-5">
-            <TabsTrigger value="overview">
-              <TabIcon name="overview" />
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="usage">
-              <TabIcon name="chart" />
-              Usage
-            </TabsTrigger>
-            <TabsTrigger value="wallet">
-              <TabIcon name="wallet" />
-              Wallet
-            </TabsTrigger>
-          </TabsList>
+          <div className="mt-5 flex items-center gap-3">
+            <TabsList variant="underline" aria-label="Billing views" className="min-w-0 flex-1 gap-3 sm:gap-6">
+              <TabsTrigger value="overview">
+                <TabIcon name="overview" />
+                Overview
+              </TabsTrigger>
+              <TabsTrigger value="plans">
+                <TabIcon name="list" />
+                Plans
+              </TabsTrigger>
+              <TabsTrigger value="usage">
+                <TabIcon name="chart" />
+                Usage
+              </TabsTrigger>
+              <TabsTrigger value="wallet">
+                <TabIcon name="wallet" />
+                Wallet
+              </TabsTrigger>
+            </TabsList>
+          </div>
         </div>
         <TabsContent value="overview">
           <div className={TAB_PANE}>
             <div className="mb-8 flex flex-col gap-4 empty:hidden">
               <BillingAlerts />
             </div>
-            <PlanSection />
+            <PlanSection onViewPlans={() => setTab('plans')} />
+          </div>
+        </TabsContent>
+        <TabsContent value="plans">
+          <div className={TAB_PANE}>
+            <PlansSection />
           </div>
         </TabsContent>
         <TabsContent value="usage">

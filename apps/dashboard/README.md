@@ -81,8 +81,8 @@ See [Checkpoint controls and recovery](#checkpoint-controls-and-recovery) for re
 
 **Connect via SSH**, beside start/stop, opens a static local-terminal guide.
 Opening, closing and copying commands make no SSH or network changes. The guide
-uses the shared compact dialog, square code surfaces and monospace typography;
-its header stays fixed while the body scrolls. The overview remains mounted throughout.
+uses the shared compact dialog and square code surfaces, with sans-serif interface
+text and monospace commands; its header stays fixed while the body scrolls. The overview remains mounted throughout.
 Copy actions sit beside step headings rather than in repeated code headers. The
 desktop dialog is 760px wide with compact spacing; shorter windows scroll only
 the body, keeping the title and close control visible.
@@ -118,8 +118,8 @@ Commands are deliberately short: the CLI default endpoint is the hosted API,
 `https://api.boxlite.ai`, and successful login caches the organization's routing
 prefix. Bare login writes the selected CLI context; the guide does not isolate
 existing CLI state or override exported `BOXLITE_*` variables. Its muted docs line
-points users with self-hosted endpoints, other organizations or an existing CLI
-setup to the [SSH guide](https://docs.boxlite.ai/cloud/ssh). The browser does not
+points users working with other organizations or an existing CLI setup to the
+[SSH guide](https://docs.boxlite.ai/cloud/ssh). The browser does not
 detect these cases. Box IDs are validated before inclusion in commands.
 
 Dashboard does not duplicate the CLI's identity-file paths, known-hosts handling
@@ -261,6 +261,12 @@ The console resolves shared-region names through `GET /api/shared-regions`.
 An unknown region keeps its stored ID as the display fallback. Region names do
 not depend on the selected organization, so switching organizations does not
 refetch this list.
+
+## Billing plans
+
+Billing separates account status in Overview from the grouped Plans comparison.
+See [subscription plans](docs/subscription-cards/README.md) for source facts,
+frontend presentation, catalogue-price checks and the local mock preview.
 
 ## Commands
 
@@ -636,8 +642,16 @@ connection-help footer. Successful requests clear filtering and show a reservati
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
-The **All domains** tab lists held platform and customer hostnames; **Custom domains**
-shows setup progress and the separate one-domain allowance, including drafts but excluding replaced configurations.
+The **Managed domain** tab lists only platform hostnames, including its filter, count and allowance.
+**Custom domain** includes draft and replaced configurations.
+Its separate one-domain allowance excludes replaced configurations.
+
+Both tabs use underline navigation and the same Domain, Target type, Associated with, Port and Actions columns.
+Actions copies the hostname; select a custom hostname to view DNS/HTTPS status, retry configuration or delete it.
+Binding and unbinding use the CLI or SDK.
+
+Deploy the API returning domain `kind` before this dashboard version.
+
 **Get DNS configuration** creates or resumes a draft and automatically continues preparation until all three records are available.
 Preparation errors require explicit retry; reopening an incomplete draft does not resume preparation automatically.
 **Configured, verify** checks DNS explicitly; successful confirmation closes the dialog, while failed checks retain records and errors.
@@ -646,7 +660,7 @@ The API task continues confirmed HTTPS setup. The page reads incomplete setup st
 DNS dialogs and pending actions pause these reads. Opening confirmed details reads status without advancing setup.
 An incomplete confirmed setup with an error offers **Retry**, which sends one advance request and respects server backoff.
 **Ready** means setup is complete with an active subscription; **Setup completed** indicates completion without confirmed active eligibility.
-Neither label implies a bound Box port. Viewing, unbinding and confirmed deletion remain available after subscription expiry.
+Neither label implies a bound Box port. Viewing and confirmed deletion remain available after subscription expiry.
 See the [customer-domain guide](../../docs/concepts/networking.md#bring-your-own-domain) for DNS configuration and ownership transfer.
 
 Run `make test:apps:dashboard` for page/client tests and

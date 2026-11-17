@@ -65,7 +65,7 @@ export type HeldDomain = {
 type StoredTarget = Pick<Domain, 'targetType' | 'boxId' | 'appId' | 'port'>
 
 export type HeldDomains = {
-  domains: HeldDomain[]
+  domains: (HeldDomain & Pick<Domain, 'kind'>)[]
   limit: number
   used: number
   remaining: number
@@ -287,6 +287,7 @@ export class DomainService {
     return {
       domains: rows.map((row) => ({
         hostname: row.hostname,
+        kind: row.kind,
         url: this.urlFor(row.hostname),
         target: this.targetOf(row),
       })),

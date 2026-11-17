@@ -32,11 +32,17 @@ const list: DomainList = {
   domains: [
     {
       hostname: 'web-one.apps.test',
+      kind: 'platform',
       url: 'https://web-one.apps.test',
       target: { type: 'box', box: 'box-123', port: 3000 },
     },
-    { hostname: 'shop-one.apps.test', url: 'https://shop-one.apps.test', target: { type: 'app', app: 'shop-app' } },
-    { hostname: 'spare.apps.test', url: 'https://spare.apps.test', target: null },
+    {
+      hostname: 'shop-one.apps.test',
+      kind: 'platform',
+      url: 'https://shop-one.apps.test',
+      target: { type: 'app', app: 'shop-app' },
+    },
+    { hostname: 'spare.apps.test', kind: 'platform', url: 'https://spare.apps.test', target: null },
   ],
   limit: 5,
   used: 3,
@@ -142,6 +148,10 @@ describe('Domains page', () => {
     await render()
     expect(document.querySelectorAll('h1')).toHaveLength(1)
     expect(state.custom).not.toHaveBeenCalled()
+    expect([...document.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toEqual([
+      'Managed domain',
+      'Custom domain',
+    ])
     const custom = document.querySelector<HTMLButtonElement>('[role="tab"][data-state="inactive"]')!
     await act(async () => custom.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
     await settle()
@@ -165,6 +175,31 @@ describe('Domains page', () => {
     expect(links).toHaveLength(1)
     expect(links[0].textContent).toBe('box-123')
     expect(links[0].getAttribute('href')).toBe('/dashboard/boxes/box-123')
+  })
+
+  it('shows only platform domains even when a custom name shares the platform suffix', async () => {
+    state.list.mockResolvedValue({
+      ...list,
+      domains: [
+        ...list.domains,
+        { hostname: 'custom.apps.test', kind: 'custom', url: 'https://custom.apps.test', target: null },
+      ],
+    })
+    await render()
+    expect(document.querySelectorAll('tbody tr')).toHaveLength(3)
+    expect(document.querySelector('tbody')?.textContent).not.toContain('custom.apps.test')
+  })
+
+  it('shows managed empty state when only custom domains are held', async () => {
+    state.list.mockResolvedValue({
+      ...list,
+      domains: [{ hostname: 'customer.example', kind: 'custom', url: 'https://customer.example', target: null }],
+      used: 0,
+      remaining: 5,
+    })
+    await render()
+    expect(document.body.textContent).toContain('No Domains yet.')
+    expect(document.querySelector('table')).toBeNull()
   })
 
   it('previews a full hostname from a short name, claims it and refreshes the list', async () => {
