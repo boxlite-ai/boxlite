@@ -530,6 +530,34 @@ export const handlers = [
     })
   }),
   http.get(`${BILLING_API_URL}/plan`, async () => {
+    if (billingPreview === 'subscription-cards') {
+      return HttpResponse.json<Plan[]>([
+        {
+          id: 'starter',
+          name: 'NoSubscription',
+          priceMonthlyCents: 0,
+          includedQuotaCents: 0,
+          concurrencyLimit: 20,
+          selfServe: true,
+        },
+        {
+          id: 'pro',
+          name: 'Go',
+          priceMonthlyCents: 500,
+          includedQuotaCents: 2000,
+          concurrencyLimit: 40,
+          selfServe: true,
+        },
+        {
+          id: 'max',
+          name: 'Team',
+          priceMonthlyCents: 10000,
+          includedQuotaCents: 40000,
+          concurrencyLimit: 1000,
+          selfServe: true,
+        },
+      ])
+    }
     // Mirrors the billing service's own standard-plan catalog (Subscription.md
     // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
     // data — and is not self-serve.
@@ -629,7 +657,7 @@ export const handlers = [
     return HttpResponse.json<{ plan?: OrganizationPlan }>({
       plan: {
         planId: 'pro',
-        planName: 'Pro',
+        planName: preview === 'subscription-cards' ? 'Go' : 'Pro',
         status: 'active',
         cycleFrom: new Date(Date.UTC(2026, 7, 5)),
         cycleTo: new Date(Date.UTC(2026, 8, 5)),

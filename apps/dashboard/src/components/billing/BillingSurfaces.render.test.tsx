@@ -6,7 +6,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { type OrganizationPlan, type OrganizationWallet, type Plan } from '@/billing-api'
 import { CycleOverview } from './CycleOverview'
-import { PlanCards } from './PlanCards'
+import { PlanComparison } from './PlanComparison'
 
 vi.mock('@/hooks/queries/useUsagePricesQuery', () => ({ useUsagePricesQuery: () => ({ data: undefined }) }))
 const wallet: OrganizationWallet = {
@@ -18,7 +18,7 @@ const wallet: OrganizationWallet = {
 const catalog: Plan[] = [
   {
     id: 'starter',
-    name: 'Starter',
+    name: 'NoSubscription',
     priceMonthlyCents: 1900,
     includedQuotaCents: 3000,
     concurrencyLimit: 20,
@@ -26,7 +26,7 @@ const catalog: Plan[] = [
   },
   {
     id: 'pro',
-    name: 'Pro',
+    name: 'Go',
     priceMonthlyCents: 14900,
     includedQuotaCents: 25000,
     concurrencyLimit: 100,
@@ -34,7 +34,7 @@ const catalog: Plan[] = [
   },
   {
     id: 'max',
-    name: 'Max',
+    name: 'Team',
     priceMonthlyCents: 49900,
     includedQuotaCents: 90000,
     concurrencyLimit: 1000,
@@ -73,6 +73,94 @@ function RouteProbe() {
 }
 
 describe('billing surface contracts', () => {
+  it('compares documented limits, prices and bonuses without inventing billing cycles', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison plans={catalog} organizationPlan={plan} />
+      </MemoryRouter>,
+    )
+    const row = (label: string) =>
+      [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === label)!
+    expect(host.querySelector('thead')?.textContent).toContain('Starter')
+    expect(host.querySelector('thead')?.textContent).toContain('$4.99')
+    expect(host.querySelector('thead')?.textContent).not.toContain('/ month')
+    expect(row('Bonus amount').textContent).toContain('—$20$400')
+    expect(row('Max Box size').textContent).toContain('1C · 2G · 10G')
+    expect([...row('Max concurrency').querySelectorAll('td')].map((td) => td.textContent)).toEqual([
+      '2',
+      '4',
+      '1,000',
+      'By agreement',
+    ])
+    expect([...row('Retention reference point').querySelectorAll('td')].map((td) => td.textContent)).toEqual([
+      'Payment becomes overdue',
+      'Subscription ends',
+      'Subscription ends',
+      'By agreement',
+    ])
+    expect(row('Maximum time after that point').textContent).toContain('24 hours48 hours72 hours')
+    expect(row('Hosted secrets').querySelectorAll('td')[2].textContent).toBe('Unlimited')
+    expect(row('Box usage dashboard').querySelectorAll('td')[2].textContent).toBe('Included')
+    expect(row('Key management')).toBeUndefined()
+    expect(row('Enterprise SSO').textContent).toContain('Coming soon')
+  })
+  it('keeps documented benefits attached to named tiers when the catalogue is reordered or incomplete', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison
+          plans={[
+            { ...catalog[2], name: 'Team' },
+            { ...catalog[0], name: 'NoSubscription' },
+            { ...catalog[1], name: 'Unrecognized', priceMonthlyCents: 1234 },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    const headers = host.querySelectorAll('thead th')
+    expect(headers[1].textContent).toContain('Team$100')
+    expect(headers[2].textContent).toContain('Pay as you go')
+    expect(headers[3].textContent).toContain('Unrecognized$12.34')
+    const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === 'Hosted secrets')!
+    expect([...row.querySelectorAll('td')].map((td) => td.textContent)).toEqual(['Unlimited', '2', '—', 'By agreement'])
+  })
+  it('handles empty and extra catalogue entries without inventing benefits', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison plans={[]} />
+        <PlanComparison plans={[...catalog, { ...catalog[2], id: 'extra', name: 'Extra' }]} />
+      </MemoryRouter>,
+    )
+    expect(host.textContent).toContain('No plans are available right now.')
+    const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === 'Max Box size')!
+    expect(row.querySelectorAll('td')[3].textContent).toBe('—')
+  })
+  it('presents PAYG without a monthly price and prevents non-owner plan actions', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison
+          plans={[{ ...catalog[0], name: 'NoSubscription', priceMonthlyCents: 0 }, ...catalog.slice(1)]}
+          canManage={false}
+        />
+        <RouteProbe />
+      </MemoryRouter>,
+    )
+    expect(host.querySelectorAll('thead th')[1].textContent).toContain('Pay as you go')
+    expect(host.querySelectorAll('thead th')[1].textContent).not.toContain('$0')
+    expect([...host.querySelectorAll('button')].every((button) => button.disabled)).toBe(true)
+    expect(host.querySelector('a[href="mailto:support@boxlite.ai"]')).toBeNull()
+  })
+  it('offers contact instead of checkout when catalogue prices differ from the displayed design', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison plans={catalog} organizationPlan={plan} />
+        <RouteProbe />
+      </MemoryRouter>,
+    )
+    expect(host.querySelector('thead')?.textContent).toContain('$4.99')
+    expect(host.querySelectorAll('thead a[href="https://boxlite.ai/contact"]')).toHaveLength(3)
+    expect([...host.querySelectorAll('thead button')].every((button) => button.disabled)).toBe(true)
+    expect(host.querySelector('output')?.textContent).toBe('/')
+  })
   it('keeps plan price, consumed quota and wallet distinct in the compact summary', () => {
     const host = render(<CycleOverview wallet={wallet} organizationPlan={plan} catalogPlan={catalog[1]} />)
     expect(host.textContent).toContain('Pro$149/mo')
@@ -102,7 +190,10 @@ describe('billing surface contracts', () => {
   it('keeps current plan disabled and routes upgrade and downgrade to confirmation', () => {
     const host = render(
       <MemoryRouter>
-        <PlanCards plans={catalog} organizationPlan={plan} />
+        <PlanComparison
+          plans={catalog.map((entry, index) => ({ ...entry, priceMonthlyCents: [0, 499, 10000][index] }))}
+          organizationPlan={plan}
+        />
         <RouteProbe />
       </MemoryRouter>,
     )
@@ -112,6 +203,8 @@ describe('billing surface contracts', () => {
     expect(host.querySelector('output')?.textContent).toBe('/dashboard/billing/plan/max')
     act(() => buttons.find((button) => button.textContent?.includes('Downgrade'))!.click())
     expect(host.querySelector('output')?.textContent).toBe('/dashboard/billing/plan/starter')
-    expect(host.querySelector('a[href^="mailto:sales@boxlite.ai"]')?.textContent).toContain('Contact sales')
+    expect(host.textContent).not.toContain('support@boxlite.ai')
+    expect(host.querySelector('a[href="https://boxlite.ai/contact"]')?.textContent).toContain('Book a call')
+    expect(host.querySelector('a[href="https://boxlite.ai/contact"]')?.getAttribute('target')).toBe('_blank')
   })
 })
