@@ -85,7 +85,7 @@ export function PaymentMethodsPanel({
     <section>
       <SectionTitle title="Payment Method" />
       <p className="mb-3 font-sans text-meta text-muted-foreground">
-        Connecting or updating a card places a temporary $0.50 hold, released automatically.
+        Connecting or updating a card places a temporary $0.50 hold to verify it; the hold is released automatically.
       </p>
 
       {isLoading ? (
