@@ -175,3 +175,37 @@ fn compare_vm_callers(programs: &[(&str, String)]) {
         );
     }
 }
+
+#[test]
+#[ignore = "requires VM and the compiled Go agent parity suite"]
+fn go_opencode_vm_parity() {
+    let program = std::env::var("BOXLITE_GO_AGENT_VM_BIN").expect("set BOXLITE_GO_AGENT_VM_BIN");
+    let binary = std::env::var(opencode::BINARY_ENV).expect("set BOXLITE_TEST_OPENCODE_BINARY");
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (port, _log) = runtime.block_on(opencode::start_fake_model());
+    let config = home.path.join("opencode.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec(&opencode::provider_config(port)).unwrap(),
+    )
+    .unwrap();
+    let registry = boxlite_test_utils::registry::local_registry().search_registry();
+    let filter = std::env::var("BOXLITE_GO_AGENT_VM_FILTER")
+        .unwrap_or_else(|_| "^TestGoAgentVMParity$".into());
+    let status = std::process::Command::new(program)
+        .arg(format!("-test.run={filter}"))
+        .args(["-test.timeout=25m", "-test.v", "--"])
+        .args([
+            std::path::Path::new(&binary),
+            &config,
+            &home.path,
+            std::path::Path::new(&registry.host),
+        ])
+        .status()
+        .expect("run Go equivalents of Rust OpenCode tests");
+    assert!(status.success(), "Go parity suite failed: {status}");
+}

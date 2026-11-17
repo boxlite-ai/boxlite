@@ -100,6 +100,7 @@ help:
 	@echo "    make test:unit:go           - Run Go SDK unit tests"
 	@echo "    make test:integration:go    - Run Go SDK archive round-trip test (requires VM, FILTER=<pattern>)"
 	@echo "    make test:integration:go:agents - Compare Go, C and Rust OpenCode agent behavior (requires VM)"
+	@echo "    make test:integration:go:agents:parity - Run Go equivalents of the Rust agent VM scenarios"
 	@echo "    make test:integration:runner - Run runner native archive recovery tests (FILTER=<pattern>)"
 	@echo "    make test:all:go            - Run all Go SDK tests"
 	@echo "    make test:unit:c            - Run C SDK unit tests (no VM required)"

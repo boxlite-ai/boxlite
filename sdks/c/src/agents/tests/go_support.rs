@@ -1,9 +1,48 @@
-//! Test-only entry points for Go's real C/core boundary tests; no VM is started.
+//! Test-only fixtures for Go's C/core boundary and real-VM acceptance tests.
 
 use super::*;
 use crate::runtime::{RuntimeHandle, RuntimeLiveness};
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
+
+// Installation is a Rust test-only operation, not part of the public C/Go API.
+// This fixture prepares the same delivered-agent state as the Rust VM tests.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn boxlite_test_agents_install(
+    handle: *mut CBoxHandle,
+    name: *const c_char,
+    path: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let result = || -> Result<(), BoxliteError> {
+        if handle.is_null() || name.is_null() || path.is_null() {
+            return Err(BoxliteError::InvalidArgument(
+                "null installation fixture argument".into(),
+            ));
+        }
+        let handle = unsafe { &*handle };
+        let name = unsafe { CStr::from_ptr(name) }
+            .to_str()
+            .map_err(|e| BoxliteError::InvalidArgument(e.to_string()))?;
+        let path = unsafe { CStr::from_ptr(path) }
+            .to_str()
+            .map_err(|e| BoxliteError::InvalidArgument(e.to_string()))?;
+        handle.tokio_rt.block_on(
+            handle
+                .handle
+                .agents()
+                .install_from_host(name, std::path::Path::new(path)),
+        )
+    };
+    match result() {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let code = error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
+}
 
 static AGENTS_FREED: AtomicUsize = AtomicUsize::new(0);
 static TURNS_FREED: AtomicUsize = AtomicUsize::new(0);

@@ -15,7 +15,7 @@ import (
 )
 
 // Invoked only by the Rust VM runner, which supplies the same model and inputs
-// to C and Go. Getter/handle checks use production C/core, without test-support.
+// to C and Go. Getter/handle checks use production C/core, without a fake backend.
 func TestGoAgentVMDriver(t *testing.T) {
 	if len(os.Args) < 5 {
 		t.Fatal("Rust runner must supply binary, config, home and registry")

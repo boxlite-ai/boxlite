@@ -532,3 +532,43 @@ BOXLITE_TEST_OPENCODE_BINARY=/absolute/path/to/linux/opencode make test:integrat
 The target builds C and Go callers, then runs the Rust comparison harness.
 The OpenCode binary must match the VM architecture and use glibc Linux; the
 Debian test image, VM support and complete runtime artifacts must be available.
+
+### Agent VM parity with Rust
+
+`make test:integration:go:agents` runs the three-language result comparison and
+Go equivalents of all 15 cases in
+[`agents_opencode.rs`](../../src/boxlite/tests/agents_opencode.rs).
+`TestGoAgentVMParity` uses the Rust test names as Go subtest names, so a failed
+scenario can be traced directly to its source contract.
+
+| Rust VM scenario | Go assertions |
+|---|---|
+| Concurrent creates, send/events/wait | One registered service, configuration, matching turn event, lookup through another handle |
+| Old turn beyond the first history page | Thirty turns outgrow the 50-message page; the first turn remains readable |
+| Restart with running and queued turns | Reacquire the Box and agent; both original turns complete |
+| Foreign server on the agent port | `ErrInvalidState` identifies the occupied port |
+| Missing OpenCode binary | `ErrExecution` identifies the required version |
+| User-owned ready or frozen service | Refuse takeover; preserve the service URL and PID |
+| Stale service registration | Recover the service without signalling the unrelated PID |
+| Environment reads and questions | `.env.example` is readable, `.env`/`.env.local` stay secret, denied questions do not block later work |
+| Frozen BoxLite service | Report unresponsiveness; after thawing, reuse its PID |
+| Remote service configuration | Refuse local startup and leave no local registration |
+| Delivered binary outside the image PATH | Agent runs from a read-only mount without adding an image executable |
+| Repeated installation | Reuse a single mount |
+| Installation after a failed file lookup | The new executable becomes visible on the existing mount |
+| Restart of a delivered agent | First Go lookup restores its recorded mount |
+| Failed mount after restart | Surface the error, keep the VM running, and retry after removing the blocker |
+
+The five installation scenarios use a `test-support` C fixture that calls the
+existing Rust-only `install_from_host` setup method. It is excluded from
+`boxlite.h` and normal builds; it adds no Go installation API. Subsequent agent
+calls, visibility checks and restart recovery use the real Go SDK and VM.
+
+The security cases observe the shared model's reply, which includes `SECRET`
+only when a tool actually returned it. Service assertions inspect the guest's
+registration and process state. These tests run outside hosted CI and require
+the same complete runtime artifacts and OpenCode binary as the comparison.
+
+For a scenario-only rerun, use `make test:integration:go:agents:parity` with the
+same binary/runtime environment. `BOXLITE_GO_AGENT_VM_FILTER` optionally selects
+a Go test/subtest pattern; omit it for the complete 15-scenario matrix.
