@@ -8,9 +8,7 @@ export class AddRunnerUnschedulableReason1791600000000 implements MigrationInter
     // lifts only its own value. The operator endpoint flips the boolean only
     // and never writes the column, so operator marks stay reasonless by
     // design -- no backfill UPDATE for existing marks.
-    await queryRunner.query(
-      `CREATE TYPE "public"."runner_unschedulablereason_enum" AS ENUM('disk_expand_exhausted')`,
-    )
+    await queryRunner.query(`CREATE TYPE "public"."runner_unschedulablereason_enum" AS ENUM('disk_expand_exhausted')`)
     await queryRunner.query(`ALTER TABLE "runner" ADD "unschedulableReason" "public"."runner_unschedulablereason_enum"`)
   }
 

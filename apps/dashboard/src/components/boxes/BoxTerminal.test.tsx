@@ -552,8 +552,16 @@ describe('BoxTerminal', () => {
     textarea.focus()
     const terminalKey = vi.fn()
     textarea.addEventListener('keydown', terminalKey)
-    const shortcut = new KeyboardEvent('keydown', { key: 'F6', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })
-    await act(async () => { textarea.dispatchEvent(shortcut) })
+    const shortcut = new KeyboardEvent('keydown', {
+      key: 'F6',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    await act(async () => {
+      textarea.dispatchEvent(shortcut)
+    })
     const restore = container.querySelector<HTMLButtonElement>('[aria-label="Restore terminal"]')!
     expect(document.activeElement).toBe(restore)
     expect(shortcut.defaultPrevented).toBe(true)

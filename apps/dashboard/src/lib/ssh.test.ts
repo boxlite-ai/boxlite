@@ -17,10 +17,21 @@ describe('SSH connection instructions', () => {
     })
   })
 
-  it.each(['', '-box', '$(id)', 'box;id', 'box name', "box'1", 'box/1', 'box\n', 'box\r', 'box\t', 'box\0', 'box\x7f', '盒子'])(
-    'rejects unsafe box ID %j',
-    (boxId) => {
-      expect(() => sshConnectionInstructions(boxId)).toThrow('Invalid box ID')
-    },
-  )
+  it.each([
+    '',
+    '-box',
+    '$(id)',
+    'box;id',
+    'box name',
+    "box'1",
+    'box/1',
+    'box\n',
+    'box\r',
+    'box\t',
+    'box\0',
+    'box\x7f',
+    '盒子',
+  ])('rejects unsafe box ID %j', (boxId) => {
+    expect(() => sshConnectionInstructions(boxId)).toThrow('Invalid box ID')
+  })
 })

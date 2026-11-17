@@ -674,7 +674,7 @@ body {
   --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.24), 0 24px 64px -20px rgb(0 0 0 / 0.65);
   --scroll-edge-color: 0 0% 100% / 0.065;
 }
-.console-input-surface:not([data-slot="input-group-control"]),
+.console-input-surface:not([data-slot='input-group-control']),
 .form-field-input {
   background-color: hsl(var(--field-surface));
   --tw-shadow: var(--field-inset);

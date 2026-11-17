@@ -72,12 +72,7 @@ describe('GcpDiskClient', () => {
     // field would reset that field to the cloud default; a full PATCH is the
     // original reset hazard this invariant exists against.
     it.each([
-      [
-        'size only',
-        undefined,
-        'sizeGb',
-        { name: 'disk-1', sizeGb: '4096' },
-      ],
+      ['size only', undefined, 'sizeGb', { name: 'disk-1', sizeGb: '4096' }],
       [
         'size + both performance fields',
         { iops: '5400', throughput: '360' },
@@ -122,9 +117,7 @@ describe('GcpDiskClient', () => {
 
   describe('getDisk', () => {
     it('returns the baseline with int64 values normalized to strings', async () => {
-      const get = jest.fn(async () => [
-        { sizeGb: 200, provisionedIops: '3600', provisionedThroughput: 240 },
-      ])
+      const get = jest.fn(async () => [{ sizeGb: 200, provisionedIops: '3600', provisionedThroughput: 240 }])
       const client = new GcpDiskClient({ disks: { get, update: jest.fn() } })
 
       await expect(client.getDisk(ref)).resolves.toEqual({
