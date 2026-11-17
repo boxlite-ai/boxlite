@@ -100,7 +100,8 @@ docker_ready() {
   local remaining=$((docker_deadline - SECONDS))
   ((remaining > 0)) || return 1
   ((remaining <= 5)) || remaining=5
-  timeout "$remaining" sudo -n -H -u runner -g docker docker info >/dev/null 2>&1
+  timeout "$remaining" setpriv --reuid=runner --regid=docker --init-groups \
+    env HOME=/home/runner USER=runner LOGNAME=runner docker info >/dev/null 2>&1
 }
 
 if ! docker_ready; then
@@ -127,7 +128,8 @@ for ((attempt=0; attempt<${RUNNER_BOOTSTRAP_SECONDS}; attempt++)); do
     ACTIONS_RUNNER_INPUT_JITCONFIG="$(cat /home/runner/.boxlite-jitconfig)"
     export ACTIONS_RUNNER_INPUT_JITCONFIG
     rm -f /home/runner/.boxlite-jitconfig /home/runner/.boxlite-jitconfig.ready
-    exec sudo -n -E -H -u runner -g docker /home/runner/run.sh
+    exec setpriv --reuid=runner --regid=docker --init-groups \
+      env HOME=/home/runner USER=runner LOGNAME=runner /home/runner/run.sh
   fi
   sleep 1
 done
