@@ -35,6 +35,7 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/setup-infra
+      id: infra
       with:
         stages: ${{ inputs.stage }}
         stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
@@ -231,6 +232,18 @@ runs:
         else
           npm run mdeploy -- --stage "${{ inputs.stage }}" --components "$COMPONENTS" --diff
         fi
+
+    # Apply can generate the platform. Save it before returning to a caller
+    # that may change the workspace, retaining the key from this restore.
+    - name: Save the prepared SST platform
+      if: >-
+        steps.infra.outputs.platform-cache-hit != 'true'
+        && steps.infra.outputs.platform-cache-key != ''
+        && hashFiles('apps/infra/mdeploy/.sst/platform/**') != ''
+      uses: actions/cache/save@v4
+      with:
+        path: apps/infra/mdeploy/.sst/platform
+        key: ${{ steps.infra.outputs.platform-cache-key }}
 
     - name: Report
       if: always()

@@ -293,6 +293,12 @@ every consumer.
 | `setup-python` | 5 | lint ×2, test ×3 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
 
+`setup-infra` saves an exact dependency-cache miss immediately after `npm ci`,
+using the key recorded by its restore step. Callers may then change their checkout.
+The deployment action saves a generated SST platform after use, before returning to its caller.
+
+Both caches use `v2` namespaces and exact keys; stage state and configuration stay outside their paths.
+
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
 `build-guest` and `run-in-manylinux` run after both. They are separate actions rather than one
 because sccache is job-scoped — `run-in-manylinux` mounts the sccache binary and reads the
