@@ -346,8 +346,8 @@ export function WalletSection({
   // unambiguous: the user owns their one organization. One attempt per mount; the ref
   // survives StrictMode's effect replay, and a rejected code waits for the user.
   const autoRedeemAttempted = useRef(false)
-  const linkTargetIsUnambiguous =
-    organizations.length === 1 && authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
+  const isOwner = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
+  const linkTargetIsUnambiguous = organizations.length === 1 && isOwner
   useEffect(() => {
     if (autoRedeemAttempted.current || !linkCouponCode || !user?.profile.email_verified) return
     if (!linkTargetIsUnambiguous || !selectedOrganization) return
@@ -440,6 +440,14 @@ export function WalletSection({
             <Skeleton className="h-10" />
           </div>
         </div>
+      )}
+
+      {/* Wallet data and the coupon form are owner-only, so a member following a
+          coupon link is told why nothing happens instead of seeing an empty tab. */}
+      {linkCouponCode && authenticatedUserOrganizationMember && !isOwner && (
+        <p className="font-sans text-body text-muted-foreground">
+          Only organization owners can redeem coupon {linkCouponCode}.
+        </p>
       )}
 
       {wallet && (

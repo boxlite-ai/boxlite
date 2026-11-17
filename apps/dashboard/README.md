@@ -358,8 +358,9 @@ in first, and the sign-in return path keeps the query.
 
 Wallet opens the coupon form with the code filled in and names the organization
 that receives the credits. When the user owns their only organization, the code
-redeems once on landing, with no click. With several organizations, or without
-the owner role, nothing is redeemed until the user clicks Redeem.
+redeems once on landing, with no click. With several organizations, nothing is
+redeemed until the user clicks Redeem. Redeeming is owner-only: a member who
+opens a coupon link sees that only organization owners can redeem it.
 
 The result also appears as a toast, since the inline note sits low in the panel.
 A successful redeem removes `code` from the URL. A rejected code is tried once

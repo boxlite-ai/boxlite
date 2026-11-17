@@ -35,8 +35,12 @@ vi.mock('@/components/billing/PlansSection', () => ({
   PlansSection: () => <div data-testid="plans-comparison">Plans comparison</div>,
 }))
 vi.mock('@/components/billing/UsageSection', () => ({ UsageSection: () => <div>Usage section</div> }))
+// The last completion callback Wallet received, so a test can fire it after Wallet unmounts.
+const walletCallbacks = vi.hoisted(() => ({ onCouponRedeemed: undefined as undefined | (() => void) }))
+
 vi.mock('@/components/billing/WalletSection', () => ({
   WalletSection: ({ linkCouponCode, onCouponRedeemed }: { linkCouponCode?: string; onCouponRedeemed?: () => void }) => (
+    (walletCallbacks.onCouponRedeemed = onCouponRedeemed),
     <div data-testid="wallet-section">
       <span data-testid="wallet-link-coupon-code">{linkCouponCode ?? ''}</span>
       <button onClick={onCouponRedeemed}>Coupon redeemed</button>
@@ -64,6 +68,7 @@ function LocationProbe() {
     <>
       <output>{location.search}</output>
       <button onClick={() => navigate(-1)}>Back in history</button>
+      <button onClick={() => navigate('?tab=plans&code=ACME50')}>Open Plans</button>
     </>
   )
 }
@@ -186,5 +191,27 @@ describe('Billing layout', () => {
     act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Coupon redeemed')!.click())
     expect(host.querySelector('output')?.textContent).toBe('?tab=wallet')
     expect(host.querySelector('[data-testid="wallet-link-coupon-code"]')?.textContent).toBe('')
+  })
+
+  it('keeps the tab the user moved to when a coupon redeem finishes later', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/billing?tab=wallet&code=ACME50']}>
+          <Billing />
+          <LocationProbe />
+        </MemoryRouter>,
+      )
+    })
+    // The redeem request is still in flight when the user opens Plans.
+    const finishRedeem = walletCallbacks.onCouponRedeemed!
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Open Plans')!.click())
+    expect(host.querySelector('output')?.textContent).toBe('?tab=plans&code=ACME50')
+
+    act(() => finishRedeem())
+
+    expect(host.querySelector('output')?.textContent).toBe('?tab=plans')
   })
 })

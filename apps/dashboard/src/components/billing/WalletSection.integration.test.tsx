@@ -136,7 +136,11 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   },
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
   useOwnerPlanQuery: () => ({ data: { quotaRemainingCents: 0 } }),
-  useOwnerWalletQuery: () => ({ data: mocks.walletPending ? undefined : mocks.wallet, isLoading: mocks.walletPending }),
+  // The real query is enabled for owners only, so a member never receives wallet data.
+  useOwnerWalletQuery: () => ({
+    data: mocks.walletPending || mocks.memberRole !== 'owner' ? undefined : mocks.wallet,
+    isLoading: mocks.walletPending,
+  }),
 }))
 
 vi.mock('@/hooks/mutations/useRedeemCouponMutation', () => ({
@@ -759,14 +763,15 @@ describe('WalletSection top-up checkout', () => {
     expect(toast.success).toHaveBeenCalledWith('Coupon redeemed')
   })
 
-  it('does not auto-redeem a coupon link for a member who does not own the organization', async () => {
+  it('tells a member that only owners can redeem a coupon link', async () => {
     mocks.organizations = [{ id: 'org-without-card' }]
     mocks.memberRole = 'member'
 
-    const { input } = await renderCouponLink('ACME50')
+    const { host, input } = await renderCouponLink('ACME50')
     await flush()
 
-    expect(input?.value).toBe('ACME50')
+    expect(host.textContent).toContain('Only organization owners can redeem coupon ACME50')
+    expect(input).toBeNull()
     expect(mocks.redeemCoupon).not.toHaveBeenCalled()
   })
 

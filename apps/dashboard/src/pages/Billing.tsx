@@ -15,7 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useRef } from 'react'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
 
 const TAB_PANE = 'py-6'
@@ -87,6 +88,12 @@ function Billing() {
   const config = useConfig()
   // Controlled, so the page-level balance warning can send the user to Wallet.
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  // A redeem can finish after the user moved to another tab. React Router hands
+  // setSearchParams the parameters of the render that started it, so read the
+  // URL as it is when the redeem completes.
+  const currentSearch = useRef('')
+  currentSearch.current = useLocation().search
   const requestedTab = searchParams.get('tab')
   const tab =
     requestedTab && ['overview', 'plans', 'usage', 'wallet'].includes(requestedTab) ? requestedTab : 'overview'
@@ -155,17 +162,12 @@ function Billing() {
           <div className={TAB_PANE}>
             <WalletSection
               linkCouponCode={searchParams.get('code') ?? undefined}
-              onCouponRedeemed={() =>
+              onCouponRedeemed={() => {
                 // Dropping the redeemed code keeps a reload from submitting it again.
-                setSearchParams(
-                  (previous) => {
-                    const next = new URLSearchParams(previous)
-                    next.delete('code')
-                    return next
-                  },
-                  { replace: true },
-                )
-              }
+                const next = new URLSearchParams(currentSearch.current)
+                next.delete('code')
+                navigate({ search: next.toString() }, { replace: true })
+              }}
             />
           </div>
         </TabsContent>
