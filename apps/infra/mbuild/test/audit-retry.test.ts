@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { load } from 'js-yaml'
-import { actionSteps } from '../../mdeploy/test/workflow-source.js'
+import { actionSteps } from 'mdeploy/test/workflow-source'
 
 const sha = 'a'.repeat(40)
 const cli = fileURLToPath(new URL('../bin/mbuild.ts', import.meta.url))

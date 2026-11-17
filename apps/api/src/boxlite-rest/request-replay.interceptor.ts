@@ -12,23 +12,16 @@ import {
   NestInterceptor,
   OnModuleDestroy,
   StreamableFile,
-  ValidationPipe,
 } from '@nestjs/common'
 import type { Request, Response } from 'express'
 import { catchError, Observable, of } from 'rxjs'
-import {
-  BoxRequestReplayService,
-  fingerprintOf,
-  ReplayResource,
-  REPLAY_HEARTBEAT_MS,
-} from './box-request-replay.service'
+import { BoxRequestReplayService, ReplayResource, REPLAY_HEARTBEAT_MS } from './box-request-replay.service'
 import { replayIdentity, replayPolicy, REPLAY_ONLY, REPLAY_RESOURCE, validateReplayKey } from './request-replay-policy'
 import { captureReplayResponse } from './request-replay-response'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { hasOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { hasNoEffect } from '../common/replay-no-effect'
-import { CreateBoxDto } from './dto/create-box.dto'
 import { RESPONSE_PASSTHROUGH_METADATA, ROUTE_ARGS_METADATA } from '@nestjs/common/constants'
 import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum'
 
@@ -79,28 +72,13 @@ export class RequestReplayInterceptor implements NestInterceptor, OnModuleDestro
       req.headers['content-type']?.split(';')[0] !== 'application/json'
     )
       throw new BadRequestException('Idempotency-Key requires a JSON request body')
-    let legacyFingerprint: string | undefined
-    if (identity.operation === 'createBox') {
-      // Compatibility calculation reproduces #2760's DTO transformation, not the new request identity.
-      try {
-        const legacy = await new ValidationPipe({
-          transform: true,
-          whitelist: true,
-          forbidNonWhitelisted: true,
-        }).transform(req.body, { type: 'body', metatype: CreateBoxDto })
-        legacyFingerprint = fingerprintOf('POST', '/boxes', legacy)
-      } catch {
-        legacyFingerprint = 'invalid-legacy-input'
-      }
-    } else if (identity.operation === 'startExecution')
-      legacyFingerprint = fingerprintOf(req.method, req.originalUrl, req.body)
     const session = await this.service.session(
       user.organizationId,
       user.userId,
       identity.operation,
       key,
       identity.fingerprint,
-      { legacyFingerprint, replayOnly: req[REPLAY_ONLY] },
+      { replayOnly: req[REPLAY_ONLY] },
     )
     const response = context.switchToHttp().getResponse<Response>()
     if (session.response) {

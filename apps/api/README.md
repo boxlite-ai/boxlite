@@ -208,10 +208,9 @@ response persistence; a retry in that short window receives 409. Redis loss, exp
 manual deletion ends the guarantee. `GET /config` advertises `PT24H` and served operation IDs.
 MCP forwards the same key and business input; wait options only control result observation.
 
-Deployment must drain keyed writes, replace every API replica, then reopen traffic. Keep
-unexpired #2760 createBox/exec records and their original namespace; the versioned reader
-checks their original DTO/URL fingerprints. A rollback must retain the shared reader/fence or
-stop the affected writes; a version that ignores their keys cannot safely receive retries.
+Deployment must drain keyed writes, replace every API replica, then reopen traffic. A rollback
+must retain the shared reader/fence or stop the affected writes; a version that ignores valid
+keys cannot safely receive retries.
 
 Run `make test:apps:api TEST_FILES='request-replay|box-request-replay|box-replay'` with
 `REDIS_HOST/REDIS_PORT` and PostgreSQL `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_DATABASE`

@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
-import { BoxRequestReplayService, fingerprintOf } from './box-request-replay.service'
+import { BoxRequestReplayService } from './box-request-replay.service'
 
 const describeIfRedis = process.env.REDIS_HOST ? describe : describe.skip
 
@@ -43,7 +43,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     `replay:${org}:${user}:${operation}:${require('crypto').createHash('sha256').update(requestId).digest('hex')}`
 
   it('returns a no-op session when no key is provided', async () => {
-    const session = await service.session(org, user, 'createBox', undefined, fingerprintOf('POST', '/boxes', {}))
+    const session = await service.session(org, user, 'createBox', undefined, 'fp-empty')
     expect(session.response).toBeUndefined()
     expect(session.isOwner).toBe(false)
     await session.complete({ status: 201, body: '{}' })
@@ -52,7 +52,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
 
   it('lets a new key owner proceed and a same-key same-fingerprint caller replay', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', { image: 'alpine' })
+    const fp = 'fp-alpine'
     const first = await service.session(org, user, 'createBox', key, fp)
     expect(first.isOwner).toBe(true)
     expect(first.response).toBeUndefined()
@@ -68,8 +68,8 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
 
   it('rejects a same-key different-fingerprint caller with 422', async () => {
     const key = randomUUID()
-    const fpA = fingerprintOf('POST', '/boxes', { image: 'alpine' })
-    const fpB = fingerprintOf('POST', '/boxes', { image: 'debian' })
+    const fpA = 'fp-alpine'
+    const fpB = 'fp-debian'
     const first = await service.session(org, user, 'createBox', key, fpA)
     expect(first.isOwner).toBe(true)
 
@@ -84,7 +84,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
   // outcome: the caller must not redispatch on a maybe-executed request.
   it('reports unknown and blocks redispatch once the completion deadline passes', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', {})
+    const fp = 'fp-empty'
     const first = await service.session(org, user, 'createBox', key, fp)
     expect(first.isOwner).toBe(true)
     await redis.hset(keyOf('createBox', key), 'expected_response_at', '1')
@@ -100,7 +100,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
   // deleting it would re-dispatch, so the conservative unknown applies.
   it('treats a corrupt stored response as unknown', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', {})
+    const fp = 'fp-empty'
     const first = await service.session(org, user, 'createBox', key, fp)
     expect(first.isOwner).toBe(true)
     await redis.hset(keyOf('createBox', key), 'response', 'not-json{')
@@ -114,7 +114,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
 
   it('blocks a concurrent same-key caller with 409 while the owner is pending', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', {})
+    const fp = 'fp-empty'
     const first = await service.session(org, user, 'createBox', key, fp)
     expect(first.isOwner).toBe(true)
 
@@ -126,7 +126,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
 
   it('allows a same-key caller to reclaim a record released after a safe quota failure', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', {})
+    const fp = 'fp-empty'
     const first = await service.session(org, user, 'createBox', key, fp)
     expect(first.isOwner).toBe(true)
     await first.markRetryable()
@@ -143,7 +143,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
 
   it('rejects a stale owner writing after a newer caller reclaimed the key', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', {})
+    const fp = 'fp-empty'
     const first = await service.session(org, user, 'createBox', key, fp)
     await first.markRetryable()
 
@@ -165,7 +165,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
 
   it('stores distinct records for different operations with the same key', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', {})
+    const fp = 'fp-empty'
     const create = await service.session(org, user, 'createBox', key, fp)
     const exec = await service.session(org, user, 'startExecution', key, fp)
     expect(create.isOwner).toBe(true)
@@ -182,7 +182,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
 
   it('isolates records across organizations for the same key', async () => {
     const key = randomUUID()
-    const fp = fingerprintOf('POST', '/boxes', {})
+    const fp = 'fp-empty'
     const orgA = await service.session('org-a', user, 'createBox', key, fp)
     const orgB = await service.session('org-b', user, 'createBox', key, fp)
     expect(orgA.isOwner).toBe(true)

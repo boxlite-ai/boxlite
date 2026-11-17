@@ -12,7 +12,8 @@
     "./runner-binary": "./stack/runner-binary.ts",
     "./runner-kernel": "./stack/runner-kernel.ts",
     "./clickhouse-host": "./stack/clickhouse-host.ts",
-    "./clickhouse-retention": "./stack/clickhouse-retention.ts"
+    "./clickhouse-retention": "./stack/clickhouse-retention.ts",
+    "./test/workflow-source": "./test/workflow-source.ts"
   },
   "engines": {
     "node": ">=22"

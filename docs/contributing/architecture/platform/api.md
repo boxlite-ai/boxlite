@@ -646,7 +646,6 @@ reopen traffic. Preserve the Redis namespace and records. Never mix replicas
 that silently ignore newly supported keys with replicas enforcing them.
 Rollback must retain the public replay reader and fences, or stop affected
 writes; returning to a version that ignores valid keys can duplicate effects.
-Keep the compatibility reader until all records it can read have expired.
 
 <details>
 <summary><b>Box lifecycle</b> · 7 routes</summary>

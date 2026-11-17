@@ -29,7 +29,6 @@ interface ReplayReservation {
   owner: string
 }
 interface ReplayOptions {
-  legacyFingerprint?: string
   replayOnly?: boolean
 }
 
@@ -75,10 +74,10 @@ export class ReplaySession {
 const RESERVE_SCRIPT = `
 local fp = redis.call('HGET', KEYS[1], 'fingerprint')
 if redis.call('EXISTS', KEYS[1]) == 0 then
-  if ARGV[5] == 'peek' or ARGV[5] == 'replay-only' then return {'unknown'} end
+  if ARGV[4] == 'peek' or ARGV[4] == 'replay-only' then return {'unknown'} end
   local now = redis.call('TIME')
   local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
-  redis.call('HSET', KEYS[1], 'fingerprint', ARGV[1], 'version', '2', 'owner', ARGV[2],
+  redis.call('HSET', KEYS[1], 'fingerprint', ARGV[1], 'owner', ARGV[2],
     'state', 'pending', 'expected_response_at', tostring(now_ms + ${COMPLETION_DEADLINE_MS}))
   local ok = redis.pcall('EXPIRE', KEYS[1], ARGV[3])
   if type(ok) == 'table' and ok.err then
@@ -87,13 +86,10 @@ if redis.call('EXISTS', KEYS[1]) == 0 then
   end
   return {'owner'}
 end
-local version = redis.call('HGET', KEYS[1], 'version')
-local expected = ARGV[1]
-if not version then expected = ARGV[4] end
-if fp ~= expected then return {'mismatch'} end
+if fp ~= ARGV[1] then return {'mismatch'} end
 local body = redis.call('HGET', KEYS[1], 'response')
 if body then return {'replay', body} end
-if ARGV[5] == 'peek' or ARGV[5] == 'replay-only' then return {'unknown'} end
+if ARGV[4] == 'peek' or ARGV[4] == 'replay-only' then return {'unknown'} end
 local state = redis.call('HGET', KEYS[1], 'state')
 local now = redis.call('TIME')
 local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
@@ -132,13 +128,6 @@ return 1
 
 function recordKey(organizationId: string, subjectId: string, operation: string, requestId: string): string {
   return `replay:${organizationId}:${subjectId}:${operation}:${createHash('sha256').update(requestId).digest('hex')}`
-}
-
-/** Compatibility reader for #2760 records, whose original absolute TTL is preserved. */
-export function fingerprintOf(method: string, path: string, body: unknown): string {
-  return createHash('sha256')
-    .update(`${method}\n${path}\n${JSON.stringify(body ?? null)}`)
-    .digest('hex')
 }
 
 function storedResponse(raw: string): ReplayResponse | undefined {
@@ -265,16 +254,7 @@ export class BoxRequestReplayService implements OnModuleDestroy {
     })
     const claim = async () => {
       const connection = await this.ready()
-      const result = await connection.eval(
-        RESERVE_SCRIPT,
-        1,
-        key,
-        fingerprint,
-        owner,
-        RECORD_TTL_SECONDS,
-        options.legacyFingerprint ?? fingerprint,
-        mode,
-      )
+      const result = await connection.eval(RESERVE_SCRIPT, 1, key, fingerprint, owner, RECORD_TTL_SECONDS, mode)
       if (!Array.isArray(result) || result.some((item) => typeof item !== 'string'))
         throw new Error('Invalid replay storage result')
       return { result: result as string[], connection }
