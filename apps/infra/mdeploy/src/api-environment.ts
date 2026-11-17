@@ -24,6 +24,7 @@ import { API_GROUP, serviceSecretsFrom, splitServiceChannels, type Environment, 
 import { API_PORT, publicHostsFor, type PublicHosts } from '../stack/api.ts'
 import { SECRET_GROUP } from 'mstage/secret-address'
 import type { Cloud } from 'mstage/config'
+import { FilestoreConfigurationError, parseFilestoreInstances } from '../../../shared/filestore-instances.ts'
 
 export class ApiEnvironmentError extends Error {
   constructor(message: string) {
@@ -321,39 +322,17 @@ const runnerDiskExpansionFrom = (environment: Environment): Record<string, strin
   }
 }
 
-  // Example: FILESTORE_INSTANCES='[{"instance":"boxlite-dev-shared","project_id":"boxlite-dev-project","zone":"us-east5-a"}]'
-
 function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {
   if (home !== 'gcp' || !raw) return []
 
-  let parsed: unknown
   try {
-    parsed = JSON.parse(raw)
-  } catch {
-    throw new ApiEnvironmentError('FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects')
-  }
-  if (!Array.isArray(parsed)) {
-    throw new ApiEnvironmentError('FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects')
-  }
-
-  const projects = parsed.map((entry) => {
-    if (
-      typeof entry !== 'object' ||
-      entry === null ||
-      typeof entry.instance !== 'string' ||
-      !entry.instance.trim() ||
-      typeof entry.project_id !== 'string' ||
-      !entry.project_id.trim() ||
-      typeof entry.zone !== 'string' ||
-      !entry.zone.trim()
-    ) {
-      throw new ApiEnvironmentError(
-        'FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects',
-      )
+    return [...new Set(parseFilestoreInstances({ FILESTORE_INSTANCES: raw }).map((entry) => entry.projectId))].sort()
+  } catch (error) {
+    if (error instanceof FilestoreConfigurationError) {
+      throw new ApiEnvironmentError(error.message)
     }
-    return entry.project_id.trim()
-  })
-  return [...new Set(projects)].sort()
+    throw error
+  }
 }
 
 /**

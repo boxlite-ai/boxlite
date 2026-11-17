@@ -62,7 +62,7 @@ for (const home of ['aws', 'gcp'] as const) {
         .map((name) => [name, 'fixture']),
     )
     const instances = JSON.stringify([
-      { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+      { instance: 'example-shared', project_id: 'example-project', zone: 'asia-southeast1-b' },
     ])
     const selected = valuesOfGroup({
       group: 'api',
@@ -371,9 +371,9 @@ test('GCP deduplicates Filestore projects and rejects malformed placement', () =
     environment: {
       ...base,
       FILESTORE_INSTANCES: JSON.stringify([
-        { instance: 'zeta', project_id: 'zeta-project', zone: 'us-east5-a' },
-        { instance: 'alpha', project_id: 'alpha-project', zone: 'us-east5-b' },
-        { instance: 'backup', project_id: 'zeta-project', zone: 'us-east5-c' },
+        { instance: 'zeta', project_id: 'zeta-project', zone: 'asia-southeast1-b' },
+        { instance: 'alpha', project_id: 'alpha-project', zone: 'asia-southeast1-c' },
+        { instance: 'backup', project_id: 'zeta-project', zone: 'asia-southeast1-a' },
       ]),
     },
     declaration: groups([]),
@@ -396,8 +396,8 @@ test('GCP deduplicates Filestore projects and rejects malformed placement', () =
   )
 
   for (const [label, entry] of [
-    ['missing instance', { project_id: 'valid-project', zone: 'us-east5-a' }],
-    ['missing project_id', { instance: 'shared', zone: 'us-east5-a' }],
+    ['missing instance', { project_id: 'valid-project', zone: 'asia-southeast1-b' }],
+    ['missing project_id', { instance: 'shared', zone: 'asia-southeast1-b' }],
     ['missing zone', { instance: 'shared', project_id: 'valid-project' }],
   ] as const) {
     assert.throws(
@@ -413,6 +413,78 @@ test('GCP deduplicates Filestore projects and rejects malformed placement', () =
       label,
     )
   }
+})
+
+test('GCP validates complete Filestore placement before deriving IAM projects', () => {
+  const invalidFormats = [
+    { instance: 'alpha', project_id: 'valid-project', zone: 'invalid' },
+    { instance: '', project_id: 'valid-project', zone: 'asia-southeast1-b' },
+    { instance: 'alpha', project_id: '', zone: 'asia-southeast1-b' },
+    { instance: 'alpha', project_id: 'valid-project', zone: '' },
+    { instance: 'alpha', project_id: 'VALID', zone: 'asia-southeast1-b' },
+    { instance: 'Alpha', project_id: 'valid-project', zone: 'asia-southeast1-b' },
+  ]
+
+  for (const [label, entry] of invalidFormats.map((entry, index) => [`invalid format ${index}`, entry] as const)) {
+    assert.throws(
+      () =>
+        apiEnvironmentFrom({
+          environment: { ...base, FILESTORE_INSTANCES: JSON.stringify([entry]) },
+          declaration: groups([]),
+          region: 'us-east1',
+          stage: 'dev',
+          home: 'gcp',
+        }),
+      (error) => {
+        assert.ok(error instanceof ApiEnvironmentError)
+        assert.match(error.message, /FILESTORE_INSTANCES/)
+        return true
+      },
+      label,
+    )
+  }
+})
+
+test('GCP rejects Filestore instance names duplicated after trimming', () => {
+  assert.throws(
+    () =>
+      apiEnvironmentFrom({
+        environment: {
+          ...base,
+          FILESTORE_INSTANCES: JSON.stringify([
+            { instance: ' shared ', project_id: 'project-a', zone: 'asia-southeast1-b' },
+            { instance: 'shared', project_id: 'project-b', zone: 'asia-southeast1-c' },
+          ]),
+        },
+        declaration: groups([]),
+        region: 'us-east1',
+        stage: 'dev',
+        home: 'gcp',
+      }),
+    (error) => {
+      assert.ok(error instanceof ApiEnvironmentError)
+      assert.match(error.message, /instance more than once/)
+      return true
+    },
+  )
+})
+
+test('GCP produces one IAM project grant for distinct instances in one project', () => {
+  const configured = apiEnvironmentFrom({
+    environment: {
+      ...base,
+      FILESTORE_INSTANCES: JSON.stringify([
+        { instance: 'alpha', project_id: 'example-project', zone: 'asia-southeast1-b' },
+        { instance: 'beta', project_id: ' example-project ', zone: 'asia-southeast1-c' },
+      ]),
+    },
+    declaration: groups([]),
+    region: 'us-east1',
+    stage: 'dev',
+    home: 'gcp',
+  })
+
+  assert.deepEqual(configured.filestoreProjects, ['example-project'])
 })
 
 test('the two dashboard origins are different on purpose, and both have a default', () => {

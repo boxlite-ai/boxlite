@@ -31,11 +31,13 @@ to cloud authorization.
 `FILESTORE_INSTANCES` names the logical instances the API may select or resolve. On GCP,
 mdeploy:
 
-1. Parses `FILESTORE_INSTANCES` in `apiEnvironmentFrom`. Unset uses the built-in placement only on
-   `dev` and `stage`; other stages receive `[]` unless configured explicitly, so the API never falls
-   back to the development instance. Explicit whitespace disables Filestore, and each nonempty entry
-   must carry `project_id`.
-2. Deduplicates and sorts the configured `project_id` values.
+1. Parses and validates `FILESTORE_INSTANCES` with the placement parser shared with the API in
+   `apps/shared/filestore-instances.ts`. Unset, whitespace, `[]`, and explicit empty strings disable
+   Filestore placement. Each nonempty entry must provide trimmed, valid `instance`, `project_id`, and
+   `zone` values, and logical instance names must be unique even when they name different projects or
+   zones.
+2. Derives IAM project IDs only after complete placement validation succeeds, then deduplicates and
+   sorts those project IDs.
 3. Adds `read-filestore-instances` as the final capability only when that project list is nonempty.
 4. Creates one project IAM binding per configured project for the API runtime identity. The role is
    `roles/file.viewer`, which contains `file.instances.get`.
