@@ -538,30 +538,42 @@ execution.stop();
 let exit = execution.join()?;
 ```
 
-- `pause(&mut self)` accepts only Running, and `resume(&mut self)` only
-  Paused; repeats return `Error::Control` with `ControlReason::InvalidState`.
-  Pause rejects any actual chipset device before publishing a request or
-  kicking vCPUs, including devices absent from configuration flags.
+- `pause(&mut self)` accepts only Running. Admission enters Pausing until all
+  vCPU ACKs arrive; repeated pause in Pausing or Paused returns `Error::Control`
+  with `ControlReason::InvalidState`. Pause rejects any actual chipset device
+  before publishing a request or kicking vCPUs, including devices absent from
+  configuration flags. `resume(&mut self)` and `export(&mut self, path)` accept
+  only Paused; both return InvalidState during Pausing without queuing commands.
 - Each pause advances a checked epoch. Every owning vCPU completes pending
   I/O and calls `notify_guest_stopped` before ACK. The supervisor counts
   distinct vCPU IDs only for that epoch and publishes Paused only after all
   bits are set. An explicit backend Unsupported default for notification is
   permitted; real backend failures remain terminal. Parked workers wait on
   a Condvar and retain an owning-thread command checkpoint.
-- Mailbox commands wake the supervisor while Running or Paused; parked workers
-  are notified on transitions and capture requests, not on idle polling passes.
-- Parking has a five-second deadline from request admission. ACKs wake the
-  supervisor through a Condvar, not sleep polling. The supervisor rechecks
-  terminal events at most every 10 ms while waiting; this is not a host
-  scheduling or teardown latency guarantee. Timeout, kick failure or worker
-  panic aborts parking and enters terminal Stopping, never Paused. Timeout
-  returns `DeadlineTimeout` and requests terminal stop; it does not resume
-  the VM. External `StopHandle::stop` remains irreversible.
-- `status()` observes Running, Paused, Stopping or Exited. `stop()` requests
-  stop without joining; `join(self)` waits for execution and teardown and
-  returns the terminal result. Drop stops and wakes workers, aborts the
-  startup gate and joins before VM/RAM release. Join and Drop can block if
-  the backend cannot stop a vCPU; they never detach it or unmap live RAM.
+- Mailbox commands wake the supervisor while Running, Pausing or Paused; parked
+  workers are notified on transitions and capture requests, not on idle polling
+  passes. ACKs wake the supervisor through a Condvar, not sleep polling. The
+  supervisor rechecks terminal events at most every 10 ms while waiting; this
+  is not a host scheduling or teardown latency guarantee.
+- Parking does not expire: late ACKs can still complete the epoch and publish
+  Paused. `pause()` has a five-second caller patience limit. On timeout it returns
+  `DeadlineTimeout`. If the supervisor has not admitted the request, timeout
+  withdraws it from the mailbox: the VM stays Running, `wait_paused` returns
+  InvalidState, and pause may be retried. If already admitted, the pending park
+  remains in Pausing; use `wait_paused(&self, timeout)` or `status()` to continue
+  observing it. Withdrawal and admission are serialized by the mailbox lock.
+  `wait_paused` succeeds immediately in Paused, waits on the Condvar in Pausing,
+  returns DeadlineTimeout if its caller patience expires, InvalidState in
+  Running, and TerminalOutcome in Stopping or Exited. Its timeout also leaves
+  parking in progress. Only terminal stop or failure (including kick failure
+  and worker panic) aborts parking and enters Stopping. External
+  `StopHandle::stop` remains irreversible.
+- `status()` observes Running, Pausing, Paused, Stopping or Exited; terminal stop
+  takes priority over any non-Exited state. `stop()` requests stop without
+  joining; `join(self)` waits for execution and teardown and returns the terminal
+  result. Drop stops and wakes workers, aborts the startup gate and joins before
+  VM/RAM release. Join and Drop can block if the backend cannot stop a vCPU;
+  they never detach it or unmap live RAM.
 
 Pause fences vCPU execution, not host time: KVM clocks/timers continue while
 parked. Export therefore captures the clock and timer state as of the export
@@ -575,7 +587,7 @@ ABI**; it makes no portable or cross-version compatibility promise. It provides
 no device snapshot or restore API.
 
 `make test:unit:vmm FILTER=control::tests` exercises epoch/ACK state, invalid
-transitions, pending I/O, duplicate/late ACKs, stop races, deadline and actual
+transitions, pending I/O, duplicate/late ACKs, stop races, caller timeouts and actual
 chipset rejection on fake backends. On x86_64 it also exercises the owned
 driver, drop/join mapping order, kick failure and worker panic. The ignored
 KVM test requires Linux x86_64 and `/dev/kvm` and runs an infinite guest with

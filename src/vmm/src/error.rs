@@ -15,7 +15,7 @@ pub enum ControlReason {
     InvalidState,
     /// Actual composition or configuration contains userspace devices.
     UnsupportedDevice,
-    /// Not every vCPU acknowledged parking before the deadline.
+    /// Caller patience expired while parking acknowledgements were incomplete.
     DeadlineTimeout,
     /// A terminal stop or worker failure interrupted the request.
     TerminalOutcome,
@@ -26,7 +26,7 @@ impl fmt::Display for ControlReason {
         f.write_str(match self {
             Self::InvalidState => "invalid state",
             Self::UnsupportedDevice => "operation requires a device-less VM",
-            Self::DeadlineTimeout => "parking deadline expired",
+            Self::DeadlineTimeout => "vCPU acknowledgements are still incomplete",
             Self::TerminalOutcome => "the VM is stopping",
         })
     }

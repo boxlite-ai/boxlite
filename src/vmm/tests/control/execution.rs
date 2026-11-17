@@ -164,11 +164,13 @@ struct Backend {
     mock: MockVm,
     failure: Failure,
     entered: mpsc::Sender<()>,
+    io_gate: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
 }
 struct Cpu {
     mock: MockVcpu,
     failure: Failure,
     entered: mpsc::Sender<()>,
+    io_gate: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
 }
 #[derive(Clone)]
 struct Handle {
@@ -202,6 +204,7 @@ impl boxlite_hypervisor::Vm for Backend {
             mock: self.mock.create_vcpu(id)?,
             failure: self.failure,
             entered: self.entered.clone(),
+            io_gate: self.io_gate.clone(),
         })
     }
     fn set_irq_line(&self, line: u32, level: bool) -> boxlite_hypervisor::Result<()> {
@@ -221,6 +224,13 @@ impl Vcpu for Cpu {
     }
     fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<()> {
         if matches!(self.failure, Failure::Io) {
+            if let Some(gate) = &self.io_gate {
+                self.entered.send(()).unwrap();
+                gate.lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap();
+            }
             Err(boxlite_hypervisor::Error::RunVcpu {
                 id: 0,
                 source: io::Error::other("I/O failure"),
@@ -263,6 +273,7 @@ fn kick_failure_io_failure_and_worker_panic_cannot_leave_paused() {
             mock: MockVm::new(),
             failure,
             entered,
+            io_gate: None,
         };
         let vm = Vm::with_backend(
             config(1),
@@ -286,10 +297,9 @@ fn pause_stop_race_rejects_pause_and_joins() {
     // before publication of its final ACK, without timing assumptions.
     let (parked, result) = mpsc::channel();
     let mut state = handle.parking.mailbox.lock().unwrap();
-    state.commands.push_back(ParkCommand::Park(
-        Instant::now() + Duration::from_secs(10),
-        parked,
-    ));
+    state
+        .commands
+        .push_back(ParkCommand::Park(Arc::new(()), parked));
     handle.stop_handle().stop();
     drop(state);
     assert_eq!(
@@ -331,4 +341,70 @@ fn kvm_device_less_guest_pauses_resumes_and_stops() {
     }
     handle.stop_handle().stop();
     assert_eq!(handle.join().unwrap(), VmExit::StopRequested);
+}
+
+#[test]
+fn wait_paused_after_supervisor_exit_reports_terminal_outcome() {
+    let mut handle = bare(MockVm::new(), 1).spawn().unwrap();
+    handle.stop();
+    handle.join_supervisor().unwrap();
+    assert_eq!(handle.status(), VmStatus::Exited);
+    assert!(matches!(
+        handle.wait_paused(Duration::ZERO),
+        Err(Error::Control {
+            operation: "wait_paused",
+            reason: ControlReason::TerminalOutcome,
+        })
+    ));
+}
+
+#[test]
+fn wait_paused_wakes_on_real_worker_failure() {
+    let (entered, ready) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let backend = Backend {
+        mock: MockVm::new(),
+        failure: Failure::Io,
+        entered,
+        io_gate: Some(Arc::new(Mutex::new(gate))),
+    };
+    let vm = Vm::with_backend(
+        config(1),
+        || Ok(backend),
+        |_, _| Ok(X86BootRegisters::default()),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let handle = vm.spawn().unwrap();
+    let _release_io = ReleaseIo(release.clone());
+    ready.recv_timeout(Duration::from_secs(1)).unwrap();
+    let parking = &handle.parking;
+    let result = park(parking);
+    ready.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(handle.status(), VmStatus::Pausing);
+    thread::scope(|scope| {
+        let (admitted, waiting) = mpsc::channel();
+        *parking.paused_wait_ready.lock().unwrap() = Some(admitted);
+        let waiter = scope.spawn(|| handle.wait_paused(Duration::from_secs(1)));
+        waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(parking.mailbox.lock().unwrap());
+        assert!(!waiter.is_finished());
+        release.send(()).unwrap();
+        assert!(matches!(
+            waiter.join().unwrap(),
+            Err(Error::Control {
+                operation: "wait_paused",
+                reason: ControlReason::TerminalOutcome,
+            })
+        ));
+    });
+    assert_eq!(result.recv().unwrap(), Err(ControlReason::TerminalOutcome));
+    assert!(matches!(
+        handle.status(),
+        VmStatus::Stopping | VmStatus::Exited
+    ));
+    assert!(matches!(
+        handle.join(),
+        Err(Error::Hypervisor(boxlite_hypervisor::Error::RunVcpu { .. }))
+    ));
 }

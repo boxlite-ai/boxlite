@@ -4,16 +4,21 @@
 //! Epoch/ACK protocol tests run on every host; owned execution tests use the
 //! x86_64 mock driver. Hardware tests require Linux x86_64 and /dev/kvm.
 
-use std::{io, sync::mpsc, thread, time::Duration};
+use std::{
+    io,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use boxlite_hypervisor::{Vcpu, VcpuExit, VcpuHandle};
 
 use super::*;
 use crate::events::{Event, EventLoop};
 
-fn park(parking: &Parking, timeout: Duration) -> mpsc::Receiver<ParkResult> {
+fn park(parking: &Parking) -> mpsc::Receiver<ParkResult> {
     let (tx, rx) = mpsc::channel();
-    parking.send(ParkCommand::Park(Instant::now() + timeout, tx));
+    parking.send(ParkCommand::Park(Arc::new(()), tx));
     rx
 }
 
@@ -39,14 +44,14 @@ fn all_ack_bits_are_required_and_duplicates_and_late_epochs_do_not_count() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
     let parking = Parking::new();
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
     assert!(parking.supervise(3, &sender).0);
     for (generation, id) in [(0, 0), (2, 0), (1, 3), (1, 64), (1, 0), (1, 0), (1, 2)] {
         ack(&parking, generation, id);
     }
     parking.supervise(3, &sender);
     assert_eq!(result.try_recv(), Err(mpsc::TryRecvError::Empty));
-    assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Running);
+    assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Pausing);
     ack(&parking, 1, 1);
     parking.supervise(3, &sender);
     assert_eq!(result.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(1));
@@ -61,7 +66,7 @@ fn all_ack_bits_are_required_and_duplicates_and_late_epochs_do_not_count() {
         Err(ControlReason::InvalidState)
     );
 
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
     parking.supervise(3, &sender);
     for id in 0..3 {
         ack(&parking, 1, id);
@@ -80,7 +85,7 @@ fn sixty_four_vcpus_and_epoch_overflow() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
     let parking = Parking::new();
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
     parking.supervise(64, &sender);
     for id in 0..64 {
         ack(&parking, 1, id);
@@ -89,7 +94,7 @@ fn sixty_four_vcpus_and_epoch_overflow() {
     assert_eq!(result.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(1));
     resume(&parking, 1, &sender, 64).unwrap();
     parking.mailbox.lock().unwrap().generation = u64::MAX;
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
     assert!(!parking.supervise(64, &sender).0);
     assert_eq!(
         result.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -102,8 +107,8 @@ fn repeat_pause_is_invalid_not_idempotent() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
     let parking = Parking::new();
-    let first = park(&parking, Duration::from_secs(10));
-    let second = park(&parking, Duration::from_secs(10));
+    let first = park(&parking);
+    let second = park(&parking);
     parking.supervise(1, &sender);
     assert_eq!(
         second.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -112,7 +117,7 @@ fn repeat_pause_is_invalid_not_idempotent() {
     ack(&parking, 1, 0);
     parking.supervise(1, &sender);
     assert_eq!(first.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(1));
-    let repeated = park(&parking, Duration::from_secs(10));
+    let repeated = park(&parking);
     parking.supervise(1, &sender);
     assert_eq!(
         repeated.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -121,52 +126,340 @@ fn repeat_pause_is_invalid_not_idempotent() {
 }
 
 #[test]
-fn timeout_is_terminal_and_late_ack_cannot_publish_paused() {
-    let mut events = EventLoop::new().unwrap();
+fn timeout_before_admission_withdraws_park_and_allows_retry() {
+    let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
-    let result = park(&parking, Duration::ZERO);
-    parking.supervise(2, &sender);
-    assert_eq!(
-        result.recv_timeout(Duration::from_secs(1)).unwrap(),
-        Err(ControlReason::DeadlineTimeout)
-    );
-    assert!(sender.is_stopping());
+    let parking = Arc::new(Parking::new());
+    let mut handle = VmHandle::<crate::mock_vm::MockVm> {
+        parking: parking.clone(),
+        stop: StopHandle(sender.clone()),
+        supervisor: None,
+        devices: false,
+        backend: PhantomData,
+    };
     assert!(matches!(
-        events.wait(Some(Duration::ZERO)).unwrap(),
-        Some(Event::StopRequested)
+        handle.request(true, Duration::ZERO),
+        Err(Error::Control {
+            operation: "pause",
+            reason: ControlReason::DeadlineTimeout,
+        })
     ));
-    for id in 0..2 {
-        ack(&parking, 1, id);
-    }
-    parking.supervise(2, &sender);
-    assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Stopping);
-    let rejected = park(&parking, Duration::from_secs(1));
-    assert_eq!(
-        rejected.recv_timeout(Duration::from_secs(1)).unwrap(),
-        Err(ControlReason::InvalidState)
-    );
+    let state = parking.mailbox.lock().unwrap();
+    assert!(state.commands.is_empty());
+    assert!(state.pending.is_none());
+    assert!(!state.requested);
+    assert_eq!(state.generation, 0);
+    drop(state);
+    assert_eq!(handle.status(), VmStatus::Running);
+    assert!(matches!(
+        handle.wait_paused(Duration::ZERO),
+        Err(Error::Control {
+            operation: "wait_paused",
+            reason: ControlReason::InvalidState,
+        })
+    ));
+    assert!(!parking.supervise(1, &sender).0);
+    thread::scope(|scope| {
+        let _abort = AbortParking(&parking);
+        scope.spawn(|| {
+            wait_for_command(&parking);
+            assert_eq!(parking.mailbox.lock().unwrap().commands.len(), 1);
+            assert!(parking.supervise(1, &sender).0);
+            ack(&parking, 1, 0);
+            parking.supervise(1, &sender);
+        });
+        handle.pause().unwrap();
+        assert_eq!(handle.status(), VmStatus::Paused);
+        assert_eq!(parking.mailbox.lock().unwrap().generation, 1);
+    });
 }
 
 #[test]
-fn terminal_stop_wins_over_queued_pause_or_final_ack() {
-    for last_ack in [false, true] {
-        let events = EventLoop::new().unwrap();
-        let sender = events.sender();
-        let parking = Parking::new();
-        let result = park(&parking, Duration::from_secs(10));
-        if last_ack {
-            parking.supervise(1, &sender);
-            ack(&parking, 1, 0);
-        }
-        sender.send(Event::StopRequested);
+fn caller_timeout_keeps_parking_and_accepts_late_ack() {
+    let mut events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let parking = Arc::new(Parking::new());
+    let handle = VmHandle::<crate::mock_vm::MockVm> {
+        parking: parking.clone(),
+        stop: StopHandle(sender.clone()),
+        supervisor: None,
+        devices: false,
+        backend: PhantomData,
+    };
+    thread::scope(|scope| {
+        let _abort = AbortParking(&parking);
+        let (ready, waiting) = mpsc::channel();
+        let (release_wait, wait_gate) = mpsc::channel();
+        let _release_wait = ReleaseIo(release_wait.clone());
+        *parking.pause_wait_gate.lock().unwrap() = Some((ready, wait_gate));
+        let caller = scope.spawn(move || {
+            let mut handle = handle;
+            assert!(matches!(
+                handle.request(true, Duration::from_millis(20)),
+                Err(Error::Control {
+                    operation: "pause",
+                    reason: ControlReason::DeadlineTimeout,
+                })
+            ));
+            handle
+        });
+        waiting.recv_timeout(Duration::from_secs(1)).unwrap();
         parking.supervise(1, &sender);
+        let (progress, observed) = mpsc::channel();
+        let (release, io_gate) = mpsc::channel();
+        let _release_io = ReleaseIo(release.clone());
+        let worker = scope.spawn(|| {
+            parking
+                .checkpoint(
+                    0,
+                    &mut FakeVcpu {
+                        io_done: progress,
+                        release_io: io_gate,
+                        fail: false,
+                    },
+                )
+                .unwrap();
+        });
         assert_eq!(
-            result.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Err(ControlReason::TerminalOutcome)
+            observed.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "completing"
         );
-        assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Stopping);
+        release_wait.send(()).unwrap();
+        let mut handle = caller.join().unwrap();
+        assert_eq!(handle.status(), VmStatus::Pausing);
+        assert!(parking.mailbox.lock().unwrap().pending.is_some());
+        assert!(!sender.is_stopping());
+        assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
+        assert!(matches!(
+            handle.wait_paused(Duration::from_millis(5)),
+            Err(Error::Control {
+                operation: "wait_paused",
+                reason: ControlReason::DeadlineTimeout,
+            })
+        ));
+        assert_eq!(handle.status(), VmStatus::Pausing);
+        assert!(matches!(
+            handle.pause(),
+            Err(Error::Control {
+                operation: "pause",
+                reason: ControlReason::InvalidState,
+            })
+        ));
+        assert!(matches!(
+            handle.resume(),
+            Err(Error::Control {
+                operation: "resume",
+                reason: ControlReason::InvalidState,
+            })
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image");
+        assert!(matches!(
+            handle.export(&path),
+            Err(Error::Control {
+                operation: "export",
+                reason: ControlReason::InvalidState,
+            })
+        ));
+        assert!(!path.exists());
+        assert!(parking.mailbox.lock().unwrap().commands.is_empty());
+        release.send(()).unwrap();
+        for expected in ["completed", "notified"] {
+            assert_eq!(
+                observed.recv_timeout(Duration::from_secs(1)).unwrap(),
+                expected
+            );
+        }
+        parking.wait_for_ack(Duration::from_secs(1));
+        thread::scope(|scope| {
+            let (ready, waiting) = mpsc::channel();
+            *parking.paused_wait_ready.lock().unwrap() = Some(ready);
+            let waiter = scope.spawn(|| handle.wait_paused(Duration::from_secs(1)));
+            waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+            drop(parking.mailbox.lock().unwrap());
+            assert!(!waiter.is_finished());
+            parking.supervise(1, &sender);
+            waiter.join().unwrap().unwrap();
+        });
+        assert_eq!(handle.status(), VmStatus::Paused);
+        handle.wait_paused(Duration::ZERO).unwrap();
+        assert!(matches!(
+            handle.pause(),
+            Err(Error::Control {
+                operation: "pause",
+                reason: ControlReason::InvalidState,
+            })
+        ));
+        handle.stop();
+        worker.join().unwrap();
+    });
+}
+
+#[test]
+fn wait_paused_rejects_running_and_stop_terminates_pending_parking() {
+    let events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let parking = Arc::new(Parking::new());
+    let handle = VmHandle::<crate::mock_vm::MockVm> {
+        parking: parking.clone(),
+        stop: StopHandle(sender.clone()),
+        supervisor: None,
+        devices: false,
+        backend: PhantomData,
+    };
+    assert!(matches!(
+        handle.wait_paused(Duration::ZERO),
+        Err(Error::Control {
+            operation: "wait_paused",
+            reason: ControlReason::InvalidState,
+        })
+    ));
+    assert!(parking.mailbox.lock().unwrap().commands.is_empty());
+    let result = park(&parking);
+    parking.supervise(1, &sender);
+    assert_eq!(handle.status(), VmStatus::Pausing);
+    thread::scope(|scope| {
+        let (ready, waiting) = mpsc::channel();
+        *parking.paused_wait_ready.lock().unwrap() = Some(ready);
+        let waiter = scope.spawn(|| handle.wait_paused(Duration::from_secs(1)));
+        waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(parking.mailbox.lock().unwrap());
+        assert!(!waiter.is_finished());
+        handle.stop();
+        assert!(matches!(
+            waiter.join().unwrap(),
+            Err(Error::Control {
+                operation: "wait_paused",
+                reason: ControlReason::TerminalOutcome,
+            })
+        ));
+    });
+    assert_eq!(handle.status(), VmStatus::Stopping);
+    assert_eq!(result.recv().unwrap(), Err(ControlReason::TerminalOutcome));
+    assert!(parking.mailbox.lock().unwrap().pending.is_none());
+    assert!(matches!(
+        handle.wait_paused(Duration::ZERO),
+        Err(Error::Control {
+            operation: "wait_paused",
+            reason: ControlReason::TerminalOutcome,
+        })
+    ));
+}
+
+#[test]
+fn wait_paused_and_caller_timeout_observe_external_stop_before_supervisor_publication() {
+    let events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let parking = Arc::new(Parking::new());
+    let handle = VmHandle::<crate::mock_vm::MockVm> {
+        parking: parking.clone(),
+        stop: StopHandle(sender.clone()),
+        supervisor: None,
+        devices: false,
+        backend: PhantomData,
+    };
+    let stop = handle.stop_handle();
+    let (ready, waiting) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    *parking.pause_wait_gate.lock().unwrap() = Some((ready, gate));
+    let handle = thread::scope(|scope| {
+        let _release_wait = ReleaseIo(release.clone());
+        let caller = scope.spawn(move || {
+            let mut handle = handle;
+            assert!(matches!(
+                handle.request(true, Duration::ZERO),
+                Err(Error::Control {
+                    operation: "pause",
+                    reason: ControlReason::TerminalOutcome,
+                })
+            ));
+            handle
+        });
+        waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+        parking.supervise(1, &sender);
+        stop.stop();
+        release.send(()).unwrap();
+        caller.join().unwrap()
+    });
+    assert_eq!(handle.status(), VmStatus::Stopping);
+    assert!(matches!(
+        handle.wait_paused(Duration::ZERO),
+        Err(Error::Control {
+            operation: "wait_paused",
+            reason: ControlReason::TerminalOutcome,
+        })
+    ));
+    ack(&parking, 1, 0);
+    parking.supervise(1, &sender);
+    assert!(parking.mailbox.lock().unwrap().pending.is_none());
+    assert_eq!(handle.status(), VmStatus::Stopping);
+}
+
+#[test]
+fn terminal_stop_or_worker_failure_wins_over_queued_pause_or_final_ack() {
+    for worker_failure in [false, true] {
+        for last_ack in [false, true] {
+            let events = EventLoop::new().unwrap();
+            let sender = events.sender();
+            let parking = Parking::new();
+            let result = park(&parking);
+            if last_ack {
+                parking.supervise(1, &sender);
+                ack(&parking, 1, 0);
+            }
+            sender.send(if worker_failure {
+                Event::VcpuFailed(Error::VcpuPanicked { vcpu: 0 })
+            } else {
+                Event::StopRequested
+            });
+            parking.supervise(1, &sender);
+            assert_eq!(
+                result.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Err(ControlReason::TerminalOutcome)
+            );
+            assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Stopping);
+        }
     }
+}
+
+#[test]
+fn caller_timeout_does_not_request_terminal_stop() {
+    let mut events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let parking = Arc::new(Parking::new());
+    let handle = VmHandle::<crate::mock_vm::MockVm> {
+        parking: parking.clone(),
+        stop: StopHandle(sender.clone()),
+        supervisor: None,
+        devices: false,
+        backend: PhantomData,
+    };
+    thread::scope(|scope| {
+        let _abort = AbortParking(&parking);
+        let (ready, waiting) = mpsc::channel();
+        let (release_wait, wait_gate) = mpsc::channel();
+        let _release_wait = ReleaseIo(release_wait.clone());
+        *parking.pause_wait_gate.lock().unwrap() = Some((ready, wait_gate));
+        let caller = scope.spawn(move || {
+            let mut handle = handle;
+            assert!(matches!(
+                handle.request(true, Duration::from_millis(20)),
+                Err(Error::Control {
+                    operation: "pause",
+                    reason: ControlReason::DeadlineTimeout,
+                })
+            ));
+            handle
+        });
+        waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+        parking.supervise(1, &sender);
+        release_wait.send(()).unwrap();
+        parking.wait_for_ack(Duration::from_millis(40));
+        parking.supervise(1, &sender);
+        let _handle = caller.join().unwrap();
+        assert!(!sender.is_stopping());
+        assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
+    });
 }
 
 #[derive(Clone)]
@@ -216,7 +509,7 @@ fn ack_follows_io_and_notification_and_parked_worker_serves_commands_on_its_thre
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
     let parking = Parking::new();
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
     parking.supervise(1, &sender);
     let (progress, observed) = mpsc::channel();
     let (release, io_gate) = mpsc::channel();
@@ -269,7 +562,7 @@ fn failed_pending_io_never_acknowledges() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
     let parking = Parking::new();
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
     parking.supervise(1, &sender);
     let (progress, _observed) = mpsc::channel();
     let (release, io_gate) = mpsc::channel();
@@ -352,26 +645,25 @@ fn device_less_configuration_rejects_every_device_kind() {
 mod execution;
 
 #[test]
-fn condvar_wait_observes_the_parking_deadline_without_ack() {
+fn condvar_rechecks_without_ack_and_late_ack_publishes_paused() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
     let parking = Parking::new();
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
+    let (_, wait) = parking.supervise(1, &sender);
+    assert_eq!(wait, PARK_RECHECK);
+    let started = Instant::now();
+    assert_eq!(parking.wait_for_ack(wait), Duration::ZERO);
+    assert!(started.elapsed() >= PARK_RECHECK);
+    assert!(started.elapsed() < Duration::from_secs(1));
     parking.supervise(1, &sender);
-    parking
-        .mailbox
-        .lock()
-        .unwrap()
-        .pending
-        .as_mut()
-        .unwrap()
-        .deadline = Instant::now() + Duration::from_millis(5);
-    assert_eq!(parking.wait_for_ack(Duration::from_secs(1)), Duration::ZERO);
+    assert_eq!(result.try_recv(), Err(mpsc::TryRecvError::Empty));
+    assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Pausing);
+    assert!(!sender.is_stopping());
+    ack(&parking, 1, 0);
     parking.supervise(1, &sender);
-    assert_eq!(
-        result.recv_timeout(Duration::from_secs(1)).unwrap(),
-        Err(ControlReason::DeadlineTimeout)
-    );
+    assert_eq!(result.recv().unwrap(), Ok(1));
+    assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Paused);
 }
 
 #[test]
@@ -489,6 +781,14 @@ fn wait_for_command(parking: &Parking) {
     assert!(!state.commands.is_empty(), "control request did not arrive");
 }
 
+/// Open pending I/O before joining workers, including on assertion failure.
+struct ReleaseIo(mpsc::Sender<()>);
+impl Drop for ReleaseIo {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
 /// Release parked workers before the test scope joins, including on assertion failure.
 struct AbortParking<'a>(&'a Parking);
 impl Drop for AbortParking<'_> {
@@ -559,7 +859,7 @@ fn paused_supervision_does_not_broadcast_without_a_transition() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
     let parking = Parking::new();
-    let result = park(&parking, Duration::from_secs(10));
+    let result = park(&parking);
     parking.supervise(1, &sender);
     ack(&parking, 1, 0);
     parking.supervise(1, &sender);
@@ -595,7 +895,7 @@ fn pause_resume_and_export_commands_interrupt_the_supervisor_wait() {
             drop(parking.mailbox.lock().unwrap());
             let (tx, _rx) = mpsc::channel();
             let command = match kind {
-                0 => ParkCommand::Park(Instant::now() + Duration::from_secs(10), tx),
+                0 => ParkCommand::Park(Arc::new(()), tx),
                 1 => ParkCommand::Resume(1, tx),
                 _ => {
                     let (tx, _rx) = mpsc::channel();
@@ -737,7 +1037,10 @@ fn control_and_snapshot_errors_keep_their_public_messages_and_causes() {
             ControlReason::UnsupportedDevice,
             "operation requires a device-less VM",
         ),
-        (ControlReason::DeadlineTimeout, "parking deadline expired"),
+        (
+            ControlReason::DeadlineTimeout,
+            "vCPU acknowledgements are still incomplete",
+        ),
         (ControlReason::TerminalOutcome, "the VM is stopping"),
     ] {
         assert_eq!(reason.to_string(), message);

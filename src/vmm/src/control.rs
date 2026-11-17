@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, PoisonError, mpsc},
     thread::JoinHandle,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[cfg(test)]
@@ -25,8 +25,10 @@ use crate::{Vm, events::Event};
 /// The observable lifecycle of an owned VM execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VmStatus {
-    /// Starting or executing vCPUs; a pause may be waiting for ACKs.
+    /// Starting or executing vCPUs.
     Running,
+    /// A park request is admitted; vCPU acknowledgements are incomplete.
+    Pausing,
     /// Every vCPU acknowledged the current parking epoch.
     Paused,
     /// Terminal stop or failure; teardown may still be joining workers.
@@ -35,7 +37,7 @@ pub enum VmStatus {
     Exited,
 }
 
-/// Deadline for all vCPUs to finish pending I/O and acknowledge parking.
+/// Caller patience for pause ACKs; expiry does not end state-machine parking.
 const PAUSE_TIMEOUT: Duration = Duration::from_secs(5);
 // Bound terminal-event latency while the supervisor waits on the ACK condvar.
 const PARK_RECHECK: Duration = Duration::from_millis(10);
@@ -49,7 +51,7 @@ type ParkResult = std::result::Result<u64, ControlReason>;
 
 enum ParkCommand {
     Export(PathBuf, mpsc::Sender<Result<()>>),
-    Park(Instant, mpsc::Sender<ParkResult>),
+    Park(Arc<()>, mpsc::Sender<ParkResult>),
     Resume(u64, mpsc::Sender<ParkResult>),
 }
 
@@ -69,7 +71,6 @@ impl ParkCommand {
 struct PendingPark {
     generation: u64,
     seen: u64,
-    deadline: Instant,
     reply: mpsc::Sender<ParkResult>,
 }
 
@@ -104,6 +105,10 @@ pub(crate) struct Parking {
     broadcasts: AtomicUsize,
     #[cfg(test)]
     ack_wait_ready: Mutex<Option<mpsc::Sender<()>>>,
+    #[cfg(test)]
+    paused_wait_ready: Mutex<Option<mpsc::Sender<()>>>,
+    #[cfg(test)]
+    pause_wait_gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl Parking {
@@ -126,6 +131,10 @@ impl Parking {
             broadcasts: AtomicUsize::new(0),
             #[cfg(test)]
             ack_wait_ready: Mutex::new(None),
+            #[cfg(test)]
+            paused_wait_ready: Mutex::new(None),
+            #[cfg(test)]
+            pause_wait_gate: Mutex::new(None),
         }
     }
 
@@ -148,9 +157,6 @@ impl Parking {
     /// ACKs and commands wake the supervisor immediately during parking.
     fn wait_for_ack(&self, slice: Duration) -> Duration {
         let state = self.mailbox.lock().unwrap_or_else(PoisonError::into_inner);
-        let slice = state.pending.as_ref().map_or(slice, |pending| {
-            slice.min(pending.deadline.saturating_duration_since(Instant::now()))
-        });
         #[cfg(test)]
         if let Some(ready) = self.ack_wait_ready.lock().unwrap().take() {
             // Signal with the mailbox held; acquiring it proves wait admission.
@@ -183,7 +189,7 @@ impl Parking {
                     state.commands.push_front(command);
                     break;
                 }
-                ParkCommand::Park(deadline, reply) => {
+                ParkCommand::Park(_, reply) => {
                     let next = state.generation.checked_add(1);
                     if state.status != VmStatus::Running || state.requested || next.is_none() {
                         let _ = reply.send(Err(ControlReason::InvalidState));
@@ -192,10 +198,10 @@ impl Parking {
                     let generation = next.unwrap();
                     state.generation = generation;
                     state.requested = true;
+                    state.status = VmStatus::Pausing;
                     state.pending = Some(PendingPark {
                         generation,
                         seen: 0,
-                        deadline,
                         reply,
                     });
                     kick = true;
@@ -226,15 +232,6 @@ impl Parking {
         } else if state
             .pending
             .as_ref()
-            .is_some_and(|p| Instant::now() >= p.deadline)
-        {
-            // A deadline is terminal: a late ACK cannot turn this VM into Paused.
-            Self::fail(&mut state, ControlReason::DeadlineTimeout);
-            self.notify_all();
-            sender.send(crate::events::Event::StopRequested);
-        } else if state
-            .pending
-            .as_ref()
             .is_some_and(|p| p.seen == u64::MAX >> (64 - count))
         {
             let pending = state.pending.take().unwrap();
@@ -243,6 +240,34 @@ impl Parking {
             self.notify_all();
         }
         (kick, PARK_RECHECK)
+    }
+
+    fn wait_paused(&self, timeout: Duration, sender: &EventSender) -> Result<u64> {
+        let state = self.mailbox.lock().unwrap_or_else(PoisonError::into_inner);
+        #[cfg(test)]
+        if state.status == VmStatus::Pausing
+            && let Some(ready) = self.paused_wait_ready.lock().unwrap().take()
+        {
+            // Acquiring the mailbox after this signal proves wait admission.
+            ready.send(()).unwrap();
+        }
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, timeout, |state| {
+                state.status == VmStatus::Pausing && !sender.is_stopping()
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        let result = if sender.is_stopping() {
+            Err(ControlReason::TerminalOutcome)
+        } else {
+            match state.status {
+                VmStatus::Paused => Ok(state.generation),
+                VmStatus::Pausing => Err(ControlReason::DeadlineTimeout),
+                VmStatus::Running => Err(ControlReason::InvalidState),
+                VmStatus::Stopping | VmStatus::Exited => Err(ControlReason::TerminalOutcome),
+            }
+        };
+        result.map_err(|reason| reason.for_operation("wait_paused"))
     }
 
     fn fail(state: &mut Mailbox, reason: ControlReason) {
@@ -345,8 +370,10 @@ impl<H: HostVm> std::fmt::Debug for VmHandle<H> {
 }
 
 impl<H: HostVm> VmHandle<H> {
-    /// Parks every vCPU of a Running device-less VM within five seconds.
-    /// Repeated pause is InvalidState. Failure to park is terminal.
+    /// Requests parking of every vCPU of a Running device-less VM.
+    /// Waits up to five seconds; timeout withdraws an unadmitted request,
+    /// or leaves an admitted park in progress.
+    /// Repeated pause is InvalidState.
     pub fn pause(&mut self) -> Result<()> {
         self.request(true, PAUSE_TIMEOUT)
     }
@@ -379,13 +406,43 @@ impl<H: HostVm> VmHandle<H> {
         let generation = state.generation;
         drop(state);
         let (tx, rx) = mpsc::channel();
+        let request = Arc::new(());
         self.parking.send(if pause {
-            ParkCommand::Park(Instant::now() + timeout, tx)
+            ParkCommand::Park(request.clone(), tx)
         } else {
             ParkCommand::Resume(generation, tx)
         });
-        rx.recv()
-            .unwrap_or(Err(ControlReason::TerminalOutcome))
+        let result = if pause {
+            #[cfg(test)]
+            if let Some((ready, release)) = self.parking.pause_wait_gate.lock().unwrap().take() {
+                ready.send(()).unwrap();
+                release.recv().unwrap();
+            }
+            rx.recv_timeout(timeout).unwrap_or_else(|error| {
+                if error == mpsc::RecvTimeoutError::Timeout {
+                    let mut state = self
+                        .parking
+                        .mailbox
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    // Withdrawal and supervisor admission share the mailbox lock.
+                    state.commands.retain(|command| {
+                        !matches!(command, ParkCommand::Park(id, _) if Arc::ptr_eq(id, &request))
+                    });
+                }
+                Err(match error {
+                    mpsc::RecvTimeoutError::Timeout if !self.stop.0.is_stopping() => {
+                        ControlReason::DeadlineTimeout
+                    }
+                    mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected => {
+                        ControlReason::TerminalOutcome
+                    }
+                })
+            })
+        } else {
+            rx.recv().unwrap_or(Err(ControlReason::TerminalOutcome))
+        };
+        result
             .and_then(|_| {
                 if self.stop.0.is_stopping() {
                     Err(ControlReason::TerminalOutcome)
@@ -410,6 +467,12 @@ impl<H: HostVm> VmHandle<H> {
             .send(ParkCommand::Export(path.as_ref().to_owned(), tx));
         rx.recv()
             .unwrap_or_else(|_| Err(ControlReason::TerminalOutcome.for_operation("export")))
+    }
+
+    /// Waits for an admitted park request without changing execution state.
+    /// Timeout leaves parking in progress; Running is InvalidState.
+    pub fn wait_paused(&self, timeout: Duration) -> Result<()> {
+        self.parking.wait_paused(timeout, &self.stop.0).map(|_| ())
     }
 
     /// Current lifecycle; a terminal stop never reports Paused.
@@ -500,7 +563,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         let restored = if matches!(self.startup, crate::vm::Startup::Restore(_)) {
             let (ready, result) = mpsc::channel();
-            parking.send(ParkCommand::Park(Instant::now() + PAUSE_TIMEOUT, ready));
+            parking.send(ParkCommand::Park(Arc::new(()), ready));
             Some(result)
         } else {
             None
