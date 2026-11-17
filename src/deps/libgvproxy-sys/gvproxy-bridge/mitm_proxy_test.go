@@ -71,22 +71,17 @@ func dialThroughMITMWithProto(t *testing.T, ca *BoxCA, hostname, destAddr string
 	}
 
 	if forceProto == "h2" {
-		// Give concurrent streams one ClientConn. A pool dial callback must
-		// never hand the same physical connection to competing pool dials.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		tlsConn, err := dialTLS(ctx)
-		if err != nil {
-			t.Fatal(err)
+		// Every pool dial owns a fresh TLS connection; the transport manages
+		// connection sharing and concurrent HTTP/2 streams.
+		transport := &http2.Transport{
+			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+				return dialTLS(ctx)
+			},
+			TLSClientConfig: tlsCfg,
 		}
-		clientConn, err := (&http2.Transport{}).NewClientConn(tlsConn)
-		if err != nil {
-			_ = tlsConn.Close()
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = clientConn.Close() })
+		t.Cleanup(transport.CloseIdleConnections)
 		return &http.Client{
-			Transport: clientConn,
+			Transport: transport,
 			Timeout:   10 * time.Second,
 		}
 	}

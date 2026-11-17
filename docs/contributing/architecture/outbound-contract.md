@@ -57,7 +57,7 @@ The typed connector does not implement proxy registration or a proxy protocol, a
 
 The guest-stack transport tests consume the shared NAT and hostname examples, relay HTTP/TLS bytes to test-owned listeners, and verify refused targets never enter the connector.
 The MITM test uses an isolated test CA in a subprocess so production certificate verification remains active; a wrong upstream certificate must receive no HTTP request.
-For HTTP/2 fixture concurrency, one explicit `http2.ClientConn` owns the guest TLS pipe; separate transport pool dials must not return the same physical connection.
+For HTTP/2 fixture concurrency, `http2.Transport` owns connection pooling and stream sharing; each pool dial owns a fresh guest/proxy TLS pipe.
 
 ## Configuration boundary
 
