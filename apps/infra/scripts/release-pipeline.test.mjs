@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { load } from 'js-yaml'
 import { runnerArtifactFor } from '../mdeploy/stack/runner-binary.ts'
 import { ReleasePipeline, releaseAssets, releaseReport, sendSlack, slackWebhook } from './release-pipeline.mjs'
@@ -99,6 +103,129 @@ const harness = (options = {}) => {
   })
   return { client, calls, records, logs, waits, dev, e2e }
 }
+
+const cliHarness = (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-release-cli-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const preload = join(directory, 'transport.mjs')
+  writeFileSync(
+    preload,
+    [
+      "import { appendFileSync } from 'node:fs'",
+      'const responses = JSON.parse(process.env.RELEASE_TEST_RESPONSES)',
+      'globalThis.fetch = async (url, init) => {',
+      '  const address = new URL(url)',
+      '  const body = init.body ? JSON.parse(init.body) : undefined',
+      "  appendFileSync(process.env.RELEASE_TEST_REQUESTS, JSON.stringify({ url, method: init.method, body }) + '\\n')",
+      "  if (address.hostname === 'hooks.slack.com') return new Response('ok')",
+      "  if (address.hostname !== 'api.github.com') throw new Error('Unexpected test host')",
+      "  if (init.method === 'POST' && address.pathname.endsWith('/dispatches')) {",
+      '    return Response.json({ workflow_run_id: body.inputs.stage === "prod" ? 303 : body.inputs.tag ? 202 : 101 })',
+      '  }',
+      '  const value = responses[address.pathname]',
+      "  if (value === undefined) throw new Error('Unexpected test endpoint')",
+      '  return Response.json(value)',
+      '}',
+    ].join('\n'),
+  )
+  const prefix = '/repos/' + repo
+  const responses = {
+    [prefix + '/releases/tags/' + tag]: snapshot,
+    [prefix + '/releases/' + snapshot.id + '/assets']: snapshot.assets,
+    [prefix + '/commits/' + encodeURIComponent('refs/tags/' + tag)]: { sha },
+    [prefix + '/actions/runs/101']: run(101),
+    [prefix + '/actions/runs/202']: run(202, { updated_at: '2026-11-17T07:20:00Z' }),
+    [prefix + '/actions/workflows/mdeploy-all.yml/runs']: { workflow_runs: [run(101)] },
+    [prefix + '/environments/prod']: {
+      protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { id: 1 } }] }],
+    },
+  }
+  return (command, overrides = {}) => {
+    const output = join(directory, 'output')
+    const summary = join(directory, 'summary')
+    const requests = join(directory, 'requests')
+    for (const file of [output, summary, requests]) writeFileSync(file, '')
+    const result = spawnSync(
+      process.execPath,
+      ['--import', preload, fileURLToPath(new URL('./release-pipeline.mjs', import.meta.url)), command],
+      {
+        encoding: 'utf8',
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          GITHUB_REPOSITORY: repo,
+          GITHUB_RUN_ID: '10',
+          GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: summary,
+          TAG: tag,
+          RELEASE_SHA: sha,
+          GH_TOKEN: 'fixture-token',
+          SLACK_WEBHOOK_URL: webhook,
+          RELEASE_RESULTS: '{}',
+          RELEASE_TEST_RESPONSES: JSON.stringify(responses),
+          RELEASE_TEST_REQUESTS: requests,
+          ...overrides,
+        },
+      },
+    )
+    return {
+      ...result,
+      output: readFileSync(output, 'utf8'),
+      summary: readFileSync(summary, 'utf8'),
+      requests: readFileSync(requests, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse),
+    }
+  }
+}
+
+test('workflow CLI waits for assets, records child runs, and reports their prod approval link', (t) => {
+  const cli = cliHarness(t)
+  const assets = cli('assets')
+  assert.equal(assets.status, 0, assets.stderr)
+  assert.equal(assets.requests.length, 2)
+  const pipeline = cli('run')
+  assert.equal(pipeline.status, 0, pipeline.stderr)
+  const outputs = Object.fromEntries(
+    pipeline.output
+      .trim()
+      .split('\n')
+      .map((line) => line.split('=')),
+  )
+  assert.deepEqual(outputs, {
+    dev_run_id: '101',
+    dev_result: 'success',
+    e2e_run_id: '202',
+    e2e_result: 'success',
+    prod_run_id: '303',
+  })
+  const dispatches = pipeline.requests.filter((request) => request.method === 'POST')
+  assert.equal(dispatches.length, 3)
+  for (const request of dispatches) assert.equal(request.body.inputs.ref ?? request.body.inputs.tag, tag)
+  const report = cli('report', {
+    RELEASE_RESULTS: JSON.stringify({ pipeline: { result: 'success', outputs } }),
+  })
+  assert.equal(report.status, 0, report.stderr)
+  assert.match(report.summary, /Prod run: https:\/\/github.com\/boxlite-ai\/boxlite\/actions\/runs\/303/)
+  assert.equal(report.requests.length, 1)
+  const actions = report.requests[0].body.blocks.find((block) => block.type === 'actions')
+  assert.equal(actions.elements[0].url, 'https://github.com/' + repo + '/actions/runs/' + outputs.prod_run_id)
+})
+
+test('workflow CLI rejects invalid configuration without network calls and preserves a failed report summary', (t) => {
+  const cli = cliHarness(t)
+  for (const [command, overrides, error] of [
+    ['assets', { SLACK_WEBHOOK_URL: '' }, /SLACK_WEBHOOK_URL/],
+    ['unknown', {}, /Expected assets, run, or report/],
+    ['run', { TAG: 'main' }, /TAG must be/],
+    ['run', { GH_TOKEN: '' }, /GH_TOKEN is required/],
+    ['report', { SLACK_WEBHOOK_URL: '' }, /SLACK_WEBHOOK_URL/],
+  ]) {
+    const result = cli(command, overrides)
+    assert.equal(result.status, 1, result.stderr)
+    assert.match(result.stderr, error)
+    assert.equal(result.requests.length, 0)
+    if (command === 'report') assert.match(result.summary, /release pipeline failed/)
+  }
+})
 
 test('required assets agree with the real Release snapshot and production consumers', () => {
   const required = releaseAssets(tag)
@@ -415,18 +542,19 @@ test('Slack payloads are JSON, while HTTP and transport failures do not expose w
       throw new Error('transport failed at ' + webhook)
     },
   ]) {
-    await assert.rejects(
-      sendSlack(webhook, payload, request),
-      (error) =>
-        /Slack notification failed/.test(error.message) &&
-        !error.message.includes(webhook) &&
-        !error.message.includes('private provider body'),
-    )
+    await assert.rejects(sendSlack(webhook, payload, request), (error) => {
+      assert.match(error.message, /Slack notification failed/)
+      assert.doesNotMatch(error.message, /private-fixture-token|private provider body/)
+      return true
+    })
   }
   for (const value of [
     '',
     'http://hooks.slack.com/services/T/B/token',
     'https://example.com/services/T/B/token',
+    'https://hooks.slack.com.evil.example/services/T/B/token',
+    'https://evil.example/hooks.slack.com/services/T/B/token',
+    'https://hooks.slack.com@evil.example/services/T/B/token',
     'https://user:password@hooks.slack.com/services/T/B/token',
     webhook + '?token=private',
   ]) {
