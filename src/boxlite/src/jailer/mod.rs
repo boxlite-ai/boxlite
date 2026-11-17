@@ -83,8 +83,8 @@ pub mod seccomp;
 // Core types
 pub use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 pub use builder::JailerBuilder;
-#[cfg(feature = "native")]
-pub(crate) use common::rlimit::raise_file_size_limit;
+#[cfg(any(feature = "native", test))]
+pub(crate) use common::rlimit::check_disk_size_limit;
 pub use error::{ConfigError, IsolationError, JailerError, SystemError};
 pub use sandbox::{
     CompositeSandbox, NoopSandbox, PathAccess, PlatformSandbox, Sandbox, SandboxContext,

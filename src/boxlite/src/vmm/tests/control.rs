@@ -118,3 +118,109 @@ fn resize_requires_a_block_id_and_rejects_index_only_requests() {
         assert!(matches!(response, Err(ControlError::InvalidInput(_))));
     }
 }
+
+#[test]
+fn resize_budget_is_checked_without_changing_process_limits() {
+    use std::process::Command;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn limits() -> (libc::rlim_t, libc::rlim_t) {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: limit is a valid output pointer.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) },
+            0
+        );
+        (limit.rlim_cur, limit.rlim_max)
+    }
+
+    const CHILD_ENV: &str = "BOXLITE_TEST_RESIZE_BUDGET_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let before = limits();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "vmm::control::tests::resize_budget_is_checked_without_changing_process_limits",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .expect("start the isolated control-budget test");
+        assert!(
+            output.status.success(),
+            "child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(limits(), before);
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("control.sock");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handled = calls.clone();
+    serve(&path, move |op| {
+        handled.fetch_add(1, Ordering::SeqCst);
+        let ControlOp::ResizeDisk { bytes, .. } = op;
+        Ok(ControlReply::DiskSize(bytes))
+    })
+    .unwrap();
+    let timeout = Duration::from_secs(5);
+    let before = limits();
+    assert!(matches!(
+        request(&path, &grow_to("container", u64::MAX), timeout).unwrap(),
+        Err(ControlError::InvalidInput(message)) if message.contains("overflow")
+    ));
+    assert_eq!(limits(), before);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let inherited = libc::rlimit {
+        rlim_cur: 8192,
+        rlim_max: 8192,
+    };
+    // SAFETY: the limit affects only this isolated child and its control thread.
+    assert_eq!(
+        unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &inherited) },
+        0
+    );
+    let before = limits();
+    assert_eq!(before, (8192, 8192));
+    for bytes in [512, 4096] {
+        assert_eq!(
+            request(&path, &grow_to("container", bytes), timeout).unwrap(),
+            Ok(ControlReply::DiskSize(bytes))
+        );
+        assert_eq!(limits(), before);
+    }
+    for bytes in [4097, 4608, u64::MAX] {
+        assert!(matches!(
+            request(&path, &grow_to("container", bytes), timeout).unwrap(),
+            Err(ControlError::InvalidInput(_))
+        ));
+        assert_eq!(limits(), before);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let lower_soft = libc::rlimit {
+        rlim_cur: 4096,
+        rlim_max: 8192,
+    };
+    // SAFETY: this isolated process owns the limits, including its control thread.
+    assert_eq!(
+        unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &lower_soft) },
+        0
+    );
+    assert!(matches!(
+        request(&path, &grow_to("container", 4096), timeout).unwrap(),
+        Err(ControlError::InvalidInput(_))
+    ));
+    assert_eq!(limits(), (4096, 8192));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}

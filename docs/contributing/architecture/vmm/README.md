@@ -581,19 +581,19 @@ logged.
   - Smaller, unaligned and read-only targets fail; the current size succeeds,
     making retries safe. Requests sent before driver activation wait for it.
     A timeout leaves the request queued; dropping the device closes its channel.
-- **File size limits.** Before growing, the shim raises its soft `RLIMIT_FSIZE`.
-  - Shared `jailer::common::rlimit` owns the limit implementation:
-    `apply_limits_raw` initializes limits before exec; `raise_file_size_limit`
-    adjusts soft after exec. The native adapter validates the disk ID, calls
-    the runtime helper, then dispatches to `VmControl`.
-  - The jailer computes hard as `min(max(2 TiB, max_file_size), inherited hard)`
-    for both engines. The existing `max_file_size` supplies the initial soft
-    limit, so the controller and builders carry no separate ceiling parameter.
-  - The initial soft limit is capped there too: an unprivileged child cannot
-    raise its inherited hard limit. A grow beyond that limit fails before
-    changing the disk.
-  - A 10 GiB disk starts with soft 20 GiB; native growth to 50 GiB raises soft
-    to 100 GiB. libkrun shares the hard-limit reserve but cannot grow online.
+- **File size limits.** The jailer sets a fixed `RLIMIT_FSIZE` before exec.
+  - Both engines start with `soft = hard = min(max(2 TiB, max_file_size), inherited hard)`.
+    The existing `max_file_size` supplies the startup requirement, normally
+    twice the initial disk capacity. A smaller inherited hard prevents startup.
+  - Shared `jailer::common::rlimit::check_disk_size_limit` only reads the actual
+    soft limit. The BoxLite control entry rejects a target whose twofold budget
+    overflows or exceeds soft, or whose limit cannot be read, before dispatch.
+    The native adapter routes the request to `VmControl`, which validates the ID.
+  - A 10 GiB disk starts with both limits at 2 TiB when inherited hard permits;
+    growth to 50 GiB leaves both unchanged. With inherited hard at 64 GiB,
+    targets above 32 GiB fail before changing the image.
+  - The limit caps individual host files; guest capacity remains the image's
+    virtual size. libkrun shares the startup policy but cannot grow online.
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).

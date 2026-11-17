@@ -3,10 +3,9 @@
 //! `create` translates the `InstanceSpec` into a `VmConfig`; `enter` builds
 //! the VM and runs it until the guest resets or powers off.
 
-use std::{collections::HashSet, fs::File, io, path::PathBuf, time::Duration};
+use std::{fs::File, io, path::PathBuf, time::Duration};
 
 use crate::experimental::custom_kernel::KernelFormat;
-use crate::jailer::raise_file_size_limit;
 use crate::rootfs::guest::Strategy;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
 use crate::vmm::{
@@ -52,17 +51,11 @@ impl VmmInstanceImpl for NativeVmmInstance {
             })?),
             None => Box::new(io::sink()),
         };
-        let disk_ids: HashSet<String> = self
-            .config
-            .disks
-            .iter()
-            .map(|disk| disk.block_id.clone())
-            .collect();
         let mut vm = Vm::new(self.config, sink).map_err(map_vmm_error)?;
         let vm_control = vm.control();
         // Without the channel the box still runs; it only cannot grow online.
         if let Err(error) =
-            crate::vmm::control::serve(&self.control, move |op| control(&vm_control, &disk_ids, op))
+            crate::vmm::control::serve(&self.control, move |op| control(&vm_control, op))
         {
             tracing::warn!(%error, path = %self.control.display(), "VMM control channel unavailable");
         }
@@ -78,38 +71,21 @@ const GROW_TIMEOUT: Duration = Duration::from_secs(10);
 /// Serves one control operation against the VM's disks.
 pub(crate) fn control(
     vm: &VmControl,
-    disk_ids: &HashSet<String>,
     op: crate::vmm::control::ControlOp,
 ) -> crate::vmm::control::ControlResponse {
     use crate::vmm::control::{ControlError, ControlOp, ControlReply};
 
     match op {
-        ControlOp::ResizeDisk { block_id, bytes } => {
-            prepare_disk_grow(disk_ids, &block_id, bytes)?;
-            vm.resize_disk(&block_id, bytes, GROW_TIMEOUT)
-                .map(ControlReply::DiskSize)
-                .map_err(|error| match error.kind() {
-                    io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {
-                        ControlError::InvalidInput(error.to_string())
-                    }
-                    _ => ControlError::Failed(error.to_string()),
-                })
-        }
+        ControlOp::ResizeDisk { block_id, bytes } => vm
+            .resize_disk(&block_id, bytes, GROW_TIMEOUT)
+            .map(ControlReply::DiskSize)
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {
+                    ControlError::InvalidInput(error.to_string())
+                }
+                _ => ControlError::Failed(error.to_string()),
+            }),
     }
-}
-
-/// Rejects unknown targets before changing the shim's file size limit.
-pub(crate) fn prepare_disk_grow(
-    disk_ids: &HashSet<String>,
-    block_id: &str,
-    bytes: u64,
-) -> Result<(), crate::vmm::control::ControlError> {
-    use crate::vmm::control::ControlError;
-    if !disk_ids.contains(block_id) {
-        return Err(ControlError::InvalidInput(format!("no disk {block_id:?}")));
-    }
-    raise_file_size_limit(bytes)
-        .map_err(|error| ControlError::Failed(format!("cannot raise the file size limit: {error}")))
 }
 
 /// Requests the engine cannot serve; any one fails `create` before boot.

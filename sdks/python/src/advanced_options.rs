@@ -105,7 +105,8 @@ pub struct PySecurityOptions {
     #[pyo3(get, set)]
     pub max_open_files: Option<u64>,
 
-    /// Maximum file size in bytes.
+    /// Startup file-size requirement in bytes. Local boxes derive it from disk
+    /// capacity; the jailer applies a fixed growth budget within inherited hard.
     #[pyo3(get, set)]
     pub max_file_size: Option<u64>,
 

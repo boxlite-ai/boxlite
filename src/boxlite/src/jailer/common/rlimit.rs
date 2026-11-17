@@ -4,7 +4,7 @@
 //! Works on both Linux and macOS.
 //!
 //! `apply_limits_raw()` initializes limits in the `pre_exec` hook.
-//! `raise_file_size_limit()` adjusts the running shim's soft limit after exec.
+//! `check_disk_size_limit()` validates runtime requests without changing limits.
 
 use crate::runtime::advanced_options::ResourceLimits;
 use std::io;
@@ -33,35 +33,24 @@ pub fn get_rlimit(resource: RlimitResource) -> Result<(u64, u64), io::Error> {
     Ok((rlim.rlim_cur as u64, rlim.rlim_max as u64))
 }
 
-/// Raises this process's soft `RLIMIT_FSIZE` to cover a disk of `bytes`,
-/// with the jailer's margin, up to the hard limit; it never lowers it.
-/// The hard limit stays unchanged. Call after exec, since errors may allocate.
-#[cfg(any(feature = "native", all(test, target_os = "linux")))]
-pub(crate) fn raise_file_size_limit(bytes: u64) -> io::Result<()> {
+/// Checks that the disk and its file-size margin fit this process's soft limit.
+/// Neither limit changes. Call after exec, since errors may allocate.
+#[cfg(any(feature = "native", test))]
+pub(crate) fn check_disk_size_limit(bytes: u64) -> io::Result<()> {
     use crate::disk::constants::qcow2::FSIZE_DISK_MULTIPLIER;
 
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: `limit` is a valid out-pointer for the call.
-    if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let wanted = bytes.saturating_mul(FSIZE_DISK_MULTIPLIER);
-    if limit.rlim_cur == libc::RLIM_INFINITY || limit.rlim_cur >= wanted {
-        return Ok(());
-    }
-    if limit.rlim_max != libc::RLIM_INFINITY && limit.rlim_max < wanted {
+    let required = bytes.checked_mul(FSIZE_DISK_MULTIPLIER).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "disk size overflows the file-size budget",
+        )
+    })?;
+    let (soft, _) = get_rlimit(libc::RLIMIT_FSIZE)?;
+    if soft != libc::RLIM_INFINITY && required > soft {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{wanted} bytes exceed the hard limit of {}", limit.rlim_max),
+            format!("disk requires {required} bytes, exceeding the file-size limit of {soft}"),
         ));
-    }
-    limit.rlim_cur = wanted;
-    // SAFETY: `limit` is a valid rlimit for the call.
-    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limit) } != 0 {
-        return Err(io::Error::last_os_error());
     }
     Ok(())
 }
@@ -125,14 +114,14 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
     Ok(())
 }
 
-/// Apply the disk-derived soft limit and reserve a hard limit for online growth.
-/// Both engines share this policy; neither limit exceeds the inherited hard limit.
+/// Set soft and hard to a fixed disk-growth budget for both engines.
+/// The inherited hard limit must cover the startup requirement and caps the budget.
 /// Async-signal-safe: only arithmetic, getrlimit and setrlimit run after fork.
-fn set_file_size_raw(soft: u64) -> Result<(), i32> {
+fn set_file_size_raw(required: u64) -> Result<(), i32> {
     use crate::disk::constants::qcow2::{FSIZE_DISK_MULTIPLIER, ONLINE_GROW_MAX_GB};
     use crate::runtime::types::Bytes;
 
-    let reserve = Bytes::from_gib(ONLINE_GROW_MAX_GB)
+    let growth_budget = Bytes::from_gib(ONLINE_GROW_MAX_GB)
         .as_bytes()
         .saturating_mul(FSIZE_DISK_MULTIPLIER);
     let mut inherited = libc::rlimit {
@@ -142,10 +131,13 @@ fn set_file_size_raw(soft: u64) -> Result<(), i32> {
     if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut inherited) } != 0 {
         return Err(super::get_errno());
     }
-    let hard = (soft.max(reserve) as libc::rlim_t).min(inherited.rlim_max);
+    if required as libc::rlim_t > inherited.rlim_max {
+        return Err(libc::EPERM);
+    }
+    let limit = (required.max(growth_budget) as libc::rlim_t).min(inherited.rlim_max);
     let rlim = libc::rlimit {
-        rlim_cur: (soft as libc::rlim_t).min(hard),
-        rlim_max: hard,
+        rlim_cur: limit,
+        rlim_max: limit,
     };
     if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &rlim) } != 0 {
         return Err(super::get_errno());

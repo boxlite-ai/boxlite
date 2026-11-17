@@ -972,18 +972,10 @@ impl BoxOptions {
             kernel.sanitize()?;
         }
 
-        // The jailed shim is the sole writer of this box's qcow2 disks, so its
-        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
-        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
-        // pick that number — it runs for a box that does not exist yet and
-        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
-        // up contradicting every larger disk (#1152). Derive it here, next to
-        // the size it comes from.
-        //
-        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
-        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
-        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
-        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+        // Derive the shim's startup file-size requirement from this box's disk.
+        // The jailer sets soft and hard to a fixed growth budget covering this
+        // requirement, within inherited hard. The multiplier is a loose file
+        // growth backstop; guest capacity comes from the qcow2 virtual size.
         self.advanced.security.resource_limits.max_file_size = Some(
             Bytes::from_gib(
                 self.disk_size_gb
@@ -3349,8 +3341,7 @@ mod tests {
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
     }
 
-    /// The whole point of #1152: the ceiling has to follow the box's own
-    /// `--disk-size`, not a constant picked before the box existed.
+    /// Startup requirements follow the box's disk before the jailer adds its budget.
     #[test]
     fn sanitize_scales_fsize_with_the_requested_disk() {
         let mut options = BoxOptions {
@@ -3362,12 +3353,11 @@ mod tests {
         assert_eq!(
             options.advanced.security.resource_limits.max_file_size,
             Some(Bytes::from_gib(40).as_bytes()),
-            "a 20 GiB box gets a 40 GiB ceiling"
+            "a 20 GiB box requires a 40 GiB startup file-size budget"
         );
     }
 
-    /// No explicit size: the disk is created at `DEFAULT_DISK_SIZE_GB`, so the
-    /// ceiling tracks that.
+    /// The startup requirement uses `DEFAULT_DISK_SIZE_GB` without an explicit size.
     #[test]
     fn sanitize_falls_back_to_the_default_disk_size() {
         let mut options = BoxOptions::default();
@@ -3376,7 +3366,7 @@ mod tests {
         assert_eq!(
             options.advanced.security.resource_limits.max_file_size,
             Some(Bytes::from_gib(20).as_bytes()),
-            "the default 10 GiB disk gets a 20 GiB ceiling"
+            "the default 10 GiB disk requires a 20 GiB startup file-size budget"
         );
     }
 

@@ -20,7 +20,8 @@ pub struct JsSecurityOptions {
     /// Maximum number of open file descriptors.
     pub max_open_files: Option<f64>,
 
-    /// Maximum file size in bytes.
+    /// Startup file-size requirement in bytes. Local boxes derive it from disk
+    /// capacity; the jailer applies a fixed growth budget within inherited hard.
     pub max_file_size: Option<f64>,
 
     /// Maximum number of processes.

@@ -2,7 +2,7 @@
 //!
 //! These modules provide:
 //! - [`fd`]: File descriptor cleanup (async-signal-safe for pre_exec)
-//! - [`rlimit`]: Resource limits for pre_exec setup and runtime adjustment
+//! - [`rlimit`]: Startup resource limits and read-only disk budget checks
 //! - [`fs`]: Filesystem utilities (copy-if-newer, etc.)
 //!
 //! Note: PID file writing lives in [`crate::util::pid_file::PidFileWriter`]

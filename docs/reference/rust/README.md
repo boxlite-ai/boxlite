@@ -1275,7 +1275,7 @@ let security = SecurityOptions::builder()
 | `allow_env(var)` | Add to env allowlist |
 | `resource_limits(limits)` | Set all limits |
 | `max_open_files(n)` | RLIMIT_NOFILE |
-| `max_file_size_bytes(n)` | RLIMIT_FSIZE |
+| `max_file_size_bytes(n)` | Startup requirement for the fixed RLIMIT_FSIZE budget |
 | `max_processes(n)` | RLIMIT_NPROC |
 | `max_memory_bytes(n)` | RLIMIT_AS |
 | `max_cpu_time_seconds(n)` | RLIMIT_CPU |
@@ -1292,7 +1292,7 @@ pub struct ResourceLimits {
     /// Max open file descriptors (RLIMIT_NOFILE)
     pub max_open_files: Option<u64>,
 
-    /// Max file size in bytes (RLIMIT_FSIZE)
+    /// Startup file-size requirement in bytes (RLIMIT_FSIZE)
     pub max_file_size: Option<u64>,
 
     /// Max number of processes (RLIMIT_NPROC)
@@ -1305,6 +1305,11 @@ pub struct ResourceLimits {
     pub max_cpu_time: Option<u64>,
 }
 ```
+
+Local creation derives the file-size requirement from twice the initial disk
+capacity. The jailer sets `soft = hard = min(max(2 TiB, requirement), inherited hard)`;
+an inherited hard below the requirement prevents startup.
+See [resource-limit enforcement](../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 
 ---
 

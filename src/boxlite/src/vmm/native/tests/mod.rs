@@ -485,29 +485,6 @@ async fn reports_a_missing_kernel_through_the_exit_file() {
     }
 }
 
-#[test]
-fn a_resize_of_a_missing_disk_leaves_file_size_limits_unchanged() {
-    use crate::vmm::control::ControlError;
-    fn limits() -> (libc::rlim_t, libc::rlim_t) {
-        let mut limit = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        // SAFETY: limit is a valid out-pointer.
-        assert_eq!(
-            unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) },
-            0
-        );
-        (limit.rlim_cur, limit.rlim_max)
-    }
-    let before = limits();
-    assert_eq!(
-        super::engine::prepare_disk_grow(&["vda".into()].into(), "missing", u64::MAX),
-        Err(ControlError::InvalidInput("no disk \"missing\"".into()))
-    );
-    assert_eq!(limits(), before);
-}
-
 #[tokio::test]
 #[ignore = "requires Linux x86_64 with /dev/kvm, VMM_KERNEL, VMM_DISK_GROW_INIT and a boxlite-shim built with native"]
 async fn grows_a_disk_through_the_shim_control_socket() {

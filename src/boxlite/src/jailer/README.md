@@ -147,26 +147,29 @@ requiring maximum security should use Linux.
 | Memory | RLIMIT_AS | Prevent OOM |
 | CPU time | RLIMIT_CPU | Prevent CPU monopolization |
 
-The file-size soft limit comes from `ResourceLimits.max_file_size`, normally
-twice the disk capacity. For both engines, the jailer reserves hard as
-`min(max(2 TiB, max_file_size), inherited hard)` and caps soft there too.
+`ResourceLimits.max_file_size` supplies the startup file-size requirement,
+normally twice the initial disk capacity. Both engines start with
+`soft = hard = min(max(2 TiB, max_file_size), inherited hard)`.
+Startup fails if inherited hard cannot cover the startup requirement.
 
-[`common::rlimit`](common/rlimit.rs) owns both stages of file-size enforcement:
+[`common::rlimit`](common/rlimit.rs) owns file-size setup and budget checks:
 
 | Stage | Entry point | Contract |
 |-------|-------------|----------|
-| Child before exec | `apply_limits_raw` | Initialize soft and hard without allocation or logging |
-| Running native shim | `raise_file_size_limit` | Raise soft within hard; never lower soft or change hard |
+| Child before exec | `apply_limits_raw` | Set equal soft and hard without allocation or logging |
+| Control request entry | `check_disk_size_limit` | Read soft and reject targets whose twofold file-size budget exceeds it |
 
-The native adapter validates the disk ID, calls the runtime helper, then submits
-the grow request to the VMM. Both entry points change the calling process's
-limits; runtime adjustment must run inside the shim.
+The BoxLite control entry checks the budget before calling the engine handler.
+Overflow and unreadable limits fail before dispatch. The native adapter submits
+the grow to `VmControl`, whose registry validates the disk ID.
 
-A 10 GiB disk starts with soft 20 GiB; the native shim raises it to 100 GiB
-before growing to 50 GiB. libkrun shares the reserve but has no online disk grow.
+A 10 GiB disk starts with soft and hard at 2 TiB when inherited hard permits it.
+Growing to 50 GiB leaves both unchanged. With inherited hard at 64 GiB, the
+twofold budget permits targets up to 32 GiB and rejects 50 GiB before growth.
 
-A shim can raise its own soft limit within hard; this is a per-file backstop,
-while the virtual disk capacity determines the guest's available space.
+This is a per-file backstop, while the virtual disk capacity determines the
+guest's available space. An unprivileged shim cannot raise hard beyond its
+startup value. libkrun shares the file-size policy but has no online disk grow.
 
 ### Layer 4: Environment Sanitization
 

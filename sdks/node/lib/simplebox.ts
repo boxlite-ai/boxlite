@@ -76,7 +76,8 @@ export interface SecurityOptions {
   maxOpenFiles?: number;
 
   /**
-   * Maximum file size in bytes.
+   * Startup file-size requirement in bytes. Local boxes derive it from disk
+   * capacity; the jailer applies a fixed growth budget within inherited hard.
    */
   maxFileSize?: number;
 

@@ -183,9 +183,9 @@ pub struct ResourceLimits {
     #[serde(default)]
     pub max_open_files: Option<u64>,
 
-    /// Initial soft file-size limit in bytes (RLIMIT_FSIZE).
-    /// The jailer reserves a hard limit for disk growth, capped at the inherited
-    /// hard limit; the initial soft limit is capped there too.
+    /// Startup file-size requirement in bytes (RLIMIT_FSIZE).
+    /// The jailer sets soft = hard = min(max(2 TiB, requirement), inherited hard).
+    /// An inherited hard limit below this requirement prevents startup.
     #[serde(default)]
     pub max_file_size: Option<u64>,
 
@@ -511,7 +511,7 @@ impl SecurityOptionsBuilder {
         self
     }
 
-    /// Set maximum file size in bytes.
+    /// Set the startup file-size requirement; see [`ResourceLimits::max_file_size`].
     pub fn max_file_size_bytes(&mut self, bytes: u64) -> &mut Self {
         self.inner.resource_limits.max_file_size = Some(bytes);
         self
