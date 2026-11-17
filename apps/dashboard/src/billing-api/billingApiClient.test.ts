@@ -72,8 +72,13 @@ describe('getOrganizationPlan', () => {
       quotaConsumedCents: 6250,
       quotaRemainingCents: 18750,
     })
-    expect(plan?.trial?.startedAt).toEqual(new Date('2026-08-05T00:00:00.000Z'))
-    expect(plan?.trial?.endsAt).toEqual(new Date('2026-08-12T00:00:00.000Z'))
+    expect(plan?.trial).toEqual({
+      startedAt: new Date('2026-08-05T00:00:00.000Z'),
+      endsAt: new Date('2026-08-12T00:00:00.000Z'),
+      conversionAmountCents: 14900,
+      currency: 'USD',
+      conversionState: 'not_attempted',
+    })
   })
 
   it('hydrates dueAt when the plan is past due', async () => {
