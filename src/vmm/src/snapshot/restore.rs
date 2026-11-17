@@ -73,6 +73,17 @@ fn vcpu_count(machine: &MachineState) -> Result<u8> {
             "vCPU count must be in 1..=64",
         )));
     }
+    if machine
+        .vcpus
+        .iter()
+        .enumerate()
+        .any(|(id, record)| usize::from(record.id) != id)
+    {
+        return Err(Error::Snapshot(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "vCPU records must be contiguous and ordered by id",
+        )));
+    }
     Ok(count as u8)
 }
 

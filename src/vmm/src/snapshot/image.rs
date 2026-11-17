@@ -19,6 +19,15 @@ const VERSION: u32 = 1;
 const HEADER_LEN: u64 = 32;
 const CHUNK: usize = 1 << 20;
 
+// Postcard uses at most 5 bytes per XSAVE u32: 65536 * 5 bytes/vCPU.
+// CPUID (<=256) and MSR (<=4096) entries are 40/16-byte KVM byte blobs;
+// rounding each to 64/32 bytes covers their length prefixes. Together these
+// arrays use <=464 KiB/vCPU. Fixed registers, ID and framing fit in 16 KiB,
+// so 512 KiB/vCPU leaves >=32 KiB spare. Another 64 KiB covers the platform
+// image and machine framing: 32 MiB + 64 KiB at MAX_VCPUS=64.
+pub(crate) const MAX_MACHINE_STATE_LEN: u64 =
+    (crate::config::MAX_VCPUS as u64) * (512 << 10) + (64 << 10);
+
 pub(crate) fn write(path: &Path, count: u32, machine: &[u8], ram: &GuestRam) -> Result<()> {
     let mut regions = ram.regions();
     let region = regions.next().ok_or_else(|| invalid("missing RAM"))?;
@@ -89,6 +98,10 @@ impl Header {
             ram_len: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
             machine_len: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
         };
+        if header.machine_len > MAX_MACHINE_STATE_LEN {
+            return Err(invalid("machine state exceeds length limit"));
+        }
+        // Restore validates the RAM layout and KVM's GPA limit before allocating RAM.
         let file_len = file.metadata().map_err(Error::Snapshot)?.len();
         if HEADER_LEN
             .checked_add(header.machine_len)

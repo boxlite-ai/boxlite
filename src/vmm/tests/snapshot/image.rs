@@ -75,7 +75,7 @@ fn partial_write_is_removed_and_existing_file_is_not_touched() {
 }
 
 #[test]
-fn reader_checks_magic_version_and_length_bounds_only() {
+fn reader_checks_magic_version_and_length_bounds() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
     let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
@@ -99,6 +99,35 @@ fn reader_checks_magic_version_and_length_bounds_only() {
     bytes.push(9); // Trailing bytes are not a compatibility/admission check.
     fs::write(&path, bytes).unwrap();
     assert!(image::Header::read(&mut File::open(&path).unwrap()).is_ok());
+}
+
+#[test]
+fn machine_state_length_limit_is_checked_in_the_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    image::write(&path, 1, b"", &ram).unwrap();
+    let mut header = fs::read(&path).unwrap()[..32].to_vec();
+    let limit = u64::from(crate::config::MAX_VCPUS) * (512 << 10) + (64 << 10);
+    for machine_len in [limit, limit + 1] {
+        header[24..32].copy_from_slice(&machine_len.to_le_bytes());
+        fs::write(&path, &header).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(32 + machine_len + 4096)
+            .unwrap();
+        let result = image::Header::read(&mut File::open(&path).unwrap());
+        if machine_len == limit {
+            assert!(result.is_ok(), "length at the limit must be admitted");
+        } else {
+            let error = result.expect_err("oversized machine state admitted by header");
+            assert!(matches!(error, crate::Error::Snapshot(ref e)
+                if e.kind() == io::ErrorKind::InvalidInput
+                    && e.to_string() == "machine state exceeds length limit"));
+        }
+    }
 }
 
 #[test]

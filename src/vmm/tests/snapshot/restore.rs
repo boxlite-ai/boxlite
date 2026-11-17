@@ -355,6 +355,102 @@ fn malformed_images_are_refused_before_creating_a_host_vm() {
 }
 
 #[test]
+fn invalid_ram_lengths_are_refused_before_creating_a_host_vm() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    write_image(&path);
+    let original = fs::read(&path).unwrap();
+    for (ram_len, reason) in [
+        (0, "missing RAM"),
+        (4095, "guest RAM size is not page-aligned"),
+        (u64::MAX, "image lengths exceed file bounds"),
+    ] {
+        let mut bytes = original.clone();
+        bytes[16..24].copy_from_slice(&ram_len.to_le_bytes());
+        fs::write(&path, bytes).unwrap();
+        let error = from_path::<Backend>(&path, || panic!("host VM created for RAM size {ram_len}"))
+            .expect_err("invalid RAM length accepted");
+        assert!(
+            matches!(error, Error::Snapshot(ref e)
+                if e.kind() == io::ErrorKind::InvalidInput && e.to_string() == reason),
+            "RAM size {ram_len}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn header_admits_ram_above_four_gib() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    write_image(&path);
+    let ram_len = (4u64 << 30) + 4096;
+    let mut bytes = fs::read(&path).unwrap();
+    let machine_len = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+    bytes[16..24].copy_from_slice(&ram_len.to_le_bytes());
+    fs::write(&path, bytes).unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(32 + machine_len + ram_len)
+        .unwrap();
+    let header = image::Header::read(&mut File::open(&path).unwrap()).unwrap();
+    assert_eq!(header.ram_len, ram_len);
+}
+
+#[test]
+fn maximum_vcpu_serialization_fits_machine_state_length_limit() {
+    let mut machine = machine();
+    machine.vcpus.truncate(1);
+    let state = &mut machine.vcpus[0].state;
+    state.xsave = vec![u32::MAX; 65536];
+    state.cpuid = vec![Default::default(); 256];
+    state.msrs = vec![Default::default(); 4096];
+    state.tsc_khz = u32::MAX;
+    machine.platform.pit = Some(Default::default());
+    let single_len = machine.encode().unwrap().len() as u64;
+    machine.vcpus.clear();
+    let platform_len = machine.encode().unwrap().len() as u64;
+    // These are X86VcpuState's decode ceilings. KVM/FPU byte-blob lengths do
+    // not depend on field values; u32::MAX maximizes XSAVE/TSC varints.
+    // Records serialize independently. Multiplying the entire one-record image
+    // overcounts platform/framing, conservatively covering MAX_VCPUS without
+    // constructing that many records; the extra empty image covers outer framing.
+    let projected = single_len * u64::from(crate::config::MAX_VCPUS) + platform_len;
+    assert!(
+        projected <= image::MAX_MACHINE_STATE_LEN,
+        "maximum machine state needs {projected} bytes, limit is {}",
+        image::MAX_MACHINE_STATE_LEN
+    );
+}
+
+#[test]
+fn noncontiguous_vcpu_records_are_refused_before_creating_a_host_vm() {
+    let dir = tempfile::tempdir().unwrap();
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    for ids in [[1, 0, 2], [0, 0, 2], [0, 2, 2]] {
+        let path = dir.path().join(format!("image-{ids:?}"));
+        let mut machine = machine();
+        let records = std::mem::take(&mut machine.vcpus);
+        machine.vcpus = ids
+            .into_iter()
+            .map(|id| VcpuRecord {
+                id,
+                state: records[usize::from(id)].state.clone(),
+            })
+            .collect();
+        image::write(&path, 3, &machine.encode().unwrap(), &ram).unwrap();
+        let error = from_path::<Backend>(&path, || {
+            panic!("host VM created for noncontiguous vCPU records {ids:?}")
+        })
+        .expect_err("noncontiguous vCPU records accepted");
+        assert!(matches!(error, Error::Snapshot(ref e)
+            if e.kind() == io::ErrorKind::InvalidInput
+                && e.to_string() == "vCPU records must be contiguous and ordered by id"));
+    }
+}
+
+#[test]
 fn out_of_range_vcpu_counts_are_refused_before_creating_a_host_vm() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::tempdir().unwrap();

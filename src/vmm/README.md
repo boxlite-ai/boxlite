@@ -611,9 +611,9 @@ checksum, hash, signature, feature negotiation or compatibility metadata:
 | `32..32+M` | Postcard: vCPU records (ID + `X86VcpuState`), then `X86VmState` |
 | `32+M..` | Raw RAM bytes |
 
-The internal reader checks magic/version, length bounds and agreement between
-header and machine-state vCPU counts. It does not compare CPU policy or kernel
-versions, and offers no portability or cross-version guarantee.
+The internal reader checks the magic and version, rejects declared lengths
+that overflow or extend past the file, and caps machine state at 32 MiB + 64 KiB
+before allocating its buffer.
 
 `make test:unit:vmm` covers the container, layout refusal, partial-write/final-flush
 cleanup and handle admission on every host. Linux x86_64 mock tests exercise
@@ -636,15 +636,20 @@ execution.join()?;
 ```
 
 Images are created with owner-only permissions (`0600`, subject to the caller's
-umask). The reader checks magic/version, file length bounds, vCPU count agreement
-and the configured execution limit of 1–64 vCPUs
-before creating a host VM. It derives the x86 RAM ranges from the nonzero,
-page-aligned payload length and checks them against the prepared KVM handle's
-GPA limit. It streams packed RAM in ascending GPA order in 1 MiB chunks into
-fresh private-anonymous regions. When the payload exceeds 3 GiB, the remaining
-bytes go into high RAM starting at 4 GiB. The phase-1 exporter writes only
-single-region images at GPA 0. Restore installs captured state without loading
-a kernel or initramfs or applying boot CPUID, MSRs or registers.
+umask). After decoding the Postcard machine state, the reader checks that its
+vCPU count matches the header and falls within 1–64. It requires vCPU records
+in contiguous ID order starting at 0.
+
+Before allocating RAM or creating a host VM, restore requires a nonzero,
+page-aligned RAM payload. The x86 RAM layout checks that each range fits the
+host's address size and that computing its end GPA does not overflow. Restore
+then checks the ranges against the prepared KVM handle's GPA limit. It streams
+packed RAM in ascending GPA order in 1 MiB chunks into fresh private-anonymous
+regions. When the payload exceeds 3 GiB, the remaining bytes go into high RAM
+starting at 4 GiB.
+
+Restore installs captured state without loading a kernel or initramfs or
+applying boot CPUID, MSRs or registers.
 The supervisor installs `X86VmState` first; each fresh vCPU installs its
 `X86VcpuState` on its own owning thread. Initial parking is armed before workers
 start. Only after every configured worker acknowledges that epoch does the
@@ -1242,8 +1247,8 @@ make fmt:check:rust
 
 On Linux x86_64 with read/write access to `/dev/kvm`,
 `make test:integration:vmm:kvm` also runs this crate's hardware tests. A flat
-32-bit guest uses 3072 MiB to fill the low RAM band, reads its last byte, and
-reports it on port `0x3f8`. A 64-bit guest uses 4097 MiB to place a marker above
+32-bit guest fills the 3 GiB low RAM band, reads its last byte, and reports it
+on port `0x3f8`. A 64-bit guest uses 4097 MiB to place a marker above
 4 GiB. Entered through `long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS`
 applied, it reloads its segments from the GDT in RAM, reads markers at RSI and
 at the top of RAM, and stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and
