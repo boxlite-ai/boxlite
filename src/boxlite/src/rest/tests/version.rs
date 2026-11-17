@@ -72,6 +72,14 @@ fn supported_config() -> String {
     json!({"api_version":crate::rest::api_version()}).to_string()
 }
 
+fn generated_operation(operation: &str) -> Value {
+    let routes: Vec<Value> = serde_json::from_str(include_str!("../version_rules.json")).unwrap();
+    routes
+        .into_iter()
+        .find(|route| route["operation"] == operation)
+        .expect("operation has generated version rules")
+}
+
 #[tokio::test]
 async fn released_0120_does_not_prove_pending_feature_support() {
     let (options, task) = server(vec![(200, r#"{"api_version":"0.12.0"}"#.into())]).await;
@@ -84,23 +92,39 @@ async fn released_0120_does_not_prove_pending_feature_support() {
 }
 
 #[tokio::test]
-async fn development_minimum_uses_semver_and_rejects_untrusted_discovery() {
-    let current = env!("CARGO_PKG_VERSION");
-    for (reported, accepted) in [
-        (json!(current), true),
-        (json!(format!("{current}+build.42")), true),
-        (json!(format!("{current}-rc.1")), false),
+async fn generated_minimum_uses_semver_and_rejects_untrusted_discovery() {
+    let operation = generated_operation("startExecution");
+    let rule = operation["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["location"] == "body" && rule["path"] == json!(["user"]))
+        .unwrap();
+    let minimum = semver::Version::parse(rule["minimum"].as_str().unwrap()).unwrap();
+    let mut with_build = minimum.clone();
+    with_build.build = semver::BuildMetadata::new("build.42").unwrap();
+    let mut newer = semver::Version::new(minimum.major, minimum.minor, minimum.patch + 1);
+    newer.pre = semver::Prerelease::new("rc.1").unwrap();
+    let mut cases = vec![
+        (json!(minimum.to_string()), true),
+        (json!(with_build.to_string()), true),
+        (json!(newer.to_string()), true),
         (json!("0.11.99"), false),
         (json!("0.12.0-rc.1"), false),
         (json!("0.12.0"), false),
         (json!("0.12.0+build.42"), false),
-        (json!("1.0.0"), true),
         (json!(crate::rest::api_version()), true),
         (Value::Null, false),
         (json!(12), false),
         (json!("0.12"), false),
         (json!("v0.12.0"), false),
-    ] {
+    ];
+    if minimum.pre.is_empty() {
+        let mut prerelease = minimum.clone();
+        prerelease.pre = semver::Prerelease::new("rc.1").unwrap();
+        cases.push((json!(prerelease.to_string()), false));
+    }
+    for (reported, accepted) in cases {
         let mut replies = vec![(
             200,
             json!({"api_version":reported,"capabilities":{"exec_user_enabled":false}}).to_string(),
@@ -135,8 +159,11 @@ async fn development_minimum_uses_semver_and_rejects_untrusted_discovery() {
 }
 
 #[tokio::test]
-async fn development_operation_minimum_accepts_same_and_newer_releases() {
-    for reported in [env!("CARGO_PKG_VERSION"), "1.0.0"] {
+async fn generated_operation_minimum_accepts_same_and_newer_releases() {
+    let operation = generated_operation("listSnapshots");
+    let minimum = semver::Version::parse(operation["minimum"].as_str().unwrap()).unwrap();
+    let newer = semver::Version::new(minimum.major, minimum.minor, minimum.patch + 1);
+    for reported in [minimum.to_string(), newer.to_string()] {
         let (options, task) = server(vec![
             (200, json!({"api_version":reported}).to_string()),
             (200, "[]".into()),

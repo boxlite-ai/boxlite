@@ -124,7 +124,13 @@ fail locally instead of bypassing checks.
 The generator supports local references, nested object properties, `allOf`,
 whole-property `present` checks, scalar `non-default` checks, and scalar query,
 header, and path parameters. Annotations inside arrays, maps, unions, parameter
-content, or non-JSON bodies fail generation; use an operation gate for those shapes.
+content, nested parameter schemas, or non-JSON bodies fail generation; use an
+operation gate for those shapes.
+
+Nested parameter fields are inventoried through references and compositions.
+For a new `query.filter.name`, use an operation minimum newer than the base release,
+`next-release`, or `unplanned`. Field annotations inside that schema are rejected.
+
 Consumers use packaged rules and need no Python or YAML parser.
 
 ### Finalizing a release
@@ -140,6 +146,11 @@ The target requires a stable workspace version newer than the Git base. It repla
 only `next-release` minima, sets `info.version` to that release, and regenerates
 `src/boxlite/src/rest/{version_rules,api_version}.json`. It preserves comments,
 previously assigned minima, and every `unplanned` declaration.
+
+Compatibility tests derive their version boundaries from generated rule minima.
+For example, after a rule is finalized at `0.13.2`, a later SDK version `0.13.3`
+still accepts server `0.13.3-rc.1`, while rejecting `0.13.2-rc.1`.
+
 Include those changes in the bump PR. Release checks refuse remaining `next-release`,
 stale artifacts, and mismatched release tags; `unplanned` remains valid and explicitly refused.
 SDK release workflows and cloud image release publication enforce these checks.

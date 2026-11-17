@@ -86,6 +86,57 @@ class VersionRulesTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unsupported"):
                     self.compile()
 
+    def test_nested_parameter_schema_annotations_are_rejected(self):
+        for annotation in [
+            {rules.MINIMUM: "unplanned", rules.CONDITION: "present"},
+            {rules.CONDITION: "present"},
+        ]:
+            child = {"type": "string", **annotation}
+            self.spec["components"]["schemas"]["ParameterField"] = child
+            shapes = [
+                {"properties": {"new": child}},
+                {"properties": {"new": {"$ref": "#/components/schemas/ParameterField"}}},
+                {"allOf": [child]}, {"items": child},
+                {"oneOf": [child]}, {"anyOf": [child]},
+                {"additionalProperties": child},
+            ]
+            for location in ["query", "header", "path"]:
+                for shape in shapes:
+                    with self.subTest(location=location, shape=shape):
+                        self.op["parameters"] = [{"name": "filter", "in": location, "schema": shape}]
+                        with self.assertRaisesRegex(ValueError, "parameter schema.*unsupported"):
+                            self.compile()
+
+    def test_new_nested_parameter_fields_require_an_operation_gate(self):
+        for location in ["query", "header", "path"]:
+            for wrapper in ["properties", "allOf", "items", "additionalProperties", "oneOf"]:
+                with self.subTest(location=location, wrapper=wrapper):
+                    self.op.pop(rules.MINIMUM, None)
+                    child = {"type": "object", "properties": {"old": {"type": "string"}}}
+                    if wrapper == "properties":
+                        schema = {"properties": {"nested": child}}
+                    elif wrapper in {"allOf", "oneOf"}:
+                        schema = {wrapper: [child]}
+                    else:
+                        schema = {wrapper: child}
+                    self.op["parameters"] = [{"name": "filter", "in": location, "schema": schema}]
+                    before = copy.deepcopy(self.spec)
+                    child["properties"]["new"] = {"type": "string"}
+                    with self.assertRaisesRegex(ValueError, "new request field"):
+                        rules.check_additions(before, self.spec, "0.12.0")
+                    self.op[rules.MINIMUM] = "next-release"
+                    rules.check_additions(before, self.spec, "0.12.0")
+
+    def test_parameter_schema_root_annotation_is_supported(self):
+        self.op["parameters"] = [{"name": "flag", "in": "query", "schema": {
+            "type": "boolean", "default": False,
+            rules.MINIMUM: "0.13.0", rules.CONDITION: "non-default",
+        }}]
+        rule = self.compile()["rules"][0]
+        self.assertEqual(rule["path"], ["flag"])
+        self.assertEqual(rule["minimum"], "0.13.0")
+        self.assertIs(rule["default"], False)
+
     def test_present_on_whole_array_is_supported(self):
         self.schema["properties"]["values"] = {"type": "array", "items": {"type": "string"},
             rules.MINIMUM: "0.13.0", rules.CONDITION: "present"}

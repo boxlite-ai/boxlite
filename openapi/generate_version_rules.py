@@ -171,6 +171,16 @@ class Contract:
                     node = {**schema, **{k: v for k, v in param.items() if k.startswith("x-boxlite-")}}
                     rule = self.rule(node, location, (param_name,))
                     fields[(location, param_name)] = node.get(MINIMUM)
+                    for pointer, child in self.walk(schema):
+                        if child is schema:
+                            continue  # The scalar parameter rule is handled above.
+                        if pointer:
+                            fields[(location, param_name, *pointer)] = child.get(MINIMUM)
+                        if MINIMUM in child or CONDITION in child:
+                            raise ValueError(
+                                f"{name} {param_name}: nested parameter schema annotations are unsupported; "
+                                "use an operation gate"
+                            )
                     for media in param.get("content", {}).values():
                         for pointer, child in self.walk(media.get("schema", {})):
                             fields[(location, param_name, *pointer)] = child.get(MINIMUM)
