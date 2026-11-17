@@ -121,11 +121,11 @@ func TestCopyInStreamLandsADirectoryTheWayDockerCpDoes(t *testing.T) {
 
 	// The archive a client sends for directory "tree", as BoxLite packs it.
 	var archive bytes.Buffer
-	if err := box.CopyOutStream(ctx, "/root/tree", &archive, nil); err != nil {
+	if err := box.CopyOutStream(ctx, "/root/tree", &archive); err != nil {
 		t.Fatalf("CopyOutStream: %v", err)
 	}
 
-	if err := box.CopyInStream(ctx, "/root/landed", CopySourceDir, &archive); err != nil {
+	if err := box.CopyInStream(ctx, "/root/landed", &archive); err != nil {
 		t.Fatalf("CopyInStream: %v", err)
 	}
 	if got := run("cat /root/landed/a.txt && test ! -e /root/landed/tree"); got != "a" {
@@ -145,7 +145,7 @@ func TestCopyInStreamFailedSourceFailsCopy(t *testing.T) {
 		err:  errors.New("client gone"),
 	}
 
-	err := box.CopyInStream(context.Background(), "/root/aborted.tar", CopySourceFile, reader)
+	err := box.CopyInStream(context.Background(), "/root/aborted.tar", reader)
 	if err == nil {
 		t.Fatal("a source failure mid-transfer must fail the copy")
 	}
@@ -165,7 +165,7 @@ func TestCopyInStreamNoProgressFails(t *testing.T) {
 	rt := newTestRuntime(t)
 	box := createStartedBox(t, rt, "alpine:latest")
 
-	err := box.CopyInStream(context.Background(), "/root/noprogress.tar", CopySourceFile, zeroReader{})
+	err := box.CopyInStream(context.Background(), "/root/noprogress.tar", zeroReader{})
 	if !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("got %v, want io.ErrNoProgress", err)
 	}
@@ -188,7 +188,7 @@ func TestCopyOutStreamDoesNotBlockRuntimeCallbacks(t *testing.T) {
 	writer := newControlledBlockingWriter()
 	copyDone := make(chan error, 1)
 	go func() {
-		copyDone <- box.CopyOutStream(context.Background(), "/root/copy-out-hol.txt", writer, nil)
+		copyDone <- box.CopyOutStream(context.Background(), "/root/copy-out-hol.txt", writer)
 		close(copyDone)
 	}()
 	t.Cleanup(func() {
@@ -248,35 +248,6 @@ func TestCopyOutStreamPullContract(t *testing.T) {
 		t.Fatalf("prepare copy-out source: exit code %d, stderr=%q", result.ExitCode, result.Stderr)
 	}
 
-	t.Run("file metadata precedes first write", func(t *testing.T) {
-		var events []string
-		metadataCalls := 0
-		writer := writerFunc(func(p []byte) (int, error) {
-			events = append(events, "write")
-			return len(p), nil
-		})
-		onMeta := func(sourceIsDir bool) {
-			metadataCalls++
-			if sourceIsDir {
-				events = append(events, "metadata:dir")
-				return
-			}
-			events = append(events, "metadata:file")
-		}
-		if err := box.CopyOutStream(context.Background(), sourcePath, writer, onMeta); err != nil {
-			t.Fatalf("CopyOutStream: %v", err)
-		}
-		if metadataCalls != 1 {
-			t.Fatalf("metadata callback count = %d, want 1", metadataCalls)
-		}
-		if len(events) < 2 {
-			t.Fatalf("events = %v, want metadata followed by at least one write", events)
-		}
-		if events[0] != "metadata:file" || events[1] != "write" {
-			t.Fatalf("first events = %v, want [metadata:file write]", events[:2])
-		}
-	})
-
 	t.Run("writer error is returned unchanged", func(t *testing.T) {
 		want := errors.New("copy-out writer sentinel")
 		writeCalls := 0
@@ -284,7 +255,7 @@ func TestCopyOutStreamPullContract(t *testing.T) {
 			writeCalls++
 			return 0, want
 		})
-		if got := box.CopyOutStream(context.Background(), sourcePath, writer, nil); got != want {
+		if got := box.CopyOutStream(context.Background(), sourcePath, writer); got != want {
 			t.Fatalf("CopyOutStream error = %v, want identical sentinel %v", got, want)
 		}
 		if writeCalls != 1 {
@@ -298,7 +269,7 @@ func TestCopyOutStreamPullContract(t *testing.T) {
 			writeCalls++
 			return len(p) - 1, nil
 		})
-		if got := box.CopyOutStream(context.Background(), sourcePath, writer, nil); got != io.ErrShortWrite {
+		if got := box.CopyOutStream(context.Background(), sourcePath, writer); got != io.ErrShortWrite {
 			t.Fatalf("CopyOutStream error = %v, want %v", got, io.ErrShortWrite)
 		}
 		if writeCalls != 1 {
@@ -312,7 +283,7 @@ func TestCopyOutStreamPullContract(t *testing.T) {
 			writeCalls++
 			return len(p), nil
 		})
-		err := box.CopyOutStream(context.Background(), "/root/copy-out-pull-contract-missing", writer, nil)
+		err := box.CopyOutStream(context.Background(), "/root/copy-out-pull-contract-missing", writer)
 		if err == nil {
 			t.Fatal("CopyOutStream succeeded for a missing source")
 		}

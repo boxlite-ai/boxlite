@@ -290,6 +290,7 @@ Follow the [Rust style guide](./docs/contributing/development/rust-style.md), wh
 
 - `make fmt` / `make fmt:check` for formatting checks
 - `make lint` / `make lint:fix` for lint checks and safe autofix
+- The `lint-fix` pre-commit hook runs `make lint:fix`, which formats the whole apps workspace when any `apps/` file changes and fails the commit if the formatter rewrites any file
 - Keep functions focused (single responsibility)
 - Add tests for new functionality
 - Update documentation in the same pull request, in the place [Documentation](#documentation) assigns

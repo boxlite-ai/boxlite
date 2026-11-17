@@ -1,7 +1,7 @@
 {
-  "_comment": "Identifier First makes this the first screen every visitor sees, new ones included, so the title sells starting rather than greeting a return; login covers the single-step variant.",
+  "_comment": "Identifier First makes this the first screen every visitor sees, new ones included, so the title sells starting rather than greeting a return; login covers the single-step variant. The description is a zero-width space: Auth0 renders its own 'Log in to ... to continue to ...' line for a missing or empty description, and this screen shows no subtitle.",
   "login-id": {
     "title": "Start building on BoxLite",
-    "description": "Log in to your BoxLite account."
+    "description": "\u200b"
   }
 }

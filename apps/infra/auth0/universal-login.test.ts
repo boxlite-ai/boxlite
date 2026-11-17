@@ -352,13 +352,14 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   const copy = new Map(source.prompts.map((prompt) => [prompt.prompt, prompt.text]))
   assert.deepEqual([...copy.keys()].sort(), ['login', 'login-id', 'signup', 'signup-id'])
   // Identifier First serves login-id/signup-id, so both variants of each screen carry the same copy.
-  for (const [prompt, title, description] of [
-    ['login-id', 'Start building on BoxLite', 'Log in to your BoxLite account.'],
-    ['login', 'Start building on BoxLite', 'Log in to your BoxLite account.'],
-    ['signup-id', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
-    ['signup', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
+  for (const [prompt, text] of [
+    // A zero-width space keeps Auth0 from rendering its default subtitle on the login screens.
+    ['login-id', { title: 'Start building on BoxLite', description: '\u200b' }],
+    ['login', { title: 'Start building on BoxLite', description: '\u200b' }],
+    ['signup-id', { title: 'Welcome to BoxLite', description: 'Boxes your agents build in, and ship from.' }],
+    ['signup', { title: 'Welcome to BoxLite', description: 'Boxes your agents build in, and ship from.' }],
   ] as const) {
-    assert.deepEqual(copy.get(prompt), { [prompt]: { title, description } })
+    assert.deepEqual(copy.get(prompt), { [prompt]: text })
   }
   assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-3f7875da.png')
   assert.equal('_comment' in source.theme, false)

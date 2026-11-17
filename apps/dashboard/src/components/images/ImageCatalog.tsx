@@ -46,7 +46,8 @@ import { toast } from 'sonner'
 // One definition for the header and every row, for the reason spelled out in
 // Volumes: two grid containers solving independently drift apart column by
 // column.
-const ROW_GRID = 'grid min-w-[760px] grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_72px_48px_100px_110px] items-center gap-4'
+const ROW_GRID =
+  'grid min-w-[760px] grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_72px_48px_100px_110px] items-center gap-4'
 
 function BoxLinks({ boxes }: { boxes: Box[] }) {
   return (
