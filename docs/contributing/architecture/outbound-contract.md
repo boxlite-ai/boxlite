@@ -280,6 +280,44 @@ Runner tests execute its production bearer and error middleware over HTTP.
 Missing, malformed, and wrong credentials cannot reach control lookup; the configured bearer can use all three resources.
 A separate client test crosses the actual Go/C/Rust transport against a controlled Runtime peer, including stopped-Box reads and refused mutation.
 
+### CLI serve control resources
+
+The CLI serve router implements the same resources.
+Its existing public policy PUT accepts HTTP `If-Match`, including tag lists and wildcard matching, while retaining the unconditional response shape.
+Coordinator headers on that public resource are rejected; trusted candidates use the dedicated snapshot path.
+
+A rejected CAS triggers a fresh predicate check; tag lists and wildcard requests may still match a competing revision.
+The server retains one candidate identity across at most two CAS attempts, then returns conflict if contention persists.
+Transport errors and uncertain outcomes return immediately without retry or an unconditional fallback.
+
+The diagram uses illustrative revision tokens; HTTP tests allocate the candidate through the real coordinator.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Serve as CLI serve
+    participant Other as Concurrent coordinator
+    participant Runtime
+    Caller->>Serve: PUT with If-Match [rev-a, rev-b]
+    Note over Serve: Allocate candidate rev-c once
+    Serve->>Runtime: Read persisted snapshot
+    Runtime-->>Serve: rev-a
+    Other->>Runtime: Replace rev-a with rev-b
+    Runtime-->>Other: ACK rev-b
+    Serve->>Runtime: CAS expected rev-a, candidate rev-c
+    Runtime-->>Serve: 412, candidate not applied
+    Serve->>Runtime: Read persisted snapshot
+    Runtime-->>Serve: rev-b
+    Note over Serve: The public tag list still matches
+    Serve->>Runtime: CAS expected rev-b, same candidate rev-c
+    Runtime-->>Serve: Matching ACK rev-c
+    Serve-->>Caller: 200, ETag rev-c
+```
+
+Local status reports the same durable snapshot in `persisted` and `runtime_persisted` because this server has no separate Cloud store.
+Absent pending and observation-error fields are omitted; an existing pending revision remains a string.
+HTTP tests exercise the actual API-key middleware and verify denied requests cannot reach Box lookup or Runtime control.
+
 ### Runtime readback and coordinator recovery
 
 `NetworkHandle::outbound_status` compares a durable snapshot with the backend's observed snapshot and installation phase.
