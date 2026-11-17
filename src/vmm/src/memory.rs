@@ -13,6 +13,8 @@
 use std::{io, ptr::NonNull, sync::Arc};
 
 use boxlite_hypervisor::{MemoryRegion, Vm};
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+use vm_memory::Bytes;
 use vm_memory::{GuestAddress, GuestMemoryBackend, GuestMemoryRegion, VolatileSlice};
 
 use crate::error::{Error, Result};
@@ -45,7 +47,12 @@ impl RamLayout {
     /// The RAM start, size and any hole endpoints must be guest-page aligned.
     pub(crate) fn ranges(&self, size: u64) -> io::Result<Vec<(GuestAddress, usize)>> {
         assert!(self.start.is_multiple_of(GUEST_PAGE_SIZE));
-        assert!(size.is_multiple_of(GUEST_PAGE_SIZE));
+        if !size.is_multiple_of(GUEST_PAGE_SIZE) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "guest RAM size is not page-aligned",
+            ));
+        }
         let (low_len, high) = if let Some((hole_start, hole_end)) = self.hole {
             assert!(hole_start.is_multiple_of(GUEST_PAGE_SIZE));
             assert!(hole_end.is_multiple_of(GUEST_PAGE_SIZE));
@@ -287,6 +294,32 @@ impl GuestRam {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_reader(len: usize, source: &mut impl io::Read) -> Result<Self> {
+        let ram = Self::new(&[(GuestAddress(0), len)])?;
+        ram.read_image(source)?;
+        Ok(ram)
+    }
+
+    /// Loads a packed RAM payload in ascending GPA order, skipping address holes.
+    #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+    pub(crate) fn read_image(&self, source: &mut impl io::Read) -> Result<()> {
+        const CHUNK: usize = 1 << 20;
+        let mut buffer = vec![0; CHUNK];
+        for (start, len) in self.ranges() {
+            for offset in (0..len).step_by(CHUNK) {
+                let size = CHUNK.min(len - offset);
+                source
+                    .read_exact(&mut buffer[..size])
+                    .map_err(Error::Snapshot)?;
+                self.memory
+                    .write_slice(&buffer[..size], GuestAddress(start.0 + offset as u64))
+                    .map_err(|error| Error::Snapshot(io::Error::other(error)))?;
+            }
+        }
+        Ok(())
+    }
+
     /// The shared guest memory every host-side user clones.
     pub(crate) fn memory(&self) -> &Arc<GuestMemoryMmap> {
         &self.memory
@@ -294,7 +327,7 @@ impl GuestRam {
 
     /// The guest RAM ranges this instance backs, in ascending guest order.
     #[cfg_attr(
-        not(all(target_os = "linux", target_arch = "x86_64")),
+        not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
         expect(dead_code, reason = "Only Linux x86_64 prepares boot data yet.")
     )]
     pub(crate) fn ranges(&self) -> impl Iterator<Item = (GuestAddress, usize)> + '_ {
@@ -377,6 +410,25 @@ impl Drop for GuestRam {
             // memory the guest can still write.
             std::mem::forget(Arc::clone(&self.memory));
         }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn packed_ram_image_loads_on_both_sides_of_the_mmio_hole() {
+    const PAGE: usize = GUEST_PAGE_SIZE as usize;
+    let low = GuestAddress(0);
+    let high = GuestAddress(MMIO_HOLE_END);
+    let ram = GuestRam::new(&[(low, PAGE), (high, PAGE)]).unwrap();
+    let payload = [[0x35; PAGE], [0xc7; PAGE]];
+    let mut source = payload.as_flattened();
+    ram.read_image(&mut source).unwrap();
+    assert!(source.is_empty());
+
+    let mut bytes = [0; PAGE];
+    for (address, expected) in [(low, payload[0]), (high, payload[1])] {
+        ram.memory().read_slice(&mut bytes, address).unwrap();
+        assert_eq!(bytes, expected);
     }
 }
 

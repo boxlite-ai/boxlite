@@ -73,7 +73,7 @@ impl KvmVcpu {
     }
 }
 
-fn check_written(msrs: &Msrs, written: usize) -> io::Result<()> {
+pub(super) fn check_written(msrs: &Msrs, written: usize) -> io::Result<()> {
     match msrs.as_slice().get(written) {
         Some(rejected) => Err(io::Error::other(format!(
             "KVM wrote {written} of {} MSRs; first rejected index {:#x}",
@@ -126,10 +126,63 @@ fn msr_buffer(entries: &[X86Msr]) -> io::Result<Msrs> {
     Ok(buffer)
 }
 
+/// Probe one index at a time: a short batch read stops at the first unavailable
+/// MSR and would lose every subsequent register (notably CPUID-gated PMU MSRs).
+/// No boot-MSR allowlist: retain every readable index advertised by KVM.
+pub(super) fn snapshot_msrs(fd: &kvm_ioctls::VcpuFd) -> io::Result<Vec<kvm_msr_entry>> {
+    let kvm = Kvm::new().map_err(io::Error::from)?;
+    let indices = kvm.get_msr_index_list().map_err(io::Error::from)?;
+    let mut entries = Vec::new();
+    for &index in indices.as_slice() {
+        // x2APIC's register window includes write-only EOI/SELF_IPI registers.
+        // LAPIC state is saved/restored via its dedicated ioctl instead.
+        if (0x800..=0xbff).contains(&index) {
+            continue;
+        }
+        let mut msr = Msrs::from_entries(&[kvm_msr_entry {
+            index,
+            ..Default::default()
+        }])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        match fd.get_msrs(&mut msr).map_err(io::Error::from)? {
+            0 => {} // Unavailable under this vCPU's CPUID/MCE configuration.
+            1 => entries.push(msr.as_slice()[0]),
+            _ => return Err(io::Error::other("invalid MSR read count")),
+        }
+    }
+    Ok(entries)
+}
+
+pub(super) fn snapshot_cpuid(entries: &[kvm_cpuid_entry2]) -> io::Result<CpuId> {
+    if entries.is_empty() || entries.len() > KVM_MAX_CPUID_ENTRIES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid CPUID count",
+        ));
+    }
+    CpuId::from_entries(entries).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use kvm_bindings::{KVM_CPUID_FLAG_STATE_READ_NEXT, KVM_CPUID_FLAG_STATEFUL_FUNC};
+
+    #[test]
+    fn snapshot_cpuid_preserves_entries_and_only_checks_count() {
+        let first = kvm_cpuid_entry2 {
+            function: 7,
+            ..Default::default()
+        };
+        let mut second = first;
+        second.index = 1;
+        second.flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX | (1 << 31);
+        second.padding[0] = 1;
+        let entries = [first, second, second];
+        assert_eq!(snapshot_cpuid(&entries).unwrap().as_slice(), &entries);
+        assert!(snapshot_cpuid(&[]).is_err());
+        assert!(snapshot_cpuid(&vec![first; KVM_MAX_CPUID_ENTRIES + 1]).is_err());
+    }
 
     #[test]
     fn supported_cpuid_omits_unrepresentable_stateful_entries() {

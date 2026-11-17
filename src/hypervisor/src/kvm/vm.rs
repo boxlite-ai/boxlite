@@ -133,6 +133,63 @@ impl KvmVm {
         prepared.create().map_err(Error::CreateVm)
     }
 
+    /// Captures the global platform without entering any vCPU. The caller must
+    /// stop all vCPUs/IRQ producers and complete userspace I/O first.
+    pub fn save_state(&self) -> Result<crate::X86VmState> {
+        let capture = || -> io::Result<_> {
+            let mut irqchips = std::array::from_fn(|chip_id| kvm_bindings::kvm_irqchip {
+                chip_id: chip_id as u32,
+                ..Default::default()
+            });
+            for chip in &mut irqchips {
+                self.fd.get_irqchip(chip).map_err(io::Error::from)?;
+            }
+            Ok(crate::X86VmState {
+                // SAFETY: each buffer was fully zeroed before GET_IRQCHIP.
+                irqchips: irqchips.map(|chip| unsafe {
+                    match chip.chip_id {
+                        0 | 1 => crate::X86IrqchipState::pic(chip.chip_id, chip.chip.pic),
+                        _ => crate::X86IrqchipState::ioapic(chip.chip.ioapic),
+                    }
+                }),
+                pit: Some(self.fd.get_pit2().map_err(io::Error::from)?),
+                clock: self.fd.get_clock().map_err(io::Error::from)?,
+            })
+        };
+        capture()
+            .map_err(|e| Error::CreateVm(io::Error::new(e.kind(), format!("save VM state: {e}"))))
+    }
+
+    /// Fully overwrites an identically configured stopped VM; see [`crate::X86VmState`].
+    /// On an ioctl failure,
+    /// discard the destination: KVM cannot roll back a partially restored VM.
+    ///
+    /// Within this platform-state call, restore IRQ chips before PIT programming
+    /// so timer interrupts have their captured sinks, then restore the VM clock.
+    /// Per-vCPU TSC state is restored separately by [`KvmVcpu::restore_state`];
+    /// do not enter any vCPU until all platform, device and vCPU state is installed.
+    pub fn restore_state(&self, state: &crate::X86VmState) -> Result<()> {
+        let restore = || -> io::Result<()> {
+            for chip in &state.irqchips {
+                self.fd
+                    .set_irqchip(chip.as_kvm())
+                    .map_err(io::Error::from)?;
+            }
+            if let Some(pit) = &state.pit {
+                self.fd.set_pit2(pit).map_err(io::Error::from)?;
+            }
+            // Do not add wall-clock time spent suspended to the guest clock.
+            let clock = kvm_bindings::kvm_clock_data {
+                flags: state.clock.flags & !kvm_bindings::KVM_CLOCK_REALTIME,
+                ..state.clock
+            };
+            self.fd.set_clock(&clock).map_err(io::Error::from)
+        };
+        restore().map_err(|e| {
+            Error::CreateVm(io::Error::new(e.kind(), format!("restore VM state: {e}")))
+        })
+    }
+
     /// KVM-supported guest CPUID before the VMM applies guest topology/policy.
     pub fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
         &self.cpuid
@@ -147,7 +204,13 @@ impl KvmVm {
                 .create_vcpu(u64::from(id))
                 .map_err(io::Error::from)?;
             kick.configure(fd.as_raw_fd())?;
-            Ok(KvmVcpu::new(fd, id, self.run_size, kick))
+            Ok(KvmVcpu::new(
+                fd,
+                id,
+                self.run_size,
+                kick,
+                self.fd.check_extension_int(Cap::Xsave2).max(0) as usize,
+            ))
         };
         create().map_err(|source| Error::CreateVcpu { id, source })
     }
@@ -245,6 +308,14 @@ impl crate::Vm for KvmVm {
 }
 
 impl crate::X86Vm for KvmVm {
+    fn save_state(&self) -> Result<crate::X86VmState> {
+        Self::save_state(self)
+    }
+
+    fn restore_state(&self, state: &crate::X86VmState) -> Result<()> {
+        Self::restore_state(self, state)
+    }
+
     fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
         Self::supported_cpuid(self)
     }
@@ -300,6 +371,297 @@ mod tests {
             // SAFETY: tests drop their VM and vCPU before this backing page.
             unsafe { libc::munmap(self.0.as_ptr().cast(), 4096) };
         }
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn vm_snapshot_platform_values_survive_restore() {
+        let source = KvmVm::new().unwrap();
+        let mut programmed = source.save_state().unwrap();
+        for (id, mask) in [(0, 0xa5), (1, 0x5a)] {
+            // SAFETY: captured wrappers contain completely initialized images.
+            let mut pic = unsafe { programmed.irqchips[id].as_kvm().chip.pic };
+            pic.imr = mask;
+            programmed.irqchips[id] = crate::X86IrqchipState::pic(id as u32, pic);
+        }
+        let redirection = 0x71 | (1u64 << 16) | (3u64 << 56);
+        // SAFETY: captured wrappers contain completely initialized images.
+        let mut ioapic = unsafe { programmed.irqchips[2].as_kvm().chip.ioapic };
+        ioapic.redirtbl[7].bits = redirection;
+        programmed.irqchips[2] = crate::X86IrqchipState::ioapic(ioapic);
+        for chip in &programmed.irqchips {
+            source.fd.set_irqchip(chip.as_kvm()).unwrap();
+        }
+        let pit = programmed.pit.as_mut().unwrap();
+        pit.flags = kvm_bindings::KVM_PIT_FLAGS_SPEAKER_DATA_ON;
+        for (i, channel) in pit.channels.iter_mut().enumerate() {
+            channel.count = 0x3456 + i as u32;
+            channel.mode = i as u8;
+            channel.rw_mode = 3;
+            channel.gate = 0;
+        }
+        source.fd.set_pit2(pit).unwrap();
+        let clock_offset = 7 * 24 * 60 * 60 * 1_000_000_000u64;
+        source
+            .fd
+            .set_clock(&kvm_bindings::kvm_clock_data {
+                clock: clock_offset,
+                ..Default::default()
+            })
+            .unwrap();
+        let mut state = crate::X86Vm::save_state(&source).unwrap();
+        assert!(state.clock.clock >= clock_offset);
+        let started = Instant::now();
+        // A stale wall-clock correlation must not advance the restored clock.
+        if state.clock.flags & kvm_bindings::KVM_CLOCK_REALTIME != 0 {
+            state.clock.realtime -= 60 * 1_000_000_000;
+        }
+        let destination = KvmVm::new().unwrap();
+        crate::X86Vm::restore_state(&destination, &state).unwrap();
+        for (id, expected) in state.irqchips.iter().enumerate() {
+            let mut actual = kvm_irqchip {
+                chip_id: id as u32,
+                ..Default::default()
+            };
+            destination.fd.get_irqchip(&mut actual).unwrap();
+            // SAFETY: GET_IRQCHIP initializes each full union image.
+            assert_eq!(unsafe { actual.chip.dummy }, unsafe {
+                expected.as_kvm().chip.dummy
+            });
+        }
+        // SAFETY: these chip IDs select the PIC and IOAPIC union members.
+        unsafe {
+            assert_eq!(state.irqchips[0].as_kvm().chip.pic.imr, 0xa5);
+            assert_eq!(state.irqchips[1].as_kvm().chip.pic.imr, 0x5a);
+            assert_eq!(
+                state.irqchips[2].as_kvm().chip.ioapic.redirtbl[7].bits,
+                redirection
+            );
+        }
+        let actual_pit = destination.fd.get_pit2().unwrap();
+        assert_eq!(
+            actual_pit.flags,
+            kvm_bindings::KVM_PIT_FLAGS_SPEAKER_DATA_ON
+        );
+        for (i, channel) in actual_pit.channels.iter().enumerate() {
+            assert_eq!(channel.count, 0x3456 + i as u32);
+            assert_eq!(
+                (channel.mode, channel.rw_mode, channel.gate),
+                (i as u8, 3, 0)
+            );
+        }
+        let actual_clock = destination.fd.get_clock().unwrap();
+        assert!(actual_clock.clock >= state.clock.clock);
+        assert!(
+            actual_clock.clock - state.clock.clock
+                < started.elapsed().as_nanos() as u64 + 1_000_000_000
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn vm_snapshot_preserves_unused_pit() {
+        let source = KvmVm::new().unwrap();
+        let state = source.save_state().unwrap();
+        assert!(state.pit.is_some(), "created, unused PIT is not absent");
+        let destination = KvmVm::new().unwrap();
+        let mut dirty = destination.fd.get_pit2().unwrap();
+        dirty.channels[2].count = 0x7654;
+        dirty.channels[2].mode = 3;
+        destination.fd.set_pit2(&dirty).unwrap();
+        destination.restore_state(&state).unwrap();
+        let actual = destination.fd.get_pit2().unwrap();
+        let mut expected = state.pit.unwrap();
+        // SET_PIT2 reloads channels 1/2 against destination host monotonic time;
+        // their host timestamps are not restored verbatim by the kernel.
+        for i in 1..3 {
+            assert!(actual.channels[i].count_load_time >= expected.channels[i].count_load_time);
+            expected.channels[i].count_load_time = actual.channels[i].count_load_time;
+        }
+        assert_eq!(actual.channels, expected.channels);
+        assert_eq!(actual.flags, expected.flags);
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_state_runs_on_a_fresh_vcpu() {
+        // .code16: load DS=0x10/ES=0x20; enable SSE in CR4; load XMM0 from
+        // CS:0x1700 and fill XMM3 with ones; WRMSR KERNEL_GS_BASE=0x12345678;
+        // load EAX/EBX/ESI/EDI with distinct values; OUT 0x80.
+        // Continuation: store GPRs, selectors, XMM0/XMM3 and RDMSR's result
+        // through CS (DS has a nonzero base); OUT 0x81 signals completion.
+        let program = [
+            0xb8, 0x10, 0x00, 0x8e, 0xd8, 0xb8, 0x20, 0x00, 0x8e, 0xc0, 0x0f, 0x20, 0xe0, 0x66,
+            0x0d, 0x00, 0x06, 0x00, 0x00, 0x0f, 0x22, 0xe0, 0x2e, 0xf3, 0x0f, 0x6f, 0x06, 0x00,
+            0x17, 0x66, 0x0f, 0x76, 0xdb, 0x66, 0xb9, 0x02, 0x01, 0x00, 0xc0, 0x66, 0xb8, 0x78,
+            0x56, 0x34, 0x12, 0x66, 0x31, 0xd2, 0x0f, 0x30, 0x66, 0xb8, 0x44, 0x33, 0x22, 0x11,
+            0x66, 0xbb, 0x88, 0x77, 0x66, 0x55, 0x66, 0xbe, 0xcc, 0xbb, 0xaa, 0x99, 0x66, 0xbf,
+            0x00, 0xff, 0xee, 0xdd, 0xe6, 0x80, 0x2e, 0x66, 0xa3, 0x00, 0x18, 0x2e, 0x66, 0x89,
+            0x1e, 0x04, 0x18, 0x2e, 0x66, 0x89, 0x36, 0x08, 0x18, 0x2e, 0x66, 0x89, 0x3e, 0x0c,
+            0x18, 0x8c, 0xd8, 0x2e, 0xa3, 0x10, 0x18, 0x8c, 0xc0, 0x2e, 0xa3, 0x12, 0x18, 0x2e,
+            0xf3, 0x0f, 0x7f, 0x06, 0x20, 0x18, 0x2e, 0xf3, 0x0f, 0x7f, 0x1e, 0x30, 0x18, 0x66,
+            0xb9, 0x02, 0x01, 0x00, 0xc0, 0x0f, 0x32, 0x2e, 0x66, 0xa3, 0x40, 0x18, 0x2e, 0x66,
+            0x89, 0x16, 0x44, 0x18, 0xe6, 0x81,
+        ];
+        let ram = Ram::new();
+        let xmm: [u8; 16] = std::array::from_fn(|i| (i * 13 + 7) as u8);
+        // SAFETY: RAM is not yet registered with a VM; both ranges fit.
+        unsafe {
+            std::ptr::copy_nonoverlapping(program.as_ptr(), ram.0.as_ptr(), program.len());
+            std::ptr::copy_nonoverlapping(xmm.as_ptr(), ram.0.as_ptr().add(0x700), xmm.len());
+        }
+        let vm = KvmVm::new().unwrap();
+        // SAFETY: RAM outlives both VMs and their CPUs; only one runs at a time.
+        unsafe { vm.map_memory(&ram.region()) }.unwrap();
+        let mut source = vm.create_vcpu(0).unwrap();
+        source.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let mut segments = source.fd.get_sregs().unwrap();
+        segments.cs.base = 0;
+        segments.cs.selector = 0;
+        source.fd.set_sregs(&segments).unwrap();
+        source
+            .fd
+            .set_regs(&kvm_regs {
+                rip: 0x1000,
+                rflags: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(matches!(
+            source.run().unwrap(),
+            VcpuExit::IoOut { port: 0x80, .. }
+        ));
+        assert!(
+            source.save_state().is_err(),
+            "pending I/O must not be snapshotted"
+        );
+        source.complete_pending_io().unwrap();
+        let state = crate::X86Vcpu::save_state(&mut source).unwrap();
+        assert_eq!(state.regs.rip, 0x104c);
+        assert_eq!(state.fpu.xmm[0], xmm);
+        drop(source);
+        drop(vm);
+
+        let destination_vm = KvmVm::new().unwrap();
+        // SAFETY: same lifetime/serialization contract as the source mapping.
+        unsafe { destination_vm.map_memory(&ram.region()) }.unwrap();
+        let mut destination = destination_vm.create_vcpu(0).unwrap();
+        crate::X86Vcpu::restore_state(&mut destination, &state).unwrap();
+        assert_eq!(destination.fd.get_regs().unwrap(), state.regs);
+        assert_eq!(destination.fd.get_fpu().unwrap(), state.fpu);
+        assert_eq!(destination.fd.get_xcrs().unwrap(), state.xcrs);
+        assert_eq!(destination.fd.get_debug_regs().unwrap(), state.debug_regs);
+        assert_eq!(destination.fd.get_mp_state().unwrap(), state.mp_state);
+        // SAFETY: neither CPU is running, and this range is within RAM.
+        let output = unsafe { std::slice::from_raw_parts(ram.0.as_ptr().add(0x800), 0x48) };
+        assert!(
+            output.iter().all(|&byte| byte == 0),
+            "restore must not enter the guest"
+        );
+        // End the host borrow before KVM writes into the page.
+        assert!(matches!(
+            destination.run().unwrap(),
+            VcpuExit::IoOut { port: 0x81, .. }
+        ));
+        // SAFETY: KVM_RUN has returned; no concurrent guest or host writes.
+        let output = unsafe { std::slice::from_raw_parts(ram.0.as_ptr().add(0x800), 0x48) };
+        for (offset, expected) in [
+            (0, 0x11223344u32),
+            (4, 0x55667788),
+            (8, 0x99aabbcc),
+            (12, 0xddeeff00),
+        ] {
+            assert_eq!(&output[offset..offset + 4], &expected.to_le_bytes());
+        }
+        assert_eq!(&output[0x10..0x14], &[0x10, 0, 0x20, 0]);
+        assert_eq!(&output[0x20..0x30], &xmm);
+        assert_eq!(&output[0x30..0x40], &[0xff; 16]);
+        assert_eq!(&output[0x40..0x48], &0x12345678u64.to_le_bytes());
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with AVX and access to /dev/kvm"]
+    fn snapshot_restores_ymm_high_halves_on_a_fresh_vcpu() {
+        use crate::{X86BootRegisters, X86Segment};
+
+        // .code32: enable x87/SSE/AVX in XCR0; VMOVDQU YMM0,[0x1700]; OUT 0x80.
+        // After restore: VMOVDQU [0x1800],YMM0; OUT 0x81.
+        let program = [
+            0x31, 0xc9, 0xb8, 0x07, 0x00, 0x00, 0x00, 0x31, 0xd2, 0x0f, 0x01, 0xd1, 0xc5, 0xfe,
+            0x6f, 0x05, 0x00, 0x17, 0x00, 0x00, 0xe6, 0x80, 0xc5, 0xfe, 0x7f, 0x05, 0x00, 0x18,
+            0x00, 0x00, 0xe6, 0x81,
+        ];
+        let ymm: [u8; 32] = std::array::from_fn(|i| (i * 7 + 1) as u8);
+        let ram = Ram::new();
+        // SAFETY: neither range is registered or concurrently accessed; both fit.
+        unsafe {
+            std::ptr::copy_nonoverlapping(program.as_ptr(), ram.0.as_ptr(), program.len());
+            std::ptr::copy_nonoverlapping(ymm.as_ptr(), ram.0.as_ptr().add(0x700), ymm.len());
+        }
+        let vm = KvmVm::new().unwrap();
+        let leaf1 = vm
+            .supported_cpuid()
+            .iter()
+            .find(|entry| entry.leaf == 1)
+            .unwrap();
+        assert_ne!(leaf1.ecx & (1 << 28), 0, "test requires AVX");
+        // SAFETY: RAM outlives both VMs; only one CPU executes at a time.
+        unsafe { vm.map_memory(&ram.region()) }.unwrap();
+        let mut source = vm.create_vcpu(0).unwrap();
+        source.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        source
+            .set_boot_registers(&X86BootRegisters {
+                rip: 0x1000,
+                rflags: 2,
+                cr0: 0x11, // Protected mode, ET; EM and TS clear.
+                cr4: (1 << 18) | (1 << 10) | (1 << 9), // OSXSAVE, OSXMMEXCPT, OSFXSR.
+                code: X86Segment {
+                    limit: u32::MAX,
+                    selector: 8,
+                    attributes: 0xc09b,
+                    ..Default::default()
+                },
+                data: X86Segment {
+                    limit: u32::MAX,
+                    selector: 16,
+                    attributes: 0xc093,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(matches!(
+            source.run().unwrap(),
+            VcpuExit::IoOut { port: 0x80, .. }
+        ));
+        source.complete_pending_io().unwrap();
+        let state = source.save_state().unwrap();
+        // The standard XSAVE layout starts YMM_Hi128 at byte 576.
+        let high: Vec<_> = state.xsave[144..148]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        assert_eq!(high, ymm[16..]);
+        drop(source);
+        drop(vm);
+
+        let vm = KvmVm::new().unwrap();
+        // SAFETY: same backing lifetime and serialized access as above.
+        unsafe { vm.map_memory(&ram.region()) }.unwrap();
+        let mut destination = vm.create_vcpu(0).unwrap();
+        destination.restore_state(&state).unwrap();
+        assert!(matches!(
+            destination.run().unwrap(),
+            VcpuExit::IoOut { port: 0x81, .. }
+        ));
+        // SAFETY: guest execution has stopped and the output lies within RAM.
+        let output = unsafe { std::slice::from_raw_parts(ram.0.as_ptr().add(0x800), 32) };
+        assert_eq!(
+            &output[16..],
+            &ymm[16..],
+            "YMM high half lost during restore"
+        );
+        assert_eq!(output, &ymm);
     }
 
     #[test]

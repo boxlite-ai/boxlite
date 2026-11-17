@@ -23,17 +23,27 @@ pub struct KvmVcpu {
     pub(super) id: u32,
     run_size: usize,
     pending_io: PendingIo,
+    entered: bool,
+    xsave_size: usize,
     kick: WorkerSignal,
     _thread_bound: PhantomData<Rc<()>>,
 }
 
 impl KvmVcpu {
-    pub(super) fn new(fd: VcpuFd, id: u32, run_size: usize, kick: WorkerSignal) -> Self {
+    pub(super) fn new(
+        fd: VcpuFd,
+        id: u32,
+        run_size: usize,
+        kick: WorkerSignal,
+        xsave_size: usize,
+    ) -> Self {
         Self {
             fd,
             id,
             run_size,
             pending_io: PendingIo::default(),
+            entered: false,
+            xsave_size,
             kick,
             _thread_bound: PhantomData,
         }
@@ -47,6 +57,7 @@ impl KvmVcpu {
     /// Runs until the next exit; handle borrowed device bytes before re-entry.
     /// An idle guest blocks until an interrupt or a cross-thread kick arrives.
     pub fn run(&mut self) -> Result<VcpuExit<'_>> {
+        self.entered = true;
         match self.fd.run().map(|_| ()) {
             Ok(()) => {}
             // A vCPU waiting for INIT or SIPI returns this once it accepts one.
@@ -103,12 +114,30 @@ impl crate::Vcpu for KvmVcpu {
         Self::complete_pending_io(self)
     }
 
+    fn notify_guest_stopped(&mut self) -> Result<()> {
+        crate::vcpu::kvmclock_ctrl_result(self.fd.kvmclock_ctrl().map_err(io::Error::from)).map_err(
+            |source| Error::ConfigureVcpu {
+                id: self.id,
+                operation: "notify guest stopped",
+                source,
+            },
+        )
+    }
+
     fn handle(&self) -> Self::Handle {
         Self::handle(self)
     }
 }
 
 impl crate::X86Vcpu for KvmVcpu {
+    fn save_state(&mut self) -> Result<crate::X86VcpuState> {
+        Self::save_state(self)
+    }
+
+    fn restore_state(&mut self, state: &crate::X86VcpuState) -> Result<()> {
+        Self::restore_state(self, state)
+    }
+
     fn set_cpu_features(
         &mut self,
         cpuid: &[crate::X86CpuidEntry],
@@ -216,6 +245,132 @@ unsafe fn decode_exit(id: u32, run: &mut kvm_run, run_size: usize) -> Result<Vcp
             }
         }
         _ => Err(unsupported()),
+    }
+}
+
+impl KvmVcpu {
+    /// Captures an architecture- and host-version-specific CPU image.
+    /// Does not enter KVM_RUN, even to complete outstanding I/O: the caller must
+    /// call `complete_pending_io` first, then stop all other VM state producers.
+    pub fn save_state(&mut self) -> Result<crate::X86VcpuState> {
+        let sregs = self.fd.get_sregs().map_err(|source| Error::ConfigureVcpu {
+            id: self.id,
+            operation: "save CPU state",
+            source: source.into(),
+        })?;
+        let save = || -> io::Result<crate::X86VcpuState> {
+            if self.pending_io.0 {
+                return Err(io::Error::other("complete pending I/O before saving"));
+            }
+            let mut xsave = self.xsave_buffer()?;
+            if self.xsave_size == 0 {
+                // SAFETY: this branch uses the fixed-size GET_XSAVE ioctl.
+                unsafe { xsave.as_mut_fam_struct().xsave = self.fd.get_xsave()? };
+            } else {
+                // SAFETY: buffer covers the VM's KVM_CAP_XSAVE2 size. The API
+                // contract forbids enabling dynamic XSTATE permissions later.
+                unsafe { self.fd.get_xsave2(&mut xsave) }?;
+            }
+            let mut words = xsave.as_fam_struct_ref().xsave.region.to_vec();
+            words.extend_from_slice(xsave.as_slice());
+            Ok(crate::X86VcpuState {
+                regs: self.fd.get_regs()?,
+                sregs,
+                fpu: self.fd.get_fpu()?,
+                cpuid: self
+                    .fd
+                    .get_cpuid2(kvm_bindings::KVM_MAX_CPUID_ENTRIES)?
+                    .as_slice()
+                    .to_vec(),
+                msrs: super::features::snapshot_msrs(&self.fd)?,
+                xsave: words,
+                xcrs: self.fd.get_xcrs()?,
+                debug_regs: self.fd.get_debug_regs()?,
+                events: self.fd.get_vcpu_events()?,
+                mp_state: self.fd.get_mp_state()?,
+                lapic: self.fd.get_lapic()?,
+                tsc_khz: self.fd.get_tsc_khz()?,
+            })
+        };
+        save().map_err(|source| Error::ConfigureVcpu {
+            id: self.id,
+            operation: "save CPU state",
+            source,
+        })
+    }
+
+    /// Overwrites a fresh, never-entered vCPU; never executes guest code.
+    /// This architecture-/host-version-specific operation is NOT transactional:
+    /// discard the destination after any error.
+    ///
+    /// CPUID must precede CPUID-gated MSRs/XCRs.
+    /// TSC scaling precedes TSC writes; SREGS precedes REGS and establishes mode
+    /// and APIC base. LAPIC precedes MSRs so its timer setup cannot clobber the
+    /// saved TSC deadline. MSRs (including XSS/XFD) precede XCRS/XSAVE. Dedicated
+    /// SET_FPU follows XSAVE so the legacy x87/SSE image is authoritative.
+    /// Debug/REGS follow mode setup, MP state and events are last (LAPIC/SREGS
+    /// can change pending events). No VM-global clock/device state is touched.
+    pub fn restore_state(&mut self, state: &crate::X86VcpuState) -> Result<()> {
+        let mut restore = || -> io::Result<()> {
+            let invalid = |message| io::Error::new(io::ErrorKind::InvalidInput, message);
+            if self.entered || self.pending_io.0 {
+                return Err(invalid("restore requires a fresh, never-entered vCPU"));
+            }
+            let cpuid = super::features::snapshot_cpuid(&state.cpuid)?;
+            let mut xsave = self.xsave_buffer()?;
+            if state.xsave.len() != 1024 + xsave.as_slice().len()
+                || state.xcrs.nr_xcrs as usize > state.xcrs.xcrs.len()
+            {
+                return Err(invalid("invalid XSAVE/XCR snapshot shape"));
+            }
+            // Before unsafe SET_XSAVE, always allocate the
+            // destination-sized buffer, never trust a serialized flexible tail.
+            unsafe {
+                xsave
+                    .as_mut_fam_struct()
+                    .xsave
+                    .region
+                    .copy_from_slice(&state.xsave[..1024])
+            };
+            xsave.as_mut_slice().copy_from_slice(&state.xsave[1024..]);
+            let current_khz = self.fd.get_tsc_khz()?;
+            self.fd.set_cpuid2(&cpuid)?;
+            if current_khz != state.tsc_khz {
+                self.fd.set_tsc_khz(state.tsc_khz)?;
+            }
+            self.fd.set_sregs(&state.sregs)?;
+            self.fd.set_lapic(&state.lapic)?;
+            for chunk in state.msrs.chunks(kvm_bindings::KVM_MAX_MSR_ENTRIES) {
+                let msrs = kvm_bindings::Msrs::from_entries(chunk)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                let written = self.fd.set_msrs(&msrs)?;
+                super::features::check_written(&msrs, written)?;
+            }
+            self.fd.set_xcrs(&state.xcrs)?;
+            // SAFETY: destination-sized allocation, checked above; no dynamic
+            // XSTATE permission changes are allowed during the vCPU lifetime.
+            unsafe { self.fd.set_xsave2(&xsave) }?;
+            self.fd.set_fpu(&state.fpu)?;
+            self.fd.set_debug_regs(&state.debug_regs)?;
+            self.fd.set_regs(&state.regs)?;
+            self.fd.set_mp_state(state.mp_state)?;
+            self.fd.set_vcpu_events(&state.events)?;
+            // Clear host-side run controls, not part of the guest CPU image.
+            self.fd.set_kvm_immediate_exit(0);
+            Ok(())
+        };
+        restore().map_err(|source| Error::ConfigureVcpu {
+            id: self.id,
+            operation: "restore CPU state",
+            source,
+        })
+    }
+
+    fn xsave_buffer(&self) -> io::Result<kvm_bindings::Xsave> {
+        let size = self.xsave_size.max(size_of::<kvm_bindings::kvm_xsave>());
+        let extra_words = (size - size_of::<kvm_bindings::kvm_xsave>()).div_ceil(size_of::<u32>());
+        kvm_bindings::Xsave::new(extra_words)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
     }
 }
 

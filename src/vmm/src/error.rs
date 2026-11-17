@@ -8,13 +8,53 @@ use std::{error, fmt, io, path::PathBuf};
 /// Result of a VMM operation.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A failure that ends the VM.
+/// Why an execution-control operation was refused or failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlReason {
+    /// The operation is not admitted in the current lifecycle state.
+    InvalidState,
+    /// Actual composition or configuration contains userspace devices.
+    UnsupportedDevice,
+    /// Not every vCPU acknowledged parking before the deadline.
+    DeadlineTimeout,
+    /// A terminal stop or worker failure interrupted the request.
+    TerminalOutcome,
+}
+
+impl fmt::Display for ControlReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidState => "invalid state",
+            Self::UnsupportedDevice => "operation requires a device-less VM",
+            Self::DeadlineTimeout => "parking deadline expired",
+            Self::TerminalOutcome => "the VM is stopping",
+        })
+    }
+}
+
+impl ControlReason {
+    pub(crate) fn for_operation(self, operation: &'static str) -> Error {
+        Error::Control {
+            operation,
+            reason: self,
+        }
+    }
+}
+
+/// A VMM construction, execution or control failure.
 ///
 /// The cause chain stays intact through [`error::Error::source`], so callers
 /// can tell a host that cannot run VMs from other failures.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
+    /// Encoding or writing a memory snapshot failed.
+    Snapshot(io::Error),
+    /// A nonterminal control request was refused, or parking failed.
+    Control {
+        operation: &'static str,
+        reason: ControlReason,
+    },
     /// The vCPU count is outside `1..=config::MAX_VCPUS`.
     InvalidVcpuCount(u8),
     /// Opening or configuring filesystem exports failed.
@@ -88,6 +128,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Snapshot(_) => f.write_str("memory snapshot failed"),
+            Self::Control { operation, reason } => write!(f, "{operation}: {reason}"),
             Self::Vsock(_) => f.write_str("failed to configure vsock bridges"),
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
@@ -158,7 +200,8 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            Self::InvalidVcpuCount(_)
+            Self::Control { .. }
+            | Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
             | Self::GuestMemoryAddressLimit { .. }
             | Self::InvalidCommandLine(_)
@@ -170,7 +213,8 @@ impl error::Error for Error {
             | Self::UnexpectedExit { .. }
             | Self::VcpuPanicked { .. }
             | Self::AlreadyRan => None,
-            Self::Vsock(source)
+            Self::Snapshot(source)
+            | Self::Vsock(source)
             | Self::Filesystem(source)
             | Self::HostMemoryCapability(source)
             | Self::AllocateMemory { source, .. }

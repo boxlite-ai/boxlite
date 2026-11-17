@@ -27,6 +27,11 @@ mod bus;
 )]
 mod chipset;
 mod config;
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(dead_code, reason = "Owned execution requires the x86_64 vCPU driver.")
+)]
+mod control;
 #[cfg(target_arch = "x86_64")]
 mod cpu_features;
 #[cfg_attr(
@@ -52,6 +57,14 @@ mod events;
 )]
 mod irq;
 mod memory;
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(
+        dead_code,
+        reason = "Memory-image capture and restore require Linux x86_64."
+    )
+)]
+mod snapshot;
 #[cfg(target_arch = "x86_64")]
 mod vcpu;
 #[cfg_attr(
@@ -80,7 +93,8 @@ pub use chipset::{BusKind, Conflict};
 pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };
-pub use error::{Error, Result};
+pub use control::{VmHandle, VmStatus};
+pub use error::{ControlReason, Error, Result};
 pub use memory::ReclaimPolicy;
 pub use vm::{StopHandle, Vm, VmExit};
 

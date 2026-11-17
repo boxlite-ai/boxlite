@@ -326,6 +326,15 @@ pub(crate) struct Chipset {
 }
 
 impl Chipset {
+    /// Whether the actual composition contains no userspace devices.
+    #[cfg_attr(
+        not(any(test, target_arch = "x86_64")),
+        expect(dead_code, reason = "Only the x86_64 driver admits pause requests.")
+    )]
+    pub(crate) fn is_empty(&self) -> bool {
+        self._devices.is_empty()
+    }
+
     /// Serves an MMIO or port access and returns `None`; returns every other
     /// exit to the caller unchanged.
     pub(crate) fn dispatch<'a>(&self, exit: VcpuExit<'a>) -> Option<VcpuExit<'a>> {
