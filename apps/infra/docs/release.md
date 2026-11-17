@@ -88,7 +88,8 @@ Slack reports each stage and links to its specific runs; failed pipelines have n
 ### 3. Approve the prod request
 
 After successful dev acceptance, Slack's **Review prod deployment** button opens the already-created prod run.
-Check the release tag and approve its `prod` Environment requests in GitHub.
+Check the release tag and approve its `prod` Environment in GitHub.
+Each release deployment run has one protected job covering artifact checks, import and apply.
 The run actor is the Actions bot; GitHub records the human reviewer separately.
 Clicking the Slack link opens GitHub; deployment proceeds only after approval.
 

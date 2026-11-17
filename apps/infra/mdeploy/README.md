@@ -213,8 +213,9 @@ A commit or open PR merge commit is accepted for `dev` and `stage`; both may use
 `prod` requires a published release; release dispatches run from `main`.
 Stage resolves stable tags to their commits and uses SHA-tagged images and a commit Runner build.
 Dev/prod release deployments import the existing version-qualified images from GHCR.
-The commit image workflow and runner build job bind the stage's
-GitHub Environment. Check actual environment reviewers and branch protections separately: source
+Commit planning and conditional image/Runner builds share one target Environment approval; commit deployment requires a second approval.
+Published releases verify, import and deploy within one protected job, requiring one approval.
+The shared image and deployment actions preserve the same artifact and apply checks. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.
 
 Use the [deployment walkthrough](../docs/deployment.md#deploy-through-github-actions) for commands and the

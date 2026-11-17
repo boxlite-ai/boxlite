@@ -88,6 +88,27 @@ verifies manifest digests and enforces the target scan policy. It never starts a
 Missing GHCR images stop planning and print the manual publication command; authentication and
 network failures remain registry errors. See the [release runbook](release.md).
 
+
+### Approval rounds
+
+When the target Environment has required reviewers:
+
+| Path | Protected work | Approval rounds |
+| --- | --- | --- |
+| Commit or PR to dev/stage | Plan and conditional builds together, then a separate deploy job | 2 |
+| Published release to dev/prod | Verify release artifacts, import GHCR images and deploy in one job | 1 |
+| Stable tag to stage | Resolve as a commit and follow the commit path | 2 |
+
+Ref validation runs before either protected path.
+Both paths retain stage concurrency, image verification, scan policy, configuration fingerprint and protected-stage confirmation.
+The shared deployment action owns the apply checks; the shared image action also backs the reusable `mbuild` workflow.
+
+Commit image and Runner builds execute sequentially within their approved job.
+Rerunning a grouped job repeats planning and verification; existing artifacts remain reusable.
+A failed import or build stops deployment.
+Apply is never automatically retried; inspect failed applies and any retained state lock before rerunning.
+The release pipeline's separate E2E workflow retains its own Environment gate.
+
 ### Caller attribution
 
 Automation callers may supply the optional string inputs `requested_by` (a public GitHub username) and

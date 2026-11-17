@@ -1,0 +1,81 @@
+name: Build and upload a staged Runner
+description: Prepare the selected commit Runner in the target stage
+inputs:
+  stage:
+    description: Target stage
+    required: true
+  sha:
+    description: Full resolved commit SHA
+    required: true
+runs:
+  using: composite
+  steps:
+    # The tree the binary is built from, and the submodules it is built with:
+    # `runner:build` refuses a checkout whose submodules are missing or do not
+    # match the commit, because a commit-keyed object holding anything else
+    # would claim bytes that commit does not produce.
+    - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+        ref: ${{ inputs.sha }}
+        submodules: recursive
+
+    - uses: ./.github/actions/setup-infra
+      with:
+        stages: ${{ inputs.stage }}
+        stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+
+    - name: Resolve the stage
+      id: config
+      working-directory: apps/infra
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        if ! output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}" 2>&1)"; then
+          echo "::error title=stage::$output"
+          exit 1
+        fi
+        echo "$output"
+        echo "$output" >> "$GITHUB_OUTPUT"
+
+    - name: Federate an AWS identity
+      if: steps.config.outputs.kind == 'ecr'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
+        aws-region: ${{ steps.config.outputs.region }}
+        role-session-name: mdeploy-all-runner-${{ github.run_id }}
+
+    - name: Federate a GCP identity
+      if: steps.config.outputs.kind == 'artifact-registry'
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ vars.GCP_DEPLOYER }}
+
+    # `runner:build` reaches Cloud Storage through the CLI, and the federation
+    # above writes a credential without installing one.
+    - name: Install gcloud
+      if: steps.config.outputs.kind == 'artifact-registry'
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Verify the session through mstage
+      working-directory: apps/infra
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        for attempt in 1 2 3; do
+          if npm run --silent mstage login; then exit 0; fi
+          echo "mstage reports no usable session (attempt $attempt/3); retrying in $((attempt * 5))s"
+          sleep $((attempt * 5))
+        done
+        echo "::error title=mstage::No usable session for ${{ steps.config.outputs.kind }} after 3 attempts"
+        exit 1
+
+    # Not retried. The destination is proved before anything is compiled, so
+    # the failures left are the build itself and a refusal about what is
+    # already in the bucket — and neither answer changes on a second ask.
+    - name: Build the runner
+      working-directory: apps/infra
+      shell: bash
+      run: npm run runner:build -- --stage "${{ inputs.stage }}"

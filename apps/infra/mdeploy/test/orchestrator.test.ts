@@ -15,6 +15,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { withActionSources } from './workflow-source.js'
+import { load } from 'js-yaml'
 
 const workflow = readFileSync(
   fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)),
@@ -32,22 +34,21 @@ const jobAt = (name: string) => {
   assert.notEqual(start, -1, `there is no ${name} job`)
   const rest = commands.slice(start + 1)
   const next = rest.search(/\n {2}[a-z][a-z-]*:\n/)
-  return next === -1 ? rest : rest.slice(0, next)
+  return withActionSources(next === -1 ? rest : rest.slice(0, next))
 }
 
 /** Every job that acts on the answer the plan gave. */
-const ACTING = ['build-images', 'build-runner', 'deploy']
+const ACTING = ['plan', 'deploy']
 
-test('everything that decides is a read, and every read comes first', () => {
-  // The plan asks two questions and answers four ways; nothing it runs changes
-  // anything, which is what makes it safe to run before the confirm gates below.
-  const plan = jobAt('plan')
-  assert.match(plan, /mbuild verify/, 'the images are not asked about')
-  assert.match(plan, /runner:build -- --stage "\$STAGE" --check/, 'the runner is asked about by building it')
-  assert.doesNotMatch(plan, /mbuild publish|mbuild promote|npm run mdeploy/, 'the plan must not change anything')
-
-  for (const job of ACTING) {
-    assert.match(jobAt(job), /needs: \[[^\]]*plan[^\]]*\]/, `${job} runs without a plan`)
+test('planning reads precede every build and release apply in the approved job', () => {
+  const steps = (load(workflow) as any).jobs.plan.steps
+  const decision = steps.findIndex((step: any) => step.id === 'plan')
+  assert.ok(decision >= 0)
+  assert.match(steps[decision].run, /mbuild verify/)
+  assert.match(steps[decision].run, /runner:build -- --stage "\$STAGE" --check/)
+  assert.doesNotMatch(steps[decision].run, /mbuild publish|mbuild promote|npm run mdeploy/)
+  for (const action of ['mbuild', 'build-staged-runner', 'mdeploy']) {
+    assert.ok(steps.findIndex((step: any) => step.uses === './.github/actions/' + action) > decision)
   }
 })
 
@@ -66,20 +67,21 @@ test('the ref is refused before a single Environment is bound', () => {
   }
 })
 
-test('each component takes exactly one of the plan’s answers', () => {
-  // The three image routes are the same artifact by three means; a component
-  // that could take two would publish over what it had just promoted.
-  assert.match(jobAt('deploy'), /needs\.plan\.outputs\.api == 'release-import'/)
-  assert.match(jobAt('build-images'), /needs\.plan\.outputs\.api == 'build'/)
-  assert.match(jobAt('build-runner'), /needs\.plan\.outputs\.runner == 'build'/)
+test('each component takes exactly one of the plan answers', () => {
+  const steps = (load(workflow) as any).jobs.plan.steps
+  const images = steps.find((step: any) => step.uses === './.github/actions/mbuild')
+  const runner = steps.find((step: any) => step.uses === './.github/actions/build-staged-runner')
+  assert.equal(images.if, "steps.plan.outputs.api == 'build'")
+  assert.equal(runner.if, "steps.plan.outputs.runner == 'build'")
+  assert.match(jobAt('deploy'), /inputs\.api-route == 'release-import'/)
 })
 
 test('release deployment imports GHCR bytes and leaves building to the manual publisher', () => {
   assert.doesNotMatch(commands, /uses: \.\/\.github\/workflows\/mbuild-release\.yml/)
   assert.match(jobAt('deploy'), /mbuild import-release/)
-  assert.match(jobAt('build-images'), /uses: \.\/\.github\/workflows\/mbuild\.yml/)
-  assert.match(jobAt('deploy'), /VERSION: \$\{\{ needs\.resolve\.outputs\.version \}\}/)
-  assert.match(jobAt('deploy'), /SHA: \$\{\{ needs\.resolve\.outputs\.sha \}\}/)
+  assert.match(jobAt('plan'), /uses: \.\/\.github\/actions\/mbuild/)
+  assert.match(jobAt('deploy'), /version: \$\{\{ needs\.resolve\.outputs\.version \}\}/)
+  assert.match(jobAt('deploy'), /sha: \$\{\{ needs\.resolve\.outputs\.sha \}\}/)
 })
 
 test('a registry that could not be read is not a stage holding nothing', () => {
@@ -100,7 +102,11 @@ test('a registry that could not be read is not a stage holding nothing', () => {
   assert.ok(absent, 'the CLI declares no exit code of its own for absence')
 
   const plan = jobAt('plan')
-  assert.match(plan, /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/, 'the status is thrown away')
+  assert.match(
+    plan,
+    /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/,
+    'the status is thrown away',
+  )
   assert.match(plan, new RegExp(`elif \\[ "\\$held" -ne ${absent} \\]; then`), 'absence is not told apart')
   assert.match(plan, /::error title=registry::/, 'a read that never landed decides the plan silently')
 })
@@ -145,11 +151,7 @@ test('a pull request resolves to the commit it would merge, never its head', () 
   assert.match(resolve, /sha="\$\(jq -r '\.potentialMergeCommit\.oid \/\/ empty' <<<"\$pr_json"\)"/)
   assert.match(resolve, /head="\$\(jq -r '\.headRefOid'/, 'the head is not read, so this test guards nothing')
   // Three refusals, each naming what the operator has to do about it.
-  for (const refused of [
-    /is \$state, not open/,
-    /conflicts with its base/,
-    /has no merge commit this run can trust/,
-  ]) {
+  for (const refused of [/is \$state, not open/, /conflicts with its base/, /has no merge commit this run can trust/]) {
     assert.match(resolve, refused, `a pull request is accepted where it should be refused: ${refused}`)
   }
   // UNKNOWN is a "not yet", not a verdict: GitHub computes it lazily and there
