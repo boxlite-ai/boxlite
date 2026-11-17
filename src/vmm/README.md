@@ -708,9 +708,17 @@ re-export, the restored PPR must follow the SDM priority rule: retain the full
 TPR (including its low nibble) when its priority class is at least ISRV's;
 otherwise use `ISRV & 0xF0`. ISRV is the highest in-service vector, or zero if
 none, read from eight 32-bit ISR registers at 16-byte intervals; reserved bytes
-do not contribute. The remaining 1023 bytes must match the source byte for byte.
+do not contribute. The full 32-bit APIC_TMCCT (`0x390..=0x393`) is excluded on
+both sides because KVM derives it from host time. Initial count (`0x380`) and
+LVT timer (`0x320`) are compared to detect countdown-mode reprogramming. The
+remaining 1019 bytes must match the source byte for byte, including reserved
+bytes at `0x394..=0x39F`.
 
-The timer check excludes free-running TSC and KVM clock reads. Dropping
+The timer check excludes free-running TSC and KVM clock reads. It also excludes
+all four APIC_TMCCT bytes (`0x390..=0x393`) because KVM derives the countdown from
+host time, even while Paused. Countdown-mode reprogramming is detected through
+initial count (`0x380`), LVT timer (`0x320`) and other compared registers;
+IA32_TSC_DEADLINE (MSR `0x6e0`) signals TSC-deadline reprogramming. Dropping
 IA32_TSC_DEADLINE during restore makes the progress check time out on a
 TSC-deadline host. This qualifies device-less kernel/timer progress, not network,
 rootfs, console output or complete Linux functionality; RAM changes alone are

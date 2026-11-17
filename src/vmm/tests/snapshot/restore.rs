@@ -697,6 +697,23 @@ fn linux_snapshot(path: &Path) -> (MachineState, Vec<u8>) {
     (machine, ram)
 }
 
+/// APIC_TMCCT is a 32-bit countdown derived by KVM from host time, even while
+/// Paused. Its entire four bytes are excluded on both sides of comparisons.
+/// Initial count (0x380) and LVT timer (0x320) remain compared, preserving guest
+/// timer reprogramming signals.
+const APIC_TMCCT: std::ops::RangeInclusive<usize> = 0x390..=0x393;
+
+/// Compare all LAPIC bytes except the four-byte APIC_TMCCT derived from host
+/// time. Initial count and LVT timer still detect guest timer reprogramming;
+/// PPR and the reserved bytes after APIC_TMCCT remain strictly compared here.
+fn lapic_timer_state_changed(before: &[i8; 1024], after: &[i8; 1024]) -> bool {
+    before
+        .iter()
+        .zip(after)
+        .enumerate()
+        .any(|(offset, (before, after))| !APIC_TMCCT.contains(&offset) && before != after)
+}
+
 fn linux_timer_changed(before: &MachineState, after: &MachineState) -> bool {
     // Linux uses TSC-deadline mode on capable hosts, otherwise LAPIC counters.
     // Unlike TSC/KVM clock reads, reprogramming this MSR requires guest activity.
@@ -708,7 +725,10 @@ fn linux_timer_changed(before: &MachineState, after: &MachineState) -> bool {
             .find(|msr| msr.index == 0x6e0) // IA32_TSC_DEADLINE
             .map(|msr| msr.data)
     };
-    before.vcpus[0].state.lapic != after.vcpus[0].state.lapic || deadline(before) != deadline(after)
+    lapic_timer_state_changed(
+        &before.vcpus[0].state.lapic.regs,
+        &after.vcpus[0].state.lapic.regs,
+    ) || deadline(before) != deadline(after)
 }
 
 /// Returns Paused, after observed progress, or fails at the deadline.
@@ -755,8 +775,12 @@ fn linux_wait_for_progress(
 /// a real failure differed only at 0xA0, with source PPR=0xE0 despite TPR=0x10
 /// and an empty ISR (canonical PPR=0x10). Source PPR carries no guest state and
 /// is excluded from comparison. KVM_SET_LAPIC recomputes PPR. This test allows
-/// no vCPU guest entry before re-export, so restored PPR must be canonical;
-/// all other bytes must match.
+/// no vCPU guest entry before re-export, so restored PPR must be canonical.
+///
+/// APIC_TMCCT is a 32-bit countdown derived by KVM from host time. Its entire
+/// four bytes are excluded on both sides. Initial count (0x380) and LVT timer
+/// (0x320) remain compared to detect guest timer reprogramming; all remaining
+/// bytes must match.
 fn lapic_differences(
     expected: &[i8; 1024],
     actual: &[i8; 1024],
@@ -783,7 +807,7 @@ fn lapic_differences(
         ));
     }
     for (offset, (&expected, &actual)) in expected.iter().zip(actual).enumerate() {
-        if offset == 0xA0 || expected == actual {
+        if offset == 0xA0 || APIC_TMCCT.contains(&offset) || expected == actual {
             continue;
         }
         let register = match offset {
@@ -793,7 +817,6 @@ fn lapic_differences(
             0x200..=0x27F => "IRR",
             0x320 => "LVT timer",
             0x380 => "initial count",
-            0x390 => "current count",
             0x3E0 => "divide configuration",
             _ => "LAPIC",
         };
@@ -911,6 +934,51 @@ fn lapic_comparison_reads_isr_slots_at_16_byte_intervals() {
         expected[offset] = 1; // Vectors 32 and 224, respectively.
         expected[0xA0] = ppr;
         assert_eq!(lapic_differences(&expected, &expected), Ok(()));
+    }
+}
+
+#[test]
+fn lapic_comparison_ignores_current_count_but_checks_timer_configuration() {
+    let expected = [0i8; 1024];
+    // Exercise every byte, including the low byte at 0x390 and high byte at 0x393.
+    for offset in APIC_TMCCT {
+        let mut actual = expected;
+        actual[offset] = 1;
+        assert_ne!(expected, actual);
+        assert_eq!(lapic_differences(&expected, &actual), Ok(()));
+        assert_eq!(lapic_differences(&actual, &expected), Ok(()));
+    }
+    for (offset, register) in [
+        (0x380, "initial count"),
+        (0x320, "LVT timer"),
+        (0x394, "LAPIC"), // Reserved bytes in the same slot remain compared.
+    ] {
+        let mut actual = expected;
+        actual[offset] = 1;
+        let detail = lapic_differences(&expected, &actual).unwrap_err();
+        assert!(
+            detail.contains(&format!("{offset:#05x} {register}")),
+            "{detail}"
+        );
+    }
+}
+
+#[test]
+fn lapic_timer_state_changed_ignores_current_count_only() {
+    let before = [0i8; 1024];
+    assert!(!lapic_timer_state_changed(&before, &before));
+    for offset in APIC_TMCCT {
+        let mut after = before;
+        after[offset] = 1;
+        assert!(!lapic_timer_state_changed(&before, &after));
+        assert!(!lapic_timer_state_changed(&after, &before));
+    }
+    // LVT timer, initial count, ISR, PPR and slot padding remain compared.
+    for offset in [0x320, 0x380, 0x100, 0xA0, 0x394] {
+        let mut after = before;
+        after[offset] = 1;
+        assert!(lapic_timer_state_changed(&before, &after));
+        assert!(lapic_timer_state_changed(&after, &before));
     }
 }
 
