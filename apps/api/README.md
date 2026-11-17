@@ -1249,7 +1249,11 @@ renewed every minute. Active uploads and streaming responses remain pending beyo
 30 minutes. A failed renewal closes the response; a crashed owner's expired lease
 allows the usual age-based reconciliation. Completion stops renewal and conditionally
 updates only the still-pending, unexpired row, so a late response cannot overwrite an
-unknown result or recreate a published record. Lease writes have five-second deadlines.
+unknown result or recreate a published record. Initial audit insertion and lease acquisition
+share one five-second deadline before the handler is called. Later renewals and result
+writes each have their own five-second deadline. Pre-handler acquisition failures and
+database timeouts return 503 without invoking the handler; unexpected audit failures return
+500. Result-write failures log their cause and preserve the handler's result.
 Deploy the additive lease-column migration before the API; all reconcilers must be
 upgraded before this protection applies. Remove new API writers before rolling back
 the column.
@@ -1290,15 +1294,33 @@ existing authorization policy. Completed detach inserts also honor `audit.consol
 Each attach audit write has a five-second deadline, including pool acquisition and
 transaction cleanup. A timeout refuses an initial upgrade or emits a diagnostic for
 completion/detach. Active database connections are closed on expiry; transaction-local
-SQL timeouts bound server work. A timed-out commit can have an uncertain result and
+SQL timeouts use the budget remaining after acquisition and transaction start, with a
+lock wait capped at one second. A timed-out commit can have an uncertain result and
 is not retried. Completion logs are emitted only after a successful commit.
-At most eight bounded audit writes per API instance may remain unfinished, including
-timed-out callers still waiting for a pool connection. Excess writes fail immediately.
-Late pool acquisitions are released without executing SQL. If pool acquisition never
-settles, those slots remain occupied; this bounds retention rather than guaranteeing
-pool recovery. Closed attach sessions remove their listeners and socket/request references
-without waiting for persistence. Handler-completion HTTP audits retain their existing
-write behavior; response-completion audits use the bounded lease writes described above.
+
+Audit writes queue in the shared PostgreSQL pool. `DB_POOL_CONNECTION_TIMEOUT_MS`
+defaults to 5000 and accepts integers from 1 through 2147483647; zero cannot disable
+the acquisition deadline. This setting applies to all API callers sharing the pool,
+including those outside auditing. Pool size remains controlled by `DB_POOL_MAX`.
+The driver removes expired queued acquisitions even while every connection is occupied.
+The acquisition timer starts when each connection is requested, independently of the
+shared HTTP audit deadline: driver cleanup can finish after the caller has timed out.
+Late acquisitions are released without executing SQL. Time limits bound waiting duration,
+not the number of queued requests under arbitrary load.
+
+For example, 100 audit requests can reuse a smaller connection pool; requests wait for
+available connections within their deadlines. If initial insertion takes four seconds,
+the response lease has about one second left before forwarding must be refused.
+
+```text
+HTTP request -> audit insert -> initial lease -> handler -> result audit
+               <--- shared five seconds --->              < five seconds >
+                     expiry -> 503, no handler
+```
+
+Closed attach sessions remove listeners and socket/request references without waiting
+for persistence. Handler-completion HTTP result writes have independent five-second
+deadlines; response-completion audits use the lease writes described above.
 
 Account-link adoption audits only after signature and identity validation. It records
 the primary/secondary IDs and the local ownership migration result, without an arbitrary

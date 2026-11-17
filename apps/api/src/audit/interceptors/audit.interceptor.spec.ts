@@ -51,11 +51,13 @@ describe('AuditInterceptor', () => {
           targetId: 'target-org',
           metadata: { body: { enabled: false } },
         }),
+        expect.any(Number),
       )
       if (!fails)
         expect(auditService.updateLog).toHaveBeenCalledWith(
           'allowlist-audit',
           expect.objectContaining({ organizationId: 'target-org' }),
+          5000,
         )
     },
   )
@@ -125,12 +127,17 @@ describe('AuditInterceptor', () => {
           query: { regionId: 'region-1' },
         },
       }),
+      expect.any(Number),
     )
-    expect(auditService.updateLog).toHaveBeenCalledWith('audit-1', {
-      organizationId: 'org-1',
-      targetId: 'regionId:region-1',
-      statusCode: 200,
-    })
+    expect(auditService.updateLog).toHaveBeenCalledWith(
+      'audit-1',
+      {
+        organizationId: 'org-1',
+        targetId: 'regionId:region-1',
+        statusCode: 200,
+      },
+      5000,
+    )
   })
 
   // A caller authenticated through a system API key (billing, proxy, ...) has
@@ -174,6 +181,7 @@ describe('AuditInterceptor', () => {
         actorEmail: '',
         organizationId: undefined,
       }),
+      expect.any(Number),
     )
   })
 })

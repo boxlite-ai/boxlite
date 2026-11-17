@@ -1,7 +1,11 @@
 import { AuditAction } from './enums/audit-action.enum'
 import { AuditService } from './services/audit.service'
 import { AuditLog } from './entities/audit-log.entity'
-import { Logger } from '@nestjs/common'
+import { ExecutionContext, Logger } from '@nestjs/common'
+import { Reflector } from '@nestjs/core'
+import { firstValueFrom, of } from 'rxjs'
+import { EventEmitter } from 'node:events'
+import { AuditInterceptor } from './interceptors/audit.interceptor'
 
 function deferred() {
   let resolve!: () => void
@@ -22,6 +26,7 @@ describe('audit write deadlines', () => {
       insert: jest.fn(async () => undefined),
       findOne: jest.fn(async () => new AuditLog({ actorId: 'actor', actorEmail: '', action: AuditAction.ATTACH })),
       save: jest.fn(async (row: AuditLog) => row),
+      query: jest.fn(async () => [[{ id: 'audit' }], 1]),
     }
     const runner = {
       connect: jest.fn(async () => client),
@@ -49,6 +54,22 @@ describe('audit write deadlines', () => {
     )
     const write = () => service.createLog({ actorId: 'actor', actorEmail: '', action: AuditAction.ATTACH }, 100)
     return { client, repo, runner, write, service, config }
+  }
+
+  function request(service: AuditService, completion = 'response') {
+    const response = Object.assign(new EventEmitter(), { statusCode: 201, destroyed: false })
+    const interceptor = new AuditInterceptor(
+      { get: () => ({ action: AuditAction.ATTACH, completion }) } as unknown as Reflector,
+      service,
+    )
+    const incoming = { user: { userId: 'actor', email: '', organizationId: 'org' }, get: () => undefined }
+    const context = {
+      getHandler: () => undefined,
+      switchToHttp: () => ({ getRequest: () => incoming, getResponse: () => response }),
+    } as unknown as ExecutionContext
+    const next = { handle: jest.fn(() => of('executed')) }
+    const result = firstValueFrom(interceptor.intercept(context, next))
+    return { response, next, result }
   }
 
   it('returns by the deadline and destroys a stuck database connection', async () => {
@@ -106,24 +127,116 @@ describe('audit write deadlines', () => {
     expect(runner.release).toHaveBeenCalledTimes(1)
   })
 
-  it('bounds truly unfinished acquisitions even after their callers time out', async () => {
+  it.each([20, 50, 100])('allows %i writes to wait for connections instead of rejecting at eight', async (count) => {
     const { runner, client, write } = setup()
     const gate = deferred()
     runner.connect.mockImplementation(async () => {
       await gate.promise
       return client
     })
-    const works = Array.from({ length: 8 }, () => write().catch(() => undefined))
+    const works = Promise.allSettled(Array.from({ length: count }, () => write()))
     try {
-      await jest.advanceTimersByTimeAsync(101)
-      await expect(write()).rejects.toThrow('capacity')
-      expect(runner.connect).toHaveBeenCalledTimes(8)
+      await jest.advanceTimersByTimeAsync(10)
+      expect(runner.connect).toHaveBeenCalledTimes(count)
     } finally {
       gate.resolve()
       await jest.advanceTimersByTimeAsync(0)
-      await Promise.all(works)
+      await works
     }
-    await expect(write()).resolves.toMatchObject({ action: AuditAction.ATTACH })
+    expect((await works).every((result) => result.status === 'fulfilled')).toBe(true)
+  })
+
+  it('uses only the remaining budget for SQL after waiting for a connection', async () => {
+    const { runner, client, write } = setup()
+    const gate = deferred()
+    runner.connect.mockImplementation(async () => {
+      await gate.promise
+      return client
+    })
+    const work = write()
+    await jest.advanceTimersByTimeAsync(70)
+    gate.resolve()
+    await work
+    expect(runner.query).toHaveBeenCalledWith(expect.stringContaining('statement_timeout'), ['30ms', '30ms'])
+  })
+
+  it.each(['insert', 'lease'])(
+    'bounds pre-handler %s by a shared five-second deadline and returns 503',
+    async (stage) => {
+      const { service, repo } = setup()
+      const gate = deferred()
+      if (stage === 'insert') repo.insert.mockImplementation(() => gate.promise)
+      else {
+        repo.insert.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 4000)))
+        repo.query.mockImplementation(async () => {
+          await gate.promise
+          return [[{ id: 'audit' }], 1]
+        })
+      }
+      const { response, next, result } = request(service)
+      let status: number | undefined
+      const work = result.catch((error) => {
+        status = error.getStatus()
+      })
+      try {
+        await jest.advanceTimersByTimeAsync(5001)
+        expect(status).toBe(503)
+        expect(next.handle).not.toHaveBeenCalled()
+      } finally {
+        gate.resolve()
+        await jest.advanceTimersByTimeAsync(0)
+        await work
+        response.emit('finish')
+        await jest.advanceTimersByTimeAsync(0)
+      }
+    },
+  )
+
+  it('refuses forwarding when the clock expires before the deadline timer runs', async () => {
+    const { service } = setup()
+    const acquire = service.keepPendingLogAlive.bind(service)
+    jest.spyOn(service, 'keepPendingLogAlive').mockImplementation(async (...args) => {
+      const lease = await acquire(...args)
+      jest.spyOn(performance, 'now').mockReturnValue(6000)
+      return lease
+    })
+    const { next, result } = request(service)
+    await expect(result).rejects.toMatchObject({ status: 503 })
+    expect(next.handle).not.toHaveBeenCalled()
+    await jest.advanceTimersByTimeAsync(0)
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
+  it('preserves handler success when recording its result times out', async () => {
+    const { service, repo } = setup()
+    const gate = deferred()
+    repo.save.mockImplementation(async (row) => {
+      await gate.promise
+      return row
+    })
+    const { next, result } = request(service, 'handler')
+    let outcome: unknown
+    const work = result.then((value) => {
+      outcome = value
+    })
+    try {
+      await jest.advanceTimersByTimeAsync(5001)
+      expect(outcome).toBe('executed')
+      expect(next.handle).toHaveBeenCalledTimes(1)
+    } finally {
+      gate.resolve()
+      await jest.advanceTimersByTimeAsync(0)
+      await work
+    }
+  })
+
+  it.each(['57014', '55P03', '23505'])('classifies SQLSTATE %s without hiding unexpected failures', async (code) => {
+    const { service, repo } = setup()
+    const cause = Object.assign(new Error('database failure'), { code })
+    repo.insert.mockRejectedValue(cause)
+    const { next, result } = request(service)
+    await expect(result).rejects.toMatchObject({ status: code === '23505' ? 500 : 503 })
+    expect(next.handle).not.toHaveBeenCalled()
   })
 
   it('keeps the deadline active while rollback is stuck', async () => {
@@ -200,10 +313,11 @@ describe('audit write deadlines', () => {
     expect(runner.rollbackTransaction).not.toHaveBeenCalled()
   })
 
-  it('returns capacity after acquisition failures without releasing an unacquired runner', async () => {
+  it('classifies acquisition failures and clears timers without releasing an unacquired runner', async () => {
     const { runner, write } = setup()
-    runner.connect.mockRejectedValue(new Error('cannot acquire'))
-    for (let attempt = 0; attempt < 10; attempt++) await expect(write()).rejects.toThrow('cannot acquire')
+    const cause = new Error('cannot acquire')
+    runner.connect.mockRejectedValue(cause)
+    for (let attempt = 0; attempt < 10; attempt++) await expect(write()).rejects.toMatchObject({ status: 503, cause })
     expect(runner.release).not.toHaveBeenCalled()
     expect(jest.getTimerCount()).toBe(0)
   })
