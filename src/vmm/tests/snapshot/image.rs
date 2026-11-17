@@ -148,33 +148,29 @@ fn final_buffer_flush_failure_removes_partial_target() {
 }
 
 #[test]
-fn ram_length_boundary_is_checked_without_allocating_ram() {
+fn large_ram_length_must_fit_in_the_image_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
     let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
     image::write(&path, 1, b"machine", &ram).unwrap();
-    let original = fs::read(&path).unwrap();
-    let limit = u64::from(crate::memory::MAX_MEMORY_MIB) << 20;
-    for len in [limit - 1, limit, limit + 1] {
-        let mut bytes = original.clone();
-        bytes[16..24].copy_from_slice(&len.to_le_bytes());
-        fs::write(&path, bytes).unwrap();
-        // Sparse length only: admission must not require populating 3 GiB.
-        File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_len(32 + 7 + len)
-            .unwrap();
-        let result = image::Header::read(&mut File::open(&path).unwrap());
-        if len <= limit {
-            assert_eq!(result.unwrap().ram_len, len);
-        } else {
-            assert!(matches!(result, Err(crate::Error::Snapshot(ref e))
-                if e.kind() == io::ErrorKind::InvalidInput
-                    && e.to_string() == "RAM length exceeds memory limit"));
-        }
-    }
+    let mut bytes = fs::read(&path).unwrap();
+    let ram_len = (4u64 << 30) + 4096;
+    bytes[16..24].copy_from_slice(&ram_len.to_le_bytes());
+    fs::write(&path, bytes).unwrap();
+
+    let file = File::options().write(true).open(&path).unwrap();
+    let image_len = 32 + 7 + ram_len;
+    // Extend the file sparsely to exercise header validation without allocating guest RAM.
+    file.set_len(image_len).unwrap();
+    let header = image::Header::read(&mut File::open(&path).unwrap()).unwrap();
+    assert_eq!(header.ram_len, ram_len);
+
+    file.set_len(image_len - 1).unwrap();
+    let error = image::Header::read(&mut File::open(&path).unwrap())
+        .expect_err("accepted an image with a truncated RAM payload");
+    assert!(matches!(error, crate::Error::Snapshot(ref e)
+        if e.kind() == io::ErrorKind::InvalidInput
+            && e.to_string() == "image lengths exceed file bounds"));
 }
 
 #[test]

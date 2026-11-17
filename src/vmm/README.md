@@ -668,6 +668,26 @@ cleanup (including backing release). The ignored KVM round-trip test exports,
 destroys the source, restores Paused, resumes, and verifies counter progress;
 it requires Linux x86_64 and `/dev/kvm`.
 
+The ignored
+`kvm_linux_device_less_export_destroy_restore_resume_makes_progress` test also
+needs `VMM_KERNEL` pointing to the pinned kernel from `make vmm:boot:host`
+(the default path is exported by `make`). It boots through `Vm::new_device_less`
+with `console=null` and a generated initramfs whose `/init` repeatedly calls
+`nanosleep`. It polls paused exports for Linux's `/init` log, RAM differences
+and LAPIC or TSC-deadline reprogramming, with a 30-second boot deadline and
+5-second progress deadlines. It then destroys the source, restores Paused,
+checks registers and interrupt controllers, and requires fresh progress after
+resume. Run it through `make test:integration:vmm:kvm` after building the kernel.
+
+Only declared RAM payloads are compared, excluding image headers and machine
+state. Installing KVM's wall-clock MSR can update shared RAM before guest entry,
+so resumed RAM must differ from both the source and a post-import paused export.
+The timer check excludes free-running TSC and KVM clock reads. Dropping
+IA32_TSC_DEADLINE during restore makes the progress check time out on a
+TSC-deadline host. This qualifies device-less kernel/timer progress, not network,
+rootfs, console output or complete Linux functionality; RAM changes alone are
+not a guest health check.
+
 ## Long-mode entry
 
 On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params, plan)`

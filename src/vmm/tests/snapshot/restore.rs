@@ -355,31 +355,7 @@ fn malformed_images_are_refused_before_creating_a_host_vm() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn invalid_ram_lengths_are_refused_before_creating_a_host_vm() {
-=======
-fn oversized_ram_is_refused_before_allocation() {
-    const CHILD: &str = "BOXLITE_SNAPSHOT_RAM_LIMIT_CHILD";
-    const TEST: &str = "snapshot::restore::tests::oversized_ram_is_refused_before_allocation";
-    const COMPLETE: &str = "BOXLITE_SNAPSHOT_RAM_LIMIT_COMPLETE";
-    if std::env::var_os(CHILD).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST, "--nocapture"])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "RAM admission subprocess failed: {output:?}"
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.lines().any(|line| line.ends_with(COMPLETE)),
-            "RAM admission subprocess did not complete the test: {stdout}"
-        );
-        return;
-    }
->>>>>>> 7e901ce6c (test(vmm): cover snapshot admission, exports and multi-vCPU restore)
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
     write_image(&path);
@@ -657,7 +633,8 @@ fn invalid_machine_payloads_and_empty_ram_never_create_a_host() {
     bytes.truncate(32 + encoded.len());
     fs::write(&path, bytes).unwrap();
     let error = from_path::<Backend>(&path, || panic!("created host for empty RAM")).unwrap_err();
-    assert!(matches!(error, Error::AllocateMemory { bytes: 0, .. }));
+    assert!(matches!(error, Error::Snapshot(ref e)
+        if e.kind() == io::ErrorKind::InvalidInput && e.to_string() == "missing RAM"));
 }
 
 #[test]
@@ -700,4 +677,163 @@ fn valid_vcpu_count_boundaries_reach_host_creation() {
         assert!(created, "valid count {count} was rejected: {result:?}");
         assert!(result.is_err());
     }
+}
+
+#[expect(
+    clippy::duplicate_mod,
+    reason = "Share boot fixtures without exposing private production test modules."
+)]
+#[path = "../boot/initramfs.rs"]
+mod linux_initramfs;
+
+/// Read only the declared RAM payload, never the header or machine bytes.
+fn linux_snapshot(path: &Path) -> (MachineState, Vec<u8>) {
+    use std::io::Read;
+    let mut file = File::open(path).unwrap();
+    let header = image::Header::read(&mut file).unwrap();
+    let machine = header.read_machine(&mut file).unwrap();
+    let mut ram = vec![0; header.ram_len as usize];
+    file.read_exact(&mut ram).unwrap();
+    (machine, ram)
+}
+
+fn linux_timer_changed(before: &MachineState, after: &MachineState) -> bool {
+    // Linux uses TSC-deadline mode on capable hosts, otherwise LAPIC counters.
+    // Unlike TSC/KVM clock reads, reprogramming this MSR requires guest activity.
+    let deadline = |machine: &MachineState| {
+        machine.vcpus[0]
+            .state
+            .msrs
+            .iter()
+            .find(|msr| msr.index == 0x6e0) // IA32_TSC_DEADLINE
+            .map(|msr| msr.data)
+    };
+    before.vcpus[0].state.lapic != after.vcpus[0].state.lapic || deadline(before) != deadline(after)
+}
+
+/// Returns Paused, after observed progress, or fails at the deadline.
+fn linux_wait_for_progress(
+    handle: &mut crate::VmHandle<boxlite_hypervisor::KvmVm>,
+    before: &(MachineState, Vec<u8>),
+    path: &Path,
+    timeout: Duration,
+    wait_for_init: bool,
+) -> (MachineState, Vec<u8>) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Linux guest progress timed out (wait_for_init={wait_for_init})"
+        );
+        handle.resume().unwrap();
+        thread::sleep(Duration::from_millis(200));
+        handle.pause().unwrap();
+        handle.export(path).unwrap();
+        let after = linux_snapshot(path);
+        fs::remove_file(path).unwrap();
+        let ready = !wait_for_init
+            || String::from_utf8_lossy(&after.1).contains("Run /init as init process");
+        if ready && before.1 != after.1 && linux_timer_changed(&before.0, &after.0) {
+            let changed = before
+                .1
+                .chunks(4096)
+                .zip(after.1.chunks(4096))
+                .filter(|(a, b)| a != b)
+                .map(|(a, b)| a.iter().zip(b).filter(|(a, b)| a != b).count())
+                .sum::<usize>();
+            eprintln!(
+                "Linux progress: RAM changed bytes={changed}, timer state changed, wait_for_init={wait_for_init}"
+            );
+            return after;
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let initramfs = dir.path().join("init.cpio");
+    // /init repeatedly nanosleeps for 10 ms. No device, console, /dev/mem,
+    // fixed physical address or host-side RAM writes provide the signal.
+    #[rustfmt::skip]
+    let init = linux_initramfs::static_program(&[
+        0x68, 0x80, 0x96, 0x98, 0x00, // push 10000000 (tv_nsec)
+        0x6a, 0x00,                   // push 0 (tv_sec)
+        0x48, 0x89, 0xe7,             // again: mov rdi,rsp
+        0x31, 0xf6,                   // xor esi,esi
+        0xb8, 35, 0, 0, 0,            // mov eax,35 (nanosleep)
+        0x0f, 0x05,                   // syscall
+        0xeb, 0xf2,                   // jmp again
+    ]);
+    fs::write(&initramfs, linux_initramfs::newc_archive("init", &init)).unwrap();
+    let vm = Vm::new_device_less(crate::VmConfig {
+        vcpu_count: 1,
+        memory_mib: 256,
+        kernel: std::env::var_os("VMM_KERNEL")
+            .expect("run make vmm:boot:host and set VMM_KERNEL to its vmlinux")
+            .into(),
+        cmdline: "console=null panic=0".into(),
+        initramfs: Some(initramfs),
+        disks: vec![],
+        filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
+    })
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    let source = dir.path().join("source");
+    let mut handle = vm.spawn().unwrap();
+    handle.pause().unwrap();
+    handle.export(&scratch).unwrap();
+    let initial = linux_snapshot(&scratch);
+    fs::remove_file(&scratch).unwrap();
+    let ready = linux_wait_for_progress(
+        &mut handle,
+        &initial,
+        &scratch,
+        Duration::from_secs(30),
+        true,
+    );
+    drop(initial);
+    // Require a second interval after Linux announces /init, not just boot writes.
+    let before =
+        linux_wait_for_progress(&mut handle, &ready, &scratch, Duration::from_secs(5), false);
+    drop(ready);
+    handle.export(&source).unwrap();
+    let still = linux_snapshot(&source);
+    assert!(before.1 == still.1, "RAM must be stable while Paused");
+    assert!(
+        !linux_timer_changed(&before.0, &still.0),
+        "timer configuration changed without guest entry"
+    );
+    drop(still);
+    drop(handle);
+
+    let mut restored = Vm::from_state(&source).unwrap();
+    assert_eq!(restored.status(), VmStatus::Paused);
+    restored.export(&scratch).unwrap();
+    let installed = linux_snapshot(&scratch);
+    fs::remove_file(&scratch).unwrap();
+    // Installing KVM's wall-clock MSR can update its shared RAM page without
+    // guest entry. Compare resumed RAM to this installed baseline as well as A.
+    assert_eq!(
+        before.0.vcpus[0].state.regs,
+        installed.0.vcpus[0].state.regs
+    );
+    assert_eq!(
+        before.0.vcpus[0].state.lapic, installed.0.vcpus[0].state.lapic,
+        "restored LAPIC"
+    );
+    assert_eq!(before.0.platform.irqchips, installed.0.platform.irqchips);
+    let after = linux_wait_for_progress(
+        &mut restored,
+        &installed,
+        &scratch,
+        Duration::from_secs(5),
+        false,
+    );
+    assert!(before.1 != after.1);
+    assert!(linux_timer_changed(&before.0, &after.0));
 }
