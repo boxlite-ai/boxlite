@@ -1104,7 +1104,9 @@ later Runners page keeps Previous available so the user can return to loaded row
 Expand an installed account in Connect GitHub, or a connected row in Connects,
 to view repositories authorized for its original Personal or Org App. Lists load
 one page on demand and show both Public and Private repositories, independently
-of CI eligibility. Update and expanded rows offer **Install app for repos**, opening
+of CI eligibility. The Update dialog shows only the installed repository total,
+including zero, using the API total across all pages. Repository names and pagination
+remain in the expandable account row. Update and expanded rows offer **Install app for repos**, opening
 the existing installation configuration in GitHub. For example, add `acme/api`
 there, return to BoxLite, and the account refreshes to page one without deleting
 its connection or discarding an unsaved Private checkbox. Ordinary focus does
