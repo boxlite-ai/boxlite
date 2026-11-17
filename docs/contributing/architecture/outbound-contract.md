@@ -220,6 +220,7 @@ A response claiming confirmation must contain matching durable and completed liv
 Internal replacement uses `PUT /boxes/{id}/network/outbound/snapshot`, one expected token in `If-Match`, and the candidate in `X-Boxlite-Outbound-Revision`.
 Only policy enters the JSON request body.
 HTTP 200 requires one strong matching ETag and the complete matching policy; 412 remains a distinct rejected-precondition outcome.
+
 Missing, weak, duplicated, malformed, or mismatched acknowledgements cannot establish application.
 Unsupported routes never trigger the old policy setter, whose unconditional request shape remains unchanged.
 Revision control exchanges have a ten-second total bound, including response reading.
@@ -236,11 +237,13 @@ Their output pointer is initialized to NULL before validating other inputs.
 Replacement takes separate expected revision, fresh candidate revision, and complete policy JSON strings, borrowed for the blocking call.
 For example, expected `rev-a`, candidate `rev-b`, and `{"mode":"disabled"}` preserve the same identity through NetworkHandle and its selected local or REST backend.
 `Ok` with `out_applied=1` confirms application; `Ok` with `out_applied=0` reports a failed precondition.
+
 Errors also initialize `out_applied` to zero and keep the existing error-code ABI.
 Malformed UTF-8, invalid tokens, repeated/reserved candidates, invalid policy, and null required pointers are rejected before dispatch.
 These are trusted-coordinator operations; the existing unconditional setters retain their signatures.
 
-The C boundary tests call the actual exported functions through a REST runtime, inspect the resulting HTTP requests, free returned strings, and check output initialization and rejection without dispatch.
+The C boundary tests call the actual exported functions through a REST runtime and inspect the resulting HTTP requests.
+They free returned strings and check output initialization and rejection without dispatch.
 
 ### Go coordinator API
 
