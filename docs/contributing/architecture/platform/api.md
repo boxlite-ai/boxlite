@@ -553,7 +553,9 @@ before inserting the box. The API generates the box ID in memory and sends
 the authenticated caller's `created_by`, and the secret values and access policy.
 Omitted placeholders become `<BOXLITE_SECRET:{name}>` before transfer.
 
-Only a complete 200/201 name-to-ID mapping permits insertion. The box's `secrets`
+Only a complete 200/201 name-to-ID mapping permits insertion. UUID uniqueness is
+case-insensitive: differently cased spellings of the same ID are rejected.
+The box's `secrets`
 then contain `{name, hosts, headers, placeholder, secretId}` without `value`;
 persistence callbacks and creation events receive that same representation.
 For example, `openai` with an inline value becomes an `openai` reference with the
