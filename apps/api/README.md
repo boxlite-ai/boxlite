@@ -1660,10 +1660,20 @@ No user-key data migration runs in this release. `User.publicKeys` and historica
 ## API release identity
 
 `GET /v1/config` reports the generated API identity bundled with this source, unless
-`VERSION` is explicitly supplied. Cloud publication passes that same identity to the image.
-Direct Docker builds and local API runs use the bundled value when `VERSION` is absent.
+`VERSION` is a valid SemVer string. Cloud publication passes that same identity to the image.
+
+Direct Docker builds and local runs use the bundled value when `VERSION` is absent or invalid.
+Invalid examples include `latest`, `v0.13.0`, and values with surrounding whitespace.
+Valid prerelease and build metadata are preserved exactly.
+
+The `api:build` and `api:test` caches include the generated `src/boxlite/src/rest/api_version.json`
+identity outside the Nx workspace. Changing only that file invalidates the API bundle
+and its tests.
+
 Development versions use the current workspace version unchanged, without adding
 a suffix or content hash. Pending SDK rules compare SemVer precedence, so build
 metadata does not affect acceptance. Release preparation replaces `next-release`
-with the chosen product version. `unplanned` stays explicitly unsupported.
+with the chosen product version.
+
+`unplanned` stays explicitly unsupported.
 See [version declarations and release finalization](../../docs/reference/README.md#adding-an-operation-or-request-field).

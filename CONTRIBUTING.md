@@ -29,7 +29,12 @@ For detailed build instructions, see [Building from source](./docs/contributing/
 
 ### Running Tests
 
+Prepare the OpenAPI dependency once before running the aggregate test targets
+(`make test`, `make test:all`, or `make test:unit`). Their contract checks use
+PyYAML from `openapi/requirements-dev.txt` with the `python3` on your PATH.
+
 ```bash
+make setup:openapi
 make test
 ```
 

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { parse as parseVersion } from 'semver'
 import { turnstileConfig } from './turnstile-config'
 import { checkpointConfig } from './checkpoint-config'
 import { customDomainConfig } from './custom-domain-config'
@@ -609,12 +610,23 @@ function ciWorkerResources() {
   return { workerCPUs: cpus, workerMemoryGB: memoryGB }
 }
 
+function apiVersion(): string {
+  const configured = process.env.VERSION
+  const parsed = parseVersion(configured)
+  if (parsed) {
+    // Require the exact SemVer spelling accepted by the Rust client.
+    const canonical = parsed.version + (parsed.build.length ? `+${parsed.build.join('.')}` : '')
+    if (configured === canonical) return configured
+  }
+  return require('../../../../src/boxlite/src/rest/api_version.json') as string
+}
+
 const configuration = {
   turnstile: turnstileConfig(),
   checkpoint: checkpointConfig(),
   customDomains: customDomainConfig(),
   production: process.env.NODE_ENV === 'production',
-  version: process.env.VERSION || (require('../../../../src/boxlite/src/rest/api_version.json') as string),
+  version: apiVersion(),
   environment: process.env.ENVIRONMENT,
   runMigrations: process.env.RUN_MIGRATIONS === 'true',
   port: parseInt(process.env.PORT, 10),

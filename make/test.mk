@@ -546,15 +546,6 @@ test\:unit\:gvproxy:
 	@echo "🧪 Running gvproxy bridge unit tests..."
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
 
-# OpenAPI reference-server unit tests: the error class the server answers with
-# must be one openapi/box.openapi.yaml declares, and must match the triple
-# `BoxliteError::http()` (src/shared/src/errors.rs) gives the same failure —
-# the reference server is what src/boxlite/tests/rest_integration.rs points the
-# Rust client at, so a class it gets wrong is a class every conformance run
-# gets wrong.
-#
-# Run the dependency-backed server contract suite as well as the stdlib-only
-# error mapping checks. The server target supplies its own Python dependencies.
 generate\:openapi:
 	@python3 openapi/generate_version_rules.py
 
@@ -567,6 +558,16 @@ check\:openapi\:release:
 check\:openapi:
 	@python3 openapi/generate_version_rules.py --check $(if $(BASE),--base "$(BASE)",)
 
+# OpenAPI reference-server unit tests: the error class the server answers with
+# must be one openapi/box.openapi.yaml declares, and must match the triple
+# `BoxliteError::http()` (src/shared/src/errors.rs) gives the same failure —
+# the reference server is what src/boxlite/tests/rest_integration.rs points the
+# Rust client at, so a class it gets wrong is a class every conformance run
+# gets wrong.
+#
+# Run the dependency-backed server contract suite as well as the stdlib-only
+# error mapping checks. The server target supplies its own Python dependencies.
+# Prepare PyYAML for generation and contract checks with make setup:openapi.
 test\:unit\:openapi: check\:openapi
 	@python3 -m unittest discover -s openapi/tests -v
 	@$(MAKE) test:unit:openapi:server

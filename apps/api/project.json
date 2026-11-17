@@ -7,6 +7,12 @@
   "targets": {
     "build": {
       "executor": "@nx/webpack:webpack",
+      "inputs": [
+        "production",
+        "^production",
+        { "dependentTasksOutputFiles": "**/*", "transitive": true },
+        { "runtime": "node -p \"require('../src/boxlite/src/rest/api_version.json')\"" }
+      ],
       "options": {
         "outputPath": "dist/apps/api",
         "deleteOutputPath": false,
@@ -106,7 +112,8 @@
         { "env": "REDIS_PORT" },
         { "env": "REDIS_USERNAME" },
         { "env": "REDIS_PASSWORD" },
-        { "runtime": "git hash-object ../openapi/box.openapi.yaml ../openapi/admin.openapi.yaml" }
+        { "runtime": "git hash-object ../openapi/box.openapi.yaml ../openapi/admin.openapi.yaml" },
+        { "runtime": "node -p \"require('../src/boxlite/src/rest/api_version.json')\"" }
       ],
       "options": {
         "jestConfig": "api/jest.config.mjs",
