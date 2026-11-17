@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{io, marker::PhantomData, rc::Rc};
+use std::{io, marker::PhantomData, rc::Rc, sync::Arc};
 
 use kvm_bindings::{
     KVM_EXIT_HLT, KVM_EXIT_INTR, KVM_EXIT_IO, KVM_EXIT_IO_IN, KVM_EXIT_IO_OUT, KVM_EXIT_MMIO,
@@ -12,6 +12,9 @@ use kvm_ioctls::VcpuFd;
 
 use super::{KvmVcpuHandle, kick::WorkerSignal};
 use crate::{Error, Result, VcpuExit};
+
+/// Number of u32 words in kvm_xsave.region, before its flexible-array tail.
+const XSAVE_REGION_WORDS: usize = 1024;
 
 /// A Linux x86_64 vCPU bound to its creating thread.
 ///
@@ -25,6 +28,7 @@ pub struct KvmVcpu {
     pending_io: PendingIo,
     entered: bool,
     xsave_size: usize,
+    msr_indices: Arc<[u32]>,
     kick: WorkerSignal,
     _thread_bound: PhantomData<Rc<()>>,
 }
@@ -36,6 +40,7 @@ impl KvmVcpu {
         run_size: usize,
         kick: WorkerSignal,
         xsave_size: usize,
+        msr_indices: Arc<[u32]>,
     ) -> Self {
         Self {
             fd,
@@ -44,6 +49,7 @@ impl KvmVcpu {
             pending_io: PendingIo::default(),
             entered: false,
             xsave_size,
+            msr_indices,
             kick,
             _thread_bound: PhantomData,
         }
@@ -271,7 +277,8 @@ impl KvmVcpu {
                 // contract forbids enabling dynamic XSTATE permissions later.
                 unsafe { self.fd.get_xsave2(&mut xsave) }?;
             }
-            let mut words = xsave.as_fam_struct_ref().xsave.region.to_vec();
+            let mut words = Vec::with_capacity(XSAVE_REGION_WORDS + xsave.as_slice().len());
+            words.extend_from_slice(&xsave.as_fam_struct_ref().xsave.region);
             words.extend_from_slice(xsave.as_slice());
             Ok(crate::X86VcpuState {
                 regs: self.fd.get_regs()?,
@@ -282,7 +289,7 @@ impl KvmVcpu {
                     .get_cpuid2(kvm_bindings::KVM_MAX_CPUID_ENTRIES)?
                     .as_slice()
                     .to_vec(),
-                msrs: super::features::snapshot_msrs(&self.fd)?,
+                msrs: super::features::snapshot_msrs(&self.fd, &self.msr_indices)?,
                 xsave: words,
                 xcrs: self.fd.get_xcrs()?,
                 debug_regs: self.fd.get_debug_regs()?,
@@ -318,21 +325,24 @@ impl KvmVcpu {
             }
             let cpuid = super::features::snapshot_cpuid(&state.cpuid)?;
             let mut xsave = self.xsave_buffer()?;
-            if state.xsave.len() != 1024 + xsave.as_slice().len()
+            if state.xsave.len() != XSAVE_REGION_WORDS + xsave.as_slice().len()
                 || state.xcrs.nr_xcrs as usize > state.xcrs.xcrs.len()
             {
                 return Err(invalid("invalid XSAVE/XCR snapshot shape"));
             }
-            // Before unsafe SET_XSAVE, always allocate the
-            // destination-sized buffer, never trust a serialized flexible tail.
+            // SAFETY: the destination-sized buffer and length check above
+            // guarantee matching slice lengths. Copying the fixed region does
+            // not change the flexible-array length or its allocation.
             unsafe {
                 xsave
                     .as_mut_fam_struct()
                     .xsave
                     .region
-                    .copy_from_slice(&state.xsave[..1024])
+                    .copy_from_slice(&state.xsave[..XSAVE_REGION_WORDS])
             };
-            xsave.as_mut_slice().copy_from_slice(&state.xsave[1024..]);
+            xsave
+                .as_mut_slice()
+                .copy_from_slice(&state.xsave[XSAVE_REGION_WORDS..]);
             let current_khz = self.fd.get_tsc_khz()?;
             self.fd.set_cpuid2(&cpuid)?;
             if current_khz != state.tsc_khz {

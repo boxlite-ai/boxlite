@@ -89,6 +89,9 @@ signature or compatibility negotiation in this crate.
 | `X86VmState` | PIC master/slave, IOAPIC, every created PIT (including unused reset state), and KVM clock |
 | `X86VcpuState` | regs, sregs, FPU, CPUID, all KVM-advertised readable MSRs, complete host-sized XSAVE, XCRs, debug registers, events, MP state, LAPIC and TSC frequency |
 
+KVM caches the advertised MSR index list at VM creation and shares it with
+its vCPUs; capture still probes readability under each vCPU's CPUID/MCE state.
+
 Stop all vCPUs and IRQ producers and complete userspace I/O with
 `complete_pending_io` before capture. `save_state` never enters the guest.
 `Vcpu::notify_guest_stopped`, called on the stopped vCPU's owning thread,

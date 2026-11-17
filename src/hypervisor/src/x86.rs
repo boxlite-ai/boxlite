@@ -243,10 +243,18 @@ pub struct X86VcpuState {
     #[serde(with = "fpu_serde")]
     pub fpu: kvm_bindings::kvm_fpu,
     /// Complete XSAVE buffer, including the kernel-sized flexible tail.
+    /// Decoding permits at most 65536 u32 words (256 KiB), a policy ceiling
+    /// with room for host XSTATE components beyond the fixed KVM region.
     #[serde(deserialize_with = "vcpu_state_serde::words::<_, _, 65536>")]
     pub xsave: Vec<u32>,
-    #[serde(deserialize_with = "vcpu_state_serde::entries::<_, _, 256>")]
+    /// Captured CPUID leaves; decoding uses KVM's maximum entry count,
+    /// matching the buffer accepted by the restore path.
+    #[serde(
+        deserialize_with = "vcpu_state_serde::entries::<_, _, { kvm_bindings::KVM_MAX_CPUID_ENTRIES }>"
+    )]
     pub cpuid: Vec<kvm_bindings::kvm_cpuid_entry2>,
+    /// Readable KVM-advertised MSRs; decoding permits at most 4096 entries.
+    /// This is a decoding policy, not KVM's per-ioctl MSR batch limit.
     #[serde(deserialize_with = "vcpu_state_serde::entries::<_, _, 4096>")]
     pub msrs: Vec<kvm_bindings::kvm_msr_entry>,
     pub xcrs: kvm_bindings::kvm_xcrs,

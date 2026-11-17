@@ -129,11 +129,12 @@ fn msr_buffer(entries: &[X86Msr]) -> io::Result<Msrs> {
 /// Probe one index at a time: a short batch read stops at the first unavailable
 /// MSR and would lose every subsequent register (notably CPUID-gated PMU MSRs).
 /// No boot-MSR allowlist: retain every readable index advertised by KVM.
-pub(super) fn snapshot_msrs(fd: &kvm_ioctls::VcpuFd) -> io::Result<Vec<kvm_msr_entry>> {
-    let kvm = Kvm::new().map_err(io::Error::from)?;
-    let indices = kvm.get_msr_index_list().map_err(io::Error::from)?;
+pub(super) fn snapshot_msrs(
+    fd: &kvm_ioctls::VcpuFd,
+    indices: &[u32],
+) -> io::Result<Vec<kvm_msr_entry>> {
     let mut entries = Vec::new();
-    for &index in indices.as_slice() {
+    for &index in indices {
         // x2APIC's register window includes write-only EOI/SELF_IPI registers.
         // LAPIC state is saved/restored via its dedicated ioctl instead.
         if (0x800..=0xbff).contains(&index) {

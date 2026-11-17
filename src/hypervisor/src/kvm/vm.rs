@@ -1,7 +1,11 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{io, os::fd::AsRawFd, sync::Mutex};
+use std::{
+    io,
+    os::fd::AsRawFd,
+    sync::{Arc, Mutex},
+};
 
 use kvm_bindings::{KVM_API_VERSION, KVM_PIT_SPEAKER_DUMMY, kvm_pit_config};
 use kvm_ioctls::{Cap, Kvm, VmFd};
@@ -21,6 +25,7 @@ pub struct KvmVm {
     run_size: usize,
     kick_signal: i32,
     cpuid: Vec<crate::X86CpuidEntry>,
+    msr_indices: Arc<[u32]>,
 }
 
 /// A checked KVM system handle and the supported CPUID for a prospective VM.
@@ -106,6 +111,11 @@ impl PreparedKvm {
             run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
             kick_signal,
             cpuid,
+            msr_indices: kvm
+                .get_msr_index_list()
+                .map_err(io::Error::from)?
+                .as_slice()
+                .into(),
         })
     }
 }
@@ -210,6 +220,7 @@ impl KvmVm {
                 self.run_size,
                 kick,
                 self.fd.check_extension_int(Cap::Xsave2).max(0) as usize,
+                Arc::clone(&self.msr_indices),
             ))
         };
         create().map_err(|source| Error::CreateVcpu { id, source })
