@@ -230,15 +230,7 @@ async fn checkpoint_list_and_get_render_captured_metadata_as_tables() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkpoint_import_entry_keeps_ordinary_binary_archive_uploads() {
     let home = TempDir::new().unwrap();
-    let server = Server::start(|request| {
-        let body = if request.path.ends_with("/config") {
-            json!({"capabilities":{"import_enabled":true}})
-        } else {
-            box_info()
-        };
-        (StatusCode::OK, body)
-    })
-    .await;
+    let server = Server::start(|_| (StatusCode::OK, box_info())).await;
     let bytes = b"archive\x00\xffbytes";
     let archive = home.path().join("saved.boxlite");
     std::fs::write(&archive, bytes).unwrap();
@@ -250,14 +242,12 @@ async fn checkpoint_import_entry_keeps_ordinary_binary_archive_uploads() {
         .success()
         .stdout("cloudBox1234\n");
     let requests = server.requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].method, "GET");
-    assert_eq!(requests[0].path, "/v1/config");
-    assert_eq!(requests[1].method, "POST");
-    assert_eq!(requests[1].path, "/v1/tenant/boxes/import");
-    assert_eq!(requests[1].query, "name=worker");
-    assert_eq!(requests[1].content_type, "application/octet-stream");
-    assert_eq!(requests[1].bytes, bytes);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/tenant/boxes/import");
+    assert_eq!(requests[0].query, "name=worker");
+    assert_eq!(requests[0].content_type, "application/octet-stream");
+    assert_eq!(requests[0].bytes, bytes);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

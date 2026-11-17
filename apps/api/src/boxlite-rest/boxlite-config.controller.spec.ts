@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config'
+import { TypedConfigService } from '../config/typed-config.service'
 import { BoxliteConfigController } from './boxlite-config.controller'
 
 describe('checkpoint capability discovery', () => {
@@ -8,7 +9,9 @@ describe('checkpoint capability discovery', () => {
     { archivePrefix: 'gs://checkpoint-test/archives/', enabled: false, expected: false },
     { archivePrefix: 'gs://checkpoint-test/archives/', enabled: true, expected: true },
   ])('advertises checkpoint admission only after rollout: %j', ({ archivePrefix, enabled, expected }) => {
-    const controller = new BoxliteConfigController(new ConfigService({ checkpoint: { archivePrefix, enabled } }))
+    const controller = new BoxliteConfigController(
+      new TypedConfigService(new ConfigService({ checkpoint: { archivePrefix, enabled } })),
+    )
     expect(controller.getConfig().capabilities.checkpoints_enabled).toBe(expected)
     expect(controller.getConfig().capabilities.import_enabled).toBe(false)
   })

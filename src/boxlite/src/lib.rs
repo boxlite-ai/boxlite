@@ -81,6 +81,8 @@ pub use runtime::types::{
 };
 
 #[cfg(feature = "rest")]
+pub use rest::api_version;
+#[cfg(feature = "rest")]
 pub use rest::credential::{AccessToken, ApiKeyCredential, Credential};
 #[cfg(feature = "rest")]
 pub use rest::options::BoxliteRestOptions;

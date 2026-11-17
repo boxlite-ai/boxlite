@@ -4,23 +4,24 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Get, Optional } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
+import { Controller, Get } from '@nestjs/common'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { TypedConfigService } from '../config/typed-config.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1')
 export class BoxliteConfigController {
-  constructor(@Optional() private readonly config?: ConfigService) {}
+  constructor(private readonly configService: TypedConfigService) {}
 
   @Get('config')
   getConfig() {
     return {
+      api_version: this.configService.get('version'),
       capabilities: {
         checkpoints_enabled:
-          this.config?.get('checkpoint.enabled') === true && !!this.config?.get('checkpoint.archivePrefix'),
+          this.configService.get('checkpoint.enabled') === true && !!this.configService.get('checkpoint.archivePrefix'),
         privileged_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,

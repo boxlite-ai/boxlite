@@ -478,7 +478,9 @@ lifecycle tests cover database rollback.
 ## Guest Docker privilege
 
 REST creation accepts `advanced.privileged` (default false) and advertises
-`privileged_enabled` in `/v1/config`. The option is stored on the Box and
+`privileged_enabled` in `/v1/config` for older SDKs. New SDKs check the
+OpenAPI minimum against `api_version`, sourced from the deployed `VERSION`,
+just like the `X-BoxLite-Api-Version` header. The option is stored on the Box and
 forwarded by both runner adapters on creation and by v0 recovery. Subsequent
 starts reuse the runtime's persisted guest settings. The
 pre-deploy migration initializes existing Boxes to false. Privileged requests
@@ -1654,3 +1656,24 @@ Dashboard owns its normalized telemetry display types, independently of the remo
 
 The nullable physical `user.keyPair` column remains for older API instances and rollback; the current entity no longer maps it.
 No user-key data migration runs in this release. `User.publicKeys` and historical audit action identifiers remain unchanged.
+
+## API release identity
+
+`GET /v1/config` reports the generated API identity bundled with this source, unless
+`VERSION` is a valid SemVer string. Cloud publication passes that same identity to the image.
+
+Direct Docker builds and local runs use the bundled value when `VERSION` is absent or invalid.
+Invalid examples include `latest`, `v0.13.0`, and values with surrounding whitespace.
+Valid prerelease and build metadata are preserved exactly.
+
+The `api:build` and `api:test` caches include the generated `src/boxlite/src/rest/api_version.json`
+identity outside the Nx workspace. Changing only that file invalidates the API bundle
+and its tests.
+
+Development versions use the current workspace version unchanged, without adding
+a suffix or content hash. Pending SDK rules compare SemVer precedence, so build
+metadata does not affect acceptance. Release preparation replaces `next-release`
+with the chosen product version.
+
+`unplanned` stays explicitly unsupported.
+See [version declarations and release finalization](../../docs/reference/README.md#adding-an-operation-or-request-field).

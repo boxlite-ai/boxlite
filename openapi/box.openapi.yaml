@@ -16,7 +16,7 @@
 openapi: 3.1.1
 info:
   title: BoxLite Box API
-  version: 0.1.0
+  version: next-release
   description: |
     HTTP API for BoxLite boxes — hardware-isolated VMs for secure code
     execution. Exposes box lifecycle management, command execution, file
@@ -621,6 +621,7 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: createSnapshot
+      x-boxlite-min-server-version: "next-release"
       summary: Create a snapshot
       description: |
         Creates a named snapshot from the box's current stopped disk state.
@@ -645,6 +646,7 @@ paths:
           $ref: "#/components/responses/ConflictError"
     get:
       operationId: listSnapshots
+      x-boxlite-min-server-version: "next-release"
       summary: List box snapshots
       tags: [Boxes]
       responses:
@@ -668,6 +670,7 @@ paths:
           type: string
     get:
       operationId: getSnapshot
+      x-boxlite-min-server-version: "next-release"
       summary: Get snapshot details
       tags: [Boxes]
       responses:
@@ -681,6 +684,7 @@ paths:
           $ref: "#/components/responses/NotFoundError"
     delete:
       operationId: removeSnapshot
+      x-boxlite-min-server-version: "next-release"
       summary: Remove a snapshot
       tags: [Boxes]
       responses:
@@ -702,6 +706,7 @@ paths:
           type: string
     post:
       operationId: restoreSnapshot
+      x-boxlite-min-server-version: "next-release"
       summary: Restore box from snapshot
       description: Restores the box's stopped disks from a named snapshot.
       tags: [Boxes]
@@ -719,6 +724,7 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: cloneBox
+      x-boxlite-min-server-version: "next-release"
       summary: Clone a box
       description: |
         Creates a new box cloned from the source box's current stopped disk state.
@@ -748,6 +754,7 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: exportBox
+      x-boxlite-min-server-version: "next-release"
       summary: Export a box archive
       description: Exports a stopped box as a portable archive payload.
       tags: [Boxes]
@@ -1279,6 +1286,8 @@ paths:
               type: object
               properties:
                 isPublic:
+                  x-boxlite-min-server-version: "next-release"
+                  x-boxlite-version-check: non-default
                   type: boolean
                   default: true
               additionalProperties: false
@@ -2211,6 +2220,10 @@ components:
       type: object
       description: Server configuration and capabilities (the `GET /v1/config` response).
       properties:
+        api_version:
+          type: string
+          description: Server product release in SemVer format; matches the SDK/server release numbering.
+          example: "0.12.0"
         defaults:
           type: object
           description: Default values applied when not specified in requests
@@ -2238,7 +2251,7 @@ components:
             type: string
         capabilities:
           type: object
-          description: Server capability limits and feature flags
+          description: Deployment limits and legacy feature flags. New SDKs use api_version for protocol compatibility.
           properties:
             linux_capabilities_enabled:
               type: boolean
@@ -2310,7 +2323,7 @@ components:
               example: true
             private_tunnels_enabled:
               type: boolean
-              description: Whether prepareTunnel honors a private `isPublic` of false; clients check it before every private prepare
+              description: Legacy advertisement that prepareTunnel honors a private `isPublic` of false
               example: true
             exec_user_enabled:
               type: boolean
@@ -2856,10 +2869,14 @@ components:
       additionalProperties: false
       properties:
         privileged:
+          x-boxlite-min-server-version: "next-release"
+          x-boxlite-version-check: non-default
           type: boolean
           default: false
-          description: Full guest capabilities and writable guest kernel mounts. Does not relax the host sandbox. Conflicts with explicit capabilities; requires privileged_enabled.
+          description: Full guest capabilities and writable guest kernel mounts. Does not relax the host sandbox. Conflicts with explicit capabilities.
         capabilities:
+          x-boxlite-min-server-version: "next-release"
+          x-boxlite-version-check: present
           $ref: "#/components/schemas/CreateContainerCapabilities"
 
     CreateContainerCapabilities:
@@ -3242,6 +3259,8 @@ components:
           default: false
           description: Enable pseudo-terminal allocation
         user:
+          x-boxlite-min-server-version: "next-release"
+          x-boxlite-version-check: present
           type: string
           description: >-
             User to run the command as, Docker format `<name|uid>[:<group|gid>]`.

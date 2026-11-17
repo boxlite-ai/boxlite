@@ -6,6 +6,7 @@ package boxlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -31,7 +32,7 @@ func TestCheckpointExportRejectsRunningSourceBeforeNativeExport(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/config" {
-			_, _ = io.WriteString(w, `{"capabilities":{"export_enabled":true}}`)
+			_, _ = fmt.Fprintf(w, `{"api_version":%q}`, sdk.Version())
 			return
 		}
 		if r.Method == http.MethodGet {

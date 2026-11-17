@@ -70,6 +70,8 @@ export type ArtifactConfig = {
   dockerfile: string
   /** Build context, repository-relative. Usually the root, for a workspace. */
   context: string
+  /** Optional repository-relative JSON string containing the image's product/API version. */
+  versionFile?: string
 }
 
 /**
@@ -214,12 +216,7 @@ const assertObject = (value: unknown, where: string): Record<string, unknown> =>
  * `borrowed` names keys this parser accepts but does not own — the stage file
  * is shared with mstage — so they are allowed without being demanded.
  */
-const assertKeys = (
-  block: Record<string, unknown>,
-  known: string[],
-  where: string,
-  borrowed: string[] = [],
-): void => {
+const assertKeys = (block: Record<string, unknown>, known: string[], where: string, borrowed: string[] = []): void => {
   const unknown = Object.keys(block).filter((key) => !known.includes(key))
   if (unknown.length > 0) {
     throw new BuildConfigError(`${where} does not take ${unknown.join(', ')}. It takes ${known.join(', ')}`)
@@ -249,10 +246,15 @@ const parseArtifacts = (raw: unknown, where: string): Record<string, ArtifactCon
       throw new BuildConfigError(`${where}: artifact "${name}" must match ${ARTIFACT_NAME.source}`)
     }
     const artifact = assertObject(block[name], `${where}.${name}`)
-    assertKeys(artifact, ['dockerfile', 'context'], `${where}.${name}`)
+    assertKeys(artifact, ['dockerfile', 'context', 'versionFile'], `${where}.${name}`, ['versionFile'])
     parsed[name] = {
       dockerfile: assertContainedPath(artifact.dockerfile, `${where}.${name}.dockerfile`),
       context: assertContainedPath(artifact.context, `${where}.${name}.context`),
+      ...(artifact.versionFile === undefined
+        ? {}
+        : {
+            versionFile: assertContainedPath(artifact.versionFile, `${where}.${name}.versionFile`),
+          }),
     }
   }
   return parsed
@@ -385,12 +387,7 @@ export const parseBase = (
   // mstage's too: the app abbreviated, for names with a length budget. `audit`
   // is mbuild's own and travels in the same list only because it is optional:
   // a repository that declares none is audited the way it always was.
-  assertKeys(root, ['root', 'artifacts', 'audit', 'app', 'appShort', 'env'], path, [
-    'audit',
-    'app',
-    'appShort',
-    'env',
-  ])
+  assertKeys(root, ['root', 'artifacts', 'audit', 'app', 'appShort', 'env'], path, ['audit', 'app', 'appShort', 'env'])
   if (typeof root.root !== 'string' || root.root.trim() === '') {
     throw new BuildConfigError(`${path}: "root" must name the repository root, relative to this file`)
   }

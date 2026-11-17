@@ -45,13 +45,127 @@ implementation currently serves all 35 paths:
 | `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
 | reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
-Read each server's routes rather than either README — both under-report.
-`GET /config` does not close this gap: its feature flags (`tty_enabled`,
-`streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,
-`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`) cover only some routes, there is no
-flag at all for volumes, images or tunnel, and a flag can disagree with the
-routes — the reference server advertises `streaming_enabled: true` while
-serving no attach route.
+`GET /v1/config` reports `api_version`, using the server's product release
+number (the same numbering as SDK releases), including during development. Version compatibility does not
+promise that every deployment enables every operation. Servers still reject
+unsupported features and unauthorized requests explicitly. Existing discovery
+flags remain for older SDKs; new SDK checks use only the version.
+
+### SDK server version checks
+
+The shared Rust REST transport matches each outgoing request against generated
+OpenAPI routes. An operation minimum applies to every call; a property minimum
+applies only when that property triggers its declared condition. JSON, empty
+responses, binary responses, file streams, and WebSocket handshakes all use the
+same evaluator. Proxy CONNECT is a separate protocol; its REST preparation is checked.
+
+Route matching normalizes the configured prefix with the transport's URL parser.
+For example, `team alpha` matches `/v1/team%20alpha/boxes/id/snapshots` and still
+applies the snapshot minimum. Requests within the REST base without a matching
+route proceed without version discovery; server validation remains authoritative.
+
+Archive import has no operation minimum and sends its payload without querying
+`/v1/config`. Export retains its declared operation minimum.
+
+The first request that needs a version fetches `/v1/config`. Successful discovery
+is cached for the client lifetime and shared with clones and derived boxes.
+There is no TTL or refresh API. Failed or cancelled discovery is retryable;
+a valid but insufficient version remains cached. Recreate the client after a
+server upgrade. Ordinary requests without triggered rules never fetch config.
+Rolling upgrades and downgrades are outside this cache contract.
+
+Comparisons use SemVer precedence: `0.13.0-rc.1` is below `0.13.0`, while
+`0.13.0+build.7` has equal precedence. Missing, malformed, or insufficient versions
+produce `Unsupported` before the business request, with the operation, field,
+required version, and upgrade advice. Authentication and network failures keep
+their usual categories. Requested values are never silently omitted.
+
+### Adding an operation or request field
+
+Use `next-release` for an API or request field that will ship with the next product release.
+Set `info.version: next-release` too; contributors do not guess a future release number.
+Use `unplanned` when no supporting server release is known.
+
+```yaml
+include_details:
+  type: boolean
+  default: false
+  x-boxlite-min-server-version: next-release
+  x-boxlite-version-check: non-default
+```
+
+Omitted or `false` preserves the legacy request; `true` triggers the rule.
+Use `present` when any supplied value requires support, including null, an empty
+string, or an empty object. Version annotations never add or change defaults.
+An operation-level annotation applies to every request to that operation.
+
+| Minimum | Development behavior | Bump behavior |
+| --- | --- | --- |
+| `next-release` | Uses the current workspace version as the minimum, compared by SemVer precedence | Replaced with the chosen release version |
+| `unplanned` | Returns `Unsupported`: not yet supported, before version discovery | Preserved unchanged |
+| Concrete SemVer | Requires that release or newer by SemVer precedence | Preserved unchanged |
+
+Generation resolves `next-release` to the current version in the root `Cargo.toml`,
+such as `0.13.0`, without adding a suffix or hash. Any prerelease or build metadata
+already declared in the workspace version is preserved. The YAML remains unchanged;
+only release finalization replaces its `next-release` declarations.
+SemVer precedence ignores build metadata: a `0.13.0` minimum accepts
+`0.13.0`, `0.13.0+build.7`, and newer releases, but rejects
+`0.12.9` and `0.13.0-rc.1`. Ordinary requests without triggered rules still skip discovery.
+
+This permits different builds of the same version to interoperate, but cannot
+distinguish features added within that version. Servers still enforce feature
+availability and authorization. Rebuild older development SDKs that contain
+hash-based exact rules before using servers that report the workspace version.
+Numeric minima cannot exceed the workspace release. `unplanned` dominates all triggered rules.
+
+1. Add the operation or request field and its declaration to `openapi/box.openapi.yaml`.
+2. Run `make setup:openapi` once, then `make generate:openapi`.
+3. Add real SDK request tests; fixtures use the generated API identity rather than a guessed version.
+4. Run `make test:unit:openapi BASE=origin/main` and the relevant SDK tests.
+
+CI rejects stale generated rules/identity, ungated new operations and reachable
+request fields, malformed minima, and numeric requirements newer than the workspace.
+Response-only/read-only additions do not require request gates. Requests without a
+matching generated route skip version checks and proceed to the server.
+
+The generator supports local references, nested object properties, `allOf`,
+whole-property `present` checks, scalar `non-default` checks, and scalar query,
+header, and path parameters. Annotations inside arrays, maps, unions, parameter
+content, nested parameter schemas, or non-JSON bodies fail generation; use an
+operation gate for those shapes.
+
+Nested parameter fields are inventoried through references and compositions.
+For a new `query.filter.name`, use an operation minimum newer than the base release,
+`next-release`, or `unplanned`. Field annotations inside that schema are rejected.
+
+Consumers use packaged rules and need no Python or YAML parser.
+
+### Finalizing a release
+
+After the [workspace/SDK version bump](../contributing/development/building.md#release-version-alignment), run:
+
+```bash
+make finalize:openapi BASE=origin/main
+make check:openapi:release
+```
+
+The target requires a stable workspace version newer than the Git base. It replaces
+only `next-release` minima, sets `info.version` to that release, and regenerates
+`src/boxlite/src/rest/{version_rules,api_version}.json`. It preserves comments,
+previously assigned minima, and every `unplanned` declaration.
+
+Compatibility tests derive their version boundaries from generated rule minima.
+For example, after a rule is finalized at `0.13.2`, a later SDK version `0.13.3`
+still accepts server `0.13.3-rc.1`, while rejecting `0.13.2-rc.1`.
+
+Include those changes in the bump PR. Release checks refuse remaining `next-release`,
+stale artifacts, and mismatched release tags; `unplanned` remains valid and explicitly refused.
+SDK release workflows and cloud image release publication enforce these checks.
+
+The initial migration's snapshot, clone/export, capability policy,
+privilege, execution-user, and private-tunnel rules are `next-release`.
+They make no claim that released `0.12.0` supports the new compatibility contract.
 
 `{prefix}` is a deployment-defined routing slot, opaque to the client, published
 by a server as `Principal.path_prefix`. A single-tenant server may omit the

@@ -88,9 +88,9 @@ conflict with privilege unless they match the runtime's canonical full policy.
 That policy adds only `ALL` (case-insensitive, with an optional `CAP_` prefix)
 and drops nothing; C and Go accept it before or after enabling privilege.
 
-REST checks `privileged_enabled` before each privileged creation. Privilege
+REST checks the OpenAPI minimum server version before privileged creation. Privilege
 persists across Box starts. Host security options remain local to the runner.
-The capability advertisement describes guest privilege; operators must also
+The version check establishes protocol compatibility; operators must also
 install a Docker-capable kernel. See the [API contract](../../apps/api/README.md#guest-docker-privilege)
 for persistence and warm-pool behavior.
 
@@ -144,5 +144,5 @@ persistent home. Ordinary and privileged subtests each have a five-minute budget
 
 This guide uses Docker 27.5.1 with classic overlay2 on Linux x86_64 and
 Apple Silicon.
-Deleting the Box deletes its Docker data. REST capability advertisement alone
+Deleting the Box deletes its Docker data. REST version compatibility alone
 does not certify an arbitrary runner's kernel or Docker image.

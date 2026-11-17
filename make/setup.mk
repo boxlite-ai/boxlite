@@ -41,3 +41,6 @@ setup\:build:
 setup\:test:
 	@bash $(SCRIPT_DIR)/setup/setup-test.sh
 	@$(MAKE) _ensure-python-deps
+
+setup\:openapi:
+	@python3 -m pip install -r openapi/requirements-dev.txt

@@ -546,6 +546,18 @@ test\:unit\:gvproxy:
 	@echo "🧪 Running gvproxy bridge unit tests..."
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
 
+generate\:openapi:
+	@python3 openapi/generate_version_rules.py
+
+finalize\:openapi:
+	@python3 openapi/generate_version_rules.py --finalize --base "$$BASE"
+
+check\:openapi\:release:
+	@python3 openapi/generate_version_rules.py --check --release --tag "$$RELEASE_TAG"
+
+check\:openapi:
+	@python3 openapi/generate_version_rules.py --check $(if $(BASE),--base "$(BASE)",)
+
 # OpenAPI reference-server unit tests: the error class the server answers with
 # must be one openapi/box.openapi.yaml declares, and must match the triple
 # `BoxliteError::http()` (src/shared/src/errors.rs) gives the same failure —
@@ -555,7 +567,9 @@ test\:unit\:gvproxy:
 #
 # Run the dependency-backed server contract suite as well as the stdlib-only
 # error mapping checks. The server target supplies its own Python dependencies.
-test\:unit\:openapi:
+# Prepare PyYAML for generation and contract checks with make setup:openapi.
+test\:unit\:openapi: check\:openapi
+	@python3 -m unittest discover -s openapi/tests -v
 	@$(MAKE) test:unit:openapi:server
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
