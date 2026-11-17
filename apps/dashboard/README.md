@@ -641,9 +641,12 @@ The **Managed domain** tab lists only held platform hostnames, using the API's
 state apply to those platform names. **Custom domain** shows setup progress and
 the separate one-domain allowance, including drafts but excluding replaced configurations.
 
-The custom table shows Target type, Associated with and Port from held-domain bindings.
+Both tables use Domain, Target type, Associated with, Port and Actions with matching column widths.
+The custom table shows DNS/HTTPS status below the hostname and offers hostname copying in Actions.
 Box targets link to their details page; drafts and unbound hostnames show Unbound and —.
-Select the hostname to manage DNS, HTTPS and binding.
+
+Select the custom hostname to manage DNS, HTTPS and deletion.
+Binding and unbinding use the CLI or SDK; the custom-domain dialogs only configure DNS and HTTPS.
 
 Both views use the shared underline tabs: transparent surfaces, a 2px active
 indicator and independent keyboard focus. The API still returns the complete
@@ -658,7 +661,7 @@ The API task continues confirmed HTTPS setup. The page reads incomplete setup st
 DNS dialogs and pending actions pause these reads. Opening confirmed details reads status without advancing setup.
 An incomplete confirmed setup with an error offers **Retry**, which sends one advance request and respects server backoff.
 **Ready** means setup is complete with an active subscription; **Setup completed** indicates completion without confirmed active eligibility.
-Neither label implies a bound Box port. Viewing, unbinding and confirmed deletion remain available after subscription expiry.
+Neither label implies a bound Box port. Viewing and confirmed deletion remain available after subscription expiry.
 See the [customer-domain guide](../../docs/concepts/networking.md#bring-your-own-domain) for DNS configuration and ownership transfer.
 
 Run `make test:apps:dashboard` for page/client tests and

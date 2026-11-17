@@ -121,7 +121,7 @@ describe('Custom domains setup', () => {
         'Target type',
         'Associated with',
         'Port',
-        'Status',
+        'Actions',
       ])
       const row = button('Manage app.example.com').closest('tr')!
       expect([...row.querySelectorAll('td')].slice(1, 4).map((cell) => cell.textContent)).toEqual(cells)
@@ -638,13 +638,31 @@ describe('Custom domains setup', () => {
     expect(api.listCustomDomains).toHaveBeenCalledTimes(1)
   })
 
-  it('binds a ready hostname using the existing Box target operation', async () => {
+  it.each([null, { type: 'box', box: 'box-1', port: 8080 }] satisfies HeldDomain['target'][])(
+    'shows DNS details without binding controls for target %j',
+    async (target) => {
+      held = [{ hostname: domain.hostname, url: `https://${domain.hostname}`, target }]
+      await render()
+      await click('Manage app.example.com')
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('HTTPS is ready.')
+      expect(document.querySelector('input[aria-label="Box ID or name"]')).toBeNull()
+      expect(document.querySelector('input[aria-label="Port"]')).toBeNull()
+      expect(button('Bind')).toBeUndefined()
+      expect(button('Unbind')).toBeUndefined()
+      expect(api.bindDomain).not.toHaveBeenCalled()
+      expect(api.unbindDomain).not.toHaveBeenCalled()
+      expect(button('Delete configuration')).toBeDefined()
+    },
+  )
+
+  it.each([true, false])('copies the list hostname with success=%s feedback', async (success) => {
+    feedback.copy.mockResolvedValue(success)
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
-    input('Box ID or name', 'my-box')
-    input('Port', '8080')
-    await click('Bind')
-    expect(api.bindDomain).toHaveBeenCalledWith('org-1', 'app.example.com', 'my-box', 8080)
+    await click('Copy app.example.com')
+    expect(feedback.copy).toHaveBeenCalledWith(domain.hostname)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    if (success) expect(feedback.success).toHaveBeenCalledWith('Domain copied')
+    else expect(feedback.error).toHaveBeenCalledWith('Could not copy domain. Select the hostname and copy it manually.')
   })
 
   it('shows DNS verification progress and only acknowledges confirmed submission', async () => {
@@ -803,7 +821,7 @@ describe('Custom domains setup', () => {
     expect(api.createCustomDomain).not.toHaveBeenCalled()
   })
 
-  it('does not allow a superseded application to verify or bind again', async () => {
+  it('does not allow a superseded application to verify again', async () => {
     response.domains = [{ ...domain, ready: false, phase: 'superseded', errorCode: 'domain_superseded' }]
     await render()
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
@@ -952,7 +970,7 @@ describe('Custom domains setup', () => {
     expect(api.advanceCustomDomain).not.toHaveBeenCalled()
   })
 
-  it('allows unbind and explicit deletion after subscription expiry while retaining DNS guidance', async () => {
+  it('allows explicit deletion after subscription expiry while retaining DNS guidance', async () => {
     response.subscription = 'required'
     held = [
       { hostname: domain.hostname, url: `https://${domain.hostname}`, target: { type: 'box', box: 'box-1', port: 80 } },
@@ -960,9 +978,9 @@ describe('Custom domains setup', () => {
     await render()
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
     expect(button('Continue HTTPS setup')).toBeUndefined()
-    expect(button('Bind').disabled).toBe(true)
-    await click('Unbind')
-    expect(api.unbindDomain).toHaveBeenCalledWith('org-1', domain.hostname)
+    expect(button('Bind')).toBeUndefined()
+    expect(button('Unbind')).toBeUndefined()
+    expect(api.unbindDomain).not.toHaveBeenCalled()
     await click('Delete configuration')
     expect(api.deleteCustomDomain).not.toHaveBeenCalled()
     await click('Confirm deletion')
