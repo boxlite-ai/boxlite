@@ -36,6 +36,7 @@ How to build, test, and change the code.
 Dated root-cause analyses and design studies, newest first.
 
 - 2026-11-17 · [Free trial with automatic conversion design](investigations/2026-11-17-free-trial-auto-conversion-design.md): Commerce/Stripe lifecycle, safety invariants, compatibility, and deterministic payment testing.
+- 2026-11-17 · [Free trial dev manual testing](investigations/2026-11-17-free-trial-dev-manual-testing.md): card setup, trial activation, dev time travel, paid conversion, and negative paths.
 - 2026-11-17 · [Free trial with automatic conversion requirements](investigations/2026-11-17-free-trial-auto-conversion-requirements.md): first-subscription eligibility, cancellation, paid conversion, payment failure, and related-issue boundaries.
 - 2026-11-13 · [Runner data-disk performance scaling](investigations/2026-11-13-runner-data-disk-performance-scaling.md): expansion raises provisioned IOPS/throughput proportionally, clipped to the per-disk ceiling; capacity never waits for performance.
 - 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
