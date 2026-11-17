@@ -318,6 +318,36 @@ Local status reports the same durable snapshot in `persisted` and `runtime_persi
 Absent pending and observation-error fields are omitted; an existing pending revision remains a string.
 HTTP tests exercise the actual API-key middleware and verify denied requests cannot reach Box lookup or Runtime control.
 
+### Cloud-to-Runner control adapter
+
+`RunnerOutboundControl` uses the dedicated snapshot and status resources through the assigned Runner's existing control endpoint and bearer credential.
+It never retries a versioned operation through the unconditional policy route.
+
+```mermaid
+flowchart LR
+    C[Cloud coordinator] -->|Expected revision and full candidate| A[RunnerOutboundControl]
+    A -->|Authenticated snapshot PUT or status GET| R[Assigned Runner]
+    R -->|Revision-aware SDK and FFI| T[Runtime]
+    T -->|Snapshot or refusal| R
+    R -->|HTTP response| A
+    A -->|Verified result or classified failure| C
+```
+
+Only HTTP 200 with the exact strong candidate ETag and complete matching policy acknowledges replacement.
+HTTP 412 is a distinct precondition outcome; bare 404, 405, or 501 reports unsupported control.
+
+Status requires `revision-v1`, valid complete snapshots, and an explicit application phase.
+Runtime confirmation requires matching persisted and observed snapshots, a confirmed observation, and no pending revision or observation error.
+
+For example, a live `rev-b` with unfinished Runtime persistence remains pending or uncertain, even when its policy matches.
+This adapter validates Runtime completion; the Cloud coordinator must additionally compare its own durable state.
+
+Every HTTP call has a ten-second deadline including response-body consumption and a 64 KiB response limit.
+Redirects are rejected, and public errors omit endpoint credentials and upstream diagnostics.
+
+`make test:apps:api TEST_FILES=runner-adapter/outbound-control.spec` exercises actual loopback HTTP, including stalled bodies and invalid acknowledgements.
+The fixture models a Runner control peer; it does not boot a guest VM.
+
 ### Runtime readback and coordinator recovery
 
 `NetworkHandle::outbound_status` compares a durable snapshot with the backend's observed snapshot and installation phase.
