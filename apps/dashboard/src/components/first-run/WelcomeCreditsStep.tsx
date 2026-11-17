@@ -179,7 +179,7 @@ export default function WelcomeCreditsStep({
         {!ready && isOwner && (
           <>
             <p className="mt-5 text-meta leading-5 text-muted-foreground">
-              No verification fee. No paid plan is activated.
+              We place a temporary $0.50 hold, which is released automatically after verification. No paid plan is activated.
             </p>
             {(checkoutStarted || wallet.isError) && (
               <button
