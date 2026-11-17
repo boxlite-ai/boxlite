@@ -8,7 +8,7 @@ type BenefitGroup = { title: string; rows: BenefitRow[] }
 
 export const PLAN_PRESENTATION = [
   { name: 'Pay as you go', priceCents: 0, bonusCents: null },
-  { name: 'Starter', priceCents: 499, bonusCents: 2000 },
+  { name: 'Starter', priceCents: 500, bonusCents: 2000 },
   { name: 'Team', priceCents: 10000, bonusCents: 40000 },
 ] as const
 
