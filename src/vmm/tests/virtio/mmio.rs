@@ -884,14 +884,14 @@ fn the_transport_claims_a_four_kib_window() {
 }
 
 #[test]
-fn slots_hand_out_consecutive_windows_and_lines_until_exhausted() {
+fn slots_hand_out_consecutive_windows_and_skip_the_rtc_line_until_exhausted() {
     let mut slots = Slots::new();
     for index in 0..Slots::CAPACITY {
         let slot = slots.take().unwrap();
         assert_eq!(slot.base, 0xd000_0000 + u64::from(index) * MMIO_WINDOW_LEN);
-        assert_eq!(slot.gsi, 5 + index);
+        assert_eq!(slot.gsi, if index < 3 { 5 + index } else { 6 + index });
     }
-    assert_eq!(Slots::CAPACITY, 19);
+    assert_eq!(Slots::CAPACITY, 18);
     assert!(matches!(slots.take(), Err(Error::VirtioSlotsExhausted)));
     assert_eq!(
         Error::VirtioSlotsExhausted.to_string(),
