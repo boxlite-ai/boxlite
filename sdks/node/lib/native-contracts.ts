@@ -576,7 +576,7 @@ export interface JsMountInfo {
   target: string;
   readOnly: boolean;
   /** `mounted` or `detaching` (a removal that has not fully converged). */
-  state: string;
+  state: "mounted" | "detaching";
 }
 
 export interface JsMountsHandle {

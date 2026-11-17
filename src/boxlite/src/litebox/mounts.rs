@@ -96,7 +96,7 @@ pub enum MountState {
 }
 
 /// A delivery request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MountRequest {
     /// Host directory to deliver. Must be a real directory; symlinks are
     /// refused at open.
@@ -315,9 +315,32 @@ impl MountCoordinator {
         info: MountInfo,
         open: OpenSource,
     ) -> BoxliteResult<MountInfo> {
-        control.begin().map_err(|error| {
-            BoxliteError::Internal(format!("transaction admission failed: {error}"))
+        let mut admitted = control.try_clone().map_err(|error| {
+            BoxliteError::Internal(format!("clone the control connection: {error}"))
         })?;
+        tokio::task::spawn_blocking(move || admitted.begin())
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("admission task: {error}")))?
+            .map_err(|error| {
+                BoxliteError::Internal(format!("transaction admission failed: {error}"))
+            })?;
+        // Admission is granted per connection and this connection stays open
+        // for the whole transaction, so any earlier transaction has fully
+        // committed or rolled back before the check below: re-check the
+        // target here, where a concurrent add can no longer race it. The
+        // pre-transaction check alone lets two adds of one target both pass.
+        if self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|record| record.info.target == request.target)
+        {
+            return Err(BoxliteError::InvalidState(format!(
+                "a mount already exists at {:?}",
+                request.target
+            )));
+        }
         // Stage 1a: obtain the source descriptor. The plain open refuses
         // files and symlinked sources before any descriptor leaves this
         // process; a pinned descriptor skips the re-open by contract.
@@ -361,14 +384,22 @@ impl MountCoordinator {
         // Stage 1c: the record becomes visible before the guest RPC, so a
         // cancelled or timed-out caller can still observe and converge it.
         // The shim is the authority: a fresh client recovers from it.
-        control
-            .record(ControlMount {
-                export: export.clone(),
-                info: record_info.clone(),
+        let mut recorder = control.try_clone().map_err(|error| {
+            BoxliteError::Internal(format!("clone the control connection: {error}"))
+        })?;
+        let record_export = export.clone();
+        let record_info_copy = record_info.clone();
+        tokio::task::spawn_blocking(move || {
+            recorder.record(ControlMount {
+                export: record_export,
+                info: record_info_copy,
             })
-            .map_err(|error| {
-                BoxliteError::Storage(format!("record the mount with the shim: {error}"))
-            })?;
+        })
+        .await
+        .map_err(|error| BoxliteError::Internal(format!("record task: {error}")))?
+        .map_err(|error| {
+            BoxliteError::Storage(format!("record the mount with the shim: {error}"))
+        })?;
         self.records.lock().unwrap().push(MountRecord {
             export: export.clone(),
             info: record_info,
@@ -393,7 +424,13 @@ impl MountCoordinator {
         if let Some(error) = guest_error {
             // Roll the registration back: the mount never became visible.
             let rollback = self.retire(&mut control, &export).await;
-            let forget = control.forget(export.clone());
+            let mut forgetter = control.try_clone().map_err(|error| {
+                BoxliteError::Internal(format!("clone the control connection: {error}"))
+            })?;
+            let forget_export = export.clone();
+            let forget = tokio::task::spawn_blocking(move || forgetter.forget(forget_export))
+                .await
+                .map_err(|error| BoxliteError::Internal(format!("forget task: {error}")));
             let dropped = export.clone();
             self.records
                 .lock()
@@ -402,7 +439,7 @@ impl MountCoordinator {
             rollback?;
             forget.map_err(|error| {
                 BoxliteError::Storage(format!("forget the shim record: {error}"))
-            })?;
+            })??;
             return Err(error);
         }
         Ok(info)
@@ -445,9 +482,15 @@ impl MountCoordinator {
         guest: &mut dyn GuestMounts,
         target: PathBuf,
     ) -> BoxliteResult<()> {
-        control.begin().map_err(|error| {
-            BoxliteError::Internal(format!("transaction admission failed: {error}"))
+        let mut admitted = control.try_clone().map_err(|error| {
+            BoxliteError::Internal(format!("clone the control connection: {error}"))
         })?;
+        tokio::task::spawn_blocking(move || admitted.begin())
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("admission task: {error}")))?
+            .map_err(|error| {
+                BoxliteError::Internal(format!("transaction admission failed: {error}"))
+            })?;
         let record = {
             let mut records = self.records.lock().unwrap();
             let index = records
@@ -484,8 +527,13 @@ impl MountCoordinator {
             return Err(error);
         }
         retire?;
-        control
-            .forget(record.export.clone())
+        let mut forgetter = control.try_clone().map_err(|error| {
+            BoxliteError::Internal(format!("clone the control connection: {error}"))
+        })?;
+        let forget_export = record.export.clone();
+        tokio::task::spawn_blocking(move || forgetter.forget(forget_export))
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("forget task: {error}")))?
             .map_err(|error| BoxliteError::Storage(format!("forget the shim record: {error}")))?;
         // Stage 3: the record goes away with the mount, by its incarnation.
         let export = record.export;
@@ -537,15 +585,18 @@ impl MountCoordinator {
             if records.iter().any(|record| record.export == mount.export) {
                 continue;
             }
-            let highest = self.next_export.load(Ordering::Relaxed).max(
+            // fetch_max keeps this bump atomic against a concurrent add's
+            // fetch_add between the read and the write, so a recovered name
+            // never falls back and collides with an in-flight export.
+            self.next_export.fetch_max(
                 mount
                     .export
                     .trim_start_matches("boxlite-m")
                     .parse()
                     .unwrap_or(0)
                     + 1,
+                Ordering::Relaxed,
             );
-            self.next_export.store(highest, Ordering::Relaxed);
             records.push(MountRecord {
                 export: mount.export,
                 info: mount.info,

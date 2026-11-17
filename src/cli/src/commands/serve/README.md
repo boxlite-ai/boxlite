@@ -144,7 +144,7 @@ other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 | POST   | `/v1/boxes/{box_id}/mounts`                     | `mounts::add_mount`    | Deliver a host directory into the running box (201) |
 | GET    | `/v1/boxes/{box_id}/mounts`                     | `mounts::list_mounts`  | List every runtime mount                          |
 | GET    | `/v1/boxes/{box_id}/mounts/by-target?target=…`  | `mounts::get_mount`    | One mount by container target (404 when absent)   |
-| DELETE | `/v1/boxes/{box_id}/mounts/by-target?target=…`  | `mounts::remove_mount` | Lazy detach; idempotent (204)                     |
+| DELETE | `/v1/boxes/{box_id}/mounts/by-target?target=…`  | `mounts::remove_mount` | Lazy detach (204; 404 NotFoundError when absent)   |
 
 The container target travels as the `target` query parameter — `/` in it never
 becomes a routing segment. Without `target` both `by-target` routes answer

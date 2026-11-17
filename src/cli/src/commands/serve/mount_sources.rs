@@ -59,8 +59,11 @@ fn open_beneath(root: &File, path: &Path) -> anyhow::Result<File> {
     let how = OpenHow {
         flags: (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
         mode: 0,
-        // RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS.
-        resolve: 0x08 | 0x04 | 0x02,
+        // RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS
+        // | RESOLVE_NO_XDEV — a source may not cross a mount boundary, so
+        // grafts (bind mounts, tmpfs, network mounts) inside a granted tree
+        // fail closed instead of widening the grant.
+        resolve: 0x08 | 0x04 | 0x02 | 0x01,
     };
     // SAFETY: both pointers reference live, initialized syscall arguments;
     // successful openat2 returns a fresh descriptor owned by this File.

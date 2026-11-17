@@ -675,9 +675,9 @@ impl BoxBackend for RestBox {
     }
 
     async fn mounts_add(&self, request: crate::MountRequest) -> BoxliteResult<crate::MountInfo> {
-        self.client.post(&format!("/boxes/{}/mounts", self.box_id_str()), &serde_json::json!({
-            "source": request.source, "target": request.target, "read_only": request.read_only,
-        })).await
+        self.client
+            .post(&format!("/boxes/{}/mounts", self.box_id_str()), &request)
+            .await
     }
 
     async fn mounts_remove(&self, target: &Path) -> BoxliteResult<()> {
