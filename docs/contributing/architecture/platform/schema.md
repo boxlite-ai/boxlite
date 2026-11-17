@@ -665,6 +665,9 @@ the persisted JSONB arrays.
 One data-disk expansion attempt per row, created by pre-deploy migration
 `1794528002000-add-runner-disk-expansion`. Written only by the runner-disk-expansion
 cron (`runner-disk-expansion.service.ts`); everything else reads it.
+Expansion is enabled by default; setting `RUNNER_DISK_EXPANSION_ENABLED=false`
+stops that cron and its sampling. Existing `disk_expand_exhausted` marks are
+not lifted while it is off.
 
 The disk identity the controller expands is the runner's own report
 (`dataDiskRef`, refreshed on each heartbeat that carries it). The API records
