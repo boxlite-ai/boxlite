@@ -133,6 +133,54 @@ The crash check stops the coordinator after a matching acknowledgement and befor
 Repeat with gvproxy surviving the coordinator, then with gvproxy restarting too.
 Reconcile observed and persisted revisions or expose uncertainty; never label a stale stored revision as confirmed live state.
 
+## Application and recovery timing
+
+The coordinator marks application pending before publication or a NIC transition.
+The following sequence expresses the application and recovery contract above; it is an implementation target.
+
+```mermaid
+sequenceDiagram
+    participant C as Coordinator
+    participant S as gvproxy snapshot
+    participant N as Guest NIC
+    participant D as Persistence
+    Note over C,S: Complete candidate is validated and compiled
+    C->>S: Mark application pending
+    alt Disable
+        C->>S: Publish disabled snapshot
+        C->>N: Suspend NIC
+    else Enable
+        Note over S,N: Keep disabled snapshot during NIC enabling
+        C->>N: Enable NIC
+    else Enabled-to-enabled replacement
+        C->>S: Publish candidate once
+    end
+    alt Mode transition fails
+        Note over C,N: Retain disabled gate; report uncertainty without confirmation
+    else Publication or transition succeeds
+        opt Enabling
+            C->>S: Publish enabled candidate after NIC enabling succeeds
+        end
+        alt Exact candidate application confirmed
+            S-->>C: Acknowledgement or readback identifies exact installed candidate
+            C->>D: Persist candidate
+            alt Persistence succeeds
+                Note over C,D: Application and persistence confirmed
+            else Persistence fails
+                C->>S: Conditional compensation against candidate with fresh token
+                C->>D: Persist restoration if application confirmed
+                Note over C,D: Unconfirmed restoration or persistence remains uncertain
+            end
+        else Application unresolved
+            C->>S: Bounded readback after acknowledgement timeout
+            S-->>C: Expected revision observed; application may still be running
+            Note over C,S: Old-revision readback cannot prove rejection while request can still apply
+            Note over C,S: Remain uncertain until request completion or fencing is established
+            Note over C,D: Preserve uncertainty; no blind replay or compensation
+        end
+    end
+```
+
 ## Shared examples and evidence
 
 `tests/fixtures/outbound/contract-v1.json` separates current policy examples from versioned replacement and connection-boundary examples.

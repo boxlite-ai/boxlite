@@ -147,6 +147,8 @@ Restoration uses a fresh revision rather than reusing an old token, preventing s
 If compensation or its persistence cannot be confirmed, retain diagnostic context and expose uncertainty through live status readback.
 When the database itself is unavailable, durable status cannot be promised; return failure and require readback after recovery.
 
+See the [application and recovery timing visual](../architecture/outbound-contract.md#application-and-recovery-timing) for named actors, NIC publication order, delayed application, and conditional compensation.
+
 ## Validation
 
 Source inspection is complete; implementation and traffic validation below are planned.
