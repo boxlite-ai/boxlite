@@ -652,6 +652,41 @@ See the [customer-domain guide](../../docs/concepts/networking.md#bring-your-own
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.
 
+## Sidebar billing summary
+
+The desktop sidebar shows one funding summary above Quickstart: remaining plan
+allowance while funded, otherwise the wallet balance. Subscription-only accounts
+do not see an empty wallet row. When allowance is exhausted and the wallet has
+funds, a short note explains the switch. Exhausted or canceled plans fall back
+to Wallet even when its balance is zero. Overdrawn wallets take priority.
+Unsubscribed accounts show the actual wallet balance, including a new account
+with no funds. The summary does not infer separate promotional credit totals,
+remaining grant amounts, or a registration reward. Finite allowance usage uses the shared
+ASCII segmented bar without decorative brackets; wallet-only accounts have
+no progress bar because the balance has no fixed allowance denominator. It shares the existing owner-only billing queries and
+opens the existing Billing page. Compact navigation uses a billing icon with a
+balance tooltip. Missing billing configuration and non-owner membership hide the
+summary; loading and failed requests do not display a fabricated zero balance.
+Wallet warnings reuse the Billing page's existing allowance and auto-reload rules.
+
+The summary reads `GET /organization/:id/wallet` (`ongoingBalanceCents`,
+`automaticTopUp`) and `GET /organization/:id/plan` (`planName`, `status`,
+`includedQuotaCents`, `quotaRemainingCents`). An empty plan response means no
+subscription; a null allowance means unlimited. Both queries are scoped to the
+selected organization and owner membership. Previous-organization placeholder
+responses stay hidden until both current-organization reads finish.
+
+Use `/dashboard/boxes?preview=new-user` for an unsubscribed new account with
+zero wallet balance and no Boxes. Existing onboarding and payment flows are unchanged.
+These billing fixtures persist through client-side navigation; reload a URL without
+a preview parameter to restore defaults.
+
+In the local mock preview, use `?preview=balance-subscription` for subscription-only,
+`?preview=balance-wallet` for wallet-only, or `?preview=balance-wallet-fallback`
+for an exhausted plan with wallet funding. Use `?preview=balance-empty` for exhausted wallet and
+plan allowance, or `?preview=balance-error` for a failed wallet read. These fixtures
+and the sidebar require no backend changes or new endpoints.
+
 ## Neutral dark surfaces
 
 Dark structural surfaces use zero-saturation gray: page background 4% lightness,

@@ -55,6 +55,9 @@ import {
 
 const BILLING_API_URL = `${window.location.origin}/api/billing`
 const API_URL = import.meta.env.VITE_API_URL
+// Keep the selected billing fixture through client-side onboarding/navigation.
+const billingPreview = new URLSearchParams(window.location.search).get('preview')
+const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-user-unfunded'
 
 // Quickstart's agent handoff waits for a box created after it handed the key
 // over, then for that box enabling inbound access. Static fixtures can reach neither
@@ -63,16 +66,16 @@ const API_URL = import.meta.env.VITE_API_URL
 function quickstartHandoffDemoBox() {
   const stage = globalThis.localStorage?.getItem('qs-publish-demo')
   if (stage !== 'created' && stage !== 'published') return null
-  return {
-    ...MOCK_BOXES[0],
+  return buildBox({
     id: 'mock-box-agent',
     name: 'agile-otter',
+    state: BoxState.STARTED,
     createdAt: new Date().toISOString(),
     network: {
       outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
       inbound: { mode: stage === 'published' ? NetworkMode.ENABLED : NetworkMode.DISABLED, allow_net: [] },
     },
-  }
+  })
 }
 
 /** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
@@ -94,7 +97,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 
 export const handlers = [
   ...resourceStateHandlers(API_URL),
-  ...ciHandlers(),
+  ...ciHandlers(newUserPreview),
   ...sshHandlers,
   ...tunnelHandlers,
   ...domainHandlers(),
@@ -566,18 +569,21 @@ export const handlers = [
     ])
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/wallet`, async () => {
+    const preview = billingPreview
+    if (preview === 'balance-error') return new HttpResponse(null, { status: 503 })
     return HttpResponse.json<OrganizationWallet>({
-      balanceCents: 1000,
-      ongoingBalanceCents: 1000,
+      balanceCents: newUserPreview ? 0 : 1000,
+      ongoingBalanceCents:
+        newUserPreview || ['balance-empty', 'balance-subscription'].includes(preview ?? '') ? 0 : 1000,
       name: 'Wallet',
-      creditCardConnected: true,
+      creditCardConnected: !newUserPreview,
       automaticTopUp: undefined,
-      creditGrantedCents: 10_000,
-      creditRemainingCents: 1_000,
       usageChargeMultiplier: '1.0000',
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
+    if (newUserPreview)
+      return HttpResponse.json({ paymentMethods: [], meta: { currentPage: 1, totalPages: 0, totalCount: 0 } })
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
@@ -613,6 +619,9 @@ export const handlers = [
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
+    const preview = billingPreview
+    if (newUserPreview || preview === 'balance-wallet') return HttpResponse.json({})
+    const empty = preview === 'balance-empty' || preview === 'balance-wallet-fallback'
     // Mirrors the billing service's own mock seed: pro, a quarter used,
     // pinned mid-cycle so the meter renders deterministically. The real
     // route wraps this in a `plan` key ({} means no live plan), never a
@@ -625,8 +634,8 @@ export const handlers = [
         cycleFrom: new Date(Date.UTC(2026, 7, 5)),
         cycleTo: new Date(Date.UTC(2026, 8, 5)),
         includedQuotaCents: 25000,
-        quotaConsumedCents: 6250,
-        quotaRemainingCents: 18750,
+        quotaConsumedCents: empty ? 25000 : 6250,
+        quotaRemainingCents: empty ? 0 : 18750,
       },
     })
   }),
@@ -994,3 +1003,10 @@ export const handlers = [
     })
   }),
 ]
+
+// Reset after every handler factory has seeded its resources, including CI runners.
+if (newUserPreview) {
+  MOCK_BOXES.splice(0)
+  MOCK_PAGINATED_BOXES.items = MOCK_BOXES
+  MOCK_PAGINATED_BOXES.total = 0
+}

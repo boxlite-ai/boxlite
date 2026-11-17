@@ -5,6 +5,7 @@
  */
 
 import { NavigationIcon, type NavigationIconName } from '@/components/NavigationIcon'
+import { SidebarBalance } from '@/components/billing/SidebarBalance'
 import { LogoText } from '@/assets/Logo'
 import {
   DropdownMenu,
@@ -622,6 +623,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             </div>
           </nav>
           <div className="flex w-full shrink-0 flex-col items-center gap-2 px-2 pt-2">
+            <SidebarBalance expanded={showLabels} />
             <Tooltip {...navigationTooltipProps('Quickstart')}>
               <TooltipTrigger asChild>
                 <button
