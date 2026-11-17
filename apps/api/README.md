@@ -637,6 +637,12 @@ Design: [Account-first CI connect](https://linear.app/polygala/issue/BUI-1511/gi
 
 ## Administrator CI connections (in development)
 
+These platform-admin routes appear under the `admin` Swagger tag and in the
+generated [Cloud OpenAPI aggregate](../libs/api-client-go/api/openapi.yaml).
+The generated TypeScript and Go admin clients expose lookup, list, create, update
+and delete operations. Request/response DTOs own this contract; regenerate clients
+with the existing API-client drift workflow after changing it.
+
 Platform administrators can connect an installed GitHub CI App directly to the
 BoxLite organization that supplies workers, quota and billing. No GitHub user OAuth
 or BoxLite organization membership is required. Administrator API keys retain their
@@ -668,6 +674,8 @@ Content-Type: application/json
 ```
 
 An existing connection returns `409`, even for the same target or disabled history.
+Conflicts retain the current mapping in `connection`, or at most two ambiguous
+mappings in `connections`, through the production exception handling path.
 First inspect `GET /api/admin/ci/connections?account_type=User&github_account=alice`.
 To replace the observed mapping, repeat POST with `force:true`, its
 `expected_binding_id` and `expected_generation`; successful replacement returns

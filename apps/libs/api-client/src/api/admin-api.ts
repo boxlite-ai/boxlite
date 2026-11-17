@@ -26,6 +26,18 @@ import type { AdminBoxDetail } from '../models';
 // @ts-ignore
 import type { AdminBoxOverviewPage } from '../models';
 // @ts-ignore
+import type { AdminCiConnection } from '../models';
+// @ts-ignore
+import type { AdminCiConnectionCreate } from '../models';
+// @ts-ignore
+import type { AdminCiConnectionError } from '../models';
+// @ts-ignore
+import type { AdminCiConnectionPage } from '../models';
+// @ts-ignore
+import type { AdminCiConnectionUpdate } from '../models';
+// @ts-ignore
+import type { AdminCiConnectionVersion } from '../models';
+// @ts-ignore
 import type { AdminComponentIdentities } from '../models';
 // @ts-ignore
 import type { AdminCreateRunner } from '../models';
@@ -65,6 +77,51 @@ import type { MemoryIncidentListDto } from '../models';
 export const AdminApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
+         * Uses App authentication, without GitHub user OAuth or either organization ownership. Defaults to conflict for any retained mapping. force:true requires observed expected_binding_id and expected_generation; omit both otherwise. New creation returns 201; replacement returns 200.
+         * @summary Bind an installed GitHub CI App to a billing organization
+         * @param {string} organizationId 
+         * @param {AdminCiConnectionCreate} adminCiConnectionCreate 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminCreateCiConnection: async (organizationId: string, adminCiConnectionCreate: AdminCiConnectionCreate, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminCreateCiConnection', 'organizationId', organizationId)
+            // verify required parameter 'adminCiConnectionCreate' is not null or undefined
+            assertParamExists('adminCreateCiConnection', 'adminCiConnectionCreate', adminCiConnectionCreate)
+            const localVarPath = `/admin/organizations/{organizationId}/ci/connections`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(adminCiConnectionCreate, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * 
          * @summary Create runner
          * @param {AdminCreateRunner} adminCreateRunner 
@@ -99,6 +156,55 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(adminCreateRunner, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * The JSON body must contain expected_generation. Retains original workers and cleanup identities; stale versions return 409 without mutation.
+         * @summary Disable a CI connection with an observed version
+         * @param {string} organizationId 
+         * @param {string} bindingId 
+         * @param {AdminCiConnectionVersion} adminCiConnectionVersion 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminDeleteCiConnection: async (organizationId: string, bindingId: string, adminCiConnectionVersion: AdminCiConnectionVersion, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminDeleteCiConnection', 'organizationId', organizationId)
+            // verify required parameter 'bindingId' is not null or undefined
+            assertParamExists('adminDeleteCiConnection', 'bindingId', bindingId)
+            // verify required parameter 'adminCiConnectionVersion' is not null or undefined
+            assertParamExists('adminDeleteCiConnection', 'adminCiConnectionVersion', adminCiConnectionVersion)
+            const localVarPath = `/admin/organizations/{organizationId}/ci/connections/{bindingId}`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)))
+                .replace('{bindingId}', encodeURIComponent(String(bindingId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'DELETE', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(adminCiConnectionVersion, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -496,6 +602,56 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary List retained CI connections for an organization
+         * @param {string} organizationId 
+         * @param {string} [cursor] Last binding ID from the previous page.
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListCiConnections: async (organizationId: string, cursor?: string, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminListCiConnections', 'organizationId', organizationId)
+            const localVarPath = `/admin/organizations/{organizationId}/ci/connections`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary List jobs with sanitized failure categories
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
@@ -837,6 +993,69 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
+         * Requires account_type and exactly one of github_account or github_account_id. Includes disabled history. No organization membership or Box key scopes are required.
+         * @summary Find CI billing destinations for an exact GitHub account
+         * @param {AdminLookupCiConnectionsAccountTypeEnum} accountType 
+         * @param {string} [cursor] Last binding ID from the previous page.
+         * @param {number} [limit] 
+         * @param {string} [githubAccount] Exact case-insensitive login; supply this or github_account_id, exclusively.
+         * @param {string} [githubAccountId] Stable GitHub account ID as a decimal string; mutually exclusive with github_account.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminLookupCiConnections: async (accountType: AdminLookupCiConnectionsAccountTypeEnum, cursor?: string, limit?: number, githubAccount?: string, githubAccountId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'accountType' is not null or undefined
+            assertParamExists('adminLookupCiConnections', 'accountType', accountType)
+            const localVarPath = `/admin/ci/connections`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (accountType !== undefined) {
+                localVarQueryParameter['account_type'] = accountType;
+            }
+
+            if (githubAccount !== undefined) {
+                localVarQueryParameter['github_account'] = githubAccount;
+            }
+
+            if (githubAccountId !== undefined) {
+                localVarQueryParameter['github_account_id'] = githubAccountId;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * 
          * @summary Query recorded resource usage with fixed snapshot pagination
          * @param {string} to Exclusive RFC 3339 instant, no later than now.
@@ -1015,6 +1234,55 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Update CI private-repository policy with an observed version
+         * @param {string} organizationId 
+         * @param {string} bindingId 
+         * @param {AdminCiConnectionUpdate} adminCiConnectionUpdate 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminUpdateCiConnection: async (organizationId: string, bindingId: string, adminCiConnectionUpdate: AdminCiConnectionUpdate, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminUpdateCiConnection', 'organizationId', organizationId)
+            // verify required parameter 'bindingId' is not null or undefined
+            assertParamExists('adminUpdateCiConnection', 'bindingId', bindingId)
+            // verify required parameter 'adminCiConnectionUpdate' is not null or undefined
+            assertParamExists('adminUpdateCiConnection', 'adminCiConnectionUpdate', adminCiConnectionUpdate)
+            const localVarPath = `/admin/organizations/{organizationId}/ci/connections/{bindingId}`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)))
+                .replace('{bindingId}', encodeURIComponent(String(bindingId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PATCH', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(adminCiConnectionUpdate, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -1062,6 +1330,20 @@ export const AdminApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = AdminApiAxiosParamCreator(configuration)
     return {
         /**
+         * Uses App authentication, without GitHub user OAuth or either organization ownership. Defaults to conflict for any retained mapping. force:true requires observed expected_binding_id and expected_generation; omit both otherwise. New creation returns 201; replacement returns 200.
+         * @summary Bind an installed GitHub CI App to a billing organization
+         * @param {string} organizationId 
+         * @param {AdminCiConnectionCreate} adminCiConnectionCreate 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminCreateCiConnection(organizationId: string, adminCiConnectionCreate: AdminCiConnectionCreate, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminCiConnection>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminCreateCiConnection(organizationId, adminCiConnectionCreate, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminCreateCiConnection']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * 
          * @summary Create runner
          * @param {AdminCreateRunner} adminCreateRunner 
@@ -1072,6 +1354,21 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminCreateRunner(adminCreateRunner, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminCreateRunner']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * The JSON body must contain expected_generation. Retains original workers and cleanup identities; stale versions return 409 without mutation.
+         * @summary Disable a CI connection with an observed version
+         * @param {string} organizationId 
+         * @param {string} bindingId 
+         * @param {AdminCiConnectionVersion} adminCiConnectionVersion 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminDeleteCiConnection(organizationId: string, bindingId: string, adminCiConnectionVersion: AdminCiConnectionVersion, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminDeleteCiConnection(organizationId, bindingId, adminCiConnectionVersion, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminDeleteCiConnection']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1199,6 +1496,21 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary List retained CI connections for an organization
+         * @param {string} organizationId 
+         * @param {string} [cursor] Last binding ID from the previous page.
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListCiConnections(organizationId: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminCiConnectionPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListCiConnections(organizationId, cursor, limit, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListCiConnections']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary List jobs with sanitized failure categories
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
@@ -1291,6 +1603,23 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         * Requires account_type and exactly one of github_account or github_account_id. Includes disabled history. No organization membership or Box key scopes are required.
+         * @summary Find CI billing destinations for an exact GitHub account
+         * @param {AdminLookupCiConnectionsAccountTypeEnum} accountType 
+         * @param {string} [cursor] Last binding ID from the previous page.
+         * @param {number} [limit] 
+         * @param {string} [githubAccount] Exact case-insensitive login; supply this or github_account_id, exclusively.
+         * @param {string} [githubAccountId] Stable GitHub account ID as a decimal string; mutually exclusive with github_account.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminLookupCiConnections(accountType: AdminLookupCiConnectionsAccountTypeEnum, cursor?: string, limit?: number, githubAccount?: string, githubAccountId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminCiConnectionPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminLookupCiConnections(accountType, cursor, limit, githubAccount, githubAccountId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminLookupCiConnections']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * 
          * @summary Query recorded resource usage with fixed snapshot pagination
          * @param {string} to Exclusive RFC 3339 instant, no later than now.
@@ -1342,6 +1671,21 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Update CI private-repository policy with an observed version
+         * @param {string} organizationId 
+         * @param {string} bindingId 
+         * @param {AdminCiConnectionUpdate} adminCiConnectionUpdate 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminUpdateCiConnection(organizationId: string, bindingId: string, adminCiConnectionUpdate: AdminCiConnectionUpdate, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminCiConnection>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminUpdateCiConnection(organizationId, bindingId, adminCiConnectionUpdate, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminUpdateCiConnection']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -1363,6 +1707,17 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
     const localVarFp = AdminApiFp(configuration)
     return {
         /**
+         * Uses App authentication, without GitHub user OAuth or either organization ownership. Defaults to conflict for any retained mapping. force:true requires observed expected_binding_id and expected_generation; omit both otherwise. New creation returns 201; replacement returns 200.
+         * @summary Bind an installed GitHub CI App to a billing organization
+         * @param {string} organizationId 
+         * @param {AdminCiConnectionCreate} adminCiConnectionCreate 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminCreateCiConnection(organizationId: string, adminCiConnectionCreate: AdminCiConnectionCreate, options?: RawAxiosRequestConfig): AxiosPromise<AdminCiConnection> {
+            return localVarFp.adminCreateCiConnection(organizationId, adminCiConnectionCreate, options).then((request) => request(axios, basePath));
+        },
+        /**
          * 
          * @summary Create runner
          * @param {AdminCreateRunner} adminCreateRunner 
@@ -1371,6 +1726,18 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminCreateRunner(adminCreateRunner: AdminCreateRunner, options?: RawAxiosRequestConfig): AxiosPromise<CreateRunnerResponse> {
             return localVarFp.adminCreateRunner(adminCreateRunner, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * The JSON body must contain expected_generation. Retains original workers and cleanup identities; stale versions return 409 without mutation.
+         * @summary Disable a CI connection with an observed version
+         * @param {string} organizationId 
+         * @param {string} bindingId 
+         * @param {AdminCiConnectionVersion} adminCiConnectionVersion 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminDeleteCiConnection(organizationId: string, bindingId: string, adminCiConnectionVersion: AdminCiConnectionVersion, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.adminDeleteCiConnection(organizationId, bindingId, adminCiConnectionVersion, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1470,6 +1837,18 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary List retained CI connections for an organization
+         * @param {string} organizationId 
+         * @param {string} [cursor] Last binding ID from the previous page.
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListCiConnections(organizationId: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminCiConnectionPage> {
+            return localVarFp.adminListCiConnections(organizationId, cursor, limit, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary List jobs with sanitized failure categories
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
@@ -1544,6 +1923,20 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminListRunners(regionId, options).then((request) => request(axios, basePath));
         },
         /**
+         * Requires account_type and exactly one of github_account or github_account_id. Includes disabled history. No organization membership or Box key scopes are required.
+         * @summary Find CI billing destinations for an exact GitHub account
+         * @param {AdminLookupCiConnectionsAccountTypeEnum} accountType 
+         * @param {string} [cursor] Last binding ID from the previous page.
+         * @param {number} [limit] 
+         * @param {string} [githubAccount] Exact case-insensitive login; supply this or github_account_id, exclusively.
+         * @param {string} [githubAccountId] Stable GitHub account ID as a decimal string; mutually exclusive with github_account.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminLookupCiConnections(accountType: AdminLookupCiConnectionsAccountTypeEnum, cursor?: string, limit?: number, githubAccount?: string, githubAccountId?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminCiConnectionPage> {
+            return localVarFp.adminLookupCiConnections(accountType, cursor, limit, githubAccount, githubAccountId, options).then((request) => request(axios, basePath));
+        },
+        /**
          * 
          * @summary Query recorded resource usage with fixed snapshot pagination
          * @param {string} to Exclusive RFC 3339 instant, no later than now.
@@ -1586,6 +1979,18 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Update CI private-repository policy with an observed version
+         * @param {string} organizationId 
+         * @param {string} bindingId 
+         * @param {AdminCiConnectionUpdate} adminCiConnectionUpdate 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminUpdateCiConnection(organizationId: string, bindingId: string, adminCiConnectionUpdate: AdminCiConnectionUpdate, options?: RawAxiosRequestConfig): AxiosPromise<AdminCiConnection> {
+            return localVarFp.adminUpdateCiConnection(organizationId, bindingId, adminCiConnectionUpdate, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -1602,6 +2007,18 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
  */
 export class AdminApi extends BaseAPI {
     /**
+     * Uses App authentication, without GitHub user OAuth or either organization ownership. Defaults to conflict for any retained mapping. force:true requires observed expected_binding_id and expected_generation; omit both otherwise. New creation returns 201; replacement returns 200.
+     * @summary Bind an installed GitHub CI App to a billing organization
+     * @param {string} organizationId 
+     * @param {AdminCiConnectionCreate} adminCiConnectionCreate 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminCreateCiConnection(organizationId: string, adminCiConnectionCreate: AdminCiConnectionCreate, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminCreateCiConnection(organizationId, adminCiConnectionCreate, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
      * 
      * @summary Create runner
      * @param {AdminCreateRunner} adminCreateRunner 
@@ -1610,6 +2027,19 @@ export class AdminApi extends BaseAPI {
      */
     public adminCreateRunner(adminCreateRunner: AdminCreateRunner, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminCreateRunner(adminCreateRunner, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * The JSON body must contain expected_generation. Retains original workers and cleanup identities; stale versions return 409 without mutation.
+     * @summary Disable a CI connection with an observed version
+     * @param {string} organizationId 
+     * @param {string} bindingId 
+     * @param {AdminCiConnectionVersion} adminCiConnectionVersion 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminDeleteCiConnection(organizationId: string, bindingId: string, adminCiConnectionVersion: AdminCiConnectionVersion, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminDeleteCiConnection(organizationId, bindingId, adminCiConnectionVersion, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1719,6 +2149,19 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary List retained CI connections for an organization
+     * @param {string} organizationId 
+     * @param {string} [cursor] Last binding ID from the previous page.
+     * @param {number} [limit] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListCiConnections(organizationId: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListCiConnections(organizationId, cursor, limit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary List jobs with sanitized failure categories
      * @param {string} [cursor] Opaque cursor returned by the previous page
      * @param {number} [limit] 
@@ -1799,6 +2242,21 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
+     * Requires account_type and exactly one of github_account or github_account_id. Includes disabled history. No organization membership or Box key scopes are required.
+     * @summary Find CI billing destinations for an exact GitHub account
+     * @param {AdminLookupCiConnectionsAccountTypeEnum} accountType 
+     * @param {string} [cursor] Last binding ID from the previous page.
+     * @param {number} [limit] 
+     * @param {string} [githubAccount] Exact case-insensitive login; supply this or github_account_id, exclusively.
+     * @param {string} [githubAccountId] Stable GitHub account ID as a decimal string; mutually exclusive with github_account.
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminLookupCiConnections(accountType: AdminLookupCiConnectionsAccountTypeEnum, cursor?: string, limit?: number, githubAccount?: string, githubAccountId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminLookupCiConnections(accountType, cursor, limit, githubAccount, githubAccountId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
      * 
      * @summary Query recorded resource usage with fixed snapshot pagination
      * @param {string} to Exclusive RFC 3339 instant, no later than now.
@@ -1844,6 +2302,19 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Update CI private-repository policy with an observed version
+     * @param {string} organizationId 
+     * @param {string} bindingId 
+     * @param {AdminCiConnectionUpdate} adminCiConnectionUpdate 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminUpdateCiConnection(organizationId: string, bindingId: string, adminCiConnectionUpdate: AdminCiConnectionUpdate, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminUpdateCiConnection(organizationId, bindingId, adminCiConnectionUpdate, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Update runner scheduling status
      * @param {string} id 
      * @param {*} [options] Override http request option.
@@ -1863,6 +2334,12 @@ export const AdminListOrganizationsOverviewIncludeEnum = {
     MEMBER_EMAILS: 'memberEmails',
 } as const;
 export type AdminListOrganizationsOverviewIncludeEnum = typeof AdminListOrganizationsOverviewIncludeEnum[keyof typeof AdminListOrganizationsOverviewIncludeEnum];
+export const AdminLookupCiConnectionsAccountTypeEnum = {
+    USER: 'User',
+    ORGANIZATION: 'Organization',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminLookupCiConnectionsAccountTypeEnum = typeof AdminLookupCiConnectionsAccountTypeEnum[keyof typeof AdminLookupCiConnectionsAccountTypeEnum];
 export const AdminQueryUsageGranularityEnum = {
     WINDOW: 'window',
     HOUR: 'hour',

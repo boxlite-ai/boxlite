@@ -4,7 +4,9 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
+|[**adminCreateCiConnection**](#admincreateciconnection) | **POST** /admin/organizations/{organizationId}/ci/connections | Bind an installed GitHub CI App to a billing organization|
 |[**adminCreateRunner**](#admincreaterunner) | **POST** /admin/runners | Create runner|
+|[**adminDeleteCiConnection**](#admindeleteciconnection) | **DELETE** /admin/organizations/{organizationId}/ci/connections/{bindingId} | Disable a CI connection with an observed version|
 |[**adminDeleteRunner**](#admindeleterunner) | **DELETE** /admin/runners/{id} | Delete runner|
 |[**adminGetBoxOverview**](#admingetboxoverview) | **GET** /admin/boxes/{id} | Get box placement, health, and jobs|
 |[**adminGetComponentIdentities**](#admingetcomponentidentities) | **GET** /admin/component-identities | Get API and runner version identities|
@@ -14,16 +16,82 @@ All URIs are relative to *http://localhost:3000*
 |[**adminGetRegion**](#admingetregion) | **GET** /admin/regions/{id} | Get region capacity and health|
 |[**adminGetRunnerById**](#admingetrunnerbyid) | **GET** /admin/runners/{id} | Get runner by ID|
 |[**adminListBoxesOverview**](#adminlistboxesoverview) | **GET** /admin/boxes | List boxes with placement and health|
+|[**adminListCiConnections**](#adminlistciconnections) | **GET** /admin/organizations/{organizationId}/ci/connections | List retained CI connections for an organization|
 |[**adminListJobsOverview**](#adminlistjobsoverview) | **GET** /admin/jobs | List jobs with sanitized failure categories|
 |[**adminListOrganizationsOverview**](#adminlistorganizationsoverview) | **GET** /admin/organizations | List organization operational summaries|
 |[**adminListRegions**](#adminlistregions) | **GET** /admin/regions | List regions with capacity and health|
 |[**adminListRunnerCpuIncidents**](#adminlistrunnercpuincidents) | **GET** /admin/runner-cpu-incidents | Query sustained runner CPU incidents by capture completion time range|
 |[**adminListRunnerMemoryIncidents**](#adminlistrunnermemoryincidents) | **GET** /admin/runner-memory-incidents | Query runner memory snapshots by host sample time range|
 |[**adminListRunners**](#adminlistrunners) | **GET** /admin/runners | List all runners|
+|[**adminLookupCiConnections**](#adminlookupciconnections) | **GET** /admin/ci/connections | Find CI billing destinations for an exact GitHub account|
 |[**adminQueryUsage**](#adminqueryusage) | **GET** /admin/usage | Query recorded resource usage with fixed snapshot pagination|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
 |[**adminSetOrganizationNestedVirtualization**](#adminsetorganizationnestedvirtualization) | **PUT** /admin/organizations/{organizationId}/nested-virtualization | Set organization nesting allowlist|
+|[**adminUpdateCiConnection**](#adminupdateciconnection) | **PATCH** /admin/organizations/{organizationId}/ci/connections/{bindingId} | Update CI private-repository policy with an observed version|
 |[**adminUpdateRunnerScheduling**](#adminupdaterunnerscheduling) | **PATCH** /admin/runners/{id}/scheduling | Update runner scheduling status|
+
+# **adminCreateCiConnection**
+> AdminCiConnection adminCreateCiConnection(adminCiConnectionCreate)
+
+Uses App authentication, without GitHub user OAuth or either organization ownership. Defaults to conflict for any retained mapping. force:true requires observed expected_binding_id and expected_generation; omit both otherwise. New creation returns 201; replacement returns 200.
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration,
+    AdminCiConnectionCreate
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; //
+let adminCiConnectionCreate: AdminCiConnectionCreate; //
+
+const { status, data } = await apiInstance.adminCreateCiConnection(
+    organizationId,
+    adminCiConnectionCreate
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **adminCiConnectionCreate** | **AdminCiConnectionCreate**|  | |
+| **organizationId** | [**string**] |  | |
+
+
+### Return type
+
+**AdminCiConnection**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**201** |  |  -  |
+|**400** | Invalid request or precondition fields. |  -  |
+|**401** | Invalid credentials. |  -  |
+|**403** | Current platform administrator authority is required. |  -  |
+|**404** | Organization or connection not found. |  -  |
+|**409** | Existing, ambiguous or stale mapping; inspect connection or connections when present and repeat lookup. |  -  |
+|**502** | GitHub installation verification unavailable. |  -  |
+|**503** | CI App unavailable or connection capacity exceeded. |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **adminCreateRunner**
 > CreateRunnerResponse adminCreateRunner(adminCreateRunner)
@@ -73,6 +141,69 @@ const { status, data } = await apiInstance.adminCreateRunner(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**201** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminDeleteCiConnection**
+> adminDeleteCiConnection(adminCiConnectionVersion)
+
+The JSON body must contain expected_generation. Retains original workers and cleanup identities; stale versions return 409 without mutation.
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration,
+    AdminCiConnectionVersion
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; //
+let bindingId: string; //
+let adminCiConnectionVersion: AdminCiConnectionVersion; //
+
+const { status, data } = await apiInstance.adminDeleteCiConnection(
+    organizationId,
+    bindingId,
+    adminCiConnectionVersion
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **adminCiConnectionVersion** | **AdminCiConnectionVersion**|  | |
+| **organizationId** | [**string**] |  | |
+| **bindingId** | [**string**] |  | |
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**204** | Connection disabled; response body is empty. |  -  |
+|**400** | Invalid request or precondition fields. |  -  |
+|**401** | Invalid credentials. |  -  |
+|**403** | Current platform administrator authority is required. |  -  |
+|**404** | Organization or connection not found. |  -  |
+|**409** | Existing, ambiguous or stale mapping; inspect connection or connections when present and repeat lookup. |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -547,6 +678,67 @@ const { status, data } = await apiInstance.adminListBoxesOverview(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
+# **adminListCiConnections**
+> AdminCiConnectionPage adminListCiConnections()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; //
+let cursor: string; //Last binding ID from the previous page. (optional) (default to undefined)
+let limit: number; // (optional) (default to 25)
+
+const { status, data } = await apiInstance.adminListCiConnections(
+    organizationId,
+    cursor,
+    limit
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] |  | |
+| **cursor** | [**string**] | Last binding ID from the previous page. | (optional) defaults to undefined|
+| **limit** | [**number**] |  | (optional) defaults to 25|
+
+
+### Return type
+
+**AdminCiConnectionPage**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**400** | Invalid request or precondition fields. |  -  |
+|**401** | Invalid credentials. |  -  |
+|**403** | Current platform administrator authority is required. |  -  |
+|**404** | Organization or connection not found. |  -  |
+|**409** | Existing, ambiguous or stale mapping; inspect connection or connections when present and repeat lookup. |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
 # **adminListJobsOverview**
 > AdminJobOverviewPage adminListJobsOverview()
 
@@ -895,6 +1087,74 @@ const { status, data } = await apiInstance.adminListRunners(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
+# **adminLookupCiConnections**
+> AdminCiConnectionPage adminLookupCiConnections()
+
+Requires account_type and exactly one of github_account or github_account_id. Includes disabled history. No organization membership or Box key scopes are required.
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let accountType: 'User' | 'Organization'; //
+let cursor: string; //Last binding ID from the previous page. (optional) (default to undefined)
+let limit: number; // (optional) (default to 25)
+let githubAccount: string; //Exact case-insensitive login; supply this or github_account_id, exclusively. (optional) (default to undefined)
+let githubAccountId: string; //Stable GitHub account ID as a decimal string; mutually exclusive with github_account. (optional) (default to undefined)
+
+const { status, data } = await apiInstance.adminLookupCiConnections(
+    accountType,
+    cursor,
+    limit,
+    githubAccount,
+    githubAccountId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **accountType** | [**&#39;User&#39; &#124; &#39;Organization&#39;**] |  | |
+| **cursor** | [**string**] | Last binding ID from the previous page. | (optional) defaults to undefined|
+| **limit** | [**number**] |  | (optional) defaults to 25|
+| **githubAccount** | [**string**] | Exact case-insensitive login; supply this or github_account_id, exclusively. | (optional) defaults to undefined|
+| **githubAccountId** | [**string**] | Stable GitHub account ID as a decimal string; mutually exclusive with github_account. | (optional) defaults to undefined|
+
+
+### Return type
+
+**AdminCiConnectionPage**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**400** | Invalid request or precondition fields. |  -  |
+|**401** | Invalid credentials. |  -  |
+|**403** | Current platform administrator authority is required. |  -  |
+|**404** | Organization or connection not found. |  -  |
+|**409** | Existing, ambiguous or stale mapping; inspect connection or connections when present and repeat lookup. |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
 # **adminQueryUsage**
 > AdminUsagePage adminQueryUsage()
 
@@ -1080,6 +1340,68 @@ const { status, data } = await apiInstance.adminSetOrganizationNestedVirtualizat
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminUpdateCiConnection**
+> AdminCiConnection adminUpdateCiConnection(adminCiConnectionUpdate)
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration,
+    AdminCiConnectionUpdate
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; //
+let bindingId: string; //
+let adminCiConnectionUpdate: AdminCiConnectionUpdate; //
+
+const { status, data } = await apiInstance.adminUpdateCiConnection(
+    organizationId,
+    bindingId,
+    adminCiConnectionUpdate
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **adminCiConnectionUpdate** | **AdminCiConnectionUpdate**|  | |
+| **organizationId** | [**string**] |  | |
+| **bindingId** | [**string**] |  | |
+
+
+### Return type
+
+**AdminCiConnection**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** | Updated connection, including the resulting generation. |  -  |
+|**400** | Invalid request or precondition fields. |  -  |
+|**401** | Invalid credentials. |  -  |
+|**403** | Current platform administrator authority is required. |  -  |
+|**404** | Organization or connection not found. |  -  |
+|**409** | Existing, ambiguous or stale mapping; inspect connection or connections when present and repeat lookup. |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

@@ -2,6 +2,12 @@
 import { INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import { PassportModule } from '@nestjs/passport'
+import { SwaggerModule, OpenAPIObject } from '@nestjs/swagger'
+import Ajv from 'ajv'
+import addFormats from 'ajv-formats'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { parse } from 'yaml'
 import { AddressInfo } from 'node:net'
 import { createHash, randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
@@ -9,6 +15,8 @@ import { AuditLog } from '../audit/entities/audit-log.entity'
 import { ApiKeyStrategy } from '../auth/api-key.strategy'
 import { JwtStrategy } from '../auth/jwt.strategy'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { AllExceptionsFilter } from '../filters/all-exceptions.filter'
+import { getOpenApiConfig } from '../openapi.config'
 import { AddCiConnect1793664000000 } from '../migrations/pre-deploy/1793664000000-add-ci-connect-migration'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
 import { AddCiWebConnect1793786400000 } from '../migrations/pre-deploy/1793786400000-add-ci-web-connect-migration'
@@ -43,14 +51,35 @@ integration('CI administrator HTTP + PostgreSQL contract', () => {
     app: INestApplication,
     base: string
   let verifyInstallation: jest.SpyInstance
+  let document: OpenAPIObject
+  const contractId = 'https://contract.test/ci-admin.openapi.json'
+  const validator = addFormats(new Ajv({ strict: false, allErrors: true }))
   const path = (org = first, id?: string) => `/organizations/${org}/ci/connections${id ? '/' + id : ''}`
   const lookup = '/ci/connections?account_type=User&github_account=ALICE'
   async function request(url = path(), method = 'GET', body?: unknown, token = 'admin-key') {
-    return fetch(base + url, {
+    const response = await fetch(base + url, {
       method,
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
+    const route = Object.keys(document.paths).find((key) =>
+      new RegExp('^' + key.replace(/\{[^}]+\}/g, '[^/]+') + '$').test('/admin' + url.split('?')[0]),
+    )
+    expect(route).toBeDefined()
+    const operation = document.paths[route!]?.[method.toLowerCase()]
+    const contract = operation.responses[response.status]
+    expect(contract).toBeDefined()
+    if (response.status === 204) expect(await response.clone().text()).toBe('')
+    else {
+      const pointer = route!.replace(/~/g, '~0').replace(/\//g, '~1')
+      const validate = validator.getSchema(
+        `${contractId}#/paths/${pointer}/${method.toLowerCase()}/responses/${response.status}/content/application~1json/schema`,
+      )!
+      expect(validate).toBeDefined()
+      const actual = await response.clone().json()
+      if (!validate(actual)) throw new Error(JSON.stringify(validate.errors))
+    }
+    return response
   }
   async function create(org = first) {
     const response = await request(path(org), 'POST', input)
@@ -160,7 +189,12 @@ integration('CI administrator HTTP + PostgreSQL contract', () => {
     }).compile()
     app = module.createNestApplication({ logger: false })
     app.setGlobalPrefix('api')
+    app.useGlobalFilters(
+      new AllExceptionsFilter({ incrementFailedAuth: jest.fn().mockResolvedValue(undefined) } as never),
+    )
     await app.listen(0, '127.0.0.1')
+    document = SwaggerModule.createDocument(app, getOpenApiConfig('https://example.test'), { ignoreGlobalPrefix: true })
+    validator.addSchema(document, contractId)
     base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/admin`
   })
   beforeEach(async () => {
@@ -223,6 +257,53 @@ integration('CI administrator HTTP + PostgreSQL contract', () => {
       metadata: { before: null, after: binding },
     })
     expect(JSON.stringify(logs)).not.toContain(hash('admin-key'))
+  })
+  it('publishes all five admin operations and their actual DTO contracts in the generated aggregate', () => {
+    const generated = parse(readFileSync(resolve(__dirname, '../../../libs/api-client-go/api/openapi.yaml'), 'utf8'))
+    const operations = [
+      ['/admin/ci/connections', 'get', 'adminLookupCiConnections'],
+      ['/admin/organizations/{organizationId}/ci/connections', 'get', 'adminListCiConnections'],
+      ['/admin/organizations/{organizationId}/ci/connections', 'post', 'adminCreateCiConnection'],
+      ['/admin/organizations/{organizationId}/ci/connections/{bindingId}', 'patch', 'adminUpdateCiConnection'],
+      ['/admin/organizations/{organizationId}/ci/connections/{bindingId}', 'delete', 'adminDeleteCiConnection'],
+    ] as const
+    for (const [path, method, id] of operations) {
+      const current = document.paths[path]?.[method]
+      expect(current).toMatchObject({ operationId: id, tags: ['admin'] })
+      expect(current?.security).toEqual(expect.arrayContaining([{ bearer: [] }]))
+      // The generator materializes OpenAPI's default parameter serialization.
+      const parameters = current?.parameters?.map((parameter) => {
+        if ('$ref' in parameter) return parameter
+        return { style: parameter.in === 'query' ? 'form' : 'simple', explode: parameter.in === 'query', ...parameter }
+      })
+      expect(generated.paths[path]?.[method]).toEqual({ ...current, ...(parameters ? { parameters } : {}) })
+    }
+    for (const [name, schema] of Object.entries(document.components?.schemas ?? {})) {
+      if (!name.startsWith('AdminCi')) continue
+      // Required-field order has no JSON Schema meaning; codegen sorts it.
+      const required =
+        'required' in schema && Array.isArray(schema.required) ? { required: [...schema.required].sort() } : {}
+      const { example, ...generatedSchema } = generated.components.schemas[name]
+      expect(generatedSchema).toEqual({ ...schema, ...required })
+      if (example !== undefined) {
+        const validate = validator.getSchema(`${contractId}#/components/schemas/${name}`)!
+        if (!validate(example)) throw new Error(JSON.stringify(validate.errors))
+      }
+    }
+    const lookup = document.paths['/admin/ci/connections'].get!
+    expect(lookup.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'account_type', required: true }),
+        expect.objectContaining({ name: 'limit', schema: expect.objectContaining({ maximum: 100, default: 25 }) }),
+      ]),
+    )
+    expect(document.components?.schemas?.AdminCiConnectionCreate).toMatchObject({
+      required: ['account_type', 'github_account', 'allow_private_repositories'],
+    })
+    expect(document.components?.schemas?.AdminCiConnectionUpdate).toMatchObject({
+      required: ['expected_generation', 'allow_private_repositories'],
+    })
+    expect(document.components?.schemas?.AdminCiConnectionVersion).toMatchObject({ required: ['expected_generation'] })
   })
   it('requires real admin authority and rechecks cached roles, revoked and expired keys', async () => {
     expect((await request(path(), 'POST', input, 'owner-key')).status).toBe(403)
