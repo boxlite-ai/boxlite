@@ -41,6 +41,7 @@ for (const checkpointAccess of [false, true]) {
         certificatemanager: ['DnsAuthorization', 'Certificate'],
         dns: ['ManagedZone', 'RecordSet'],
         compute: [
+          'SecurityPolicy',
           'RegionNetworkEndpointGroup',
           'BackendService',
           'URLMap',
