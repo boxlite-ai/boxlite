@@ -9,12 +9,10 @@ import {
   Get,
   HttpCode,
   Param,
-  ParseBoolPipe,
   Post,
   Query,
   UseGuards,
   UsePipes,
-  ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator'
@@ -26,6 +24,7 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { Checkpoint } from '../box/entities/checkpoint.entity'
 import { CheckpointService } from '../box/services/checkpoint.service'
+import { ReplayParseBoolPipe, ReplayValidationPipe } from '../common/replay-validation.pipe'
 
 class CreateCheckpointRequest {
   @IsString() @MinLength(1) @MaxLength(128) source_box_id: string
@@ -35,7 +34,7 @@ class CreateCheckpointRequest {
 @Controller(['v1/checkpoints', 'v1/:prefix/checkpoints'])
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+@UsePipes(new ReplayValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BoxliteCheckpointController {
   constructor(private readonly checkpoints: CheckpointService) {}
 
@@ -69,10 +68,10 @@ export class BoxliteCheckpointController {
   async remove(
     @AuthContext() auth: OrganizationAuthContext,
     @Param('key') key: string,
-    @Query('force', new DefaultValuePipe(false), ParseBoolPipe) force: unknown,
+    @Query('force', new DefaultValuePipe(false), ReplayParseBoolPipe) force: unknown,
   ) {
     // Boolean metatype coercion would turn an invalid query into false before
-    // ParseBoolPipe can reject it. Let that pipe validate the original value.
+    // ReplayParseBoolPipe can reject it. Let that pipe validate the original value.
     await this.checkpoints.remove(auth.organizationId, key, force === true)
   }
 }

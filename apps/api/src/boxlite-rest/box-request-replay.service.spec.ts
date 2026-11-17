@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
-import { BoxRequestReplayService, ReplaySession, fingerprintOf } from './box-request-replay.service'
+import { BoxRequestReplayService, fingerprintOf } from './box-request-replay.service'
 
 const describeIfRedis = process.env.REDIS_HOST ? describe : describe.skip
 
@@ -31,6 +31,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
   })
 
   afterAll(async () => {
+    service.onModuleDestroy()
     await redis.quit()
   })
 
@@ -46,7 +47,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     expect(session.response).toBeUndefined()
     expect(session.isOwner).toBe(false)
     await session.complete({ status: 201, body: '{}' })
-    await session.releaseSafe(true)
+    await session.markRetryable()
   })
 
   it('lets a new key owner proceed and a same-key same-fingerprint caller replay', async () => {
@@ -128,7 +129,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     const fp = fingerprintOf('POST', '/boxes', {})
     const first = await service.session(org, user, 'createBox', key, fp)
     expect(first.isOwner).toBe(true)
-    await first.releaseSafe(true)
+    await first.markRetryable()
 
     const second = await service.session(org, user, 'createBox', key, fp)
     expect(second.isOwner).toBe(true)
@@ -144,7 +145,7 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     const key = randomUUID()
     const fp = fingerprintOf('POST', '/boxes', {})
     const first = await service.session(org, user, 'createBox', key, fp)
-    await first.releaseSafe(true)
+    await first.markRetryable()
 
     const second = await service.session(org, user, 'createBox', key, fp)
     expect(second.isOwner).toBe(true)
@@ -155,8 +156,10 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     expect(before['owner']).not.toBe('')
 
     await second.complete({ status: 201, body: '{}' })
+    await first.complete({ status: 201, body: '{"box_id":"stale"}' })
     const after = await redis.hgetall(keyOf('createBox', key))
     expect(after['state']).toBe('complete')
+    expect(after['response']).toBe(JSON.stringify({ status: 201, body: '{}' }))
     await cleanup(keyOf('createBox', key))
   })
 
@@ -190,8 +193,3 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     )
   })
 })
-
-/** Exported for controller specs that construct a standalone no-op session. */
-export function replayNoOp(): ReplaySession {
-  return new ReplaySession(undefined, undefined, undefined)
-}

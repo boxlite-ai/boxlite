@@ -2,50 +2,38 @@
  * Copyright 2026 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
  */
-
-import { ConflictException, HttpException, HttpStatus, Inject, Injectable, Logger } from '@nestjs/common'
+import { HttpException, HttpStatus, Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import type Redis from 'ioredis'
 import { createHash, randomUUID } from 'node:crypto'
 
-/**
- * How long a request record lives after its first use. Matches the public
- * contract: "Keys expire after the duration advertised in GET /v1/config"
- * (openapi/box.openapi.yaml idempotencyKey). Retries never extend this.
- */
 const RECORD_TTL_SECONDS = 24 * 60 * 60
-
-/**
- * How long a pending owner has to record its outcome before the next caller
- * treats the result as unknown. Bounds the window where a crashed replica
- * leaves a key permanently uncallable.
- */
+export const REPLAY_COMMAND_TIMEOUT_MS = 1_000
+export const REPLAY_HEARTBEAT_MS = 1_000
 const COMPLETION_DEADLINE_MS = 5_000
+export const REPLAY_MAX_RESPONSE_BYTES = 1024 * 1024
 
-/**
- * A stored success response replayed to the retrying caller. The status code
- * is preserved alongside the body so the caller sees the original contract.
- */
+export interface ReplayResource {
+  id: string
+  organizationId: string
+}
 export interface ReplayResponse {
   status: number
   body: string
+  encoding?: 'base64'
+  headers?: Record<string, string>
+  resource?: ReplayResource
 }
-
-/**
- * Fencing handle proving this caller won the key; a stale owner cannot
- * overwrite a record that a newer caller has reclaimed.
- */
 interface ReplayReservation {
   key: string
   owner: string
 }
+interface ReplayOptions {
+  legacyFingerprint?: string
+  replayOnly?: boolean
+}
 
-/**
- * A replay session the controller drives through the business call. Without
- * a key, `response` is undefined and `complete`/`releaseSafe` are no-ops;
- * with a key won by this caller, the controller must call exactly one of
- * `complete` (on success) or `releaseSafe` (on a proven pre-dispatch failure).
- */
+/** Only the HTTP entry owns this handle. Unknown outcomes keep their fence; late success may still complete. */
 export class ReplaySession {
   constructor(
     readonly response: ReplayResponse | undefined,
@@ -57,45 +45,41 @@ export class ReplaySession {
     return this.reservation !== undefined
   }
 
-  /** Persists the original status and JSON body for same-key retries. */
   async complete(response: ReplayResponse): Promise<void> {
     if (!this.reservation || !this.redis) return
-    await this.redis.eval(
-      COMPLETE_SCRIPT,
-      1,
-      this.reservation.key,
-      this.reservation.owner,
-      JSON.stringify(response),
-      'complete',
-    )
+    const serialized = JSON.stringify(response)
+    if (Buffer.byteLength(serialized) > REPLAY_MAX_RESPONSE_BYTES) {
+      await this.markUnknown()
+      return
+    }
+    await this.redis.eval(COMPLETE_SCRIPT, 1, this.reservation.key, this.reservation.owner, serialized)
   }
 
-  /**
-   * Marks a proven pre-dispatch failure (quota rejection) as safe to retry,
-   * so a same-key caller can reclaim the slot after capacity is freed.
-   * Non-retryable failures release the pending record entirely.
-   */
-  async releaseSafe(retryable: boolean): Promise<void> {
+  async markRetryable(): Promise<void> {
+    await this.update('retryable')
+  }
+  async markUnknown(): Promise<void> {
+    await this.update('unknown')
+  }
+  async heartbeat(): Promise<void> {
+    await this.update('heartbeat')
+  }
+
+  private async update(state: string): Promise<void> {
     if (!this.reservation || !this.redis) return
-    await this.redis.eval(RELEASE_SCRIPT, 1, this.reservation.key, this.reservation.owner, retryable ? '1' : '0')
+    await this.redis.eval(UPDATE_SCRIPT, 1, this.reservation.key, this.reservation.owner, state)
   }
 }
 
-/**
- * Atomic per-key state shared by every API instance. Each hash holds the
- * request fingerprint, the current owner, and (once set) the original
- * response. The Lua scripts make EXISTS → HSET → EXPIRE one operation, so
- * two replicas cannot both win the same key; the completion script rejects
- * a stale owner writing after its reservation expired and was reclaimed.
- */
+// Redis time and absolute expiry are shared by replicas. Neither heartbeat nor reclaim extends retention.
 const RESERVE_SCRIPT = `
-local now = redis.call('TIME')
-local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+local fp = redis.call('HGET', KEYS[1], 'fingerprint')
 if redis.call('EXISTS', KEYS[1]) == 0 then
-  redis.call('HSET', KEYS[1],
-    'fingerprint', ARGV[1],
-    'owner', ARGV[2],
-    'expected_response_at', tostring(now_ms + ${COMPLETION_DEADLINE_MS}))
+  if ARGV[5] == 'peek' or ARGV[5] == 'replay-only' then return {'unknown'} end
+  local now = redis.call('TIME')
+  local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+  redis.call('HSET', KEYS[1], 'fingerprint', ARGV[1], 'version', '2', 'owner', ARGV[2],
+    'state', 'pending', 'expected_response_at', tostring(now_ms + ${COMPLETION_DEADLINE_MS}))
   local ok = redis.pcall('EXPIRE', KEYS[1], ARGV[3])
   if type(ok) == 'table' and ok.err then
     redis.call('DEL', KEYS[1])
@@ -103,11 +87,16 @@ if redis.call('EXISTS', KEYS[1]) == 0 then
   end
   return {'owner'}
 end
-local fp = redis.call('HGET', KEYS[1], 'fingerprint')
+local version = redis.call('HGET', KEYS[1], 'version')
+local expected = ARGV[1]
+if not version then expected = ARGV[4] end
+if fp ~= expected then return {'mismatch'} end
 local body = redis.call('HGET', KEYS[1], 'response')
-local state = redis.call('HGET', KEYS[1], 'state')
-if fp ~= ARGV[1] then return {'mismatch'} end
 if body then return {'replay', body} end
+if ARGV[5] == 'peek' or ARGV[5] == 'replay-only' then return {'unknown'} end
+local state = redis.call('HGET', KEYS[1], 'state')
+local now = redis.call('TIME')
+local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
 if state == 'retryable' then
   redis.call('HSET', KEYS[1], 'owner', ARGV[2], 'state', 'pending',
     'expected_response_at', tostring(now_ms + ${COMPLETION_DEADLINE_MS}))
@@ -118,120 +107,227 @@ local deadline = tonumber(redis.call('HGET', KEYS[1], 'expected_response_at') or
 if now_ms >= deadline then return {'unknown'} end
 return {'pending'}
 `
-
 const COMPLETE_SCRIPT = `
 if redis.call('HGET', KEYS[1], 'owner') ~= ARGV[1] then return 0 end
 local state = redis.call('HGET', KEYS[1], 'state')
-if state and state ~= 'pending' then return 0 end
-redis.call('HSET', KEYS[1], 'response', ARGV[2], 'state', ARGV[3])
+if state and state ~= 'pending' and state ~= 'unknown' then return 0 end
+if redis.call('HEXISTS', KEYS[1], 'response') == 1 then return 0 end
+redis.call('HSET', KEYS[1], 'response', ARGV[2], 'state', 'complete')
 return 1
 `
-
-/**
- * Releases a reservation the owner never used: a safe failure (quota
- * rejection) marks the record retryable so the same key can reclaim it;
- * anything else deletes a still-pending record that has no response.
- * A completed record is always kept.
- */
-const RELEASE_SCRIPT = `
+const UPDATE_SCRIPT = `
 if redis.call('HGET', KEYS[1], 'owner') ~= ARGV[1] then return 0 end
 if redis.call('HEXISTS', KEYS[1], 'response') == 1 then return 0 end
-if ARGV[2] == '1' then
-  redis.call('HSET', KEYS[1], 'state', 'retryable')
-  redis.call('HDEL', KEYS[1], 'owner')
-  return 1
+if ARGV[2] == 'heartbeat' then
+  if redis.call('HGET', KEYS[1], 'state') ~= 'pending' then return 0 end
+  local now = redis.call('TIME')
+  local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+  redis.call('HSET', KEYS[1], 'expected_response_at', tostring(now_ms + ${COMPLETION_DEADLINE_MS}))
+else
+  redis.call('HSET', KEYS[1], 'state', ARGV[2])
+  if ARGV[2] == 'retryable' then redis.call('HDEL', KEYS[1], 'owner') end
 end
-redis.call('DEL', KEYS[1])
 return 1
 `
 
-/**
- * Stable per-record key. The SHA-256 of the UUID prevents unbounded key
- * growth from direct injection; the scoping fields isolate tenants.
- */
 function recordKey(organizationId: string, subjectId: string, operation: string, requestId: string): string {
-  const digest = createHash('sha256').update(requestId).digest('hex')
-  return `replay:${organizationId}:${subjectId}:${operation}:${digest}`
+  return `replay:${organizationId}:${subjectId}:${operation}:${createHash('sha256').update(requestId).digest('hex')}`
 }
 
-/**
- * Request fingerprint binding the key to one operation's inputs. Every field
- * that could change the business result must participate: method, resolved
- * path, and the parsed request body. The serialization must be stable for
- * identical logical requests across replicas.
- */
+/** Compatibility reader for #2760 records, whose original absolute TTL is preserved. */
 export function fingerprintOf(method: string, path: string, body: unknown): string {
   return createHash('sha256')
     .update(`${method}\n${path}\n${JSON.stringify(body ?? null)}`)
     .digest('hex')
 }
 
+function storedResponse(raw: string): ReplayResponse | undefined {
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (!value || typeof value !== 'object' || !('status' in value) || !('body' in value)) return undefined
+    if (typeof value.status !== 'number' || value.status < 200 || value.status >= 300 || typeof value.body !== 'string')
+      return undefined
+    if ('encoding' in value && value.encoding !== 'base64') return undefined
+    if (
+      'headers' in value &&
+      (!value.headers ||
+        typeof value.headers !== 'object' ||
+        Object.entries(value.headers).some(
+          ([key, item]) => !['content-type', 'location'].includes(key) || typeof item !== 'string',
+        ))
+    )
+      return undefined
+    if (
+      'resource' in value &&
+      (!value.resource ||
+        typeof value.resource !== 'object' ||
+        !('id' in value.resource) ||
+        !('organizationId' in value.resource) ||
+        typeof value.resource.id !== 'string' ||
+        typeof value.resource.organizationId !== 'string')
+    )
+      return undefined
+    // Every optional field was validated above; this is the persisted response boundary.
+    return value as ReplayResponse
+  } catch {
+    return undefined
+  }
+}
+
 @Injectable()
-export class BoxRequestReplayService {
+export class BoxRequestReplayService implements OnModuleDestroy {
   private readonly logger = new Logger(BoxRequestReplayService.name)
+  private connection?: Redis
+  private connecting?: Promise<Redis>
+  private policyChecked = false
   private readonly noOpSession = new ReplaySession(undefined, undefined, undefined)
 
   constructor(@Inject(getRedisConnectionToken()) private readonly redis: Redis) {}
 
-  /**
-   * Atomically claims a key and returns a replay session for the controller
-   * to drive through its business call. Without a key, a passthrough session
-   * is returned. A key seen with different parameters is a documented 422;
-   * pending and unknown block redispatch.
-   *
-   * Fingerprint must describe every input that affects the outcome: method,
-   * resolved path, and the validated request body.
-   */
+  onModuleDestroy(): void {
+    this.connection?.disconnect()
+  }
+
   async session(
     organizationId: string,
     subjectId: string,
     operation: string,
     requestId: string | undefined,
     fingerprint: string,
+    options: ReplayOptions = {},
   ): Promise<ReplaySession> {
     if (!requestId) return this.noOpSession
-
     const key = recordKey(organizationId, subjectId, operation, requestId)
     const owner = randomUUID()
-    const result = (await this.redis.eval(RESERVE_SCRIPT, 1, key, fingerprint, owner, RECORD_TTL_SECONDS)) as string[]
-
-    switch (result[0]) {
-      case 'owner':
-        return new ReplaySession(undefined, { key, owner }, this.redis)
-      case 'replay': {
-        try {
-          const stored = JSON.parse(result[1]) as ReplayResponse
-          return new ReplaySession(stored, undefined, undefined)
-        } catch {
-          this.logger.warn(`Corrupt replay record for ${operation}; treating as unknown`)
-          throw this.unknownResult()
-        }
-      }
-      case 'mismatch':
-        throw new HttpException(
-          {
-            message: 'Idempotency-Key was already used with a different request',
-            code: 'idempotency_payload_mismatch',
-          },
-          HttpStatus.UNPROCESSABLE_ENTITY,
-        )
-      case 'pending':
-        throw new ConflictException(
-          'The original request has not recorded a response yet. Retry with the same Idempotency-Key.',
-        )
-      default:
-        throw this.unknownResult()
+    const { result, connection } = await this.reserve(
+      key,
+      owner,
+      fingerprint,
+      options,
+      options.replayOnly ? 'replay-only' : 'reserve',
+    )
+    if (result[0] === 'owner') return new ReplaySession(undefined, { key, owner }, connection)
+    if (result[0] === 'replay') {
+      const response = storedResponse(result[1])
+      if (response) return new ReplaySession(response, undefined, undefined)
+      this.logger.warn(`Corrupt replay record for ${operation}; retaining fence`)
     }
-  }
-
-  private unknownResult(): HttpException {
-    return new HttpException(
+    if (result[0] === 'mismatch')
+      throw new HttpException(
+        { message: 'Idempotency-Key was already used with a different request', code: 'idempotency_payload_mismatch' },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      )
+    if (result[0] === 'pending')
+      throw new HttpException(
+        {
+          message: 'The original request is still processing. Retry with the same Idempotency-Key.',
+          code: 'idempotency_in_progress',
+        },
+        HttpStatus.CONFLICT,
+      )
+    throw new HttpException(
       {
         message:
           'The original request has no recorded response and its outcome is unknown. This request was not executed again.',
         code: 'idempotency_outcome_unknown',
       },
       HttpStatus.UNPROCESSABLE_ENTITY,
+    )
+  }
+
+  async peekCompleted(
+    organizationId: string,
+    subjectId: string,
+    operation: string,
+    requestId: string,
+    fingerprint: string,
+  ): Promise<ReplayResponse | undefined> {
+    const { result } = await this.reserve(
+      recordKey(organizationId, subjectId, operation, requestId),
+      '',
+      fingerprint,
+      {},
+      'peek',
+    )
+    return result[0] === 'replay' ? storedResponse(result[1]) : undefined
+  }
+
+  private async reserve(
+    key: string,
+    owner: string,
+    fingerprint: string,
+    options: ReplayOptions,
+    mode: string,
+  ): Promise<{ result: string[]; connection: Redis }> {
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Replay reservation deadline exceeded')), REPLAY_COMMAND_TIMEOUT_MS)
+    })
+    const claim = async () => {
+      const connection = await this.ready()
+      const result = await connection.eval(
+        RESERVE_SCRIPT,
+        1,
+        key,
+        fingerprint,
+        owner,
+        RECORD_TTL_SECONDS,
+        options.legacyFingerprint ?? fingerprint,
+        mode,
+      )
+      if (!Array.isArray(result) || result.some((item) => typeof item !== 'string'))
+        throw new Error('Invalid replay storage result')
+      return { result: result as string[], connection }
+    }
+    try {
+      return await Promise.race([claim(), deadline])
+    } catch (error) {
+      throw this.unavailable(error)
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private async ready(): Promise<Redis> {
+    if (this.connecting) return this.connecting
+    if (this.policyChecked && this.connection?.status === 'ready') return this.connection
+    if (!this.connection) {
+      this.connection = this.redis.duplicate({
+        lazyConnect: true,
+        commandTimeout: REPLAY_COMMAND_TIMEOUT_MS,
+        connectTimeout: REPLAY_COMMAND_TIMEOUT_MS,
+        maxRetriesPerRequest: 0,
+        enableOfflineQueue: false,
+        autoResendUnfulfilledCommands: false,
+        retryStrategy: null,
+      })
+      this.connection.on('error', () => undefined)
+    }
+    const connection = this.connection
+    this.connecting = (async () => {
+      try {
+        if (connection.status === 'wait' || connection.status === 'end') await connection.connect()
+        const policy = await connection.config('GET', 'maxmemory-policy')
+        if (!Array.isArray(policy) || policy[1] !== 'noeviction')
+          throw new Error('Replay Redis requires maxmemory-policy=noeviction')
+        this.policyChecked = true
+        return connection
+      } catch (error) {
+        this.policyChecked = false
+        throw this.unavailable(error)
+      } finally {
+        this.connecting = undefined
+      }
+    })()
+    return this.connecting
+  }
+
+  private unavailable(error: unknown): HttpException {
+    this.logger.warn('Replay storage unavailable; request not dispatched')
+    return new HttpException(
+      { message: 'Request replay storage is unavailable', code: 'idempotency_storage_unavailable' },
+      HttpStatus.SERVICE_UNAVAILABLE,
+      { cause: error },
     )
   }
 }

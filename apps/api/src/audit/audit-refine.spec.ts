@@ -24,7 +24,6 @@ import { VolumeAccessGuard } from '../box/guards/volume-access.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { AccountLinkService, ADOPT_AUDIENCE } from '../auth/account-link.service'
 import { Context } from '../common/context/context'
-import { BoxRequestReplayService, ReplaySession } from '../boxlite-rest/box-request-replay.service'
 
 // Use Node's loader for the published ESM proxy, preserving real HTTP behavior.
 jest.mock('http-proxy-middleware', () =>
@@ -93,10 +92,6 @@ describe('audit refinement contracts', () => {
             updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
             getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://tunnel.example.test'),
           },
-        },
-        {
-          provide: BoxRequestReplayService,
-          useValue: { session: async () => new ReplaySession(undefined, undefined, undefined) },
         },
         {
           provide: RunnerService,

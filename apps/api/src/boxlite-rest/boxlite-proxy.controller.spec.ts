@@ -10,7 +10,7 @@ import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA, ROUTE_ARGS_METADATA
 import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
-import { ReplaySession } from './box-request-replay.service'
+import { hasNoEffect } from '../common/replay-no-effect'
 import { Context } from '../common/context/context'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -19,8 +19,6 @@ import { SystemRole } from '../user/enums/system-role.enum'
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
   fixRequestBody: jest.fn(),
-  // Identity wrapper: the tests call the capture callback directly.
-  responseInterceptor: (fn: unknown) => fn,
 }))
 jest.mock('uuid', () => ({ v4: jest.fn(() => 'mock-uuid'), validate: jest.fn(() => true) }))
 
@@ -49,17 +47,13 @@ function makeHarness() {
     prepare: jest.fn().mockResolvedValue({ isPublic: true, token: null }),
     revoke: jest.fn().mockResolvedValue(undefined),
   }
-  const requestReplay = {
-    session: jest.fn().mockResolvedValue(new ReplaySession(undefined, undefined, undefined)),
-  }
-  const controller = new (BoxliteProxyController as any)(
-    boxService,
-    runnerService,
-    autoResume,
-    tunnelService,
-    requestReplay,
-  ) as BoxliteProxyController
-  return { controller, boxService, autoResume, tunnelService, requestReplay }
+  const controller = new BoxliteProxyController(
+    boxService as never,
+    runnerService as never,
+    autoResume as never,
+    tunnelService as never,
+  )
+  return { controller, boxService, autoResume, tunnelService }
 }
 
 describe('BoxliteProxyController', () => {
@@ -78,7 +72,6 @@ describe('BoxliteProxyController', () => {
       controller.proxyExec(
         activeAuth as never,
         'mybox',
-        undefined,
         { method: 'POST' } as never,
         new EventEmitter() as never,
         jest.fn(),
@@ -152,64 +145,13 @@ describe('BoxliteProxyController', () => {
     const res = new EventEmitter()
     const next = jest.fn()
 
-    await controller.proxyExec(activeAuth as never, 'public-box', undefined, req as never, res as never, next)
+    await controller.proxyExec(activeAuth as never, 'public-box', req as never, res as never, next)
 
     const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
     const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
     expect(pathRewrite('/api/v1/boxes/public-box/exec', req)).toBe('/v1/boxes/box-uuid/exec')
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
-  })
-
-  it('replays the original execution response for a repeated POST exec with the same key', async () => {
-    const replayed = new ReplaySession({ status: 201, body: '{"execution_id":"exec-original"}' }, undefined, undefined)
-    const { controller, requestReplay } = makeHarness()
-    requestReplay.session.mockResolvedValueOnce(replayed)
-    const res = { status: jest.fn().mockReturnThis(), type: jest.fn().mockReturnThis(), send: jest.fn() }
-    const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST', body: { command: '/bin/echo' } }
-    const next = jest.fn()
-
-    await controller.proxyExec(activeAuth as never, 'public-box', 'test-key-1', req as never, res as never, next)
-
-    expect(res.status).toHaveBeenCalledWith(201)
-    expect(res.type).toHaveBeenCalledWith('application/json')
-    expect(res.send).toHaveBeenCalledWith('{"execution_id":"exec-original"}')
-    expect(createProxyMiddleware).not.toHaveBeenCalled()
-  })
-
-  // The runner already produced the response when the replay write fails:
-  // the client must still get it, and the logger keeps the failure visible.
-  it('ends the proxied response even when saving the replay record fails', async () => {
-    const owner = new ReplaySession(undefined, { key: 'k', owner: 'o' }, undefined)
-    jest.spyOn(owner, 'complete').mockRejectedValue(new Error('redis write failed'))
-    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
-    const { boxService, autoResume } = makeHarness()
-    const sessionStub = { session: jest.fn().mockResolvedValue(owner) }
-    const gated = new (BoxliteProxyController as any)(
-      boxService,
-      { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'k' }) },
-      autoResume,
-      { prepare: jest.fn(), revoke: jest.fn() },
-      sessionStub,
-    ) as BoxliteProxyController
-    const warnSpy = jest.spyOn((gated as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
-
-    const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST', body: { command: '/bin/echo' } }
-    await gated.proxyExec(
-      activeAuth as never,
-      'public-box',
-      'key-1',
-      req as never,
-      new EventEmitter() as never,
-      jest.fn(),
-    )
-
-    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
-    const proxyRes = proxyOptions.on?.proxyRes as (p: unknown, q: unknown, r: unknown, s: unknown) => Promise<void>
-    const clientRes = { setHeader: jest.fn(), write: jest.fn(), end: jest.fn(), headersSent: false }
-    await proxyRes(Buffer.from('{"execution_id":"e1"}'), { statusCode: 201, headers: {} }, req, clientRes)
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to record replay response'))
-    warnSpy.mockRestore()
   })
 
   it('passes a POST exec without a key directly to the proxy middleware', async () => {
@@ -219,26 +161,13 @@ describe('BoxliteProxyController', () => {
     const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST' }
     const next = jest.fn()
 
-    await controller.proxyExec(
-      activeAuth as never,
-      'public-box',
-      undefined,
-      req as never,
-      new EventEmitter() as never,
-      next,
-    )
+    await controller.proxyExec(activeAuth as never, 'public-box', req as never, new EventEmitter() as never, next)
 
     expect(proxyHandler).toHaveBeenCalled()
   })
 
-  // A refusal before dispatch (stopped box, auto-resume disabled) never
-  // reaches the runner: holding the key pending would block same-key retries
-  // with outcome-unknown until the record expired.
-  it('releases the key as retryable when admission refuses a keyed exec', async () => {
-    const proxyHandler = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-    const owner = new ReplaySession(undefined, { key: 'k', owner: 'o' }, undefined)
-    const releaseSpy = jest.spyOn(owner, 'releaseSafe')
+  it('marks an admission refusal before auto-resume and dispatch as no-effect', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller, boxService, autoResume } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({
       id: 'box-uuid',
@@ -247,24 +176,14 @@ describe('BoxliteProxyController', () => {
       state: 'stopped',
       desiredState: 'stopped',
     })
-    const sessionStub = { session: jest.fn().mockResolvedValue(owner) }
-    const gated = new (BoxliteProxyController as any)(
-      boxService,
-      { findOne: jest.fn() },
-      autoResume,
-      { prepare: jest.fn(), revoke: jest.fn() },
-      sessionStub,
-    ) as BoxliteProxyController
-    const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST', body: { command: '/bin/echo' } }
-
-    await expect(
-      gated.proxyExec(activeAuth as never, 'public-box', 'key-1', req as never, new EventEmitter() as never, jest.fn()),
-    ).rejects.toMatchObject({ status: 409 })
-
-    expect(releaseSpy).toHaveBeenCalledWith(true)
-    expect(proxyHandler).not.toHaveBeenCalled()
+    const error = await controller
+      .proxyExec(activeAuth as never, 'public-box', { method: 'POST' } as never, new EventEmitter() as never, jest.fn())
+      .catch((error: unknown) => error)
+    expect(error).toMatchObject({ status: 409 })
+    expect(hasNoEffect(error)).toBe(true)
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
   })
-
   it('lists a stopped box without resuming it or extending its idle lifetime', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller, boxService, autoResume } = makeHarness()
@@ -302,14 +221,7 @@ describe('BoxliteProxyController', () => {
     const { controller } = makeHarness()
 
     await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
-    await controller.proxyExec(
-      activeAuth as never,
-      'public-box',
-      undefined,
-      { url: '/exec' } as never,
-      {} as never,
-      jest.fn(),
-    )
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
 
     const fileOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
     const execOptions = jest.mocked(createProxyMiddleware).mock.calls[1][0]
@@ -502,14 +414,7 @@ describe('BoxliteProxyController', () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller, boxService, autoResume } = makeHarness()
 
-    await controller.proxyExec(
-      activeAuth as never,
-      'public-box',
-      undefined,
-      { url: '/exec' } as never,
-      {} as never,
-      jest.fn(),
-    )
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
     await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
     expect(autoResume.ensureReady).toHaveBeenCalledTimes(2)
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
@@ -533,16 +438,11 @@ describe('BoxliteProxyController', () => {
     const { controller, autoResume } = makeHarness()
     autoResume.ensureReady.mockRejectedValue(new Error('start failed'))
 
-    await expect(
-      controller.proxyExec(
-        activeAuth as never,
-        'public-box',
-        undefined,
-        { url: '/exec' } as never,
-        {} as never,
-        jest.fn(),
-      ),
-    ).rejects.toThrow('start failed')
+    const error = await controller
+      .proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
+      .catch((error: unknown) => error)
+    expect(error).toMatchObject({ message: 'start failed' })
+    expect(hasNoEffect(error)).toBe(false)
     expect(proxyHandler).not.toHaveBeenCalled()
   })
 
@@ -551,14 +451,7 @@ describe('BoxliteProxyController', () => {
     const { controller, boxService, autoResume } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: false })
 
-    await controller.proxyExec(
-      activeAuth as never,
-      'public-box',
-      undefined,
-      { url: '/exec' } as never,
-      {} as never,
-      jest.fn(),
-    )
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
 
     expect(autoResume.ensureReady).not.toHaveBeenCalled()
   })
@@ -570,14 +463,7 @@ describe('BoxliteProxyController', () => {
     autoResume.ensureReady.mockRejectedValue(new ForbiddenException('Organization is suspended'))
 
     await expect(
-      controller.proxyExec(
-        activeAuth as never,
-        'public-box',
-        undefined,
-        { url: '/exec' } as never,
-        {} as never,
-        jest.fn(),
-      ),
+      controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn()),
     ).rejects.toThrow(ForbiddenException)
     expect(proxyHandler).not.toHaveBeenCalled()
   })
@@ -694,14 +580,7 @@ describe('BoxliteProxyController business events', () => {
     const { controller } = harness()
     const res = response()
 
-    await controller.proxyExec(
-      activeAuth as never,
-      'public-box',
-      undefined,
-      request('POST', '/exec'),
-      res as never,
-      jest.fn(),
-    )
+    await controller.proxyExec(activeAuth as never, 'public-box', request('POST', '/exec'), res as never, jest.fn())
     expect(events.map(([message]) => message)).toEqual(['box.exec requested'])
 
     res.emit('finish')
@@ -725,14 +604,7 @@ describe('BoxliteProxyController business events', () => {
     const { controller } = harness()
     const res = response()
 
-    await controller.proxyExec(
-      activeAuth as never,
-      'public-box',
-      undefined,
-      request('POST', '/exec'),
-      res as never,
-      jest.fn(),
-    )
+    await controller.proxyExec(activeAuth as never, 'public-box', request('POST', '/exec'), res as never, jest.fn())
     res.statusCode = 502
     res.emit('finish')
 
@@ -754,7 +626,7 @@ describe('BoxliteProxyController business events', () => {
     const req = { method: operation === 'exec' ? 'POST' : 'PUT', url: '/operation', user: auth, get: () => undefined }
     const res = response()
     if (operation === 'exec') {
-      await controller.proxyExec(auth as never, 'public-box', undefined, req as never, res as never, jest.fn())
+      await controller.proxyExec(auth as never, 'public-box', req as never, res as never, jest.fn())
     } else {
       await controller.proxyFiles(auth as never, 'public-box', req as never, res as never, jest.fn())
     }
@@ -792,7 +664,6 @@ describe('BoxliteProxyController business events', () => {
     const pending = controller.proxyExec(
       activeAuth as never,
       'public-box',
-      undefined,
       request('POST', '/exec'),
       res as never,
       jest.fn(),
@@ -842,7 +713,6 @@ describe('BoxliteProxyController business events', () => {
     await controller.proxyExec(
       activeAuth as never,
       'public-box',
-      undefined,
       request('GET', '/exec'),
       response() as never,
       jest.fn(),

@@ -18,7 +18,6 @@ import {
   Query,
   UseGuards,
   UsePipes,
-  ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { isUUID } from 'class-validator'
@@ -39,6 +38,7 @@ import { OrganizationActionGuard } from '../organization/guards/organization-act
 import { OrganizationInvitationService } from '../organization/services/organization-invitation.service'
 import { CreateInvitationDto } from './dto/create-invitation.dto'
 import { AdminPageQuery, adminNextPage } from './dto/admin-page-query.dto'
+import { ReplayValidationPipe } from '../common/replay-validation.pipe'
 
 type RestInvitation = {
   type: 'invite'
@@ -54,7 +54,7 @@ type RestInvitation = {
 @Controller('v1/organizations/invites')
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, OrganizationActionGuard)
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+@UsePipes(new ReplayValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BoxliteInvitationController {
   constructor(private readonly organizationInvitationService: OrganizationInvitationService) {}
 

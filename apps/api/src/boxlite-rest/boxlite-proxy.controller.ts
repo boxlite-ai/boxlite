@@ -16,23 +16,19 @@ import {
   Req,
   Res,
   Next,
-  Headers,
   UseGuards,
   Logger,
   NotFoundException,
   ConflictException,
-  ForbiddenException,
   HttpCode,
   HttpStatus,
-  ParseIntPipe,
   Post,
   Query,
   Body,
   Header,
-  ValidationPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
-import { createProxyMiddleware, fixRequestBody, responseInterceptor, Options } from 'http-proxy-middleware'
+import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -52,7 +48,8 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
-import { BoxRequestReplayService, fingerprintOf } from './box-request-replay.service'
+import { noEffect } from '../common/replay-no-effect'
+import { ReplayParseIntPipe, ReplayValidationPipe } from '../common/replay-validation.pipe'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -120,7 +117,6 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
-    private readonly requestReplay: BoxRequestReplayService,
   ) {}
 
   @All(':boxId/exec')
@@ -135,72 +131,23 @@ export class BoxliteProxyController {
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
-    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() req: Request,
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    if (req.method !== 'POST' || !idempotencyKey) {
-      return this.proxyToRunner(
-        authContext,
-        boxId,
-        (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
-        req,
-        res,
-        next,
-        USER_OPERATION,
-        {
-          operation: req.method === 'POST' ? 'box.exec' : undefined,
-          admit: req.method === 'POST' ? requireExecReady : undefined,
-        },
-      )
-    }
-
-    const body = (req as Request & { body?: unknown }).body
-    const replay = await this.requestReplay.session(
-      authContext.organizationId,
-      authContext.userId,
-      'startExecution',
-      idempotencyKey,
-      fingerprintOf(req.method, req.originalUrl, body),
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
+      req,
+      res,
+      next,
+      USER_OPERATION,
+      {
+        operation: req.method === 'POST' ? 'box.exec' : undefined,
+        admit: req.method === 'POST' ? requireExecReady : undefined,
+      },
     )
-    if (replay.response) {
-      res.status(replay.response.status).type('application/json').send(replay.response.body)
-      return
-    }
-
-    let admissionRefused = false
-    try {
-      return await this.proxyToRunner(
-        authContext,
-        boxId,
-        (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
-        req,
-        res,
-        next,
-        USER_OPERATION,
-        {
-          operation: 'box.exec',
-          admit: (box, id) => {
-            try {
-              requireExecReady(box, id)
-            } catch (err) {
-              admissionRefused = true
-              throw err
-            }
-          },
-          captureResponse: async (status, body) => {
-            await replay.complete({ status, body })
-          },
-        },
-      )
-    } catch (err) {
-      // Admission refused before any runner dispatch, so the key can be
-      // retried once the box is ready. Failures after dispatch keep the
-      // record: the runner may have executed, and the outcome is unknown.
-      if (admissionRefused) await replay.releaseSafe(true)
-      throw err
-    }
   }
 
   @All(':boxId/executions/:execId/signal')
@@ -494,9 +441,9 @@ export class BoxliteProxyController {
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
-    @Query('port', ParseIntPipe) port: number,
+    @Query('port', ReplayParseIntPipe) port: number,
     @UserContext() ctx: Context,
-    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
+    @Body(new ReplayValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
     @Req() request?: Request,
   ) {
     // findOneByIdOrName already 404s for a missing/destroyed box.
@@ -554,7 +501,7 @@ export class BoxliteProxyController {
   async revokeNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
-    @Query('port', ParseIntPipe) port: number,
+    @Query('port', ReplayParseIntPipe) port: number,
     @Req() request?: Request,
   ): Promise<void> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
@@ -577,8 +524,6 @@ export class BoxliteProxyController {
       proxyTimeoutMs?: number
       admit?: ProxyAdmission
       operation?: ProxiedOperation
-      /** When set, the proxied response is buffered for the capture before reaching the caller. */
-      captureResponse?: (status: number, body: string) => Promise<void>
     },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
@@ -617,7 +562,14 @@ export class BoxliteProxyController {
       res.once('error', stop)
     }
 
-    opts?.admit?.(box, boxId)
+    // Only this local admission check proves that neither auto-resume nor
+    // runner dispatch has begun. An error after ensureReady may follow a start.
+    try {
+      opts?.admit?.(box, boxId)
+    } catch (error) {
+      if (error instanceof Error) throw noEffect(error)
+      throw error
+    }
 
     if (policy.autoResume && box.autoResume) {
       await this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit)
@@ -633,7 +585,6 @@ export class BoxliteProxyController {
       throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
     }
 
-    const capture = opts?.captureResponse
     const proxyOptions: Options = {
       target: targetUrl,
       secure: false,
@@ -641,27 +592,11 @@ export class BoxliteProxyController {
       autoRewrite: true,
       ws: opts?.ws ?? false,
       pathRewrite: () => targetPathForRunnerBox(box.id),
-      // selfHandleResponse routes the response through the interceptor instead
-      // of piping it directly; required for response capture.
-      selfHandleResponse: !!capture,
       on: {
-        proxyReq: (proxyReq: any, originalReq: any) => {
+        proxyReq: (proxyReq, originalReq) => {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
         },
-        proxyRes: capture
-          ? responseInterceptor(async (responseBuffer: Buffer, proxyRes: any, _req: any, res: any) => {
-              try {
-                await capture(proxyRes.statusCode, responseBuffer.toString('utf8'))
-              } catch (err) {
-                // The runner already produced this response; ending it matters
-                // more than the replay record, which stays pending and fences
-                // retries. Logging keeps the failure diagnosable.
-                this.logger.warn(`Failed to record replay response for ${box.id}: ${err}`)
-              }
-              return responseBuffer
-            })
-          : undefined,
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }

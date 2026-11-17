@@ -25,6 +25,7 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { AttachTicketService } from '../box/services/attach-ticket.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AttachAuditSession } from './attach-audit-session'
+import { assertReplaySupported } from './request-replay-policy'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -130,10 +131,17 @@ export class BoxliteWsProxyService {
       return
     }
 
+    try {
+      assertReplaySupported(req.method ?? 'GET', req.url ?? '', req.headers)
+    } catch {
+      this.respondAndClose(socket, 400, 'Bad Request')
+      return
+    }
     // Browsers cannot set `Authorization` on a WebSocket; they send a ticket.
     const auth = req.headers['authorization']
       ? await this.authenticate(req, match.tenant)
       : await this.authenticateTicket(req, match)
+
     if (!auth) {
       this.respondAndClose(socket, 401, 'Unauthorized')
       return

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { replayPolicy } from '../boxlite-rest/request-replay-policy'
+
 /** A JSON Schema object, as OpenAPI 3.x and MCP tool inputs carry it. */
 export type JsonSchema = Record<string, unknown>
 
@@ -124,15 +126,26 @@ function toOperation(
   const properties: Record<string, JsonSchema> = {}
   const required: string[] = []
   const params: McpOperationParam[] = []
+  const responses = (operation.responses ?? {}) as Record<string, unknown>
+  const supportsReplay = replayPolicy(method, path, '101' in responses) === 'supported'
   for (const raw of [...sharedParams, ...asArray(operation.parameters)]) {
     const param = resolve(raw) as Record<string, unknown>
     const name = param.name as string
     const location = param.in as McpOperationParam['in']
     if (name === 'prefix' || !['path', 'query', 'header'].includes(location)) continue
     if (location === 'header' && RESERVED_HEADERS.test(name)) continue
+    if (location === 'header' && name.toLowerCase() === 'idempotency-key') continue
     params.push({ name, in: location, required: param.required === true })
     properties[name] = { ...(param.schema as JsonSchema), description: param.description }
     if (param.required === true) required.push(name)
+  }
+  if (supportsReplay) {
+    params.push({ name: 'Idempotency-Key', in: 'header', required: false })
+    properties['Idempotency-Key'] = {
+      type: 'string',
+      format: 'uuid',
+      description: 'Optional UUID for replaying this hosted write with the same business input for 24 hours.',
+    }
   }
 
   const body = requestBody(resolve(operation.requestBody) as Record<string, unknown> | undefined)
@@ -143,7 +156,6 @@ function toOperation(
   }
   if (body?.required) required.push(body.kind === 'json' ? 'body' : 'body_base64')
 
-  const responses = (operation.responses ?? {}) as Record<string, unknown>
   return {
     operationId,
     method,

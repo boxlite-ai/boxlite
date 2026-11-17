@@ -37,7 +37,7 @@ import { BoxliteMemberController } from './boxlite-member.controller'
 import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
-import { BoxRequestReplayService } from './box-request-replay.service'
+import { RequestReplayModule } from './request-replay.module'
 import { AuditModule } from '../audit/audit.module'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
 
@@ -51,6 +51,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     ImageModule,
     RegistryModule,
     AuditModule,
+    RequestReplayModule,
   ],
   controllers: [
     BoxliteCheckpointController,
@@ -73,7 +74,6 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
   providers: [
     BoxliteWsProxyService,
     CommerceBoxLimitService,
-    BoxRequestReplayService,
     CiConnectService,
     CiSettingsService,
     CiNativeState,

@@ -17,6 +17,7 @@ import { CheckpointRecoverService } from '../box/services/checkpoint-recover.ser
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { RequestReplayInterceptor } from './request-replay.interceptor'
 
 /** Tracks create calls across both replica applications. */
 function createCounter() {
@@ -87,6 +88,7 @@ describeIfRedis('Box request replay real Redis HTTP', () => {
       .compile()
     const app = module.createNestApplication()
     app.setGlobalPrefix('api')
+    app.useGlobalInterceptors(new RequestReplayInterceptor(module.get(BoxRequestReplayService)))
     await app.listen(0, '127.0.0.1')
     return { app, base: await app.getUrl(), create }
   }

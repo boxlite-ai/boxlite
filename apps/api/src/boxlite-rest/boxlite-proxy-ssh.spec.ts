@@ -18,7 +18,6 @@ import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
-import { ReplaySession } from './box-request-replay.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -43,7 +42,6 @@ function makeHarness(box: Record<string, unknown>) {
     runnerService as never,
     autoResume as never,
     {} as never,
-    { session: async () => new ReplaySession(undefined, undefined, undefined) } as never,
   )
   const call = (route: 'configureSsh' | 'enableSsh' | 'getSshStatus' | 'disableSsh') =>
     controller[route](auth, 'my-box', { url: '/ssh' } as never, {} as never, jest.fn())

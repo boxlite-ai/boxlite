@@ -7,13 +7,17 @@
 import { Controller, Get, Optional } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { REPLAY_LIFETIME, RequestReplayPolicy } from './request-replay-policy'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1')
 export class BoxliteConfigController {
-  constructor(@Optional() private readonly config?: ConfigService) {}
+  constructor(
+    @Optional() private readonly config?: ConfigService,
+    @Optional() private readonly replayPolicy?: RequestReplayPolicy,
+  ) {}
 
   @Get('config')
   getConfig() {
@@ -29,6 +33,8 @@ export class BoxliteConfigController {
         inbound_update_enabled: true,
         private_tunnels_enabled: true,
         exec_user_enabled: true,
+        idempotency_key_lifetime: REPLAY_LIFETIME,
+        idempotency_operations: this.replayPolicy?.operations() ?? [],
       },
     }
   }

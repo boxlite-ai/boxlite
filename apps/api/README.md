@@ -173,27 +173,50 @@ credential-policy enforcement or deployed infrastructure behavior.
 
 ## Request idempotency and replay
 
-`createBox` and `POST /boxes/{boxId}/exec` honour an optional `Idempotency-Key` UUID header.
-The first request atomically claims the key in the existing Redis; later same-key requests replay
-the stored success response without calling the business layer again. Same key with a different
-method, path, or body returns `422 idempotency_payload_mismatch`; a concurrent same-key request
-while the owner is still processing returns `409` with `idempotency_in_progress`. A result whose
-outcome cannot be confirmed returns `422 idempotency_outcome_unknown` and never redispatches.
+Hosted `/api/v1` writes returning finite JSON or empty responses honour an optional
+`Idempotency-Key` UUID header through `RequestReplayInterceptor`, after authentication,
+organization membership, and resource permissions. New write routes are covered automatically;
+controllers do not opt in or manage reservations. Requests without the header execute normally.
+File transfers, WebSocket upgrades, and private tunnel preparation reject the header before
+their operation begins. Organization invitations retain their separate transactional replay.
 
-Records live 24 hours from first use; retries never extend the deadline. A proven pre-dispatch
-failure (the organization Box limit rejection) marks the record retryable so the same key can
-succeed once capacity frees; the success response is then cached permanently within that window.
-REST and MCP share the same entry points: MCP passes `Idempotency-Key` through to the REST
-route, and its `wait`/`wait_timeout_seconds` arguments are stripped before the fingerprint, so
-retries always reach the original execution. Requests without the header are unchanged.
+For example, retrying `POST /boxes` with the same key and input returns the original Box ID
+and creation response even after quota fills or the Box changes state. Object key order is
+ignored; target parameters, query values, arrays, types, explicit null, and absent bodies matter.
+Equivalent organization-prefixed routes share identity after the prefix is authorized.
 
-Two API replicas sharing one Redis cannot both claim a key: the Lua scripts make
-`EXISTS` → `HSET` → `EXPIRE` atomic, and a stale owner cannot overwrite a reclaimed record.
-Redis data loss, TTL expiry, or manual deletion terminates the replay guarantee for that key.
+| Condition | Response |
+| --- | --- |
+| Original success recorded | Original status, serialized bytes, Content-Type and Location |
+| Same key with changed business input | `422 idempotency_payload_mismatch` |
+| Original owner still active | `409 idempotency_in_progress` |
+| Outcome cannot be confirmed | `422 idempotency_outcome_unknown`; no redispatch |
+| Reservation storage unavailable | `503 idempotency_storage_unavailable`; no dispatch |
 
-Run `make test:apps:api TEST_FILES='box-request-replay|box-replay'` with `REDIS_HOST` and
-`REDIS_PORT` for the real-Redis service and cross-replica HTTP suites; without `REDIS_HOST`
-they skip.
+Records expire 24 hours after first use. Heartbeats and retries preserve this absolute deadline.
+Only trusted validation or proven pre-effect admission errors make the same key retryable.
+Submitted work, downstream errors, disconnects, and unclassified exceptions retain the fence;
+the original owner can still record a late success. Never automatically switch keys after unknown.
+The response representation is limited to 1 MiB; oversized or incomplete responses retain unknown.
+Only response bytes and request hashes are retained, excluding credentials and request bodies.
+Cookie, CORS, authentication, and tracking headers belong to the current request.
+
+Replay uses a dedicated Redis connection with one-second connection and command deadlines,
+no offline command queue or command resend, and `maxmemory-policy=noeviction`.
+Capacity refusal rejects new keyed work before dispatch. Success delivery does not wait for
+response persistence; a retry in that short window receives 409. Redis loss, expiration, or
+manual deletion ends the guarantee. `GET /config` advertises `PT24H` and served operation IDs.
+MCP forwards the same key and business input; wait options only control result observation.
+
+Deployment must drain keyed writes, replace every API replica, then reopen traffic. Keep
+unexpired #2760 createBox/exec records and their original namespace; the versioned reader
+checks their original DTO/URL fingerprints. A rollback must retain the shared reader/fence or
+stop the affected writes; a version that ignores their keys cannot safely receive retries.
+
+Run `make test:apps:api TEST_FILES='request-replay|box-request-replay|box-replay'` with
+`REDIS_HOST/REDIS_PORT` and PostgreSQL `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_DATABASE`
+for the HTTP, real Redis, and production-service persistence suites. Missing dependencies
+skip integration tests and do not establish the contract.
 
 ## Registration email policy
 

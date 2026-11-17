@@ -17,7 +17,6 @@ import { TunnelService } from '../box/services/tunnel.service'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { AddAuditResponseLease1794300000000 } from '../migrations/pre-deploy/1794300000000-add-audit-response-lease-migration'
-import { BoxRequestReplayService, ReplaySession } from '../boxlite-rest/box-request-replay.service'
 
 jest.mock('http-proxy-middleware', () =>
   process.getBuiltinModule('node:module').createRequire(__filename)('http-proxy-middleware'),
@@ -103,10 +102,6 @@ databaseSuite('response audit lifetime on PostgreSQL', () => {
             }),
             updateLastActivityAt: async () => undefined,
           },
-        },
-        {
-          provide: BoxRequestReplayService,
-          useValue: { session: async () => new ReplaySession(undefined, undefined, undefined) },
         },
         {
           provide: RunnerService,

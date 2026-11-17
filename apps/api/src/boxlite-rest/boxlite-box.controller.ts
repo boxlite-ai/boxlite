@@ -14,11 +14,9 @@ import {
   Body,
   Param,
   Query,
-  Headers,
   HttpCode,
   UseGuards,
   UsePipes,
-  ValidationPipe,
   Logger,
   Res,
   Req,
@@ -48,12 +46,12 @@ import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto, InboundNetworkSpecDto, OutboundNetworkSpecDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
-import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
 import { Audit, AUDIT_TARGET_ID, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
-import { BoxRequestReplayService, fingerprintOf } from './box-request-replay.service'
+import { ReplayValidationPipe } from '../common/replay-validation.pipe'
+import { noEffect } from '../common/replay-no-effect'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
 
@@ -80,7 +78,7 @@ const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 //
 // `whitelist` alone only strips unknown fields; `forbidNonWhitelisted` is what
 // turns a stripped field into a 400. Both are required.
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+@UsePipes(new ReplayValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 @ApiBearerAuth()
 export class BoxliteBoxController {
   private readonly logger = new Logger(BoxliteBoxController.name)
@@ -90,7 +88,6 @@ export class BoxliteBoxController {
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
     private readonly checkpointRecoverService: CheckpointRecoverService,
-    private readonly requestReplay: BoxRequestReplayService,
   ) {}
 
   @Post()
@@ -133,66 +130,23 @@ export class BoxliteBoxController {
   })
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Body() dto: CreateBoxDto,
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
-    const replay = await this.requestReplay.session(
-      authContext.organizationId,
-      authContext.userId,
-      'createBox',
-      idempotencyKey,
-      fingerprintOf('POST', '/boxes', dto),
-    )
-    if (replay.response) {
-      // The stored status is always 201 for a successful create, matching
-      // this handler's @HttpCode. The body is the original serialized DTO;
-      // returning it parsed lets NestJS serialize it identically.
-      return JSON.parse(replay.response.body) as BoxResponseDto
+    if (dto.checkpoint_id !== undefined) {
+      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
     }
-
-    try {
-      if (dto.checkpoint_id !== undefined) {
-        const response = await this.createBoxFromCheckpoint(authContext, dto, ctx, request)
-        await replay.complete({ status: 201, body: JSON.stringify(response) })
-        return response
-      }
-
-      // Attaching a managed volume grants the box read/write access to its data,
-      // so it is authorized independently of WRITE_BOXES: the caller must hold the
-      // volume permissions too. WRITE_BOXES alone must not reach another key's
-      // volumes (GHSA-2qqv-7cwv-mj8h).
-      if (dto.volumes?.length) {
-        this.assertCanAttachVolumes(authContext)
-      }
-
-      const organization = authContext.organization
-      const createBoxDto = createBoxToCreateBox(dto)
-      const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
-
-      let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
-      if (request) request[AUDIT_TARGET_ID] = box.id
-      if (box.state !== BoxState.STARTED) {
-        box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
-      }
-      const response = boxToBoxResponse(box)
-      await replay.complete({ status: 201, body: JSON.stringify(response) })
-      return response
-    } catch (error) {
-      // Only a failure proven to happen before admission may free the key.
-      // Quota rejection is the documented retryable case; 400/403 validation
-      // runs before any dispatch. Anything else (admission, state wait) may
-      // have had an effect: the record is left untouched, staying pending and
-      // fencing same-key retries with idempotency_outcome_unknown after the
-      // completion deadline, instead of allowing a second Box.
-      const preAdmission =
-        error instanceof BoxCreationLimitExceededError ||
-        error instanceof BadRequestException ||
-        error instanceof ForbiddenException
-      if (preAdmission) await replay.releaseSafe(true)
-      throw error
+    if (dto.volumes?.length) this.assertCanAttachVolumes(authContext)
+    const organization = authContext.organization
+    const createBoxDto = createBoxToCreateBox(dto)
+    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+    let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
+    if (request) request[AUDIT_TARGET_ID] = box.id
+    if (box.state !== BoxState.STARTED) {
+      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }
+    return boxToBoxResponse(box)
   }
 
   /** Admit an inherited configuration, record its request, then wait without losing its identity. */
@@ -206,15 +160,17 @@ export class BoxliteBoxController {
       .filter(([field, value]) => value !== undefined && field !== 'checkpoint_id' && field !== 'name')
       .map(([field]) => field)
     if (overrides.includes('image')) {
-      throw new BadRequestException('checkpoint_id and image are mutually exclusive')
+      throw noEffect(new BadRequestException('checkpoint_id and image are mutually exclusive'))
     }
     if (overrides.length) {
-      throw new BadRequestException(
-        `A box created from a checkpoint inherits its settings; only name may be set, remove: ${overrides.join(', ')}`,
+      throw noEffect(
+        new BadRequestException(
+          `A box created from a checkpoint inherits its settings; only name may be set, remove: ${overrides.join(', ')}`,
+        ),
       )
     }
     if (dto.name !== undefined && (typeof dto.name !== 'string' || !CHECKPOINT_BOX_NAME.test(dto.name))) {
-      throw new BadRequestException('Invalid box name')
+      throw noEffect(new BadRequestException('Invalid box name'))
     }
 
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
@@ -250,7 +206,7 @@ export class BoxliteBoxController {
   private assertCanAttachVolumes(authContext: OrganizationAuthContext): void {
     const required = [OrganizationResourcePermission.READ_VOLUMES, OrganizationResourcePermission.WRITE_VOLUMES]
     if (!hasOrganizationResourcePermissions(authContext, required)) {
-      throw new ForbiddenException(`Attaching a managed volume requires: ${required.join(', ')}`)
+      throw noEffect(new ForbiddenException(`Attaching a managed volume requires: ${required.join(', ')}`))
     }
   }
 
