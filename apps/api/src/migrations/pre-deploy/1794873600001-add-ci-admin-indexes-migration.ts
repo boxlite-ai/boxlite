@@ -16,15 +16,17 @@ export class AddCiAdminIndexes1794873600001 implements MigrationInterface {
     try {
       for (const [name, keys] of indexes) {
         const [existing] = await runner.query(
-          `SELECT i.indisvalid,i.indisunique,i.indnatts,i.indpred IS NULL AS unfiltered,
+          `SELECT i.indisvalid,i.indisunique,i.indnatts,i.indpred IS NULL AS unfiltered,am.amname,
           i.indrelid='ci_installation_binding'::regclass AS expected_table,
           ARRAY(SELECT pg_get_indexdef(i.indexrelid,n,true) FROM generate_series(1,i.indnkeyatts) n) AS keys
-          FROM pg_index i WHERE i.indexrelid=to_regclass($1)`,
+          FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_am am ON am.oid=c.relam
+          WHERE i.indexrelid=to_regclass($1)`,
           [name],
         )
         if (existing) {
           if (
             !existing.expected_table ||
+            existing.amname !== 'btree' ||
             existing.indisunique ||
             !existing.unfiltered ||
             existing.indnatts !== keys.length ||
