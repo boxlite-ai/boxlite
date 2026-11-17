@@ -32,6 +32,13 @@ function requiredCount(value: string | undefined, fallback: number, name: string
   return parsed
 }
 
+function databaseAcquisitionTimeout(): number {
+  const name = 'DB_POOL_CONNECTION_TIMEOUT_MS'
+  const timeout = requiredCount(process.env[name], 5000, name)
+  if (timeout > 2_147_483_647) throw new Error(`${name} exceeds the Node.js timer limit`)
+  return timeout
+}
+
 function organizationInvitationTtlSeconds(): number {
   const name = 'ORGANIZATION_INVITATION_TTL_SECONDS'
   const seconds = requiredCount(process.env[name], 604800, name)
@@ -633,8 +640,7 @@ const configuration = {
       max: process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10),
       min: process.env.DB_POOL_MIN && parseInt(process.env.DB_POOL_MIN, 10),
       idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS && parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10),
-      connectionTimeoutMillis:
-        process.env.DB_POOL_CONNECTION_TIMEOUT_MS && parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 10),
+      connectionTimeoutMillis: databaseAcquisitionTimeout(),
     },
   },
   redis: {

@@ -113,6 +113,7 @@ describe('Registry credential update HTTP boundary', () => {
     expect(service.update).toHaveBeenCalledWith(ORG, ID, LOGIN)
     expect(audit.createLog).toHaveBeenCalledWith(
       expect.objectContaining({ targetId: ID, metadata: { body: { username: LOGIN.username } } }),
+      expect.any(Number),
     )
     expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain(LOGIN.password)
   })

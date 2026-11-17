@@ -5,6 +5,7 @@ import { AuditLog } from './entities/audit-log.entity'
 import { AuditAction } from './enums/audit-action.enum'
 import { AuditService } from './services/audit.service'
 import { AuditLogSubscriber } from './subscribers/audit-log.subscriber'
+import { configuration } from '../config/configuration'
 
 const databaseSuite = process.env.DB_HOST ? describe : describe.skip
 
@@ -32,7 +33,12 @@ databaseSuite('audit write deadlines on PostgreSQL', () => {
       schema,
       entities: [AuditLog],
       entitySkipConstructor: true,
-      extra: { max: 1, options: `-c search_path=${schema},public`, application_name: schema },
+      extra: {
+        max: 1,
+        connectionTimeoutMillis: configuration.database.pool.connectionTimeoutMillis,
+        options: `-c search_path=${schema},public`,
+        application_name: schema,
+      },
     }).initialize()
     await db.synchronize()
     new AuditLogSubscriber(db)
@@ -52,6 +58,40 @@ databaseSuite('audit write deadlines on PostgreSQL', () => {
       await observer.destroy()
     }
   })
+
+  it.each([20, 50, 100])('queues %i writes and completes them through one connection', async (count) => {
+    const held = db.createQueryRunner()
+    await held.connect()
+    const writes = Promise.allSettled(Array.from({ length: count }, () => service.createLog(dto, 5000)))
+    try {
+      await delay(0)
+      const pool = (db.driver as unknown as { master: { waitingCount: number } }).master
+      expect(pool.waitingCount).toBe(count)
+    } finally {
+      await held.release()
+      await writes
+    }
+    expect((await writes).filter((result) => result.status === 'rejected')).toEqual([])
+    expect(await db.getRepository(AuditLog).count()).toBe(count)
+  })
+
+  it('removes expired acquisitions while the pool remains occupied', async () => {
+    const held = db.createQueryRunner()
+    await held.connect()
+    const pool = (db.driver as unknown as { master: { waitingCount: number } }).master
+    const write = service.createLog(dto, 100).catch((error) => error)
+    try {
+      await write
+      const cleanupBy = Date.now() + 6000
+      while (pool.waitingCount > 0 && Date.now() < cleanupBy) await delay(20)
+      expect(pool.waitingCount).toBe(0)
+    } finally {
+      await held.release()
+      await write
+    }
+    expect(await db.getRepository(AuditLog).count()).toBe(0)
+    await expect(service.createLog(dto, 1000)).resolves.toMatchObject(dto)
+  }, 10000)
 
   it('times out while the pool is full and never writes after a late acquisition', async () => {
     const held = db.createQueryRunner()
