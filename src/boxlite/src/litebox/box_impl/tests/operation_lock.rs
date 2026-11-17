@@ -979,3 +979,168 @@ async fn disk_lock_snapshot_waiter_rechecks_identity_after_admission() {
             .exists()
     );
 }
+
+fn snapshot_restore_test_disk(bx: &BoxImpl) -> std::path::PathBuf {
+    let disks = bx.config.box_home.join("disks");
+    std::fs::create_dir_all(&disks).unwrap();
+    let disk = disks.join("disk.qcow2");
+    crate::disk::Qcow2Helper::create_disk(&disk, true)
+        .unwrap()
+        .leak();
+    bx.runtime
+        .snapshot_mgr
+        .create(&bx.config.box_home, "restore-point", bx.id().as_str())
+        .unwrap();
+    // Distinguish the current disk from the COW child restore would create.
+    std::fs::write(&disk, b"current disk must survive rejected restore").unwrap();
+    disk
+}
+
+#[tokio::test]
+async fn snapshot_restore_rechecks_stale_stopped_state() {
+    use crate::runtime::backend::SnapshotBackend;
+
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let handle = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&handle);
+    bx.state.write().force_status(BoxStatus::Stopped);
+    runtime
+        .box_manager
+        .save_box(bx.id(), &bx.state.read())
+        .unwrap();
+    let disk = snapshot_restore_test_disk(&bx);
+    let before = std::fs::read(&disk).unwrap();
+    let mut running = runtime.box_manager.update_box(bx.id()).unwrap();
+    running.force_status(BoxStatus::Running);
+    runtime.box_manager.save_box(bx.id(), &running).unwrap();
+    assert_eq!(bx.state.read().status, BoxStatus::Stopped);
+
+    let snapshots = crate::litebox::LocalSnapshotBackend::new(Arc::clone(&bx));
+    let result = snapshots.restore("restore-point").await;
+    assert!(
+        matches!(&result, Err(BoxliteError::InvalidState(message))
+            if message == "Cannot restore snapshot while box is running. Stop the box first."),
+        "restore accepted stale Stopped state: {result:?}"
+    );
+    assert_eq!(
+        std::fs::read(&disk).unwrap(),
+        before,
+        "restore replaced a running box's disk"
+    );
+}
+
+#[tokio::test]
+async fn snapshot_restore_rechecks_running_after_disk_wait() {
+    use crate::runtime::backend::SnapshotBackend;
+
+    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = &fixture.box_impl;
+    let disk = snapshot_restore_test_disk(bx);
+    let before = std::fs::read(&disk).unwrap();
+    let running = bx.state.read().clone();
+    let mut stopped = running.clone();
+    stopped.force_status(BoxStatus::Stopped);
+    bx.runtime.box_manager.save_box(bx.id(), &stopped).unwrap();
+    let stale = Arc::new(BoxImpl::new(
+        bx.config.clone(),
+        stopped,
+        Arc::clone(&bx.runtime),
+        bx.runtime.shutdown_token.child_token(),
+    ));
+    let snapshots = crate::litebox::LocalSnapshotBackend::new(Arc::clone(&stale));
+    let locker = bx.disk_locker().unwrap();
+    let owner = LockGuard::new_async(locker.as_ref()).await;
+    let mut restore = Box::pin(snapshots.restore("restore-point"));
+    assert!(
+        futures::poll!(&mut restore).is_pending(),
+        "restore bypassed disk admission"
+    );
+
+    // Model another handle publishing a booted VM under lifecycle admission.
+    // The harness supplies LiveState; start() exercises its real admission path
+    // without requiring a VM boot in this host-only test.
+    bx.with_operation(async {
+        bx.runtime.box_manager.save_box(bx.id(), &running)?;
+        *bx.state.write() = running.clone();
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let started = tokio::time::timeout(Duration::from_secs(1), bx.start()).await;
+    bx.shutdown_token.cancel();
+    wait_for_background_starts(bx, 1).await;
+    assert!(
+        matches!(started, Ok(Ok(()))),
+        "start blocked behind restore's disk waiter: {started:?}"
+    );
+    assert_eq!(stale.state.read().status, BoxStatus::Stopped);
+    drop(owner);
+
+    let result = tokio::time::timeout(Duration::from_secs(1), restore)
+        .await
+        .expect("restore stalled after disk admission");
+    assert!(
+        matches!(&result, Err(BoxliteError::InvalidState(message))
+            if message == "Cannot restore snapshot while box is running. Stop the box first."),
+        "restore missed Running published while waiting for disk admission: {result:?}"
+    );
+    assert_eq!(
+        std::fs::read(&disk).unwrap(),
+        before,
+        "queued restore replaced a running box's disk"
+    );
+}
+
+#[tokio::test]
+async fn snapshot_restore_waits_for_lifecycle_while_holding_disk() {
+    use crate::runtime::backend::SnapshotBackend;
+
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let handle = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&handle);
+    bx.state.write().force_status(BoxStatus::Stopped);
+    runtime
+        .box_manager
+        .save_box(bx.id(), &bx.state.read())
+        .unwrap();
+    let disk = snapshot_restore_test_disk(&bx);
+    let before = std::fs::read(&disk).unwrap();
+    let locker = runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let lifecycle = LockGuard::new(locker.as_ref());
+    let snapshots = crate::litebox::LocalSnapshotBackend::new(Arc::clone(&bx));
+    let mut restore = Box::pin(snapshots.restore("restore-point"));
+    assert!(
+        futures::poll!(&mut restore).is_pending(),
+        "restore bypassed lifecycle admission instead of queuing"
+    );
+    assert!(
+        LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_none(),
+        "restore did not retain disk admission while waiting for lifecycle"
+    );
+    assert_eq!(std::fs::read(&disk).unwrap(), before);
+    drop(lifecycle);
+    tokio::time::timeout(Duration::from_secs(1), restore)
+        .await
+        .expect("restore stalled after lifecycle admission")
+        .unwrap();
+    assert_ne!(
+        std::fs::read(&disk).unwrap(),
+        before,
+        "stopped restore did not replace the disk"
+    );
+    assert!(LockGuard::try_new(locker.as_ref()).is_some());
+    assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_some());
+}

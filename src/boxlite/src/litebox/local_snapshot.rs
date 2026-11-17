@@ -126,34 +126,38 @@ impl LocalSnapshotBackend {
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
 
-        // Refuse restore while the box is active — disk replacement under a running
-        // VM would corrupt state and potentially lose data.
-        {
-            let state = self.inner.state.read();
-            if state.status.is_active() {
-                return Err(BoxliteError::InvalidState(
-                    "Cannot restore snapshot while box is running. Stop the box first.".into(),
-                ));
-            }
-        }
-
         self.inner
             .with_disk_admission(async {
-                let box_id = self.inner.id().as_str();
-                let disks_dir = self.inner.config.box_home.join("disks");
-
                 self.inner
-                    .runtime
-                    .snapshot_mgr
-                    .restore_disks(box_id, name, &disks_dir)?;
+                    .with_operation(async {
+                        // Lifecycle admission refreshes state before this check and
+                        // prevents a start until disk replacement finishes.
+                        {
+                            let state = self.inner.state.read();
+                            if state.status.is_active() {
+                                return Err(BoxliteError::InvalidState(
+                                    "Cannot restore snapshot while box is running. Stop the box first.".into(),
+                                ));
+                            }
+                        }
 
-                tracing::info!(
-                    box_id = %self.inner.id(),
-                    snapshot = %name,
-                    "Restored snapshot"
-                );
+                        let box_id = self.inner.id().as_str();
+                        let disks_dir = self.inner.config.box_home.join("disks");
 
-                Ok(())
+                        self.inner
+                            .runtime
+                            .snapshot_mgr
+                            .restore_disks(box_id, name, &disks_dir)?;
+
+                        tracing::info!(
+                            box_id = %self.inner.id(),
+                            snapshot = %name,
+                            "Restored snapshot"
+                        );
+
+                        Ok(())
+                    })
+                    .await
             })
             .await
     }
