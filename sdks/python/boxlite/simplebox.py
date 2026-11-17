@@ -147,7 +147,16 @@ class SimpleBox:
     @property
     def agents(self) -> Agents:
         """Get the agent namespace without starting the Box."""
-        return Agents()
+
+        def resolve():
+            if not self._started:
+                raise RuntimeError(
+                    "Box not started. Use 'async with SimpleBox(...) as box:' "
+                    "or call 'await box.start()' first."
+                )
+            return self._box.agents
+
+        return Agents(resolve=resolve)
 
     def __init__(
         self,

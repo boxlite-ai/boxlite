@@ -41,7 +41,7 @@ Note:
     Use the async API (CodeBox, SimpleBox) in those cases.
 """
 
-from ._agents import SyncAgent, SyncAgents, SyncAgentTurn
+from ._agents import SyncAgent, SyncAgentEventStream, SyncAgents, SyncAgentTurn
 from ._box import SyncBox
 from ._boxlite import SyncBoxlite
 from ._checkpoints import SyncCheckpointHandle
@@ -61,6 +61,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     # Entry point
     "SyncAgents",
     "SyncAgent",
+    "SyncAgentEventStream",
     "SyncAgentTurn",
     "SyncBoxlite",
     # Base classes
