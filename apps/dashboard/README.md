@@ -262,6 +262,12 @@ An unknown region keeps its stored ID as the display fallback. Region names do
 not depend on the selected organization, so switching organizations does not
 refetch this list.
 
+## Billing plans
+
+Billing separates account status in Overview from the grouped Plans comparison.
+See [subscription plans](docs/subscription-cards/README.md) for source facts,
+frontend presentation, catalogue-price checks and the local mock preview.
+
 ## Commands
 
 Run these from `apps/`:
