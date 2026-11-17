@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve tooling.ref, validate the profile, adopt the tip
+      - name: Install pinned tooling and validate the profile
         run: ./.agent-tooling/install.sh
       - name: Guidance block is current (an explicit install splices; drift becomes a diff)
         run: git diff --exit-code -- AGENTS.md CLAUDE.md

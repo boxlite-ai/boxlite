@@ -163,12 +163,20 @@ Threshold behavior follows [Codecov's status configuration](https://docs.codecov
 
 ### Updating agent tooling
 
-Run `./.agent-tooling/install.sh` in each worktree after a tooling upgrade to
-refresh hooks and managed guidance. Keep committed bootstrap scripts synchronized
-with the adopted release templates, `.github/pull_request_template.md` with the
-release's PR template (keeping this guide's word limits), and the
-`AGENT_TOOLING_REV` pin in `.github/workflows/author-review.yml` with a reviewed
-release revision.
+[`.agent-tooling/hold`](.agent-tooling/hold) pins a reviewed full lowercase tooling
+commit SHA for local installation and CI. This pin takes precedence over
+`tooling.ref`, so upstream `main` updates do not change an existing PR's generated
+guidance.
+
+Upgrade tooling in a dedicated PR:
+
+1. Update `.agent-tooling/hold` to the reviewed commit SHA.
+2. Run `./.agent-tooling/install.sh` in each worktree to refresh hooks and managed guidance.
+3. Commit the pin and generated guidance together; repeat installation and confirm `git diff --exit-code -- AGENTS.md CLAUDE.md` passes.
+
+Keep committed bootstrap scripts synchronized with the adopted release templates.
+Keep `.github/pull_request_template.md` aligned with the release's PR template, retaining this guide's word limits.
+Update the `AGENT_TOOLING_REV` pin in `.github/workflows/author-review.yml` to a reviewed release revision.
 
 The 0.1.26 Claude bootstrap checks the adopted manifest version and reinstalls a
 stale project plugin when an update leaves it unchanged, preserving project
