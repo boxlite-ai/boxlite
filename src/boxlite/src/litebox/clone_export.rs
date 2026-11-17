@@ -111,10 +111,7 @@ impl BoxImpl {
                 let temp = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
                     BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
                 })?;
-                #[allow(deprecated)]
-                let staging = temp.into_path();
-
-                let staging_disks = staging.join("disks");
+                let staging_disks = temp.path().join("disks");
                 std::fs::create_dir_all(&staging_disks).map_err(|e| {
                     BoxliteError::Storage(format!("Failed to create staging disks dir: {}", e))
                 })?;
@@ -130,7 +127,7 @@ impl BoxImpl {
                 )?
                 .leak();
 
-                staging_dirs.push(staging);
+                staging_dirs.push(temp);
             }
 
             // Phase C: Provision each clone and record base disk refs.
@@ -140,24 +137,17 @@ impl BoxImpl {
             let copy_options = self.options_for_copy()?;
             let mut clones = Vec::with_capacity(count);
             for (i, staging) in staging_dirs.into_iter().enumerate() {
-                let litebox = match rt
+                // Keep the TempDir alive until provisioning moves it to the final box home.
+                // On failure, it and all remaining staging dirs are cleaned up on drop.
+                let litebox = rt
                     .provision_box(
-                        staging.clone(),
+                        staging.path().to_path_buf(),
                         names.get(i).cloned(),
                         copy_options.clone(),
                         BoxStatus::Stopped,
                         resolved_image.clone(),
                     )
-                    .await
-                {
-                    Ok(lb) => lb,
-                    Err(e) => {
-                        // Cleanup remaining staging dirs on failure.
-                        let _ = std::fs::remove_dir_all(&staging);
-                        // Don't clean up already-provisioned clones; they're valid boxes.
-                        return Err(e);
-                    }
-                };
+                    .await?;
 
                 // Record that this clone depends on the shared base disk.
                 if let Err(e) = rt

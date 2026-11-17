@@ -195,6 +195,8 @@ Blocking acquisition follows disk → lifecycle → short state guard order, wit
 persisted ownership rechecked after disk admission and before disk side effects.
 Clone, export, and snapshot mutations share `with_disk_admission` for acquisition
 and ownership rechecks, keeping new entry points on the same admission path.
+If a batch clone fails after staging begins, every unprovisioned staging
+directory is cleaned up, while successfully provisioned clones are retained.
 Snapshot restore queues for disk → lifecycle admission, rechecks that the box is
 inactive after the lifecycle state refresh, and holds both admissions through disk
 replacement.
