@@ -15,8 +15,10 @@ import { RunnerUnschedulableReason } from '../enums/runner-unschedulable-reason.
 import { RunnerDiskExpansionStatus } from '../enums/runner-disk-expansion-status.enum'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 import { RedisLockProvider } from '../common/redis-lock.provider'
+import { metrics, type Meter } from '@opentelemetry/api'
 import { TypedConfigService } from '../../config/typed-config.service'
 import {
+  BASELINE_READ_DEADLINE_MS,
   CONFIRM_TOLERANCE_RATIO,
   EXPANSION_ERROR,
   HYPERDISK_BALANCED_MAX_GIB,
@@ -25,12 +27,13 @@ import {
   headroomGiB,
   maxGrowthWithinWindow,
   nextSizeGiB,
+  performanceTarget,
   resolveCapGiB,
   resolveEffectiveCapGiB,
   sampleBucketAt,
   shouldTrigger,
 } from './runner-disk-expansion.service'
-import { GcpDiskClientLike, GcpZoneOperation } from './gcp-disk-client'
+import { GcpDiskClientLike, GcpDiskSnapshot, GcpZoneOperation } from './gcp-disk-client'
 import { runnerDiskConfig } from '../../config/configuration'
 
 const HOUR = 3600_000
@@ -149,6 +152,17 @@ function makeService(opts: {
   acceptedCount?: number
   hasPending?: boolean
   hasRecentRateLimit?: boolean
+  hasRecentPerformance?: boolean
+  /** The disks.get answer; the empty object is the size-only default. */
+  diskSnapshot?: GcpDiskSnapshot
+  /** When set, getDisk rejects with this error. */
+  getDiskError?: Error
+  /** When set, getDisk never settles: the deadline must win the race. */
+  diskReadNeverResolves?: boolean
+  /** When set, the performance-cooldown gate query rejects with this error. */
+  perfGateQueryError?: Error
+  /** When set, resizeDisk rejects with this error (mapped through toExpansionClientError). */
+  resizeError?: Error
   samples?: RunnerDiskUsageSample[]
   acquireLease?: boolean
   /** The MIN(fromGiB) the cap-baseline query reports; null (default) means no attempts yet. */
@@ -177,11 +191,13 @@ function makeService(opts: {
   const expansions = {
     find: jest.fn(async () => opts.pendingExpansions ?? []),
     count: jest.fn(async () => opts.acceptedCount ?? 0),
-    exist: jest.fn(async (criteria: { where: Partial<RunnerDiskExpansion> }) =>
-      criteria.where.status === RunnerDiskExpansionStatus.PENDING
-        ? (opts.hasPending ?? false)
-        : (opts.hasRecentRateLimit ?? false),
-    ),
+    exist: jest.fn(async (criteria: { where: Partial<RunnerDiskExpansion> }) => {
+      const where = criteria.where as Record<string, unknown>
+      if (opts.perfGateQueryError && where.performanceUpdated === true) throw opts.perfGateQueryError
+      if (where.status === RunnerDiskExpansionStatus.PENDING) return opts.hasPending ?? false
+      if (where.performanceUpdated === true) return opts.hasRecentPerformance ?? false
+      return opts.hasRecentRateLimit ?? false
+    }),
     insert: jest.fn(async () => ({ identifiers: [{ id: 'inserted-row' }], generatedMaps: [], raw: [] })),
     update: jest.fn(async () => ({ affected: 1, raw: [], generatedMaps: [] })),
     createQueryBuilder: jest.fn(() => baselineQuery),
@@ -200,7 +216,14 @@ function makeService(opts: {
   }
 
   const gcpDiskClient: GcpDiskClientLike = {
-    resizeDisk: jest.fn(async () => ({ operation: 'op-1' })),
+    resizeDisk: opts.resizeError
+      ? jest.fn(() => Promise.reject(opts.resizeError))
+      : jest.fn(async () => ({ operation: 'op-1' })),
+    getDisk: opts.diskReadNeverResolves
+      ? jest.fn(() => new Promise<never>(() => {}))
+      : opts.getDiskError
+        ? jest.fn(() => Promise.reject(opts.getDiskError))
+        : jest.fn(async () => opts.diskSnapshot ?? {}),
     getZoneOperation: jest.fn(async () => opts.zoneOperation ?? { status: 'PENDING' as const }),
   }
 
@@ -245,6 +268,94 @@ function gcpRunner(overrides: Partial<Runner> = {}): Runner {
   Object.assign(runner, overrides)
   return runner
 }
+
+describe('performanceTarget', () => {
+  it('scales both fields at the measured slope, nothing clipped', () => {
+    expect(performanceTarget('3600', '240', '200', 300)).toEqual({
+      iops: '5400',
+      throughput: '360',
+      ceilingHit: false,
+      ceilingFields: [],
+    })
+  })
+
+  it('accepts numeric baseline values from the gRPC-typed snapshot identically', () => {
+    expect(performanceTarget(3600, 240, 200, 300)).toEqual({
+      iops: '5400',
+      throughput: '360',
+      ceilingHit: false,
+      ceilingFields: [],
+    })
+  })
+
+  it('rounds each field independently', () => {
+    expect(performanceTarget('3601', '241', '200', 300)).toMatchObject({ iops: '5402', throughput: '362' })
+  })
+
+  it('drops same-value fields in a degenerate ratio<1 round', () => {
+    expect(performanceTarget('3600', '240', 300, 250)).toEqual({
+      ceilingHit: false,
+      ceilingFields: [],
+    })
+  })
+
+  it('clips IOPS to the flat ceiling when the slope target outgrows it', () => {
+    expect(performanceTarget('99000', '200', '200', 400)).toEqual({
+      iops: '160000',
+      throughput: '400',
+      ceilingHit: true,
+      ceilingFields: ['iops'],
+    })
+  })
+
+  it('drops same-value fields already parked on the ceiling', () => {
+    expect(performanceTarget('160000', '2400', '320', 400)).toEqual({
+      ceilingHit: true,
+      ceilingFields: ['iops', 'throughput'],
+    })
+  })
+
+  it('clips throughput at the P/4 coupling ceiling to an integer', () => {
+    // iopsTarget=3750 puts the coupling ceiling at 937.5; a fractional wire
+    // value would be rejected by the int64 field and drag the bundled
+    // capacity change down with it, so the bound is floored to 937.
+    expect(performanceTarget('3000', '750', '200', 250)).toEqual({
+      iops: '3750',
+      throughput: '937',
+      ceilingHit: true,
+      ceilingFields: ['throughput'],
+    })
+  })
+
+  it('clips IOPS at the per-GiB ceiling when the flat ceiling is not binding', () => {
+    // slope 600/GiB × 220 = 132000 vs per-GiB bound 500×220 = 110000 < 160000:
+    // the per-GiB bound is the one that clips.
+    expect(performanceTarget('120000', '100', '200', 220)).toEqual({
+      iops: '110000',
+      throughput: '110',
+      ceilingHit: true,
+      ceilingFields: ['iops'],
+    })
+  })
+
+  it('pulls a boosted baseline down to the new ceiling and still sends the repair value', () => {
+    // curIops 160000 > iopsMax(100 GiB) = 50000: max-before-min keeps the
+    // field sent at the lowered legal value — the anti-deadlock repair path.
+    expect(performanceTarget('160000', '2400', '320', 100)).toEqual({
+      iops: '50000',
+      ceilingHit: true,
+      ceilingFields: ['iops'],
+    })
+  })
+
+  it('returns undefined on any missing or non-positive baseline input', () => {
+    expect(performanceTarget(undefined, '240', '200', 300)).toBeUndefined()
+    expect(performanceTarget('3600', undefined, '200', 300)).toBeUndefined()
+    expect(performanceTarget('3600', '240', undefined, 300)).toBeUndefined()
+    expect(performanceTarget('3600', '240', '0', 300)).toBeUndefined()
+    expect(performanceTarget('-5', '240', '200', 300)).toBeUndefined()
+  })
+})
 
 describe('RunnerDiskExpansionService round', () => {
   it('stays dormant while disabled', async () => {
@@ -833,5 +944,239 @@ describe('RunnerDiskExpansionService round', () => {
     // 200 GiB disk: statfs total is ~195.8 GiB (4.18 GiB overhead, measured).
     // 195.8 / 200 = 0.979 > 0.975, so a correct resize confirms.
     expect(195.8 / 200).toBeGreaterThan(CONFIRM_TOLERANCE_RATIO)
+  })
+
+  it('carries performance fields when the baseline is present and the cooldown is clear', async () => {
+    const { service, gcpDiskClient, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250, { iops: '4500', throughput: '300' })
+    expect(expansions.update).toHaveBeenCalledWith(
+      'inserted-row',
+      expect.objectContaining({ accepted: true, operation: 'op-1', performanceUpdated: true }),
+    )
+  })
+
+  it('logs the full identity, operation, and perf before/after on a bundled request', async () => {
+    const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {})
+    const { service } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+    })
+
+    try {
+      await service.evaluateAndConfirm()
+
+      const logged = logSpy.mock.calls.find((call) => String(call[0]).includes('expansion requested'))?.[1]
+      expect(logged).toBeDefined()
+      expect(logged).toEqual(
+        expect.objectContaining({
+          'runner.id': '11111111-1111-4111-8111-111111111111',
+          'runner.name': 'runner-1',
+          'disk.name': 'disk-1',
+          'disk.zone': 'z1',
+          'disk.project': 'proj',
+          'disk.operation': 'op-1',
+          'disk.from_gib': 200,
+          'disk.to_gib': 250,
+          'disk.perf_from_iops': '3600',
+          'disk.perf_from_throughput': '240',
+          'disk.perf_from_size_gib': '200',
+          'disk.perf_to_iops': '4500',
+          'disk.perf_to_throughput': '300',
+        }),
+      )
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it('sends size only while the performance cooldown is active', async () => {
+    const { service, gcpDiskClient, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+      hasRecentPerformance: true,
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    expect(expansions.update).toHaveBeenCalledWith('inserted-row', { accepted: true, operation: 'op-1' })
+    // the cooldown gate runs before the read: only gate-passing runners pay it
+    expect(gcpDiskClient.getDisk).not.toHaveBeenCalled()
+  })
+
+  it('still grows the disk when the baseline read fails', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const { service, gcpDiskClient } = makeService({ getDiskError: new Error('read boom') })
+
+    await service.evaluateAndConfirm()
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('disk read failed, expanding size only'),
+      expect.objectContaining({ 'disk.expansion_result': 'perf_read_failed' }),
+    )
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    warnSpy.mockRestore()
+  })
+
+  it('still grows the disk when the baseline read hangs past the deadline', async () => {
+    // The SDK's default Get config is a 600s timeout with retries; the
+    // deadline races it so one black-holed read cannot stall the sequential
+    // round or outlive the 60s cron lease. Expiry takes the same size-only
+    // fallback as a failed read; the next cron round retries naturally.
+    jest.useFakeTimers()
+    try {
+      const { service, gcpDiskClient } = makeService({ diskReadNeverResolves: true })
+      const round = service.evaluateAndConfirm()
+      await jest.advanceTimersByTimeAsync(BASELINE_READ_DEADLINE_MS + 100)
+      await round
+      expect(gcpDiskClient.resizeDisk).toHaveBeenCalledTimes(1)
+      expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('marks performanceUpdated on a rejected performance-carrying attempt', async () => {
+    const { service, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+      resizeError: GoogleError.parseHttpError({ error: { code: 400, message: 'bad' } }),
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(expansions.update).toHaveBeenCalledWith(
+      'inserted-row',
+      expect.objectContaining({
+        status: RunnerDiskExpansionStatus.FAILED,
+        error: EXPANSION_ERROR.NOT_ACCEPTED,
+        performanceUpdated: true,
+      }),
+    )
+  })
+
+  it('credits a performance-carrying throttle to the performance budget, not the capacity cooldown', async () => {
+    // A bundled PATCH that draws a GCP 429 cannot tell which budget tripped.
+    // performanceUpdated already opens the 4h performance cooldown; recording
+    // rate_limited would also freeze capacity for the whole rate-limit
+    // cooldown, which the design promises capacity is never subject to. The
+    // rejection is credited to performance and capacity goes size-only on the
+    // next round immediately; an actually capacity-caused throttle
+    // self-identifies when that size-only attempt records its own rate_limited.
+    const { service, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+      resizeError: GoogleError.parseHttpError({
+        error: { code: 429, message: 'rate', status: 'RESOURCE_EXHAUSTED' },
+      }),
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(expansions.update).toHaveBeenCalledWith(
+      'inserted-row',
+      expect.objectContaining({
+        status: RunnerDiskExpansionStatus.FAILED,
+        error: EXPANSION_ERROR.NOT_ACCEPTED,
+        performanceUpdated: true,
+      }),
+    )
+  })
+
+  it('keeps capacity moving after a performance throttle and lets a capacity throttle self-identify', async () => {
+    // Round 1: a bundled PATCH drawing a 429 is credited to the performance
+    // budget (not_accepted + performanceUpdated). Round 2: the performance
+    // cooldown holds, capacity retries size-only immediately — the 30-minute
+    // rate-limit gate must not block it. If the throttle was capacity-caused,
+    // the size-only retry draws its own 429 and records rate_limited then.
+    const options = {
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+      resizeError: GoogleError.parseHttpError({ error: { code: 429, message: 'rate', status: 'RESOURCE_EXHAUSTED' } }),
+      hasRecentPerformance: false,
+    }
+    const { service, gcpDiskClient, expansions } = makeService(options)
+
+    await service.evaluateAndConfirm()
+    expect(gcpDiskClient.resizeDisk).toHaveBeenNthCalledWith(1, ref, 250, { iops: '4500', throughput: '300' })
+    expect(expansions.update).toHaveBeenNthCalledWith(
+      1,
+      'inserted-row',
+      expect.objectContaining({ error: EXPANSION_ERROR.NOT_ACCEPTED, performanceUpdated: true }),
+    )
+
+    // the ledger row written by round 1 is what the cooldown gate reads
+    options.hasRecentPerformance = true
+    await service.evaluateAndConfirm()
+    expect(gcpDiskClient.resizeDisk).toHaveBeenNthCalledWith(2, ref, 250)
+    // size-only round: no performance fields carried, so the ledger row does
+    // not carry the performance marker — only the self-identified throttle
+    expect(expansions.update).toHaveBeenNthCalledWith(
+      2,
+      'inserted-row',
+      expect.objectContaining({ error: EXPANSION_ERROR.RATE_LIMITED }),
+    )
+  })
+
+  it('warns when the disk snapshot lacks provisioned values and still grows size-only', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const { service, gcpDiskClient } = makeService({ diskSnapshot: { sizeGb: '200' } })
+
+    await service.evaluateAndConfirm()
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('lacks provisioned performance values'),
+      expect.objectContaining({ 'disk.expansion_result': 'perf_baseline_missing' }),
+    )
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    warnSpy.mockRestore()
+  })
+
+  it('counts and warns on ceiling-clipped targets, sending the integer-clipped bundle', async () => {
+    const counterAdd = jest.fn()
+    const meterSpy = jest.spyOn(metrics, 'getMeter').mockReturnValue({
+      createCounter: () => ({ add: counterAdd }),
+      createObservableGauge: () => ({ addCallback: () => {} }),
+    } as unknown as Meter)
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const { service, gcpDiskClient, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '160000', provisionedThroughput: '2400' },
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(counterAdd).toHaveBeenCalledWith(1, { field: 'iops' })
+    expect(counterAdd).toHaveBeenCalledWith(1, { field: 'throughput' })
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('clipped to the per-disk ceiling'),
+      expect.objectContaining({ 'disk.expansion_result': 'perf_ceiling' }),
+    )
+    // 160000→125000 differs and is sent; 2400→2400 is a same-value drop
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250, { iops: '125000' })
+    expect(expansions.update).toHaveBeenCalledWith('inserted-row', {
+      accepted: true,
+      operation: 'op-1',
+      performanceUpdated: true,
+    })
+    meterSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it('still grows the disk size-only when the performance cooldown gate query fails', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const { service, gcpDiskClient } = makeService({
+      perfGateQueryError: new Error('db blip'),
+      diskSnapshot: { sizeGb: '100', provisionedIops: '50000', provisionedThroughput: '250' },
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('cooldown gate query failed'),
+      expect.objectContaining({ 'disk.expansion_result': 'perf_gate_query_failed' }),
+    )
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    expect(gcpDiskClient.getDisk).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 })
