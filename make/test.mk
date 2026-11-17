@@ -48,6 +48,9 @@ PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
 GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
+# RACE=1 runs the Go suites under the race detector; the detector's slowdown
+# pushes the full SDK suite past half an hour, so race runs get an hour.
+GOTEST_RACE      = $(if $(RACE),-race -timeout 60m,)
 
 # The Rust unit-test crate set, shared by test:unit:rust and the coverage
 # targets so coverage measures exactly what the unit suite runs. Test builds
@@ -658,7 +661,7 @@ test\:all\:c:
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
 	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
+	@cd sdks/go && go test -tags boxlite_dev $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.
@@ -735,7 +738,7 @@ test\:apps\:github-ci-runner: _ensure-apps-deps
 
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
-	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+	@cd apps/runner && go test -tags boxlite_dev $(GOTEST_RACE) ./... $(GOTEST_FILTER)
 
 PHONY_TARGETS += test\:integration\:runner
 test\:integration\:runner: dev\:go

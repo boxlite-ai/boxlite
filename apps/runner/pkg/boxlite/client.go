@@ -421,11 +421,17 @@ func (c *Client) Shutdown(ctx context.Context, timeout time.Duration) error {
 // so boxes get a graceful stop before the C handle is freed.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	boxes := make([]*boxlite.Box, 0, len(c.boxes))
 	for id, bx := range c.boxes {
-		bx.Close()
+		boxes = append(boxes, bx)
 		delete(c.boxes, id)
+	}
+	c.mu.Unlock()
+
+	// Close outside the cache lock: each Close waits for in-flight native
+	// calls on its box, and one box's drain must not block the others.
+	for _, bx := range boxes {
+		bx.Close()
 	}
 	return c.runtime.Close()
 }
@@ -798,9 +804,8 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 //
 // It reads through the runtime rather than the handle cache: a state read
 // needs no bootable handle, only the persisted record. Routing it through
-// getOrFetchBox would evict and re-fetch a handle for every non-running box,
-// and eviction cannot free the old one (see evictBox), so the runner would
-// accumulate dead handles for as long as it ran.
+// getOrFetchBox would evict, close and re-fetch a handle for every
+// non-running box, paying a full handle round-trip per read.
 func (c *Client) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error) {
 	info, err := c.nativeBoxInfo(ctx, boxId)
 	if err != nil {
@@ -980,31 +985,37 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 // only on the push that says the box started, so one still owed for a box that
 // no longer exists can never be delivered, and left behind it would accumulate
 // one entry per box this runner ever destroyed.
+// forgetBox drops everything this client still holds for a box that is being
+// destroyed: the cached handle, and any image report the box never got to
+// deliver. The report has to go with it — the control plane records an image
+// only on the push that says the box started, so one still owed for a box that
+// no longer exists can never be delivered, and left behind it would accumulate
+// one entry per box this runner ever destroyed.
+//
+// The close runs outside the cache lock: it waits for in-flight native calls
+// on that one box, and no other box's lookup should queue behind the wait.
 func (c *Client) forgetBox(boxId string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if bx, ok := c.boxes[boxId]; ok {
-		bx.Close()
-		delete(c.boxes, boxId)
-	}
+	bx := c.boxes[boxId]
+	delete(c.boxes, boxId)
 	delete(c.pendingImageReports, boxId)
+	c.mu.Unlock()
+
+	if bx != nil {
+		bx.Close()
+	}
 }
 
 // evictBox unmaps a handle so the next lookup fetches a fresh one, and only
 // while it is still the cached one — a concurrent Create or fetch may already
 // have replaced it, and unmapping the winner would drop a live entry.
 //
-// It deliberately does not Close the handle. getOrFetchBox hands the same
-// *boxlite.Box to every caller and the runner serializes nothing per box, so
-// freeing here would pull the FFI handle out from under a goroutine mid-call.
-// An unmapped handle is instead leaked for the process lifetime — Close only
-// frees what is still in the map. The cost is one handle per request that finds
-// its box down: calls that go on to boot it stop there, while ones that refuse a
-// stopped box (metrics) pay it again on every retry. That is
-// affordable only because it tracks request volume — which is why GetBoxInfo
-// reads through the runtime rather than coming through here.
-// Ref-counting the wrapper is the real fix, and it belongs in the SDK.
+// It deliberately does not Close the handle: an evicted handle may still be
+// referenced by callers that have not finished their requests, and closing it
+// here would turn those calls into ErrInvalidState. That ownership hand-off
+// is its own change, tracked in Linear BUI-1747 — until it lands, the
+// unmapped handle is leaked for the process lifetime, bounded by the request
+// volume that finds its box down.
 func (c *Client) evictBox(boxId string, stale *boxlite.Box) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

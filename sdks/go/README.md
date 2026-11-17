@@ -443,6 +443,16 @@ runtime's lifetime.
 See the [SSH guide](../../docs/guides/ssh.md) for listener behavior,
 authentication rules, and the HTTP contract.
 
+## Threading
+
+A `Box` is safe for concurrent use by multiple goroutines. Each native call
+holds a shared lock on the box handle for the duration of its synchronous C
+submission; `Close` takes the exclusive lock, waits for those submissions to
+finish, then frees the handle exactly once. `Close` is idempotent. Methods
+called after `Close` — or racing a finishing `Close` — return an
+`ErrInvalidState` error ("box is closed"). Closing does not destroy the box;
+the box keeps running in the runtime.
+
 ## Development
 
 Build from source (requires Rust toolchain):
