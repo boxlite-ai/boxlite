@@ -31,7 +31,8 @@ def test_agents_simple_namespace_needs_no_runtime_initialization():
 
 @pytest.mark.asyncio
 async def test_simplebox_agent_calls_require_started_box():
-    box = SimpleBox(image="alpine:latest")
+    box = object.__new__(SimpleBox)
+    box._started = False
     with pytest.raises(RuntimeError, match="Box not started"):
         await box.agents.create("opencode")
 

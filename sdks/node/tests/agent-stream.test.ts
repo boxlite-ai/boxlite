@@ -241,3 +241,100 @@ test("forwards requests and responses without changing free JSON", async () => {
     idempotencyKey: "key",
   });
 });
+
+test("agent calls forward options and map core records", async () => {
+  const freeData = { turn_id: "inside", empty: null };
+  const result = {
+    turn_id: "t",
+    status: "completed",
+    outcome: "answer",
+    text: "done",
+    data: freeData,
+    artifacts: [],
+    usage: null,
+    error: null,
+  };
+  const control = { idempotencyKey: "key" };
+  const turn = {
+    wait: vi.fn().mockResolvedValue(result),
+    steer: vi
+      .fn()
+      .mockResolvedValue({ id: "s", turn_id: "t", status: "accepted" }),
+    interrupt: vi.fn().mockResolvedValue(undefined),
+    events: vi
+      .fn()
+      .mockReturnValue({ opened: vi.fn(), nextEvent: vi.fn(), close: vi.fn() }),
+  };
+  const agent = {
+    state: {
+      id: "a",
+      status: "ready",
+      cursor: null,
+      active_turn_id: null,
+      queued_turn_ids: [],
+      requests: [],
+      steering: [],
+    },
+    config: { model: "m", output_schema: freeData },
+    capabilities: {
+      operations: ["agent.send"],
+      input_kinds: ["text"],
+      max_queued_turns: null,
+      max_pending_steering: null,
+      idempotency_retention_seconds: null,
+    },
+    send: vi.fn().mockResolvedValue(turn),
+    getTurn: vi.fn().mockResolvedValue(turn),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+  const create = vi.fn().mockResolvedValue(agent);
+  const native = {
+    create,
+    get: vi.fn().mockResolvedValue(agent),
+  } as unknown as NativeAgents;
+  const agents = wrapAgents(native);
+  const wrapped = await agents.create("opencode", {
+    config: { outputSchema: freeData },
+  });
+  expect(create).toHaveBeenCalledWith("opencode", {
+    config: { output_schema: freeData },
+  });
+  expect(wrapped.state).toEqual({
+    id: "a",
+    status: "ready",
+    queuedTurnIds: [],
+    requests: [],
+    steering: [],
+  });
+  expect(wrapped.config).toEqual({ model: "m", outputSchema: freeData });
+  expect(wrapped.capabilities).toEqual({
+    operations: ["agent.send"],
+    inputKinds: ["text"],
+  });
+  const sent = await wrapped.send("hello", { mode: "reject", data: freeData });
+  expect(agent.send).toHaveBeenCalledWith("hello", {
+    mode: "reject",
+    data: freeData,
+  });
+  expect(await sent.wait({ timeoutSeconds: 2 })).toEqual({
+    turnId: "t",
+    status: "completed",
+    outcome: "answer",
+    text: "done",
+    data: freeData,
+    artifacts: [],
+  });
+  expect(turn.wait).toHaveBeenCalledWith({ timeoutSeconds: 2 });
+  expect(await sent.steer("continue", control)).toEqual({
+    id: "s",
+    turnId: "t",
+    status: "accepted",
+  });
+  expect(turn.steer).toHaveBeenCalledWith("continue", control);
+  await sent.interrupt(control);
+  expect(turn.interrupt).toHaveBeenCalledWith(control);
+  sent.events({ after: "cursor" });
+  expect(turn.events).toHaveBeenCalledWith({ after: "cursor" });
+  await wrapped.close(control);
+  expect(agent.close).toHaveBeenCalledWith(control);
+});
