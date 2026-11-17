@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/runner"
@@ -11,6 +12,15 @@ import (
 )
 
 func BoxliteFileUpload(ctx *gin.Context) {
+	overwrite := true
+	if raw, present := ctx.GetQuery("overwrite"); present {
+		var err error
+		overwrite, err = strconv.ParseBool(raw)
+		if err != nil {
+			respondError(ctx, http.StatusBadRequest, "overwrite must be a boolean", "InvalidArgumentError", "invalid_argument")
+			return
+		}
+	}
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		respondError(ctx, http.StatusInternalServerError, err.Error(), "InternalError", "internal")
@@ -27,7 +37,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	// Stream straight into the guest, which lands the upload by the archive's
 	// first entry. No runner-side staging; an old client's source_is_dir
 	// query parameter is ignored.
-	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, ctx.Request.Body); err != nil {
+	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, ctx.Request.Body, boxlite.WithCopyOverwrite(overwrite)); err != nil {
 		respondCopyError(ctx, err)
 		return
 	}

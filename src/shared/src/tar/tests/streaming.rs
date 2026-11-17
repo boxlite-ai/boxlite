@@ -17,6 +17,7 @@ async fn cancelled_unpack_releases_an_idle_source() {
         Box::pin(source),
         tmp.path().join("out"),
         default_unpack(true),
+        None,
         move |_| {
             let _ = &extractor_tx;
             Ok(())
@@ -62,6 +63,7 @@ async fn slow_extraction_bounds_source_read_ahead() {
         Box::pin(source),
         tmp.path().join("out"),
         default_unpack(true),
+        None,
         move |_| {
             if let Some(signal) = blocked.lock().unwrap().take() {
                 signal.send(()).unwrap();
