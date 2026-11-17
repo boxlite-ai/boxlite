@@ -7,13 +7,13 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { load } from 'js-yaml'
-import { resolveRegistry } from '../mbuild/src/address.ts'
-import { parseBuildConfig } from '../mbuild/src/config.ts'
-import { AuditFailedError, publish, type RunOptions } from '../mbuild/src/publish.ts'
+import { resolveRegistry } from '../src/address.ts'
+import { parseBuildConfig } from '../src/config.ts'
+import { AuditFailedError, publish, type RunOptions } from '../src/publish.ts'
 
-const root = fileURLToPath(new URL('../../../', import.meta.url))
+const root = fileURLToPath(new URL('../../../../', import.meta.url))
 const path = join(root, '.github/workflows/release-dependency-audit.yml')
-const workflow = (): any => existsSync(path) ? load(readFileSync(path, 'utf8')) : { on: {}, jobs: {} }
+const workflow = (): any => (existsSync(path) ? load(readFileSync(path, 'utf8')) : { on: {}, jobs: {} })
 const auditJob = () => {
   const job = workflow().jobs.audit
   assert.ok(job, 'release version PRs need a dependency audit job before publication')
@@ -22,10 +22,14 @@ const auditJob = () => {
 const releaseTitle = 'chore(release): bump version to 0.11.2'
 
 function selected(title: string, event = 'pull_request', draft = false): boolean {
-  return runInNewContext(auditJob().if.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {
-    github: { event_name: event, event: event === 'pull_request' ? { pull_request: { title, draft } } : {} },
-    startsWith: (value: string, prefix: string) => value.toLowerCase().startsWith(prefix.toLowerCase()),
-  }, { timeout: 1000 })
+  return runInNewContext(
+    auditJob().if.replace(/^\$\{\{\s*|\s*\}\}$/g, ''),
+    {
+      github: { event_name: event, event: event === 'pull_request' ? { pull_request: { title, draft } } : {} },
+      startsWith: (value: string, prefix: string) => value.toLowerCase().startsWith(prefix.toLowerCase()),
+    },
+    { timeout: 1000 },
+  )
 }
 
 test('release audit covers PR updates and title edits without changing Test triggers', () => {
@@ -61,9 +65,18 @@ test('release audit uses one bounded job with read-only checkout and no dependen
   assert.equal(job['runs-on'], 'ubuntu-latest')
   assert.ok(job['timeout-minutes'] > 0 && job['timeout-minutes'] <= 5)
   assert.equal(job['continue-on-error'], undefined)
-  assert.equal(job.steps.find((step: any) => step.uses?.startsWith('actions/checkout@')).with['persist-credentials'], false)
-  assert.equal(String(job.steps.find((step: any) => step.uses?.startsWith('actions/setup-node@')).with['node-version']), '22')
-  assert.deepEqual(job.steps.filter((step: any) => step.run).map((step: any) => step.run), ['make audit:apps'])
+  assert.equal(
+    job.steps.find((step: any) => step.uses?.startsWith('actions/checkout@')).with['persist-credentials'],
+    false,
+  )
+  assert.equal(
+    String(job.steps.find((step: any) => step.uses?.startsWith('actions/setup-node@')).with['node-version']),
+    '22',
+  )
+  assert.deepEqual(
+    job.steps.filter((step: any) => step.run).map((step: any) => step.run),
+    ['make audit:apps'],
+  )
   assert.equal(job.steps.find((step: any) => step.run)['continue-on-error'], undefined)
   assert.equal(spec.concurrency['cancel-in-progress'], true)
   assert.match(spec.concurrency.group, /github\.ref/)
@@ -75,28 +88,35 @@ async function publicationAudit(): Promise<{ cwd: string | undefined; args: stri
     basePath,
     base: readFileSync(basePath, 'utf8'),
     stagePath: join(root, 'apps/infra/.mstage.config.json'),
-    stages: JSON.stringify({ stages: { dev: {
-      home: 'gcp',
-      registry: { kind: 'artifact-registry', repository: 'images', immutableTags: true, scanOnPush: true },
-      scan: { blockOn: 'DISABLED' },
-    } } }),
+    stages: JSON.stringify({
+      stages: {
+        dev: {
+          home: 'gcp',
+          registry: { kind: 'artifact-registry', repository: 'images', immutableTags: true, scanOnPush: true },
+          scan: { blockOn: 'DISABLED' },
+        },
+      },
+    }),
   })
   let observed: { cwd: string | undefined; args: string[] } | undefined
-  await assert.rejects(publish({
-    config,
-    stage: 'dev',
-    registry: resolveRegistry({ config, stage: 'dev', region: 'us-east1', project: 'audit-test' }),
-    tag: 'a'.repeat(40),
-    log: () => {},
-    run: async (file: string, args: string[], options?: RunOptions) => {
-      if (file === 'corepack') {
-        observed = { args, cwd: options?.cwd }
-        return { code: 1, stdout: 'audit probe', stderr: '' }
-      }
-      assert.equal(file, 'gcloud', 'a failed audit must precede image commands')
-      return { code: 0, stdout: args.includes('repositories') ? 'True' : '[]', stderr: '' }
-    },
-  }), AuditFailedError)
+  await assert.rejects(
+    publish({
+      config,
+      stage: 'dev',
+      registry: resolveRegistry({ config, stage: 'dev', region: 'us-east1', project: 'audit-test' }),
+      tag: 'a'.repeat(40),
+      log: () => {},
+      run: async (file: string, args: string[], options?: RunOptions) => {
+        if (file === 'corepack') {
+          observed = { args, cwd: options?.cwd }
+          return { code: 1, stdout: 'audit probe', stderr: '' }
+        }
+        assert.equal(file, 'gcloud', 'a failed audit must precede image commands')
+        return { code: 0, stdout: args.includes('repositories') ? 'True' : '[]', stderr: '' }
+      },
+    }),
+    AuditFailedError,
+  )
   assert.ok(observed, 'capture the audit invocation from real publication code')
   return observed
 }
@@ -106,16 +126,25 @@ for (const code of [0, 1]) {
     const directory = mkdtempSync(join(tmpdir(), 'boxlite-release-audit-'))
     t.after(() => rmSync(directory, { recursive: true, force: true }))
     const calls = join(directory, 'calls')
-    writeFileSync(join(directory, 'corepack'), `#!/bin/sh
+    writeFileSync(
+      join(directory, 'corepack'),
+      `#!/bin/sh
 printf '%s\\n' "$PWD" "$@" >> "$AUDIT_PROBE_CALLS"
 echo 'audit stdout'
 echo 'audit stderr' >&2
 exit "$AUDIT_PROBE_EXIT"
-`, { mode: 0o755 })
+`,
+      { mode: 0o755 },
+    )
     const step = auditJob().steps.find((candidate: any) => candidate.run)
     const result = spawnSync('bash', ['-eo', 'pipefail', '-c', step.run], {
       cwd: root,
-      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, AUDIT_PROBE_CALLS: calls, AUDIT_PROBE_EXIT: String(code) },
+      env: {
+        ...process.env,
+        PATH: `${directory}:${process.env.PATH}`,
+        AUDIT_PROBE_CALLS: calls,
+        AUDIT_PROBE_EXIT: String(code),
+      },
       encoding: 'utf8',
       timeout: 30_000,
     })

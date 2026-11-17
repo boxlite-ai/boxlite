@@ -3,7 +3,16 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,12 +24,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const workflow: any = load(readFileSync(join(root, '.github/workflows/e2e-local.yml'), 'utf8'))
 const steps: any[] = workflow.jobs['e2e-tests'].steps
 const preflight = steps.find((step) => step.name === 'Disk-pressure cache eviction')
-const finalizers = steps.slice(steps.findIndex((step) => step.name === 'Run integration tests') + 1)
+const finalizers = steps
+  .slice(steps.findIndex((step) => step.name === 'Run integration tests') + 1)
   .filter((step) => step.name === 'Post-run disk-pressure cache eviction')
 const gib = 1024 ** 3
 
 function fixture(t: TestContext) {
-  const dir = mkdtempSync(join(tmpdir(), 'e2e-disk-'))
+  // Match the workflow's canonical paths, including macOS /var -> /private/var.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-disk-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const workspace = join(dir, 'old checkout')
   const home = join(dir, 'runner home')
@@ -35,11 +46,15 @@ function fixture(t: TestContext) {
   const cache = file(join(workspace, 'target/boxlite-test/cache'))
   const debug = file(join(workspace, 'target/debug/build'))
   const release = file(join(workspace, 'target/release/build'))
-  const preserved = ['src/lib.rs', 'target/native/library', 'target/nextest/results.xml'].map((path) => file(join(workspace, path)))
+  const preserved = ['src/lib.rs', 'target/native/library', 'target/nextest/results.xml'].map((path) =>
+    file(join(workspace, path)),
+  )
   preserved.push(file(join(home, '.cargo/bin/rustc')), file(join(temp, 'boxlite-rescue/log')))
   const disposable = [file(join(home, '.boxlite/image')), file(join(temp, 'boxlite-test with spaces/log'))]
   // Only df is simulated; pressure changes when the production shell removes files.
-  writeFileSync(join(bin, 'df'), `#!/bin/bash
+  writeFileSync(
+    join(bin, 'df'),
+    `#!/bin/bash
 set -eu
 [[ "\${DF_ERROR:-}" != yes ]] || exit 9
 if [[ "\${DF_BAD:-}" == yes ]]; then printf 'header\\ninvalid 90%%\\n'; exit; fi
@@ -53,9 +68,13 @@ case "$*" in
   *--output=pcent*) printf 'Use%%\\n%s%%\\n' "$used" ;;
   *) exit 8 ;;
 esac
-`, { mode: 0o755 })
+`,
+    { mode: 0o755 },
+  )
   // Confine the old workflow's absolute /tmp glob during full-revert runs.
-  writeFileSync(join(bin, 'rm'), `#!/bin/bash
+  writeFileSync(
+    join(bin, 'rm'),
+    `#!/bin/bash
 set -eu
 [[ "\${RM_ERROR:-}" != yes ]] || exit 13
 for path in "$@"; do
@@ -63,16 +82,28 @@ for path in "$@"; do
   resolved=$(realpath -m -- "$path")
   [[ "$resolved" == "$FIXTURE_ROOT/"* ]] || exit 91
 done
-exec /bin/rm "$@"
-`, { mode: 0o755 })
+# The production workflow uses GNU --one-file-system on its Linux runner.
+exec ${process.platform === 'darwin' ? 'grm' : '/bin/rm'} "$@"
+`,
+    { mode: 0o755 },
+  )
   const env = {
-    ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home, TMPDIR: temp,
-    GITHUB_WORKSPACE: workspace, FIXTURE_ROOT: dir, BLOCKING_PATH: cache,
-    PRESSURE_BYTES: String(10 * gib), PRESSURE_PCT: '90',
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    HOME: home,
+    TMPDIR: temp,
+    GITHUB_WORKSPACE: workspace,
+    FIXTURE_ROOT: dir,
+    BLOCKING_PATH: cache,
+    PRESSURE_BYTES: String(10 * gib),
+    PRESSURE_PCT: '90',
   }
   function run(step = preflight, extra = {}, cwd = workspace) {
     return spawnSync('bash', ['-e', '-c', step.run], {
-      cwd, env: { ...env, ...step.env, ...extra }, encoding: 'utf8', timeout: 5000,
+      cwd,
+      env: { ...env, ...step.env, ...extra },
+      encoding: 'utf8',
+      timeout: 5000,
     })
   }
   return { dir, workspace, home, temp, file, cache, debug, release, disposable, preserved, run }
@@ -83,7 +114,20 @@ for (const phase of ['before', 'after']) {
     const f = fixture(t)
     const git = (args: string[]) => spawnSync('git', args, { cwd: f.workspace, encoding: 'utf8' })
     assert.equal(git(['init', '-q']).status, 0)
-    assert.equal(git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'Old checkout']).status, 0)
+    assert.equal(
+      git([
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.invalid',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'Old checkout',
+      ]).status,
+      0,
+    )
     const head = git(['rev-parse', 'HEAD']).stdout
     for (const step of phase === 'before' ? [preflight] : finalizers) {
       const result = f.run(step)
@@ -108,7 +152,12 @@ for (const profile of ['debug', 'release', 'x86_64-unknown-linux-gnu/debug', 'aa
   })
 }
 
-for (const [used, free, evict] of [[70, 60 * gib, true], [69, 50 * gib - 1, true], [69, 19 * gib, true], [69, 50 * gib, false]] as const) {
+for (const [used, free, evict] of [
+  [70, 60 * gib, true],
+  [69, 50 * gib - 1, true],
+  [69, 19 * gib, true],
+  [69, 50 * gib, false],
+] as const) {
   test(`disk boundaries: ${used}% used and ${free} bytes free`, (t) => {
     const f = fixture(t)
     const result = f.run(preflight, { PRESSURE_PCT: String(used), PRESSURE_BYTES: String(free) })
@@ -157,12 +206,16 @@ test('cleanup surrounds builds, follows diagnostics, and respects failed debug s
   assert.ok(steps.indexOf(preflight) > steps.findIndex((step) => step.id === 'checkout'))
   assert.ok(steps.indexOf(preflight) < steps.findIndex((step) => step.name.startsWith('Install build dependencies')))
   assert.ok(steps.indexOf(final) > steps.findIndex((step) => step.name === 'Debug via SSH on failure'))
-  assert.ok(steps.indexOf(final) > steps.findIndex((step) => step.name === 'Upload test logs on failure or cancellation'))
+  assert.ok(
+    steps.indexOf(final) > steps.findIndex((step) => step.name === 'Upload test logs on failure or cancellation'),
+  )
   for (const outcome of ['success', 'failure', 'cancelled']) {
     for (const debug of [false, true]) {
       for (const checkout of ['success', 'failure', 'skipped']) {
         const runs = runInNewContext(final.if, {
-          always: () => true, failure: () => outcome === 'failure', inputs: { debug },
+          always: () => true,
+          failure: () => outcome === 'failure',
+          inputs: { debug },
           steps: { checkout: { outcome: checkout } },
         })
         assert.equal(runs, checkout === 'success' && !(outcome === 'failure' && debug))
