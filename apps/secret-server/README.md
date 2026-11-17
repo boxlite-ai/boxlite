@@ -5,8 +5,8 @@ The internal encryption package protects secret values and routing policy with p
 ## Scope
 
 This Go module contains encryption, runner attestation, server configuration,
-write authentication, database initialization, and a migration command. The
-HTTP server entry point, routes, and deployment resources are not yet included.
+write authentication, a fetch handler, database initialization, and a migration
+command. The HTTP server entry point and deployment resources are not yet included.
 The existing API encryption service and stored values remain unchanged.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
@@ -254,3 +254,86 @@ Verifying real Google tokens is planned for staging.
 
 This is a new contract with no equivalent on the base branch. Full-revert defect
 proof is not applicable; positive, negative, and boundary tests exercise the new code.
+
+## Fetching authorized secrets
+
+The `internal/fetch` handler implements
+[credential redemption](https://github.com/boxlite-ai/boxlite/issues/2724).
+It depends on the single-value database foundation in #2612, including the
+existing attestation and encryption packages. Migration 2 extends access-log
+results while preserving version-1 data. There is no secret version in grants,
+responses or audit rows; decryption always uses AAD version 1.
+
+After `database.Initialize`, construct the handler with the configured cipher,
+attestation selector and the **full internal introspection URL**:
+
+```go
+handler, err := fetch.New(pool, cipher, selector,
+    "http://api-internal/internal/v1/credentials/introspect", logger)
+if err != nil {
+    return err
+}
+mux.Handle("/internal/v1/fetch", handler)
+```
+
+The service skeleton (#2570) must mount this route only for roles `fetch` and
+`all`, outside write-caller authentication middleware. This module still has
+only the migration command; the handler does not introduce a second service
+startup implementation. The caller owns pool shutdown and the verifier settings.
+
+A runner posts `{"credential":"bxsc_..."}` with its attestation proof header.
+The handler verifies identity before contacting the API, then sends
+`{"token":"bxsc_...","runner_id":"..."}`. The API owns atomic consumption
+and runner binding (BUI-1385); the client makes one request with a three-second
+limit and never follows redirects, retries or caches authorization.
+The MVP API route has no caller authentication and must remain internal-only.
+
+```text
+proof -> consuming introspection -> check all organizations and box scopes
+      -> decrypt all values -> audit -> complete response
+```
+
+An active reply must contain credential, organization, runner and box IDs,
+an unexpired RFC3339 expiry and unique secret grants. The returned runner must
+match the verified identity. Missing or disabled rows reject the entire request;
+box-scoped secrets must match both organization and box. Decryption reconstructs
+AAD from stored IDs, hosts and headers. A late failure returns no partial values.
+
+Success is `{"box_id":"...","secrets":[{"name":"...","value":"...",
+"hosts":["..."],"headers":{"Authorization":"Bearer {value}"},
+"placeholder":"..."}]}`. Empty grants return `secrets: []`.
+Every response carries `Cache-Control: no-store`; errors use RFC 9457 with `code`.
+
+| Failure | HTTP / code | Audit result |
+| --- | --- | --- |
+| Invalid proof | 401 / `attestation_failed` | `attestation_failed` |
+| Verifier outage | 503 / `attestation_unavailable` | `attestation_unavailable` |
+| Inactive credential | 401 / `credential_invalid` | `credential_invalid` |
+| Runner mismatch | 401 / `credential_invalid` | `runner_mismatch` |
+| Organization or box mismatch | 401 / `credential_invalid` | `scope_mismatch` |
+| Missing or disabled secret | 409 / `secret_unavailable` | `not_found` / `disabled` |
+| API failure or malformed answer | 503 / `api_unavailable` | `api_unavailable` |
+| Storage failure or resource limit | 503 / `store_unavailable` | `store_unavailable` |
+| Decryption failure | 503 / `decrypt_failed` | `decrypt_failed` |
+
+Disabled errors include the authorized name; a deleted secret has no name to
+return. Inactive reasons are known only to the API. Attestation failures never
+consume credentials; failures after successful introspection leave them consumed.
+
+Resource bounds are 4 KiB request bodies, 64 KiB API replies, 64 grants,
+64 KiB ciphertext, 128 KiB serialized stored rows, 8 MiB success JSON and
+16 concurrent fetch operations. A single SQL statement suppresses oversized
+stored payloads before transfer. No unbounded request queue is created.
+
+Audit attempts use a separate 100 ms context for the complete outcome, with at
+most 16 concurrent audit operations. Success records one row per secret; empty
+success and failure record one row. Unknown identifiers remain null.
+Audit failures preserve the response outcome, emit a fixed error log and increment
+`Handler.AuditFailures()` for telemetry collection. Credentials, proofs, values,
+templates, placeholders and raw upstream errors are never logged.
+
+Tests use a consuming HTTP fake for the API and real envelope encryption.
+They cover identity ordering, replay, concurrent consumption, ownership, late
+failures, redirect refusal, timeout, limits and audit failures. The PostgreSQL
+integration target includes real fetch queries, audit constraints and schema
+upgrade preservation; staging integration with the real API remains pending.

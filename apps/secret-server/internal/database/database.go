@@ -18,7 +18,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Initialize applies the schema and verifies the configured key before readiness.
 func Initialize(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Cipher) error {
