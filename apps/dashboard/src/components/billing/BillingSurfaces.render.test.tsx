@@ -226,6 +226,26 @@ describe('billing surface contracts', () => {
     expect(host.textContent).toContain('Wallet balance$10.00')
     expect(host.textContent).toContain('Quota consumed$62.50/ $250.00')
     expect(host.textContent).not.toContain('no subscription')
+    expect(host.textContent).not.toContain('FREE TRIAL')
+  })
+  it('labels an active subscription trial with its total duration in hours', () => {
+    const host = render(
+      <CycleOverview
+        wallet={wallet}
+        organizationPlan={{
+          ...plan,
+          trial: {
+            startedAt: new Date('2026-08-01T00:00:00.000Z'),
+            endsAt: new Date('2026-08-07T00:00:00.000Z'),
+            conversionAmountCents: 14900,
+            currency: 'USD',
+            conversionState: 'not_attempted',
+          },
+        }}
+        catalogPlan={catalog[1]}
+      />,
+    )
+    expect(host.textContent).toContain('Pro$149/mo(FREE TRIAL for 144 hours)')
   })
   it('shows grant progress across the summary width and retains plan guidance', () => {
     const host = render(
