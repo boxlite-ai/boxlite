@@ -78,7 +78,7 @@ func outboundHeaders(header http.Header) (string, string, bool) {
 	if len(expected) != 1 || len(candidate) != 1 {
 		return "", "", false
 	}
-	tag := strings.TrimSpace(expected[0])
+	tag := strings.Trim(expected[0], " \t")
 	if len(tag) < 2 || tag[0] != '"' || tag[len(tag)-1] != '"' {
 		return "", "", false
 	}

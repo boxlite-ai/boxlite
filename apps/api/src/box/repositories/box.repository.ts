@@ -31,6 +31,9 @@ import { registryProxyHost } from '../../registry/utils/registry-proxy.util'
 import { matchingCredential } from '../../registry/utils/matching-credential'
 import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
+import { OutboundControl } from '../runner-adapter/outbound-control'
+import { OutboundPolicyCoordinator, OutboundPrecondition } from '../services/outbound-policy.coordinator'
+import { OutboundPolicyStore, persistedOutbound } from '../stores/outbound-policy.store'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
@@ -109,48 +112,28 @@ export class BoxRepository extends BaseRepository<Box> {
     })
   }
 
-  /** Serialize runtime application and persistence against concurrent box writes. */
+  async readOutbound(id: string, organizationId: string) {
+    return persistedOutbound(await new OutboundPolicyStore(this.dataSource).read(id, organizationId))
+  }
+
+  async outboundStatus(id: string, organizationId: string, control: (box: Box) => Promise<OutboundControl>) {
+    return new OutboundPolicyCoordinator(new OutboundPolicyStore(this.dataSource), control).status(id, organizationId)
+  }
+
+  /** Reserve durable intent before applying through the revision-required Runner channel. */
   async replaceOutbound(
     id: string,
     organizationId: string,
     policy: OutboundPolicy,
-    apply: (box: Box, policy: OutboundPolicy) => Promise<void>,
+    control: (box: Box) => Promise<OutboundControl>,
+    matches?: OutboundPrecondition,
   ): Promise<Box> {
-    const updated = await this.manager.transaction(async (manager) => {
-      await manager.query("SET LOCAL lock_timeout = '5s'")
-      const box = await manager.findOne(Box, {
-        where: { id, organizationId },
-        lock: { mode: 'pessimistic_write' },
-        loadEagerRelations: false,
-      })
-      if (!box) throw new NotFoundException('Box not found')
-      if (box.state !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED || !box.runnerId) {
-        throw new ConflictException('Outbound policy updates require a running box')
-      }
-      const previous: OutboundPolicy = {
-        mode: box.outboundEnabled ? 'enabled' : 'disabled',
-        allow_net: box.outboundAllowNet ?? [],
-      }
-      await apply(box, policy)
-      const update = {
-        outboundEnabled: policy.mode === 'enabled',
-        outboundAllowNet: policy.allow_net.length ? policy.allow_net : null,
-      }
-      try {
-        await manager.update(Box, id, update)
-      } catch (error) {
-        try {
-          await apply(box, previous)
-        } catch {
-          throw new ConflictException(
-            'Outbound persistence and rollback failed; live policy is uncertain, retry the complete update',
-          )
-        }
-        throw error
-      }
-      Object.assign(box, update)
-      return box
-    })
+    const updated = await new OutboundPolicyCoordinator(new OutboundPolicyStore(this.dataSource), control).replace(
+      id,
+      organizationId,
+      policy,
+      matches,
+    )
     this.invalidateLookupCacheOnUpdate(updated, updated)
     return updated
   }

@@ -499,3 +499,67 @@ async fn outbound_serve_public_update_does_not_retry_an_uncertain_ack() {
         boxlite::runtime::options::NetworkMode::Disabled
     );
 }
+
+#[tokio::test]
+async fn outbound_serve_public_conditions_accept_empty_list_elements() {
+    for (condition, expected, writes) in [
+        (r#",,"rev-a",,"#, StatusCode::OK, 1),
+        (r#""rev-a", "#, StatusCode::OK, 1),
+        (r#""old",, "rev-a""#, StatusCode::OK, 1),
+        ("", StatusCode::PRECONDITION_FAILED, 0),
+        (", ,", StatusCode::PRECONDITION_FAILED, 0),
+        (
+            r#", W/"rev-a",, "old", "#,
+            StatusCode::PRECONDITION_FAILED,
+            0,
+        ),
+    ] {
+        let peer = outbound_peer(None).await;
+        let response = reqwest::Client::new()
+            .put(&peer.url)
+            .header("if-match", condition)
+            .json(&serde_json::json!({"mode":"disabled","allow_net":[]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{condition:?}");
+        let state = peer.state.lock().await;
+        assert_eq!(
+            state
+                .calls
+                .iter()
+                .filter(|call| call.0.starts_with("PUT "))
+                .count(),
+            writes,
+            "{condition:?}"
+        );
+        assert_eq!(
+            serde_json::to_value(&state.current.policy).unwrap()["mode"],
+            if writes == 1 { "disabled" } else { "enabled" }
+        );
+    }
+}
+
+#[tokio::test]
+async fn outbound_serve_public_conditions_keep_empty_field_separators_before_wildcard() {
+    let peer = outbound_peer(None).await;
+    let mut headers = HeaderMap::new();
+    headers.append("if-match", axum::http::HeaderValue::from_static(""));
+    headers.append("if-match", axum::http::HeaderValue::from_static("*"));
+    let response = reqwest::Client::new()
+        .put(&peer.url)
+        .headers(headers)
+        .json(&serde_json::json!({"mode":"disabled","allow_net":[]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        peer.state
+            .lock()
+            .await
+            .calls
+            .iter()
+            .all(|call| !call.0.starts_with("PUT "))
+    );
+}

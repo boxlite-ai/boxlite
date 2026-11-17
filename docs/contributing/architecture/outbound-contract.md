@@ -415,6 +415,24 @@ It combines real transactions and HTTP with a controlled Runner peer; it does no
 A real PostgreSQL trigger rejects final publication after the Runner ACK to exercise restoration and failed-restoration intent.
 Socket loss and pending/uncertain readback checks distinguish matching revisions from completed application.
 
+### Public Cloud control resources
+
+Public policy GET returns the existing policy object with a strong revision ETag; status GET returns completion metadata separately.
+Policy PUT retains its complete-replacement body and accepts optional HTTP `If-Match`, including strong tag lists and wildcard matching.
+The coordinator allocates candidate revisions; caller-supplied internal candidate headers are rejected.
+
+Public lists ignore empty elements; an empty list matches no revision, while weak tags never satisfy strong comparison.
+Wildcard stands alone, and the complete field is validated before any matching tag can authorize a mutation.
+Only HTTP SP and HTAB count as surrounding whitespace, including on internal single-revision control resources.
+
+These rules follow [RFC 9110 list parsing and whitespace](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6).
+
+Reads require organization membership; writes also require the existing Box write permission.
+Status describes control-state agreement and does not probe destination connectivity.
+
+The HTTP authorization suite runs actual API-key and signed-JWT strategies and organization guards with controlled credential, membership, Redis, and Box storage.
+It checks canonical, organization-prefixed, and legacy paths; it does not boot the production Cloud application or guest VMs.
+
 ### Runtime readback and coordinator recovery
 
 `NetworkHandle::outbound_status` compares a durable snapshot with the backend's observed snapshot and installation phase.

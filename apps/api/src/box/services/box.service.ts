@@ -106,7 +106,9 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
-import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
+import { OutboundPolicy } from '../runner-adapter/network-policy'
+import { RunnerOutboundControl } from '../runner-adapter/outbound-control'
+import { OutboundPrecondition } from './outbound-policy.coordinator'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
   AUTO_DELETE_DISABLED,
@@ -1441,50 +1443,41 @@ export class BoxService {
     }
   }
 
-  async updateNetworkSettings(
-    boxIdOrName: string,
-    outboundEnabled?: boolean,
-    outboundAllowNet?: string[],
-    organizationId?: string,
-  ): Promise<Box> {
+  async getOutboundNetwork(boxIdOrName: string, organizationId: string) {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const updateData: Partial<Box> = {}
-
-    if (outboundEnabled !== undefined) {
-      updateData.outboundEnabled = outboundEnabled
-    }
-
-    if (outboundAllowNet !== undefined) {
-      updateData.outboundAllowNet = this.resolveOutboundAllowNet(outboundAllowNet)
-    }
-
-    const updatedBox = await this.boxRepository.update(box.id, { updateData, entity: box })
-
-    // Update network settings on the runner
-    if (box.runnerId) {
-      const runner = await this.runnerService.findOne(box.runnerId)
-      if (runner) {
-        const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-        await runnerAdapter.updateNetworkSettings(box.id, updateData.outboundEnabled, updateData.outboundAllowNet)
-      }
-    }
-
-    return updatedBox
+    return this.boxRepository.readOutbound(box.id, organizationId)
   }
 
-  async setOutboundNetwork(boxIdOrName: string, policy: OutboundPolicy, organizationId: string): Promise<Box> {
+  async getOutboundStatus(boxIdOrName: string, organizationId: string) {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    return this.boxRepository.outboundStatus(box.id, organizationId, (locked) => this.outboundControl(locked))
+  }
+
+  async setOutboundNetwork(
+    boxIdOrName: string,
+    policy: OutboundPolicy,
+    organizationId: string,
+    matches?: OutboundPrecondition,
+  ): Promise<Box> {
     if (hasDisabledOutboundRules(policy.mode, policy.allow_net)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
     }
     const allowNet = this.resolveOutboundAllowNet(policy.allow_net) ?? []
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
     const resolved = { ...policy, allow_net: allowNet }
-    return this.boxRepository.replaceOutbound(box.id, organizationId, resolved, async (locked, next) => {
-      const runner = await this.runnerService.findOne(locked.runnerId)
-      if (!runner) throw new ConflictException('Box runner is unavailable')
-      await setRunnerOutbound(runner, locked.id, next)
-    })
+    return this.boxRepository.replaceOutbound(
+      box.id,
+      organizationId,
+      resolved,
+      (locked) => this.outboundControl(locked),
+      matches,
+    )
+  }
+
+  private async outboundControl(box: Box): Promise<RunnerOutboundControl> {
+    const runner = box.runnerId ? await this.runnerService.findOne(box.runnerId) : null
+    if (!runner) throw new ConflictException('Box runner is unavailable')
+    return new RunnerOutboundControl(runner, box.id)
   }
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch

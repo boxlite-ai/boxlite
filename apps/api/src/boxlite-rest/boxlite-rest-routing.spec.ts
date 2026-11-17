@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { Reflector } from '@nestjs/core'
 import { ConfigService } from '@nestjs/config'
 import { Test } from '@nestjs/testing'
-import { ValidationPipe, type INestApplication } from '@nestjs/common'
+import { HttpException, ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
@@ -45,6 +45,8 @@ describe('BoxLite REST routing', () => {
   let app: INestApplication
   let updateInboundEnabled: jest.Mock
   let setOutboundNetwork: jest.Mock
+  let getOutboundNetwork: jest.Mock
+  let getOutboundStatus: jest.Mock
 
   async function startRoutingTestApp() {
     updateInboundEnabled = jest.fn((_boxId: string, inboundEnabled: boolean) => Promise.resolve({ inboundEnabled }))
@@ -52,8 +54,11 @@ describe('BoxLite REST routing', () => {
       Promise.resolve({
         outboundEnabled: policy.mode === 'enabled',
         outboundAllowNet: policy.allow_net,
+        outboundControl: { version: 1, revision: 'rev-b' },
       }),
     )
+    getOutboundNetwork = jest.fn().mockResolvedValue({ revision: 'rev-a', policy: { mode: 'enabled', allow_net: [] } })
+    getOutboundStatus = jest.fn().mockResolvedValue({ application_state: 'pending', pending_revision: 'rev-b' })
     await startApp(
       // The module's order, with the proxy controller's catch-all routes
       // present, so one that shadowed PUT network/inbound would fail below.
@@ -70,6 +75,8 @@ describe('BoxLite REST routing', () => {
             toBoxDtos: jest.fn().mockResolvedValue([]),
             updateInboundEnabled,
             setOutboundNetwork,
+            getOutboundNetwork,
+            getOutboundStatus,
           },
         },
         {
@@ -122,11 +129,11 @@ describe('BoxLite REST routing', () => {
     return fetch(`http://127.0.0.1:${address.port}${path}`)
   }
 
-  async function put(path: string, body: unknown): Promise<Response> {
+  async function put(path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
     const address = app.getHttpServer().address() as AddressInfo
     return fetch(`http://127.0.0.1:${address.port}${path}`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
     })
   }
@@ -239,7 +246,12 @@ describe('BoxLite REST routing', () => {
       const response = await put(path, { mode: 'enabled' })
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ mode: 'enabled', allow_net: [] })
-      expect(setOutboundNetwork).toHaveBeenLastCalledWith('box-1', { mode: 'enabled', allow_net: [] }, 'org-123')
+      expect(setOutboundNetwork).toHaveBeenLastCalledWith(
+        'box-1',
+        { mode: 'enabled', allow_net: [] },
+        'org-123',
+        undefined,
+      )
     }
   })
 
@@ -248,6 +260,68 @@ describe('BoxLite REST routing', () => {
     setOutboundNetwork.mockResolvedValueOnce({ outboundEnabled: false, outboundAllowNet: null })
     const response = await put('/api/v1/boxes/box-1/network/outbound', { mode: 'disabled' })
     expect(await response.json()).toEqual({ mode: 'disabled', allow_net: [] })
+  })
+
+  it('reads policy identity and status ahead of the proxy catch-all on both prefixes', async () => {
+    await startRoutingTestApp()
+    for (const prefix of ['/api/v1', '/api/v1/default']) {
+      const response = await get(`${prefix}/boxes/box-1/network/outbound`)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('etag')).toBe('"rev-a"')
+      expect(await response.json()).toEqual({ mode: 'enabled', allow_net: [] })
+      const status = await get(`${prefix}/boxes/box-1/network/outbound/status`)
+      expect(status.status).toBe(200)
+      expect(await status.json()).toEqual({ application_state: 'pending', pending_revision: 'rev-b' })
+    }
+    expect(getOutboundNetwork).toHaveBeenLastCalledWith('box-1', 'org-123')
+    expect(getOutboundStatus).toHaveBeenLastCalledWith('box-1', 'org-123')
+    expect(setOutboundNetwork).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['"rev-a"', true],
+    ['"other", "rev-a"', true],
+    ['*', true],
+    ['W/"rev-a"', false],
+    ['"rev-a", broken', 'invalid'],
+    ['"rev-a",', true],
+    ['', false],
+    [', ,', false],
+    ['"rev-a" trailing', 'invalid'],
+    ['*, "rev-a"', 'invalid'],
+    ['"unfinished', 'invalid'],
+    ['"bad tag"', 'invalid'],
+    ['W/"other", "rev-a"', true],
+    ['"other"', false],
+  ])('evaluates complete If-Match %s at the service boundary', async (header, match) => {
+    await startRoutingTestApp()
+    setOutboundNetwork.mockImplementation(async (_id, policy, _org, matches) => {
+      if (!matches('rev-a')) throw new HttpException('Precondition failed', 412)
+      return {
+        outboundEnabled: true,
+        outboundAllowNet: policy.allow_net,
+        outboundControl: { version: 1, revision: 'rev-b' },
+      }
+    })
+    const response = await put(
+      '/api/v1/boxes/box-1/network/outbound',
+      { mode: 'enabled' },
+      { 'If-Match': header as string },
+    )
+    expect(response.status).toBe(match === 'invalid' ? 400 : match ? 200 : 412)
+    if (match === 'invalid') expect(setOutboundNetwork).not.toHaveBeenCalled()
+    if (match === true) expect(response.headers.get('etag')).toBe('"rev-b"')
+  })
+
+  it('rejects a public caller trying to choose an internal candidate', async () => {
+    await startRoutingTestApp()
+    const response = await put(
+      '/api/v1/boxes/box-1/network/outbound',
+      { mode: 'enabled' },
+      { 'X-Boxlite-Outbound-Revision': 'chosen' },
+    )
+    expect(response.status).toBe(400)
+    expect(setOutboundNetwork).not.toHaveBeenCalled()
   })
 
   it('audits only the outbound policy fields', () => {

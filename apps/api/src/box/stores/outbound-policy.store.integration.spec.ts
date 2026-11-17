@@ -12,6 +12,7 @@ import { PostgresCommitProxy } from './tests/postgres-commit-proxy'
 import { Runner } from '../entities/runner.entity'
 import { RunnerOutboundControl, OutboundSnapshot } from '../runner-adapter/outbound-control'
 import { OutboundPolicyCoordinator } from '../services/outbound-policy.coordinator'
+import { BoxRepository } from '../repositories/box.repository'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `outbound_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -233,6 +234,42 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       persisted: live,
       runtime_persisted: live,
     })
+  })
+
+  it('exposes the persisted snapshot and guarded replacement through BoxRepository', async () => {
+    const cache = { invalidate: jest.fn(), invalidateOrgId: jest.fn() }
+    const repository = new BoxRepository(primary, { emit: jest.fn() } as never, cache as never)
+    expect((await repository.readOutbound(box.id, org)).revision).toBe('initial')
+    const result = await repository.replaceOutbound(
+      box.id,
+      org,
+      candidate.policy,
+      control,
+      (revision) => revision === 'initial',
+    )
+    expect(persistedOutbound(result)).toEqual(live)
+    expect((await repository.outboundStatus(box.id, org, control)).application_state).toBe('confirmed')
+    await expect(repository.readOutbound(box.id, randomUUID())).rejects.toThrow('Box not found')
+  })
+
+  it('preserves confirmed policy and revision through real lifecycle updates using a stale entity', async () => {
+    const cache = { invalidate: jest.fn(), invalidateOrgId: jest.fn() }
+    const repository = new BoxRepository(primary, { emit: jest.fn() } as never, cache as never)
+    const stale = await repository.findOneBy({ id: box.id })
+    expect(stale.outboundControl).toBeUndefined()
+    await coordinator.replace(box.id, org, candidate.policy)
+    const confirmed = structuredClone(live)
+    await repository.update(box.id, { entity: stale, updateData: { errorReason: 'lifecycle observation' } })
+    await repository.updateWhere(box.id, {
+      updateData: { errorReason: 'locked lifecycle observation' },
+      whereCondition: { organizationId: org },
+    })
+    const durable = await store.read(box.id, org)
+    expect(durable.errorReason).toBe('locked lifecycle observation')
+    expect(persistedOutbound(durable)).toEqual(confirmed)
+    expect(outboundRecord(durable)).toEqual({ version: 1, revision: confirmed.revision })
+    expect((await coordinator.status(box.id, org)).application_state).toBe('confirmed')
+    expect(writes).toHaveLength(1)
   })
 
   it.each([

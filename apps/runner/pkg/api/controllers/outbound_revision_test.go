@@ -93,6 +93,8 @@ func TestOutboundRevisionHTTPRejectsMalformedMetadataBeforeClientLookup(t *testi
 		{"If-Match": {`"rev-a", "other"`}, "X-Boxlite-Outbound-Revision": {"rev-b"}},
 		{"If-Match": {`"rev-a"`, `"other"`}, "X-Boxlite-Outbound-Revision": {"rev-b"}},
 		{"If-Match": {`*`}, "X-Boxlite-Outbound-Revision": {"rev-b"}},
+		{"If-Match": {"\u00a0\"rev-a\""}, "X-Boxlite-Outbound-Revision": {"rev-b"}},
+		{"If-Match": {"\"rev-a\"\u00a0"}, "X-Boxlite-Outbound-Revision": {"rev-b"}},
 		{"If-Match": {`"bad value"`}, "X-Boxlite-Outbound-Revision": {"rev-b"}},
 		{"If-Match": {`"rev-a"`}, "X-Boxlite-Outbound-Revision": {"initial"}},
 		{"If-Match": {`"rev-a"`}, "X-Boxlite-Outbound-Revision": {"rev-a"}},

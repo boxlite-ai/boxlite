@@ -565,27 +565,35 @@ is exhausted, requests return HTTP 429 with `Retry-After-authenticated` before
 catalog changes or registry credential operations run; switching API surfaces
 does not reset it.
 
-Resource permissions are enforced per route. A box mutation — create, start,
-stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, an
-attach ticket, and the network routes — requires `write:boxes`; deleting a box requires
-`delete:boxes`. Box reads (list, get, head, execution status, metrics) carry no
-permission and are reached by any member, because the model has no `read:boxes`.
+Resource permissions are enforced per route.
+`write:boxes` is required for create, start, stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, attach tickets and network mutations.
+Deleting a box requires `delete:boxes`.
+
+Box reads include list, get, head, execution status, metrics, and outbound policy/status.
+They require organization membership without a permission scope; the model has no `read:boxes`.
+
 Volume routes require `read:volumes`, `write:volumes`, or `delete:volumes` to
 match, image routes `read:images`, `write:images`, or `delete:images`, and
 registry login routes `read:registries`, `write:registries`, or
 `delete:registries`. Attaching a managed volume while creating a box is authorized
 independently of `write:boxes`: the caller must also hold `read:volumes` and
 `write:volumes`, so a box-only credential cannot reach another's volume data
-(GHSA-2qqv-7cwv-mj8h). A system admin and an interactive owner without an API key
+(GHSA-2qqv-7cwv-mj8h).
+
+A system admin and an interactive owner without an API key
 are not permission-bounded; every API key is bounded by the permissions it
 carries. The WebSocket `/attach` upgrade enforces `write:boxes` inline — an
 upgrade never passes through the organization guard — using the same admin and
 owner exemptions, so it resolves the caller's system role just as the HTTP path
-does. A browser, which cannot set `Authorization` on a WebSocket, instead sends a
+does.
+
+A browser, which cannot set `Authorization` on a WebSocket, instead sends a
 `?ticket=` bought from `POST /box/{boxIdOrName}/attach-tickets`. Spending it
 re-checks the ticket's credential the same way:
 the API key that bought it, which must still exist and be unexpired, or else
-its user. The attach URL may omit `{prefix}`; the ticket already names the organization.
+its user.
+
+The attach URL may omit `{prefix}`; the ticket already names the organization.
 `GET /v1/me` can return `path_prefix: null` for an authenticated user with no
 organization membership.
 
@@ -645,7 +653,7 @@ for storage and lifecycle details.
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, networking, and SSH</b> · 16 routes</summary>
+<summary><b>Execution, files, metrics, networking, and SSH</b> · 23 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
@@ -665,10 +673,19 @@ for storage and lifecycle details.
 | `PUT`    | `/v1[/{prefix}]/domains/{domain}/target`                  | Routes an owned full hostname to a box port using `{"type":"box","box":"<id-or-name>","port":3000}`; replaces any existing binding without declaring the port public. |
 | `DELETE` | `/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
+| `GET`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound` | Reads the persisted complete policy and its strong revision ETag. |
+| `GET`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound/status` | Compares Cloud persistence, Runtime persistence and completed backend observation; pending or uncertain state is explicit. |
+| `PUT`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound` | Replaces the complete policy; optional strong `If-Match` enforces the public precondition, and success returns the confirmed revision ETag. |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration on a running box; no auto-resume or activity. |
 | `GET`    | `/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
 | `DELETE` | `/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH on a running box; otherwise `409`. No auto-resume or activity. |
+
+Outbound policy and status reads require organization membership; writes additionally require `write:boxes` and a running Box.
+Policy GET returns configuration, while status reports completion metadata rather than probing live destination traffic.
+Public callers provide optional `If-Match`; the internal candidate-revision header is rejected.
+
+See the [outbound control contract](../outbound-contract.md#public-cloud-control-resources) for strong comparison, durable pending and uncertain outcomes.
 
 Execution inventory is an organization-member read, like execution status; it
 does not require `write:boxes`. Box lookup remains scoped to that organization.
@@ -1176,7 +1193,7 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Embedded BoxLite operations</b> · 14 routes</summary>
+<summary><b>Embedded BoxLite operations</b> · 19 routes</summary>
 
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |
@@ -1191,6 +1208,10 @@ runtime and its microVMs.
 | `GET`     | `/v1/boxes/{boxId}/files?path={path}`          | Downloads a local box path as a tar stream.           |
 | `GET`     | `/v1/boxes/{boxId}/metrics`                    | Returns local box metrics.                            |
 | `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port; answers `409` with code `box_not_running` for a box that is not running, which the proxy uses to wake the box. |
+| `GET`     | `/v1/boxes/{boxId}/network/outbound` | Reads the local persisted policy and strong revision ETag. |
+| `GET`     | `/v1/boxes/{boxId}/network/outbound/status` | Reads Runtime persistence, backend observation, completion phase and `revision-v1` capability. |
+| `PUT`     | `/v1/boxes/{boxId}/network/outbound` | Replaces the complete local policy; rejects revision headers, which require the dedicated snapshot resource. |
+| `PUT`     | `/v1/boxes/{boxId}/network/outbound/snapshot` | Requires one strong expected ETag and a fresh `X-Boxlite-Outbound-Revision`; acknowledges the exact policy and candidate revision. |
 | `POST`    | `/v1/boxes/{boxId}/ssh`                        | Configures guest SSH once after checking that the box is running; otherwise `409 invalid_state`. |
 | `POST`    | `/v1/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration only while running; otherwise `409 invalid_state`. |
 | `GET`     | `/v1/boxes/{boxId}/ssh`                        | Reads guest SSH status; a stopped box answers disabled status without a handle. |

@@ -4,14 +4,14 @@
  */
 
 import { BoxService } from './box.service'
-import * as networkPolicy from '../runner-adapter/network-policy'
+import { RunnerOutboundControl } from '../runner-adapter/outbound-control'
 
-function fixture(runner: unknown = { id: 'runner1' }) {
+function fixture(runner: unknown = { id: 'runner1', apiUrl: 'http://runner.test', apiKey: 'synthetic-key' }) {
   const service = Object.create(BoxService.prototype) as BoxService
   const locked = { id: 'box1', runnerId: 'runner1' }
   const boxRepository = {
-    replaceOutbound: jest.fn(async (_id, _org, policy, apply) => {
-      await apply(locked, policy)
+    replaceOutbound: jest.fn(async (_id, _org, policy, control) => {
+      await (await control(locked)).replace('initial', { revision: 'candidate-b', policy })
       return locked
     }),
   }
@@ -25,27 +25,27 @@ describe('BoxService outbound policy replacement', () => {
   afterEach(() => jest.restoreAllMocks())
 
   it('resolves the name and applies the policy through the box runner', async () => {
-    const send = jest.spyOn(networkPolicy, 'setRunnerOutbound').mockResolvedValue(undefined)
+    const send = jest.spyOn(RunnerOutboundControl.prototype, 'replace').mockResolvedValue('applied')
     const { service, boxRepository, runnerService } = fixture()
     const policy = { mode: 'enabled' as const, allow_net: ['*.example.com'] }
 
     await service.setOutboundNetwork('mybox', policy, 'org1')
 
     expect(service.findOneByIdOrName).toHaveBeenCalledWith('mybox', 'org1')
-    expect(boxRepository.replaceOutbound).toHaveBeenCalledWith('box1', 'org1', policy, expect.any(Function))
+    expect(boxRepository.replaceOutbound).toHaveBeenCalledWith('box1', 'org1', policy, expect.any(Function), undefined)
     expect(runnerService.findOne).toHaveBeenCalledWith('runner1')
-    expect(send).toHaveBeenCalledWith({ id: 'runner1' }, 'box1', policy)
+    expect(send).toHaveBeenCalledWith('initial', { revision: 'candidate-b', policy })
   })
 
   it('sends and stores the trimmed outbound allowlist that create would store', async () => {
-    const send = jest.spyOn(networkPolicy, 'setRunnerOutbound').mockResolvedValue(undefined)
+    const send = jest.spyOn(RunnerOutboundControl.prototype, 'replace').mockResolvedValue('applied')
     const { service, boxRepository } = fixture()
 
     await service.setOutboundNetwork('box1', { mode: 'enabled', allow_net: [' example.com '] }, 'org1')
 
     const trimmed = { mode: 'enabled', allow_net: ['example.com'] }
-    expect(boxRepository.replaceOutbound).toHaveBeenCalledWith('box1', 'org1', trimmed, expect.any(Function))
-    expect(send).toHaveBeenCalledWith({ id: 'runner1' }, 'box1', trimmed)
+    expect(boxRepository.replaceOutbound).toHaveBeenCalledWith('box1', 'org1', trimmed, expect.any(Function), undefined)
+    expect(send).toHaveBeenCalledWith('initial', { revision: 'candidate-b', policy: trimmed })
   })
 
   it.each([
@@ -58,7 +58,7 @@ describe('BoxService outbound policy replacement', () => {
   })
 
   it('refuses a box whose runner is gone', async () => {
-    const send = jest.spyOn(networkPolicy, 'setRunnerOutbound')
+    const send = jest.spyOn(RunnerOutboundControl.prototype, 'replace')
     const { service } = fixture(null)
     await expect(service.setOutboundNetwork('box1', { mode: 'enabled', allow_net: [] }, 'org1')).rejects.toThrow(
       'runner is unavailable',

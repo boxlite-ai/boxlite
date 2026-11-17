@@ -7,8 +7,8 @@ pub(super) fn matches(
     current: &OutboundRevision,
 ) -> Result<bool, &'static str> {
     let mut value = Vec::new();
-    for field in headers.get_all(IF_MATCH) {
-        if !value.is_empty() {
+    for (index, field) in headers.get_all(IF_MATCH).iter().enumerate() {
+        if index > 0 {
             value.push(b',');
         }
         value.extend_from_slice(field.as_bytes());
@@ -36,6 +36,13 @@ fn compare(value: &[u8], current: &[u8]) -> Result<bool, &'static str> {
     }
     let mut matched = false;
     loop {
+        if rest.is_empty() {
+            return Ok(matched);
+        }
+        if let Some(tail) = rest.strip_prefix(b",") {
+            rest = ows(tail);
+            continue;
+        }
         let weak = rest.starts_with(b"W/");
         if weak {
             rest = &rest[2..];
@@ -55,9 +62,6 @@ fn compare(value: &[u8], current: &[u8]) -> Result<bool, &'static str> {
             return Ok(matched);
         }
         rest = ows(rest.strip_prefix(b",").ok_or(INVALID)?);
-        if rest.is_empty() {
-            return Err(INVALID);
-        }
     }
 }
 

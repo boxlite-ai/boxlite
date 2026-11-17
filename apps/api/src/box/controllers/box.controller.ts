@@ -350,50 +350,6 @@ export class BoxController {
     await this.boxService.updateLastActivityAt(boxId, new Date())
   }
 
-  // TODO: Network settings endpoint will not be enabled for now
-  // @Post(':boxIdOrName/network-settings')
-  // @ApiOperation({
-  //   summary: 'Update box network settings',
-  //   operationId: 'updateNetworkSettings',
-  // })
-  // @ApiParam({
-  //   name: 'boxIdOrName',
-  //   description: 'ID or name of the box',
-  //   type: 'string',
-  // })
-  // @ApiResponse({
-  //   status: 200,
-  //   description: 'Network settings have been updated',
-  //   type: BoxDto,
-  // })
-  // @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  // @UseGuards(BoxAccessGuard)
-  // @Audit({
-  //   action: AuditAction.UPDATE_NETWORK_SETTINGS,
-  //   targetType: AuditTarget.BOX,
-  //   targetIdFromRequest: (req) => req.params.boxIdOrName,
-  //   targetIdFromResult: (result: BoxDto) => result?.id,
-  //   requestMetadata: {
-  //     body: (req: TypedRequest<UpdateBoxNetworkSettingsDto>) => ({
-  //       outboundEnabled: req.body?.outboundEnabled,
-  //       outboundAllowNet: req.body?.outboundAllowNet,
-  //     }),
-  //   },
-  // })
-  // async updateNetworkSettings(
-  //   @AuthContext() authContext: OrganizationAuthContext,
-  //   @Param('boxIdOrName') boxIdOrName: string,
-  //   @Body() networkSettings: UpdateBoxNetworkSettingsDto,
-  // ): Promise<BoxDto> {
-  //   const box = await this.boxService.updateNetworkSettings(
-  //     boxIdOrName,
-  //     networkSettings.outboundEnabled,
-  //     networkSettings.outboundAllowNet,
-  //     authContext.organizationId,
-  //   )
-  //   return BoxDto.fromBox(box)
-  // }
-
   // A browser cannot set `Authorization` on a WebSocket, so the dashboard trades
   // its bearer here for a ticket the `/v1` attach upgrade accepts as `?ticket=`
   // (see BoxliteWsProxyService). It lives on the cloud API, not the Box API,
