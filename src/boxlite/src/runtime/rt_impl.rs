@@ -188,7 +188,7 @@ pub struct RuntimeImpl {
     pub(crate) shutdown_token: CancellationToken,
 
     #[cfg(test)]
-    remove_box_pre_lock_hook: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
+    test_remove_box_pre_lock_hook: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 /// Synchronized state protected by RwLock.
@@ -399,7 +399,7 @@ impl RuntimeImpl {
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
             #[cfg(test)]
-            remove_box_pre_lock_hook: std::sync::Mutex::new(None),
+            test_remove_box_pre_lock_hook: std::sync::Mutex::new(None),
         });
 
         tracing::debug!("initialized runtime");
@@ -2814,7 +2814,7 @@ mod tests {
         let locker = runtime.lock_manager.retrieve(lock_id).unwrap();
         let guard = crate::lock::LockGuard::new(&*locker);
         let (pre_lock_sender, pre_lock_receiver) = std::sync::mpsc::channel();
-        *runtime.remove_box_pre_lock_hook.lock().unwrap() = Some(Box::new(move || {
+        *runtime.test_remove_box_pre_lock_hook.lock().unwrap() = Some(Box::new(move || {
             pre_lock_sender.send(()).unwrap();
         }));
         let (sender, receiver) = std::sync::mpsc::channel();
