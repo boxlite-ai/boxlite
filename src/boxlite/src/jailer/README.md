@@ -151,6 +151,17 @@ The file-size soft limit comes from `ResourceLimits.max_file_size`, normally
 twice the disk capacity. For both engines, the jailer reserves hard as
 `min(max(2 TiB, max_file_size), inherited hard)` and caps soft there too.
 
+[`common::rlimit`](common/rlimit.rs) owns both stages of file-size enforcement:
+
+| Stage | Entry point | Contract |
+|-------|-------------|----------|
+| Child before exec | `apply_limits_raw` | Initialize soft and hard without allocation or logging |
+| Running native shim | `raise_file_size_limit` | Raise soft within hard; never lower soft or change hard |
+
+The native adapter validates the disk ID, calls the runtime helper, then submits
+the grow request to the VMM. Both entry points change the calling process's
+limits; runtime adjustment must run inside the shim.
+
 A 10 GiB disk starts with soft 20 GiB; the native shim raises it to 100 GiB
 before growing to 50 GiB. libkrun shares the reserve but has no online disk grow.
 

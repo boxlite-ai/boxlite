@@ -3,8 +3,8 @@
 //! Applies rlimits to restrict resource usage of the jailed process.
 //! Works on both Linux and macOS.
 //!
-//! Only the async-signal-safe `apply_limits_raw()` is used,
-//! called from the `pre_exec` hook before exec().
+//! `apply_limits_raw()` initializes limits in the `pre_exec` hook.
+//! `raise_file_size_limit()` adjusts the running shim's soft limit after exec.
 
 use crate::runtime::advanced_options::ResourceLimits;
 use std::io;
@@ -31,6 +31,39 @@ pub fn get_rlimit(resource: RlimitResource) -> Result<(u64, u64), io::Error> {
     }
 
     Ok((rlim.rlim_cur as u64, rlim.rlim_max as u64))
+}
+
+/// Raises this process's soft `RLIMIT_FSIZE` to cover a disk of `bytes`,
+/// with the jailer's margin, up to the hard limit; it never lowers it.
+/// The hard limit stays unchanged. Call after exec, since errors may allocate.
+#[cfg(any(feature = "native", all(test, target_os = "linux")))]
+pub(crate) fn raise_file_size_limit(bytes: u64) -> io::Result<()> {
+    use crate::disk::constants::qcow2::FSIZE_DISK_MULTIPLIER;
+
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid out-pointer for the call.
+    if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let wanted = bytes.saturating_mul(FSIZE_DISK_MULTIPLIER);
+    if limit.rlim_cur == libc::RLIM_INFINITY || limit.rlim_cur >= wanted {
+        return Ok(());
+    }
+    if limit.rlim_max != libc::RLIM_INFINITY && limit.rlim_max < wanted {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{wanted} bytes exceed the hard limit of {}", limit.rlim_max),
+        ));
+    }
+    limit.rlim_cur = wanted;
+    // SAFETY: `limit` is a valid rlimit for the call.
+    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Apply resource limits - async-signal-safe version for pre_exec.

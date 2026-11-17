@@ -582,6 +582,10 @@ logged.
     making retries safe. Requests sent before driver activation wait for it.
     A timeout leaves the request queued; dropping the device closes its channel.
 - **File size limits.** Before growing, the shim raises its soft `RLIMIT_FSIZE`.
+  - Shared `jailer::common::rlimit` owns the limit implementation:
+    `apply_limits_raw` initializes limits before exec; `raise_file_size_limit`
+    adjusts soft after exec. The native adapter validates the disk ID, calls
+    the runtime helper, then dispatches to `VmControl`.
   - The jailer computes hard as `min(max(2 TiB, max_file_size), inherited hard)`
     for both engines. The existing `max_file_size` supplies the initial soft
     limit, so the controller and builders carry no separate ceiling parameter.

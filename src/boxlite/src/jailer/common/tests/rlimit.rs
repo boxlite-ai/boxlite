@@ -70,3 +70,46 @@ fn file_size_policy_caps_soft_at_the_inherited_hard_limit() {
 fn file_size_policy_leaves_unconfigured_limits_inherited() {
     assert_eq!(child_file_size_limits(None, Some(4096)), (4096, 4096));
 }
+
+#[test]
+fn runtime_file_size_limit_preserves_process_limits() {
+    const CHILD_ENV: &str = "BOXLITE_TEST_RUNTIME_FILE_SIZE_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        // Run after exec: the runtime helper may allocate, unlike pre_exec setup.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "jailer::common::rlimit::file_size_tests::runtime_file_size_limit_preserves_process_limits",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .expect("start the isolated rlimit test");
+        assert!(
+            output.status.success(),
+            "child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    let initial = libc::rlimit {
+        rlim_cur: 1024,
+        rlim_max: 4096,
+    };
+    // SAFETY: initial is a valid rlimit, applied only in this isolated process.
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &initial) }, 0);
+
+    for (bytes, soft) in [(1024, 2048), (512, 2048), (2048, 4096)] {
+        raise_file_size_limit(bytes).unwrap();
+        assert_eq!(get_rlimit(libc::RLIMIT_FSIZE).unwrap(), (soft, 4096));
+    }
+    for bytes in [2049, u64::MAX] {
+        assert_eq!(
+            raise_file_size_limit(bytes).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput,
+        );
+        assert_eq!(get_rlimit(libc::RLIMIT_FSIZE).unwrap(), (4096, 4096));
+    }
+}

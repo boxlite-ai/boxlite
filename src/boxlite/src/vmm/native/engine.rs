@@ -6,6 +6,7 @@
 use std::{collections::HashSet, fs::File, io, path::PathBuf, time::Duration};
 
 use crate::experimental::custom_kernel::KernelFormat;
+use crate::jailer::raise_file_size_limit;
 use crate::rootfs::guest::Strategy;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
 use crate::vmm::{
@@ -109,37 +110,6 @@ pub(crate) fn prepare_disk_grow(
     }
     raise_file_size_limit(bytes)
         .map_err(|error| ControlError::Failed(format!("cannot raise the file size limit: {error}")))
-}
-
-/// Raises this process's soft `RLIMIT_FSIZE` to cover a disk of `bytes`,
-/// with the jailer's margin, up to the hard limit; it never lowers it.
-fn raise_file_size_limit(bytes: u64) -> io::Result<()> {
-    use crate::disk::constants::qcow2::FSIZE_DISK_MULTIPLIER;
-
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: `limit` is a valid out-pointer for the call.
-    if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let wanted = bytes.saturating_mul(FSIZE_DISK_MULTIPLIER);
-    if limit.rlim_cur == libc::RLIM_INFINITY || limit.rlim_cur >= wanted {
-        return Ok(());
-    }
-    if limit.rlim_max != libc::RLIM_INFINITY && limit.rlim_max < wanted {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{wanted} bytes exceed the hard limit of {}", limit.rlim_max),
-        ));
-    }
-    limit.rlim_cur = wanted;
-    // SAFETY: `limit` is a valid rlimit for the call.
-    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limit) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 /// Requests the engine cannot serve; any one fails `create` before boot.
