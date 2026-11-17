@@ -163,6 +163,10 @@ describe('Standalone BoxLite execution boundary', () => {
     await advance({ delivery: 'requested', effect: { id: randomUUID(), kind: 'jit-deliver' } })
   }
   const posts = () => calls.filter((call) => call.path === '/v1/tenant-a/boxes' && call.method === 'POST')
+  it('Docker bootstrap requests a privileged guest through REST', async () => {
+    await create()
+    expect(posts()[0].body).toMatchObject({ user: 'root', advanced: { privileged: true } })
+  })
   describe('boxlite-workers timeout-ID recovery', () => {
     const timeoutCreate = async () => {
       await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })
@@ -602,7 +606,7 @@ describe('Standalone BoxLite execution boundary', () => {
     expect(await create()).toMatchObject({ box_id: 'original-box', status: 'running' })
     expect(posts()[0].body).toMatchObject({
       name,
-      user: 'runner',
+      user: 'root',
       working_dir: '/home/runner',
       memory_mib: 2048,
       auto_stop: 0,

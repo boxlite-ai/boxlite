@@ -143,6 +143,29 @@ waiting, pending and requested workflow runs. A changing or truncated inventory,
 permission failure or API pagination cap is an error; callers retain their wake
 and retry discovery instead of acknowledging an incomplete pass.
 
+## Docker startup
+
+Every CI worker Box requests guest privilege and prepares Docker before starting
+the GitHub runner. Docker-dependent actions, service containers and scripts use
+the guest-local `/var/run/docker.sock`. Bootstrap runs as root; readiness probes
+and the GitHub runner execute as `runner` with the docker group active.
+
+```text
+Privileged CI Box -> Docker API ready -> run.sh -> workflow service containers -> steps
+```
+
+The official GitHub runner image supplies Docker binaries and passwordless sudo.
+Bootstrap installs `iptables` with apt when missing, starts `dockerd`, and probes
+the API as the runner user. Dependency installation and readiness share a
+120-second deadline; a ready daemon is reused. Preparation failures stop startup
+and print the last 60 daemon log lines. Failed JIT delivery stops an owned daemon;
+an existing daemon remains untouched. Normal teardown belongs to the Box lifecycle.
+
+Hosts need Docker-capable firmware and privileged guest support; standalone REST
+creation also requires privileged creation to be enabled. Custom worker images
+must supply Bash, Docker binaries, the docker group, sudo and GNU timeout, plus
+apt when `iptables` is absent. See [Docker inside a Box](../../../docs/guides/docker-in-docker.md).
+
 ## Resource labels
 
 Both hosts share resource parsing across webhook hints, compensation, job matching,

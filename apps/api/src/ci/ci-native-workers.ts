@@ -241,6 +241,8 @@ export class CiNativeWorkers {
           memory: launch.memoryMiB / 1024,
           disk: launch.diskGiB ?? DEFAULT_WORKER_DISK_GIB,
           user: 'runner',
+          privileged: true,
+          runAsUser: 'root',
           workingDir: '/home/runner',
           entrypoint: launch.entrypoint,
           cmd: [],
