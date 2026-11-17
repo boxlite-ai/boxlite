@@ -907,7 +907,10 @@ successful additions/updates/deletions; it does not poll the connection list.
 the guide sheet; it wraps below the description on narrow screens. Each Runners empty state
 uses a single title, concise explanation and at most one primary action. Workflow
 steps live in the guide rather than being repeated below a second empty-state heading. Successful browser
-connection offers the same guide for the current BoxLite organization.
+connection offers the same guide for the current BoxLite organization. The success
+entry survives removal of the authorization route parameter and clears when a new
+attempt starts or the organization changes. The callback guide uses the confirmed
+connection result without requiring dashboard organization context.
 
 The guide shows a compact organization context and an example workflow diff:
 replace `runs-on: ubuntu-latest` with `runs-on: boxlite` on the intended job.

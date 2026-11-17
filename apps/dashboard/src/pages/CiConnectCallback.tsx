@@ -97,7 +97,7 @@ export default function CiConnectCallback() {
         ) : result?.status === 'connected' ? (
           <>
             <p role="status">GitHub connected. Listener setup: {result.listener_status}.</p>
-            <CiFirstJobGuide label="Set up a job" primary />
+            <CiFirstJobGuide label="Set up a job" primary context={() => <p>GitHub connected.</p>} />
             <AsciiButton
               variant="primary"
               onClick={() => {

@@ -125,6 +125,15 @@ describe('CI browser connection lifecycle', () => {
         status === 'pending' ? 'Another connection request' : 'Authorization did not complete',
       )
   })
+  it('keeps setup after account selection and clears it when starting again', async () => {
+    api.selectCiAccount.mockResolvedValue({ id, status: 'connected', listener_status: 'ready' })
+    await render(true)
+    await act(async () => button('Connect').click())
+    expect(document.querySelector('[role=dialog]')).toBeNull()
+    expect(button('Set up a job')).toBeDefined()
+    await act(async () => button('Connect GitHub').click())
+    expect(button('Set up a job')).toBeUndefined()
+  })
   it('polls a resumed pending connection until GitHub finishes it', async () => {
     vi.useFakeTimers()
     api.getCiConnect.mockResolvedValue({ id, status: 'pending' })
@@ -137,6 +146,7 @@ describe('CI browser connection lifecycle', () => {
     expect(api.getCiConnect.mock.calls.length).toBeGreaterThan(reads)
     expect(document.querySelector('[role=dialog]')).toBeNull()
     expect(getCiConnectSession()).toBeUndefined()
+    expect(button('Set up a job')).toBeDefined()
   })
   it('continues polling after the actual callback route recovers a pending authorization', async () => {
     vi.useFakeTimers()
@@ -168,6 +178,7 @@ describe('CI browser connection lifecycle', () => {
     })
     expect(document.querySelector('[role=dialog]')).toBeNull()
     expect(getCiConnectSession()).toBeUndefined()
+    expect(button('Set up a job')).toBeDefined()
   })
   it('stops pending polling after closing the dialog or expiry', async () => {
     vi.useFakeTimers()

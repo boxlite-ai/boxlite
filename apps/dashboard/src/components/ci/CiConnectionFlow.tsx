@@ -83,7 +83,10 @@ export function CiConnectionFlow({
   }, [organization, id, api])
   useEffect(() => {
     setResult(undefined)
-  }, [organization, id])
+  }, [organization])
+  useEffect(() => {
+    if (id) setResult(undefined)
+  }, [id])
   useEffect(() => {
     let active = true
     if (!id) {
@@ -162,6 +165,7 @@ export function CiConnectionFlow({
   const start = async (selectAccount = false) => {
     if (startingRef.current || !configuration?.web_connect_available) return
     const request = ++startGeneration.current
+    if (!id) setResult(undefined)
     startingRef.current = true
     setStarting(true)
     setMessage('')
