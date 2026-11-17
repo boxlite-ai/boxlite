@@ -6,7 +6,7 @@
 
 import visaLogo from '@/assets/payment-brands/visa.svg'
 import mastercardLogo from '@/assets/payment-brands/mastercard.svg'
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
@@ -24,6 +24,9 @@ const mocks = vi.hoisted(() => ({
   }>,
   redeemCoupon: vi.fn(),
   emailVerified: true,
+  memberRole: 'owner',
+  // Two organizations make the target ambiguous, so a coupon link waits for a click.
+  organizations: [{ id: 'org-without-card' }, { id: 'org-other' }] as Array<{ id: string }>,
   setAutomaticTopUp: vi.fn(),
   topUpWallet: vi.fn(),
   invoicesQuery: vi.fn(),
@@ -52,7 +55,14 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
-  useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-without-card', name: 'Acme Labs' } }),
+  useSelectedOrganization: () => ({
+    selectedOrganization: { id: 'org-without-card', name: 'Acme Labs' },
+    authenticatedUserOrganizationMember: { role: mocks.memberRole },
+  }),
+}))
+
+vi.mock('@/hooks/useOrganizations', () => ({
+  useOrganizations: () => ({ organizations: mocks.organizations }),
 }))
 
 vi.mock('react-oidc-context', () => ({
@@ -181,6 +191,8 @@ describe('WalletSection top-up checkout', () => {
     mocks.walletPending = false
     mocks.topUpPending = false
     mocks.emailVerified = true
+    mocks.memberRole = 'owner'
+    mocks.organizations = [{ id: 'org-without-card' }, { id: 'org-other' }]
     mocks.redeemCoupon.mockReset()
   })
 
@@ -666,7 +678,12 @@ describe('WalletSection top-up checkout', () => {
     document.body.appendChild(host)
     await act(async () => {
       root = createRoot(host)
-      root.render(<WalletSection linkCouponCode={linkCouponCode} onCouponRedeemed={onCouponRedeemed} />)
+      // StrictMode mounts effects twice, as the dashboard does in development.
+      root.render(
+        <StrictMode>
+          <WalletSection linkCouponCode={linkCouponCode} onCouponRedeemed={onCouponRedeemed} />
+        </StrictMode>,
+      )
     })
     await flush()
     const input = host.querySelector<HTMLInputElement>('input[placeholder="Enter coupon code"]')
@@ -683,6 +700,8 @@ describe('WalletSection top-up checkout', () => {
 
     expect(input?.value).toBe('ACME50')
     expect(host.textContent).toContain('Credits go to Acme Labs')
+    // Two organizations: nothing is redeemed until the user picks this one by clicking.
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
     await act(async () => redeem!.click())
     await flush()
     expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
@@ -712,6 +731,7 @@ describe('WalletSection top-up checkout', () => {
 
   it('asks to verify the email before redeeming a coupon link code', async () => {
     mocks.emailVerified = false
+    mocks.organizations = [{ id: 'org-without-card' }]
 
     const { host, input, redeem } = await renderCouponLink('ACME50')
 
@@ -719,5 +739,43 @@ describe('WalletSection top-up checkout', () => {
     expect(input).toBeNull()
     expect(redeem).toBeUndefined()
     expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+  })
+
+  it('redeems a coupon link once without a click for the owner of a single organization', async () => {
+    mocks.organizations = [{ id: 'org-without-card' }]
+    mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')
+
+    const { host, onCouponRedeemed } = await renderCouponLink('ACME50')
+    await flush()
+
+    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
+    expect(mocks.redeemCoupon).toHaveBeenCalledWith({ organizationId: 'org-without-card', couponCode: 'ACME50' })
+    expect(onCouponRedeemed).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('Coupon redeemed')
+  })
+
+  it('does not auto-redeem a coupon link for a member who does not own the organization', async () => {
+    mocks.organizations = [{ id: 'org-without-card' }]
+    mocks.memberRole = 'member'
+
+    const { input } = await renderCouponLink('ACME50')
+    await flush()
+
+    expect(input?.value).toBe('ACME50')
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+  })
+
+  it('tries a rejected coupon link once and leaves it for the user', async () => {
+    mocks.organizations = [{ id: 'org-without-card' }]
+    mocks.redeemCoupon.mockRejectedValue(new Error('Coupon not found'))
+
+    const { host, input, onCouponRedeemed } = await renderCouponLink('NOPE')
+    await flush()
+    await flush()
+
+    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('Coupon not found')
+    expect(input?.value).toBe('NOPE')
+    expect(onCouponRedeemed).not.toHaveBeenCalled()
   })
 })

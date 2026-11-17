@@ -28,10 +28,12 @@ import {
   useOwnerWalletTransactionsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
+import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, formatAmount } from '@/lib/utils'
 import { ArrowUpRight } from '@/components/ui/icon'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
@@ -261,7 +263,8 @@ export function WalletSection({
   linkCouponCode,
   onCouponRedeemed,
 }: { linkCouponCode?: string; onCouponRedeemed?: () => void } = {}) {
-  const { selectedOrganization } = useSelectedOrganization()
+  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const { organizations } = useOrganizations()
   const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
   const [couponCode, setCouponCode] = useState<string>(linkCouponCode ?? '')
@@ -334,6 +337,19 @@ export function WalletSection({
       console.error('Failed to redeem coupon:', error)
     }
   }, [selectedOrganization, couponCode, redeemCouponMutation, onCouponRedeemed])
+
+  // A coupon link redeems without a click only when the receiving organization is
+  // unambiguous: the user owns their one organization. One attempt per mount; the ref
+  // survives StrictMode's effect replay, and a rejected code waits for the user.
+  const autoRedeemAttempted = useRef(false)
+  const linkTargetIsUnambiguous =
+    organizations.length === 1 && authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
+  useEffect(() => {
+    if (autoRedeemAttempted.current || !linkCouponCode || !user?.profile.email_verified) return
+    if (!linkTargetIsUnambiguous || !selectedOrganization) return
+    autoRedeemAttempted.current = true
+    void handleRedeemCoupon()
+  }, [linkCouponCode, user?.profile.email_verified, linkTargetIsUnambiguous, selectedOrganization, handleRedeemCoupon])
 
   const saveAutomaticTopUpDisabled = useMemo(() => {
     if (setAutomaticTopUpMutation.isPending) {
