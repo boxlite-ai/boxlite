@@ -3525,7 +3525,19 @@ components:
         domains:
           type: array
           items:
-            $ref: "#/components/schemas/Domain"
+            type: object
+            required: [hostname, url, target, kind]
+            properties:
+              hostname:
+                $ref: "#/components/schemas/Domain/properties/hostname"
+              url:
+                $ref: "#/components/schemas/Domain/properties/url"
+              target:
+                $ref: "#/components/schemas/Domain/properties/target"
+              kind:
+                type: string
+                enum: [platform, custom]
+                description: Persisted domain ownership type; independent of the configured suffix for new claims.
         limit:
           type: integer
           description: How many platform domains the organization may hold, bound or not; custom domains do not consume this allowance.

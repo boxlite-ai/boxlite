@@ -1,13 +1,17 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import React, { useEffect, useState } from 'react'
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { generatePath, Link } from 'react-router-dom'
+import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { FormDialogContent, FormDialogHeader, FormDialogBody, FormDialogFooter } from '@/components/ui/form-dialog'
 import { AsciiButton } from '@/components/ascii'
-import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
-import { Copy, Globe, Plus, ArrowRightIcon } from '@/components/ui/icon'
+import { ResourceEmptyState, ResourceIdentity, StatusIndicator } from '@/components/ResourceLayout'
+import { Copy, Globe, Plus } from '@/components/ui/icon'
+import { DomainResourceIcon } from '@/components/ResourceStateIcon'
+import { TechnicalText } from '@/components/TechnicalText'
 import { Input } from '@/components/ui/input'
 import { copyToClipboard } from '@/lib/copy-text'
 import { toast } from 'sonner'
@@ -91,8 +95,6 @@ export default function CustomDomains({
   const [open, setOpen] = useState(false)
   const [hostname, setHostname] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
-  const [box, setBox] = useState('')
-  const [port, setPort] = useState('3000')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [preparing, setPreparing] = useState<{ id: string; organizationId: string } | null>(null)
   const pendingMutations = useIsMutating({ mutationKey: key })
@@ -144,17 +146,11 @@ export default function CustomDomains({
   const action = useMutation({
     mutationKey: key,
     onMutate: () => client.cancelQueries({ queryKey: key }),
-    mutationFn: async (operation: {
-      type: 'verify' | 'prepare' | 'retry' | 'delete' | 'bind' | 'unbind'
-      id: string
-      hostname: string
-    }) => {
+    mutationFn: async (operation: { type: 'verify' | 'prepare' | 'retry' | 'delete'; id: string }) => {
       if (operation.type === 'verify') return api.verifyCustomDomain(organizationId, operation.id)
       if (operation.type === 'prepare') return api.prepareCustomDomain(organizationId, operation.id)
       if (operation.type === 'retry') return api.advanceCustomDomain(organizationId, operation.id)
       if (operation.type === 'delete') await api.deleteCustomDomain(organizationId, operation.id)
-      if (operation.type === 'bind') await api.bindDomain(organizationId, operation.hostname, box.trim(), Number(port))
-      if (operation.type === 'unbind') await api.unbindDomain(organizationId, operation.hostname)
     },
     onSuccess: async (result, operation) => {
       if (result) {
@@ -183,7 +179,7 @@ export default function CustomDomains({
   useEffect(() => {
     if (!waitingForRecords || !open || !canCreate || !domain || action.isPending || create.isPending) return
     const timer = window.setTimeout(
-      () => action.mutate({ type: 'prepare', id: domain.id, hostname: domain.hostname }),
+      () => action.mutate({ type: 'prepare', id: domain.id }),
       Math.max(3, domain.retryAfter || 3) * 1000,
     )
     return () => window.clearTimeout(timer)
@@ -192,11 +188,10 @@ export default function CustomDomains({
     !domain || (!domain.confirmed && !domain.ready && domain.phase !== 'superseded' && domain.dnsRecords.length < 3)
   const formHostname = domain?.hostname ?? hostname
   const canRetryHttps = domain?.confirmed && !domain.ready && !!domain.errorCode && domain.phase !== 'superseded'
-  const target = held.find((value) => value.hostname === domain?.hostname)?.target
-  const run = (type: 'verify' | 'prepare' | 'retry' | 'delete' | 'bind' | 'unbind') => {
+  const run = (type: 'verify' | 'prepare' | 'retry' | 'delete') => {
     if (!domain) return
     action.mutate(
-      { type, id: domain.id, hostname: domain.hostname },
+      { type, id: domain.id },
       {
         onSuccess: (result) => {
           if (!result) return
@@ -217,7 +212,7 @@ export default function CustomDomains({
           const description = result.errorCode
             ? (ERRORS[result.errorCode] ?? 'HTTPS setup needs attention. Reopen this domain to review the error.')
             : result.ready
-              ? 'HTTPS is ready. You can now bind a Box port.'
+              ? 'HTTPS is ready.'
               : result.submissionStatus === 'accepted'
                 ? 'HTTPS is being enabled. You can return later to check progress.'
                 : result.submissionStatus === 'unknown'
@@ -230,14 +225,6 @@ export default function CustomDomains({
     )
   }
   const busy = create.isPending || action.isPending || (waitingForRecords && canCreate)
-  const canBind =
-    canCreate &&
-    domain?.ready &&
-    !!box.trim() &&
-    Number.isInteger(Number(port)) &&
-    Number(port) >= 1 &&
-    Number(port) <= 65535 &&
-    !busy
   const copyRecord = async (value: string, label: string) => {
     if (await copyToClipboard(value)) toast.success(`${label} copied`)
     else toast.error('Could not copy DNS record. Select the value and copy it manually.')
@@ -283,35 +270,100 @@ export default function CustomDomains({
       )}
       {data?.subscription === 'required' && (
         <p role="status" className="mt-4 text-muted-foreground">
-          Subscribe to add, bind and access custom domains.
+          Subscribe to add and access custom domains.
         </p>
       )}
       {data && data.domains.length === 0 && (
         <ResourceEmptyState icon={<Globe className="size-6" />} title="Bring your own domain" />
       )}
       {data && data.domains.length > 0 && (
-        <div className="mt-[14px] border-t border-border">
-          {data.domains.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              aria-label={`Manage ${item.hostname}`}
-              className="flex w-full flex-wrap items-center gap-4 border-b border-border/60 px-4 py-5 text-left transition-colors hover:bg-accent/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-              onClick={() => {
-                setSelected(item.id)
-                action.reset()
-                setDeleting(null)
-                setBox('')
-                setOpen(true)
-                if (item.confirmed && !item.ready && item.phase !== 'superseded') void query.refetch()
-              }}
-            >
-              <Globe className="size-6 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 break-all font-mono font-semibold">{item.hostname}</span>
-              <DomainStatus domain={item} active={data.subscription === 'active'} />
-              <ArrowRightIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-            </button>
-          ))}
+        <div className="resource-content scroll-edge mt-[14px]">
+          <table className="resource-table w-full min-w-[640px] table-fixed text-left font-sans text-body">
+            <colgroup>
+              <col className="w-[36%]" />
+              <col className="w-[16%]" />
+              <col className="w-[26%]" />
+              <col className="w-[10%]" />
+              <col className="w-[12%]" />
+            </colgroup>
+            <thead className="border-b border-border text-meta text-muted-foreground">
+              <tr>
+                {['Domain', 'Target type', 'Associated with', 'Port', 'Actions'].map((label) => (
+                  <th
+                    key={label}
+                    scope="col"
+                    className={`h-11 px-4 py-3 font-medium ${label === 'Actions' ? 'text-right' : ''}`}
+                  >
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.domains.map((item) => {
+                const target = held.find((value) => value.hostname === item.hostname)?.target
+                return (
+                  <tr
+                    key={item.id}
+                    className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
+                  >
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        aria-label={`Manage ${item.hostname}`}
+                        className="flex w-full min-w-0 items-center gap-3 text-left hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                        onClick={() => {
+                          setSelected(item.id)
+                          action.reset()
+                          setDeleting(null)
+                          setOpen(true)
+                          if (item.confirmed && !item.ready && item.phase !== 'superseded') void query.refetch()
+                        }}
+                      >
+                        <ResourceIdentity icon={<DomainResourceIcon bound={Boolean(target)} />}>
+                          <span className="resource-name font-semibold" title={item.hostname}>
+                            <TechnicalText value={item.hostname} kind="hostname" />
+                          </span>
+                        </ResourceIdentity>
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {target ? (target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
+                    </td>
+                    <td className="truncate px-4 py-3 font-mono text-muted-foreground">
+                      {target?.type === 'box' ? (
+                        <Link
+                          to={generatePath(RoutePath.BOX_DETAILS, { boxId: encodeURIComponent(target.box) })}
+                          className="text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                        >
+                          {target.box}
+                        </Link>
+                      ) : (
+                        (target?.app ?? '—')
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono tabular-nums text-muted-foreground">
+                      {target?.type === 'box' ? target.port : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <AsciiButton
+                        variant="quiet"
+                        size="icon"
+                        aria-label={`Copy ${item.hostname}`}
+                        title="Copy domain"
+                        onClick={async () => {
+                          if (await copyToClipboard(item.hostname)) toast.success('Domain copied')
+                          else toast.error('Could not copy domain. Select the hostname and copy it manually.')
+                        }}
+                      >
+                        <Copy className="size-3.5" />
+                      </AsciiButton>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
       <Dialog
@@ -331,7 +383,7 @@ export default function CustomDomains({
             <DialogDescription className="mt-2 text-body leading-relaxed">
               {showHostnameForm
                 ? 'Use a subdomain you own, such as app.example.com. BoxLite manages HTTPS.'
-                : 'Manage DNS, HTTPS and the Box this domain points to.'}
+                : 'Manage DNS and HTTPS for this domain.'}
             </DialogDescription>
           </FormDialogHeader>
           <FormDialogBody className="space-y-5">
@@ -384,7 +436,7 @@ export default function CustomDomains({
                     {domain.phase === 'superseded'
                       ? 'A newer verified application owns this hostname. This configuration is no longer valid.'
                       : domain.ready
-                        ? 'HTTPS is ready. Bind a Box port with a public tunnel and inbound access enabled.'
+                        ? 'HTTPS is ready.'
                         : !domain.confirmed
                           ? 'Add all three records below, then click Configured, verify.'
                           : canRetryHttps
@@ -413,47 +465,6 @@ export default function CustomDomains({
                       </span>
                     )}
                   </p>
-                )}
-                {domain.ready && (
-                  <form
-                    id="custom-domain-bind"
-                    className="space-y-3"
-                    onSubmit={(event) => {
-                      event.preventDefault()
-                      if (canBind) run('bind')
-                    }}
-                  >
-                    <p className="text-meta text-muted-foreground">
-                      Saved target:{' '}
-                      <span className="font-mono text-foreground">
-                        {target?.type === 'box' ? `${target.box}:${target.port}` : 'Unbound'}
-                      </span>
-                    </p>
-                    <div className="grid grid-cols-[minmax(0,1fr)_100px] gap-3">
-                      <label className="space-y-2 text-meta font-medium">
-                        Box ID or name
-                        <Input
-                          className="font-mono"
-                          aria-label="Box ID or name"
-                          placeholder="my-box"
-                          value={box}
-                          onChange={(event) => setBox(event.target.value)}
-                        />
-                      </label>
-                      <label className="space-y-2 text-meta font-medium">
-                        Port
-                        <Input
-                          className="font-mono"
-                          aria-label="Port"
-                          type="number"
-                          min="1"
-                          max="65535"
-                          value={port}
-                          onChange={(event) => setPort(event.target.value)}
-                        />
-                      </label>
-                    </div>
-                  </form>
                 )}
                 {domain.dnsRecords.length > 0 && (
                   <details key={domain.id} open={!domain.ready && domain.phase !== 'superseded'} className="group">
@@ -600,17 +611,8 @@ export default function CustomDomains({
                 >
                   Delete
                 </AsciiButton>
-                {target && (
-                  <AsciiButton disabled={busy} onClick={() => run('unbind')}>
-                    Unbind
-                  </AsciiButton>
-                )}
                 <div className="flex-1" />
-                {domain.ready ? (
-                  <AsciiButton variant="primary" type="submit" form="custom-domain-bind" disabled={!canBind}>
-                    Bind
-                  </AsciiButton>
-                ) : canRetryHttps ? (
+                {canRetryHttps ? (
                   <AsciiButton variant="primary" disabled={!canCreate || busy} onClick={() => run('retry')}>
                     {action.isPending && action.variables?.type === 'retry' ? 'Retrying…' : 'Retry'}
                   </AsciiButton>
