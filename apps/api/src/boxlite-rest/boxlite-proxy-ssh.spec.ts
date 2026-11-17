@@ -75,7 +75,10 @@ describe('BoxliteProxyController SSH routes', () => {
 
       await call('configureSsh')
 
-      expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', expect.anything(), expect.any(Function))
+      expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', expect.anything(), expect.any(Function), {
+        requestedAt: expect.any(Date),
+        monotonicStart: expect.any(Number),
+      })
       expect(proxyHandler).toHaveBeenCalledTimes(1)
     })
 

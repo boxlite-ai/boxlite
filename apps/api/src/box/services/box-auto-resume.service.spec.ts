@@ -6,6 +6,8 @@
 import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { Logger, RequestTimeoutException } from '@nestjs/common'
+import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
 
 const organization = { id: 'org-1', suspended: false } as any
 
@@ -28,6 +30,19 @@ function makeHarness(initial: Record<string, unknown>) {
 }
 
 describe('BoxAutoResumeService', () => {
+  let observed: Readonly<Record<string, string>>[]
+  let dispose: () => void
+  beforeEach(() => {
+    observed = []
+    dispose = subscribeBusinessEvents((event) => observed.push(event))
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined)
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    dispose()
+    jest.restoreAllMocks()
+    jest.useRealTimers()
+  })
   it('returns immediately for an already STARTED box', async () => {
     const { service, waiter, redisLockProvider } = makeHarness({
       id: 'box-1',
@@ -39,6 +54,7 @@ describe('BoxAutoResumeService', () => {
     expect(waiter.waitForStarted).not.toHaveBeenCalled()
     expect(redisLockProvider.lock.mock.calls).toEqual([['box:box-1:state-change', 30]])
     expect(redisLockProvider.unlock.mock.calls).toEqual([['box:box-1:state-change']])
+    expect(observed).toEqual([])
   })
 
   it('joins an in-flight Start and waits for STARTED', async () => {
@@ -50,6 +66,14 @@ describe('BoxAutoResumeService', () => {
 
     await service.ensureReady('box-1', organization)
     expect(waiter.waitForStarted).toHaveBeenCalledWith('box-1', 'org-1', 30)
+    expect(observed.map((event) => event['event.outcome'])).toEqual(['requested', 'success'])
+    expect(observed[1]).toMatchObject({
+      'event.name': 'cloud.box.resume',
+      'operation.scope': 'proxy_api',
+      'actor.kind': 'platform',
+      'event.reason': 'auto_resume',
+      'box.id': 'box-1',
+    })
   })
 
   it('waits for an in-flight Stop, submits Start, then waits for STARTED', async () => {
@@ -74,6 +98,7 @@ describe('BoxAutoResumeService', () => {
     expect(waiter.waitForStopped).toHaveBeenCalledWith('box-1', 'org-1', 30)
     expect(waiter.waitForStarted).toHaveBeenCalledWith('box-1', 'org-1', 30)
     expect(boxService.ensureStartedForProxy).toHaveBeenCalledTimes(2)
+    expect(observed.map((event) => event['event.outcome'])).toEqual(['requested', 'success'])
   })
 
   it('propagates timeout or transition failures', async () => {
@@ -82,8 +107,21 @@ describe('BoxAutoResumeService', () => {
       state: BoxState.STARTING,
       desiredState: BoxDesiredState.STARTED,
     })
-    waiter.waitForStarted.mockRejectedValue(new Error('start timeout'))
+    waiter.waitForStarted.mockRejectedValue(new RequestTimeoutException('start timeout'))
 
     await expect(service.ensureReady('box-1', organization)).rejects.toThrow('start timeout')
+    expect(observed[1]['operation.result']).toBe('timeout')
+  })
+
+  it('includes lifecycle-lock waiting in timeout accounting', async () => {
+    jest.useFakeTimers()
+    const { service, redisLockProvider, boxService } = makeHarness({ id: 'box-1', state: BoxState.STOPPED })
+    redisLockProvider.lock.mockResolvedValue(false)
+    const pending = service.ensureReady('box-1', organization).catch((error) => error)
+    await jest.advanceTimersByTimeAsync(30_000)
+    expect(await pending).toBeInstanceOf(RequestTimeoutException)
+    expect(boxService.ensureStartedForProxy).not.toHaveBeenCalled()
+    expect(observed[1]).toMatchObject({ 'operation.result': 'timeout', 'operation.duration_ms': '30000' })
+    expect(observed[0]['operation.requested_at']).toBe(observed[1]['operation.requested_at'])
   })
 })

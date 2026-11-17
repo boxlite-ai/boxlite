@@ -14,6 +14,7 @@ use tonic::{Request, Response, Status};
 
 #[derive(Default)]
 struct Mock {
+    usage: Mutex<proto::SshUsageResponse>,
     requests: Mutex<Vec<&'static str>>,
     config: Mutex<Option<proto::SshConfig>>,
     updates: Mutex<Vec<(Option<bool>, Option<proto::SshConfig>)>>,
@@ -59,6 +60,14 @@ struct MockService(Arc<Mock>);
 
 #[tonic::async_trait]
 impl proto::Ssh for MockService {
+    async fn take_usage(
+        &self,
+        _: Request<proto::SshUsageRequest>,
+    ) -> Result<Response<proto::SshUsageResponse>, Status> {
+        self.0.reply("usage").await?;
+        Ok(Response::new(self.0.usage.lock().unwrap().clone()))
+    }
+
     /// Capture the decoded configuration so assertions cover the serialization boundary.
     async fn control(
         &self,
@@ -392,6 +401,12 @@ async fn ssh_observation_does_not_start_idle_boxes() {
                 f.backend.runtime.shutdown_token.child_token(),
             ));
             let ssh = SshHandle::new(backend.clone());
+            let usage = ssh.take_usage().await;
+            if matches!(status, BoxStatus::Configured | BoxStatus::Stopped) {
+                assert!(usage.unwrap().events.is_empty());
+            } else {
+                assert!(matches!(usage, Err(BoxliteError::InvalidState(_))));
+            }
             for operation in [1, 2, 3] {
                 let result = operate(ssh.clone(), operation).await;
                 if operation == 1 && matches!(status, BoxStatus::Configured | BoxStatus::Stopped) {
@@ -423,6 +438,76 @@ async fn ssh_observation_does_not_start_idle_boxes() {
         }
     }
     assert!(f.mock.requests.lock().unwrap().is_empty());
+}
+
+/// Source metadata crosses the real portal RPC without modification.
+#[tokio::test]
+async fn ssh_usage_source_metadata_and_validation() {
+    let f = fixture().await;
+    let event = proto::SshUsageEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        occurred_at_ms: 1_800_000_000_123,
+    };
+    *f.mock.usage.lock().unwrap() = proto::SshUsageResponse {
+        events: vec![event.clone()],
+        dropped_total: 3,
+    };
+    let batch = f.ssh.take_usage().await.unwrap();
+    assert_eq!(batch.events[0].id, event.id);
+    assert_eq!(batch.events[0].occurred_at_ms, event.occurred_at_ms);
+    assert_eq!(batch.dropped_total, 3);
+    for events in [
+        vec![event.clone(); proto::ssh_usage::SSH_USAGE_CAPACITY + 1],
+        vec![proto::SshUsageEvent {
+            id: "invalid".into(),
+            ..event.clone()
+        }],
+        vec![proto::SshUsageEvent {
+            occurred_at_ms: u64::MAX,
+            ..event.clone()
+        }],
+    ] {
+        f.mock.usage.lock().unwrap().events = events;
+        assert!(matches!(
+            f.ssh.take_usage().await,
+            Err(BoxliteError::Rpc(_))
+        ));
+    }
+    *f.mock.error.lock().unwrap() = Some(tonic::Code::Unimplemented);
+    assert!(matches!(
+        f.ssh.take_usage().await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+}
+
+/// A blocked drain exits on its own budget or runtime shutdown without retry.
+#[tokio::test]
+async fn ssh_usage_timeout_and_shutdown() {
+    for cancel in [false, true] {
+        let f = fixture().await;
+        *f.mock.block.lock().unwrap() = true;
+        let ssh = f.ssh.clone();
+        let call = tokio::spawn(async move { ssh.take_usage().await });
+        f.mock.entered.notified().await;
+        if cancel {
+            f.backend.shutdown_token.cancel();
+        } else {
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+        let error = tokio::time::timeout(Duration::from_millis(100), call)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        if cancel {
+            assert!(matches!(error, BoxliteError::Stopped(_)));
+        } else {
+            assert!(matches!(error, BoxliteError::Rpc(_)));
+            tokio::time::resume();
+        }
+        assert_eq!(*f.mock.requests.lock().unwrap(), vec!["usage"]);
+    }
 }
 
 /// An attached or recovered VM serves SSH without initializing its main command.

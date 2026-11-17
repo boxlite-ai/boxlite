@@ -1006,6 +1006,17 @@ func (c *Client) ListInfo(ctx context.Context) ([]boxlite.BoxInfo, error) {
 	return c.listPublicBoxes(ctx)
 }
 
+// TakeSSHUsage borrows its own native handle, so telemetry cannot evict or
+// close a business operation's cached handle. This read never boots the box.
+func (c *Client) TakeSSHUsage(ctx context.Context, nativeID string) (*boxlite.SSHUsageBatch, error) {
+	box, err := c.runtime.Get(ctx, nativeID)
+	if err != nil {
+		return nil, err
+	}
+	defer box.Close()
+	return box.SSH().TakeUsage(ctx)
+}
+
 // GetBox retrieves a box handle from cache or fetches it from the runtime.
 func (c *Client) GetBox(ctx context.Context, boxId string) (*boxlite.Box, error) {
 	return c.getOrFetchBox(ctx, boxId)

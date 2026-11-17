@@ -14,13 +14,61 @@ use boxlite::{SshConfig, SshStatus};
 use crate::CBoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxSshConfigureCb, CBoxSshDisableCb, CBoxSshEnableCb, CBoxSshStatusCb, OwnedFfiPtr,
-    RuntimeEvent, push_event,
+    CBoxSshConfigureCb, CBoxSshDisableCb, CBoxSshEnableCb, CBoxSshStatusCb, CBoxSshUsageCb,
+    OwnedFfiPtr, RuntimeEvent, push_event,
 };
 
 /// A rejected configure body reports this constant, mirroring the REST
 /// handler: serde's message can quote the caller's key material.
 const INVALID_CONFIG: &str = "invalid SSH configuration";
+
+/// Drain accepted SSH authentication evidence from an existing local guest.
+/// Never starts a box or sends analytics. The guest RPC has a one-second budget.
+/// REST runtimes and guests without this RPC report Unsupported asynchronously.
+///
+/// # Safety
+///
+/// `handle` must be a live box handle and `cb` must be non-null. The callback
+/// owns the returned JSON and must free it with `boxlite_free_string`.
+/// The error is borrowed during the callback. `user_data` and `cb` must remain
+/// valid until dispatch or queue disposal, as for `boxlite_box_ssh_status`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_ssh_take_usage(
+    handle: *mut CBoxHandle,
+    cb: CBoxSshUsageCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    let cb = crate::unwrap_cb_or_return!(cb, out_error);
+    if handle.is_null() {
+        unsafe { write_error(out_error, null_pointer_error("handle")) };
+        return BoxliteErrorCode::InvalidArgument;
+    }
+    let handle = unsafe { &*handle };
+    let lite = handle.handle.clone();
+    let queue = handle.queue.clone();
+    let user_data = user_data as usize;
+    handle.tokio_rt.spawn(async move {
+        let result = lite.ssh().take_usage().await.and_then(|batch| {
+            let json = serde_json::to_string(&batch).map_err(|_| {
+                boxlite::BoxliteError::Internal("SSH usage serialization failed".into())
+            })?;
+            CString::new(json).map_err(|_| {
+                boxlite::BoxliteError::Internal("SSH usage serialization failed".into())
+            })
+        });
+        push_event(
+            &queue,
+            RuntimeEvent::SshUsage {
+                cb,
+                user_data,
+                result,
+            },
+        )
+        .await;
+    });
+    BoxliteErrorCode::Ok
+}
 
 /// Guest SSH listener state as observed by one call; carries no credentials.
 ///

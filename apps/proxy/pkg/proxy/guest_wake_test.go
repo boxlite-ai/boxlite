@@ -166,6 +166,14 @@ type previewResponse struct {
 // previewGet sends one preview request through the proxy's real HTTP handler.
 func previewGet(t *testing.T, proxy *Proxy) previewResponse {
 	t.Helper()
+	response, err := previewGetResult(proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func previewGetResult(proxy *Proxy) (previewResponse, error) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(common_errors.NewErrorMiddleware(func(_ *gin.Context, err error) common_errors.ErrorResponse {
@@ -180,19 +188,19 @@ func previewGet(t *testing.T, proxy *Proxy) previewResponse {
 
 	request, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
 	if err != nil {
-		t.Fatal(err)
+		return previewResponse{}, err
 	}
 	request.Host = "3000-d-416243644566313233343536.proxy.test"
 	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
 	if err != nil {
-		t.Fatal(err)
+		return previewResponse{}, err
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		t.Fatal(err)
+		return previewResponse{}, err
 	}
-	return previewResponse{Code: response.StatusCode, Header: response.Header, Body: string(body)}
+	return previewResponse{Code: response.StatusCode, Header: response.Header, Body: string(body)}, nil
 }
 
 func TestPreviewRequestWakesStoppedBoxAndWaitsForItsService(t *testing.T) {

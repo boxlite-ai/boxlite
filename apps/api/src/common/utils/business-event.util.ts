@@ -4,6 +4,7 @@
  */
 
 import { HttpException, Logger } from '@nestjs/common'
+import { v4 } from 'uuid'
 import { getServiceType } from './app-mode'
 import { Context } from '../context/context'
 
@@ -22,9 +23,40 @@ export type BusinessEventName =
   | 'api_key.create'
   | 'volume.create'
   | 'volume.delete'
+  | 'cloud.box.create'
+  | 'cloud.box.start'
+  | 'cloud.box.resume'
+  | 'cloud.feature.use'
+
+export interface BusinessEventFeature {
+  name: 'ssh' | 'tunnel' | 'ci' | 'custom_image'
+  evidence: 'authenticated_session' | 'established_connection' | 'successful_request' | 'executed_job' | 'started_image'
+  source: 'runner' | 'proxy' | 'api'
+}
+
+export interface BusinessEventOperation {
+  id: string
+  requestedAt: Date
+  scope: 'rest_api' | 'proxy_api'
+  result?: 'success' | 'service_error' | 'timeout' | 'user_error' | 'cancelled'
+  durationMs?: number
+  boxId?: string
+}
+
+export interface BusinessEventJobTiming {
+  id: string
+  createdAt?: Date | null
+  startedAt?: Date | null
+  completedAt?: Date | null
+}
 
 export interface BusinessEventBase {
   name: BusinessEventName
+  eventId?: string
+  occurredAt?: Date
+  job?: Readonly<BusinessEventJobTiming>
+  operation?: Readonly<BusinessEventOperation>
+  feature?: Readonly<BusinessEventFeature>
   // User/box/volume id, or a fresh non-secret UUID for an API-key creation attempt.
   correlationId: string
   // The organization the event belongs to, so its activity can be counted per
@@ -73,7 +105,7 @@ export function mutationFailureType(error: unknown): string {
  */
 export function recordBusinessEvent(event: BusinessEvent): void {
   const message = `${event.name} ${event.outcome}`
-  const attributes = toLogAttributes(event)
+  const attributes = Object.freeze(toLogAttributes(event))
 
   if (event.outcome === 'exception') {
     logger.error(message, attributes)
@@ -96,31 +128,39 @@ export function recordBusinessEvent(event: BusinessEvent): void {
  * operation that creates it, so only its success can carry it.
  */
 export async function recordOutcomes<T>(
-  event: BusinessEventBase,
+  event: Omit<BusinessEventBase, 'eventId' | 'occurredAt' | 'job' | 'operation' | 'feature'>,
   op: () => Promise<T>,
   classifyError: (error: unknown) => string,
   organizationOf?: (result: T) => string | undefined,
 ): Promise<T> {
-  recordBusinessEvent({ ...event, outcome: 'requested' })
+  // Occurrence overrides belong to individual emissions, never a whole lifecycle.
+  const lifecycleEvent = {
+    name: event.name,
+    correlationId: event.correlationId,
+    organizationId: event.organizationId,
+    ctx: event.ctx,
+  }
+  recordBusinessEvent({ ...lifecycleEvent, outcome: 'requested' })
   let result: T
   try {
     result = await op()
   } catch (error) {
-    recordBusinessEvent({ ...event, outcome: 'exception', exceptionType: classifyError(error) })
+    recordBusinessEvent({ ...lifecycleEvent, outcome: 'exception', exceptionType: classifyError(error) })
     throw error
   }
   const organizationId = organizationOf?.(result) ?? event.organizationId
-  recordBusinessEvent({ ...event, outcome: 'success', ...(organizationId ? { organizationId } : {}) })
+  recordBusinessEvent({ ...lifecycleEvent, outcome: 'success', ...(organizationId ? { organizationId } : {}) })
   return result
 }
 
 function toLogAttributes(event: BusinessEvent): Record<string, string> {
   const attributes: Record<string, string> = {
     'event.name': event.name,
+    'event.id': event.eventId ?? v4(),
     'event.outcome': event.outcome,
     'correlation.id': event.correlationId,
     'service.type': getServiceType(),
-    'event.timestamp': new Date().toISOString(),
+    'event.timestamp': isoTimestamp(event.occurredAt) ?? new Date().toISOString(),
   }
 
   if (event.organizationId) {
@@ -143,5 +183,50 @@ function toLogAttributes(event: BusinessEvent): Record<string, string> {
     attributes['exception.type'] = event.exceptionType
   }
 
+  if (event.operation) {
+    const operation = event.operation
+    attributes['operation.id'] = operation.id
+    attributes['operation.requested_at'] = operation.requestedAt.toISOString()
+    attributes['operation.scope'] = operation.scope
+    attributes['operation.boundary'] = 'cloud_api_to_started'
+    attributes['traffic.kind'] = 'unknown'
+    if (operation.result) attributes['operation.result'] = operation.result
+    if (operation.boxId) attributes['box.id'] = operation.boxId
+    if (
+      typeof operation.durationMs === 'number' &&
+      Number.isFinite(operation.durationMs) &&
+      operation.durationMs >= 0
+    ) {
+      attributes['operation.duration_ms'] = String(operation.durationMs)
+    }
+  }
+
+  if (event.feature) {
+    attributes['feature.name'] = event.feature.name
+    attributes['feature.evidence'] = event.feature.evidence
+    attributes['feature.source'] = event.feature.source
+  }
+
+  if (event.job) {
+    const job = event.job
+    attributes['job.id'] = job.id
+    for (const [key, date] of [
+      ['job.created_at', job.createdAt],
+      ['job.started_at', job.startedAt],
+      ['job.completed_at', job.completedAt],
+    ] as const) {
+      const timestamp = isoTimestamp(date)
+      if (timestamp) attributes[key] = timestamp
+    }
+    if (job.createdAt instanceof Date && job.completedAt instanceof Date) {
+      const duration = job.completedAt.getTime() - job.createdAt.getTime()
+      if (Number.isFinite(duration) && duration >= 0) attributes['job.duration_ms'] = String(duration)
+    }
+  }
+
   return attributes
+}
+
+function isoTimestamp(date?: Date | null): string | undefined {
+  return date instanceof Date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined
 }

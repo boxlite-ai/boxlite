@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/boxlite-ai/common-go/pkg/featureusage"
 	"github.com/boxlite-ai/common-go/pkg/log"
 	"github.com/boxlite-ai/common-go/pkg/telemetry"
 	"github.com/boxlite-ai/runner/cmd/runner/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/boxlite-ai/runner/internal/diskresize"
 	"github.com/boxlite-ai/runner/internal/memorymonitor"
 	"github.com/boxlite-ai/runner/internal/metrics"
+	"github.com/boxlite-ai/runner/internal/sshusage"
 	"github.com/boxlite-ai/runner/pkg/api"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
@@ -108,6 +110,23 @@ func run() int {
 	defer boxliteClient.Close()
 
 	logger.Info("BoxLite runtime initialized")
+
+	if cfg.BoxliteApiUrl != "" && cfg.ApiToken != "" {
+		usageReporter, err := featureusage.NewReporter(cfg.BoxliteApiUrl, cfg.ApiToken, logger)
+		if err != nil {
+			logger.Warn("Cloud feature usage reporting disabled")
+		} else {
+			usageCtx, stopUsage := context.WithCancel(ctx)
+			usageDone := make(chan struct{})
+			reportDone := make(chan struct{})
+			go func() { defer close(reportDone); usageReporter.Run(usageCtx) }()
+			go func() {
+				defer close(usageDone)
+				sshusage.New(boxliteClient, usageReporter.Record, logger).Run(usageCtx)
+			}()
+			defer func() { stopUsage(); <-usageDone; <-reportDone }()
+		}
+	}
 
 	boxService := services.NewBoxService(logger, boxliteClient)
 

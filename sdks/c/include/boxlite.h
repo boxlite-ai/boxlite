@@ -798,6 +798,9 @@ typedef struct VolumeHandle CBoxliteVolumeHandle;
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 
+// Owns the usage JSON on success; release it with `boxlite_free_string`.
+typedef void (*CBoxSshUsageCb)(char*, CBoxliteError*, void*);
+
 // Guest SSH listener state as observed by one call; carries no credentials.
 //
 // The callback that receives it by pointer owns it, nested strings included,
@@ -2164,6 +2167,21 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 //
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
+
+// Drain accepted SSH authentication evidence from an existing local guest.
+// Never starts a box or sends analytics. The guest RPC has a one-second budget.
+// REST runtimes and guests without this RPC report Unsupported asynchronously.
+//
+// # Safety
+//
+// `handle` must be a live box handle and `cb` must be non-null. The callback
+// owns the returned JSON and must free it with `boxlite_free_string`.
+// The error is borrowed during the callback. `user_data` and `cb` must remain
+// valid until dispatch or queue disposal, as for `boxlite_box_ssh_status`.
+enum BoxliteErrorCode boxlite_box_ssh_take_usage(CBoxHandle *handle,
+                                                 CBoxSshUsageCb cb,
+                                                 void *user_data,
+                                                 struct FFIError *out_error);
 
 // Queue SSH configuration replacement. The caller's JSON is copied and
 // deserialized into the runtime's `SshConfig` at entry — a malformed or

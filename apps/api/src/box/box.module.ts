@@ -9,6 +9,7 @@ import { SecretCredentialService } from './services/secret-credential.service'
 import { SecretCredentialController } from './controllers/secret-credential.controller'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
+import { FeatureUsageController } from './controllers/feature-usage.controller'
 import { BoxService } from './services/box.service'
 import { SecretServerClient } from './services/secret-server-client'
 import { BoxExitCodeService } from './services/box-exit-code.service'
@@ -121,6 +122,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     JobController,
     CustomDomainController,
     CustomDomainMaintenanceController,
+    FeatureUsageController,
   ],
   providers: [
     SecretCredentialService,

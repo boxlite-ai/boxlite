@@ -8,6 +8,7 @@ import { HttpStatus, RequestTimeoutException } from '@nestjs/common'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
+import { BoxReadinessError } from '../errors/box-readiness.error'
 import { BoxStateWaiterService } from './box-state-waiter.service'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 
@@ -48,6 +49,8 @@ describe('BoxStateWaiterService', () => {
 
     const error = await waiter.waitForStarted('box-1', 'org-1', 1).catch((failure) => failure)
 
+    expect(error).toBeInstanceOf(BoxReadinessError)
+    expect(error.getStatus()).toBe(400)
     expect(error.getResponse()).toMatchObject({
       message: 'Box state transition failed: runner has not declared filestore',
       code: 'BOX_STATE_TRANSITION_FAILED',

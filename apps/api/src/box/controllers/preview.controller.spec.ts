@@ -194,7 +194,10 @@ describe('PreviewController ensure-ready', () => {
 
     expect(calls).toEqual(['activity', 'ensureReady'])
     expect(organizationService.findOne).toHaveBeenCalledWith('org-1')
-    expect(autoResume.ensureReady).toHaveBeenCalledWith('box-1', organization)
+    expect(autoResume.ensureReady).toHaveBeenCalledWith('box-1', organization, undefined, {
+      requestedAt: expect.any(Date),
+      monotonicStart: expect.any(Number),
+    })
   })
 
   it('refuses to wake a box that disabled auto-resume, without recording activity', async () => {
@@ -230,7 +233,10 @@ describe('PreviewController ensure-ready', () => {
 
     await controller.ensureReady('box-1')
 
-    expect(autoResume.ensureReady).toHaveBeenCalledWith('box-1', organization)
+    expect(autoResume.ensureReady).toHaveBeenCalledWith('box-1', organization, undefined, {
+      requestedAt: expect.any(Date),
+      monotonicStart: expect.any(Number),
+    })
   })
 
   it.each([BoxState.ARCHIVED, BoxState.ARCHIVING, BoxState.RESIZING, BoxState.ERROR])(

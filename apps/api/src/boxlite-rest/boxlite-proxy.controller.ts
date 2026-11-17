@@ -48,6 +48,7 @@ import { reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
+import { requestTiming } from '../common/utils/request-timing.util'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
@@ -561,7 +562,7 @@ export class BoxliteProxyController {
     opts?.admit?.(box, boxId)
 
     if (policy.autoResume && box.autoResume) {
-      await this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit)
+      await this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit, requestTiming(req))
     }
 
     const runner = await this.runnerService.findOne(box.runnerId)

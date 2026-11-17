@@ -80,6 +80,7 @@ impl SshConnection {
         };
         self.permissions = identity.permissions;
         if let Some(authenticated) = self.authenticated.take() {
+            self.guest.ssh_manager.record_usage();
             let _ = authenticated.send(());
         }
         Auth::Accept
@@ -844,6 +845,10 @@ mod tests {
             raw.auth_publickey("root", ca.public_key()).await.unwrap(),
             Auth::reject()
         );
+        assert!(
+            guest.ssh_manager.take_usage().events.is_empty(),
+            "probes and denied identities are not usage"
+        );
         assert_eq!(
             raw.auth_publickey("root", user.public_key()).await.unwrap(),
             Auth::Accept
@@ -851,6 +856,15 @@ mod tests {
         assert!(raw.permissions.pty && raw.permissions.port_forwarding);
         assert!(!raw.permissions.agent_forwarding && !raw.permissions.x11_forwarding);
         assert_eq!(committed.try_recv(), Ok(()));
+        let usage = guest.ssh_manager.take_usage();
+        assert_eq!(usage.events.len(), 1);
+        assert!(uuid::Uuid::parse_str(&usage.events[0].id).is_ok());
+        assert!(usage.events[0].occurred_at_ms > 0);
+        raw.auth_publickey("root", user.public_key()).await.unwrap();
+        assert!(
+            guest.ssh_manager.take_usage().events.is_empty(),
+            "one observation per authenticated connection"
+        );
 
         let (tx, mut committed) = oneshot::channel();
         let mut certified = SshConnection::new(
@@ -876,10 +890,11 @@ mod tests {
         assert!(certified.permissions.pty);
         assert!(!certified.permissions.port_forwarding);
         assert_eq!(committed.try_recv(), Ok(()));
+        assert_eq!(guest.ssh_manager.take_usage().events.len(), 1);
 
         let (tx, mut committed) = oneshot::channel();
         let mut cancelled = SshConnection::new(
-            guest,
+            guest.clone(),
             certified.authorizer.clone(),
             tx,
             Arc::new(super::super::TaskGroup::default()),

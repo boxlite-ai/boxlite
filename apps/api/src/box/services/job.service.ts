@@ -263,7 +263,7 @@ export class JobService {
         job.startedAt = new Date()
       }
 
-      if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
+      if ((status === JobStatus.COMPLETED || status === JobStatus.FAILED) && !job.completedAt) {
         job.completedAt = new Date()
         if (job.type === JobType.CREATE_BOX) {
           const payload = job.getPayload()

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/boxlite-ai/common-go/pkg/featureusage"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 )
 
@@ -59,6 +60,7 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	defer clientConn.Close()
+	p.featureUsage.Record(featureusage.Event{BoxID: boxID, Kind: featureusage.TunnelConnection})
 
 	if err := common_proxy.ProxyBidirectionalStream(request.Context(), clientConn, runnerConn); err != nil {
 		slog.WarnContext(request.Context(), "tunnel stream closed with error", "box", boxID, "port", port, "error", err)

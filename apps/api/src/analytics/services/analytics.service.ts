@@ -52,12 +52,13 @@ export class AnalyticsService implements OnApplicationShutdown {
       const organizationId = attributes['organization.id']
       this.capture({
         event: attributes['event.name'],
+        uuid: attributes['event.id'],
         distinctId: userId || `${attributes['actor.kind'] || 'anonymous'}:${attributes['correlation.id']}`,
         timestamp: new Date(attributes['event.timestamp']),
         groups: organizationId ? { organization: organizationId } : undefined,
         properties: {
           ...attributes,
-          activity_schema: '1',
+          ...(attributes['event.name'].startsWith('cloud.') ? { cloud_metrics_schema: '1' } : { activity_schema: '1' }),
           environment: this.configService.get('posthog.environment'),
           $process_person_profile: !!userId,
         },

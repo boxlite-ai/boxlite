@@ -980,3 +980,13 @@ Scopes carry explicit Public and Private decisions. Standalone configuration kee
 its Public switch and always permits Private, while hosted policy always permits
 Public and requires explicit Private consent. Existing scope hashes are incompatible:
 finish cleanup with the old Listener and start a fresh journal before upgrading.
+
+## Observed CI execution
+
+The hosted API observes a signed GitHub running or completed job with a valid `started_at`.
+It matches the Runner ID and JIT name to a registered Scale Set allocation, its Cloud Box, repository and tenant.
+A queued job, worker creation or acquisition alone provides no execution evidence.
+
+The host checks the existing journal in the background after webhook ingress commits. Saturation, a released
+allocation or a missing observation can drop the measurement. No GitHub inventory request is needed.
+Repeated observations of the same job carry the same occurrence UUID and original GitHub start time.

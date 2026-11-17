@@ -10,6 +10,7 @@ import Redis from 'ioredis'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { BoxDto } from '../dto/box.dto'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
+import { BoxReadinessError } from '../errors/box-readiness.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxService } from './box.service'
@@ -167,7 +168,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
 
   private assertNotFailed(boxId: string, state: BoxState, errorReason?: string | null) {
     if (state === BoxState.ERROR) {
-      throw new BadRequestException({
+      throw new BoxReadinessError({
         message: `Box state transition failed: ${errorReason || 'Unknown error'}`,
         code: 'BOX_STATE_TRANSITION_FAILED',
         boxId,

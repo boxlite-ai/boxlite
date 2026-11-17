@@ -98,6 +98,7 @@ The C SDK provides two API styles:
    - Advanced features (volumes, networking, etc.)
 
 Both APIs support:
+
 - ✅ Structured error handling (error codes + messages)
 - ✅ OCI container images
 - ✅ Hardware-accelerated VMs (KVM/Hypervisor.framework)
@@ -118,6 +119,7 @@ The existing `boxlite_options_add_secret()` remains ABI-compatible, but its
 headerless secret is rejected at creation. Use the plural function above.
 
 ### Core Features
+
 - **C-compatible FFI bindings** (`cdylib`, `staticlib`)
 - **Auto-generated header file** (`include/boxlite.h`)
 - **Structured error handling** - Error codes + detailed messages
@@ -126,6 +128,7 @@ headerless secret is rejected at creation. Use the plural function above.
 - **Typed configuration** - Builder-style options and typed result structs
 
 ### Advanced Features
+
 - **Box lifecycle management** - Create, start, stop, restart, remove
 - **Persistent boxes** - Cross-process reattachment
 - **Performance metrics** - Runtime and per-box statistics
@@ -139,11 +142,13 @@ headerless secret is rejected at creation. Use the plural function above.
 ### Prerequisites
 
 **macOS:**
+
 - Apple Silicon (ARM64) or Intel x86_64
 - macOS 11.0+ (Big Sur or later)
 - Xcode Command Line Tools
 
 **Linux:**
+
 - x86_64 or ARM64 architecture
 - KVM support (check: `kvm-ok` or `lsmod | grep kvm`)
 - GCC or Clang
@@ -420,6 +425,14 @@ See [Registries in the C reference](../../docs/reference/c/README.md#registries)
 
 ### Guest SSH Control
 
+`boxlite_box_ssh_take_usage()` explicitly drains a local Guest’s volatile authentication
+buffer through the existing post-and-drain queue. Its `CBoxSshUsageCb` owns JSON
+`{ "events": [{ "id": "UUID", "occurred_at_ms": 0 }], "dropped_total": 0 }`;
+release it with `boxlite_free_string`. Errors are borrowed during the callback.
+The RPC is limited to one second, never starts a Box, and returns an empty batch for an idle local Box.
+REST runtimes and older Guests report Unsupported. A failed drain can lose observations.
+The SDK sends no analytics; see [Cloud collection](../../apps/api/README.md#cloud-feature-use-evidence).
+
 `boxlite_box_ssh_configure()`, `boxlite_box_ssh_status()`,
 `boxlite_box_ssh_enable()`, and `boxlite_box_ssh_disable()` configure, query,
 enable saved configuration, and disable guest SSH through
@@ -464,12 +477,14 @@ void boxlite_simple_free(CBoxliteSimple* box);
 ```
 
 #### When to Use Simple API
+
 - ✅ Quick prototypes and scripts
 - ✅ Single-box applications
 - ✅ Buffered output is acceptable
 - ✅ Standard resource limits (2 CPUs, 512 MB)
 
 #### When to Use Native API Instead
+
 - ❌ Need streaming output callbacks
 - ❌ Custom volumes or networking
 - ❌ Multi-box orchestration
@@ -961,16 +976,16 @@ For the full API reference with detailed parameter tables and code examples, see
 
 The `examples/c/` directory contains 8 examples:
 
-| Example | Description |
-|---------|-------------|
-| `simple_api_demo.c` | Quick start with Simple API |
-| `execute.c` | Command execution with streaming output |
-| `shutdown.c` | Runtime shutdown with multiple boxes |
-| `01_lifecycle.c` | Complete box lifecycle (create/stop/restart/remove) |
-| `02_list_boxes.c` | Discovery, introspection, ID prefix lookup |
-| `03_streaming_output.c` | Real-time output handling with callbacks |
-| `04_error_handling.c` | Error codes, retry logic, graceful degradation |
-| `05_metrics.c` | Runtime and per-box metrics |
+| Example                 | Description                                         |
+| ----------------------- | --------------------------------------------------- |
+| `simple_api_demo.c`     | Quick start with Simple API                         |
+| `execute.c`             | Command execution with streaming output             |
+| `shutdown.c`            | Runtime shutdown with multiple boxes                |
+| `01_lifecycle.c`        | Complete box lifecycle (create/stop/restart/remove) |
+| `02_list_boxes.c`       | Discovery, introspection, ID prefix lookup          |
+| `03_streaming_output.c` | Real-time output handling with callbacks            |
+| `04_error_handling.c`   | Error codes, retry logic, graceful degradation      |
+| `05_metrics.c`          | Runtime and per-box metrics                         |
 
 ### Building and Running Examples
 
@@ -1016,6 +1031,7 @@ make
 ### Common Patterns
 
 **String output:**
+
 ```c
 char* id = boxlite_box_id(box);
 printf("ID: %s\n", id);
@@ -1023,6 +1039,7 @@ boxlite_free_string(id);  // MUST free
 ```
 
 **Error handling:**
+
 ```c
 CBoxliteError error = {0};
 BoxliteErrorCode code = boxlite_simple_new(..., &error);
@@ -1033,6 +1050,7 @@ if (code != Ok) {
 ```
 
 **Execution results:**
+
 ```c
 CBoxliteExecResult* result;
 boxlite_simple_run(..., &result, &error);
@@ -1065,6 +1083,7 @@ leaks -atExit -- ./my_app
 ### Best Practices
 
 **Safe: One runtime, multiple threads**
+
 ```c
 CBoxliteRuntime* runtime = NULL;
 CBoxliteError error = {0};
@@ -1086,6 +1105,7 @@ boxlite_options_free(opts2);
 ```
 
 **Unsafe: Sharing box handle across threads**
+
 ```c
 CBoxHandle* box = NULL;
 boxlite_create_box(runtime, opts, &box, &error);
@@ -1098,6 +1118,7 @@ boxlite_execute(box, &cmd2, ...);  // UNSAFE
 ```
 
 **Safe: Per-thread boxes**
+
 ```c
 void* thread_func(void* arg) {
     CBoxliteRuntime* runtime = (CBoxliteRuntime*)arg;
@@ -1130,27 +1151,30 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 
 ### Supported Platforms
 
-| Platform | Architecture | Status | Requirements |
-|----------|-------------|--------|--------------|
-| macOS    | ARM64 (Apple Silicon) | ✅ Full support | macOS 11.0+, Hypervisor.framework |
-| macOS    | x86_64 (Intel) | ❌ Not supported | N/A |
-| Linux    | x86_64 | ✅ Full support | KVM enabled |
-| Linux    | ARM64 (aarch64) | ✅ Full support | KVM enabled |
-| Windows  | Any | ❌ Not supported | Use WSL2 |
+| Platform | Architecture          | Status           | Requirements                      |
+| -------- | --------------------- | ---------------- | --------------------------------- |
+| macOS    | ARM64 (Apple Silicon) | ✅ Full support  | macOS 11.0+, Hypervisor.framework |
+| macOS    | x86_64 (Intel)        | ❌ Not supported | N/A                               |
+| Linux    | x86_64                | ✅ Full support  | KVM enabled                       |
+| Linux    | ARM64 (aarch64)       | ✅ Full support  | KVM enabled                       |
+| Windows  | Any                   | ❌ Not supported | Use WSL2                          |
 
 ### Platform-Specific Notes
 
 **macOS:**
+
 - Requires Hypervisor.framework (built-in on macOS 11.0+)
 - Intel Macs are not supported
 - Dylib search paths: use `install_name_tool` or `DYLD_LIBRARY_PATH`
 
 **Linux:**
+
 - Requires KVM kernel module: `sudo modprobe kvm kvm_intel` (or `kvm_amd`)
 - Check support: `kvm-ok` or `lsmod | grep kvm`
 - Library search paths: use `LD_LIBRARY_PATH` or `ldconfig`
 
 **Windows:**
+
 - Use WSL2 (Windows Subsystem for Linux 2)
 - Follow Linux instructions inside WSL2
 
@@ -1161,6 +1185,7 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 ### Unreleased
 
 **Breaking Changes:**
+
 - `boxlite_options_add_volume` is renamed `boxlite_options_add_bind_mount`, and
   the new `boxlite_options_add_managed_volume` mounts a managed volume by its
   server-assigned id or its name. The two mount origins are distinct: a host
@@ -1200,12 +1225,14 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   the upload and caps it at 512 MiB.
 
 Before:
+
 ```c
 boxlite_options_add_volume(opts, "/host/data", "/data", 0);
 boxlite_volume_create(handle, on_created, user_data, &err);
 ```
 
 After:
+
 ```c
 /* host bind (local runtime) */
 boxlite_options_add_bind_mount(opts, "/host/data", "/data", 0);
@@ -1217,22 +1244,26 @@ boxlite_volume_create(handle, NULL, on_created, user_data, &err);  /* unnamed */
 ```
 
 Before:
+
 ```c
 boxlite_options_add_port(opts, 80, 8080);  /* guest, host */
 ```
 
 After:
+
 ```c
 boxlite_options_add_port(opts, 8080, 80, BoxlitePortProtocolTcp, NULL);  /* host, guest */
 ```
 
 Before:
+
 ```c
 CBoxInfo *info = NULL;
 boxlite_box_info(box, &info, &error);
 ```
 
 After:
+
 ```c
 boxlite_box_info(box, on_info, user_data, &error);
 while (!request_done) {
@@ -1241,6 +1272,7 @@ while (!request_done) {
 ```
 
 Before:
+
 ```c
 boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindDir, copy_cb, user_data, &error);
 int32_t kind;
@@ -1248,6 +1280,7 @@ CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &kind, &error);
 ```
 
 After:
+
 ```c
 boxlite_copy_in_start(handle, "/dst", copy_cb, user_data, &error);
 CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &error);
@@ -1256,6 +1289,7 @@ CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &error);
 ### From 0.1.x to 0.2.0
 
 **Breaking Changes:**
+
 - Simple API added (new feature, backward compatible)
 - Error handling enhanced (new `CBoxliteError` struct, backward compatible with old API)
 
@@ -1266,6 +1300,7 @@ CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &error);
 **1. Simple use cases → Simple API**
 
 Before (0.1.x):
+
 ```c
 char* error = NULL;
 CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, &error);
@@ -1276,6 +1311,7 @@ boxlite_runtime_free(runtime);
 ```
 
 After (0.2.0):
+
 ```c
 CBoxliteSimple* box;
 CBoxliteError error = {0};
@@ -1291,6 +1327,7 @@ boxlite_simple_free(box);
 **2. Error handling → Structured errors**
 
 Before:
+
 ```c
 char* error = NULL;
 if (!runtime) {
@@ -1300,6 +1337,7 @@ if (!runtime) {
 ```
 
 After:
+
 ```c
 CBoxliteError error = {0};
 if (code != Ok) {
@@ -1324,6 +1362,7 @@ if (code != Ok) {
 **Error:** `dyld: Library not loaded: @rpath/libboxlite.dylib`
 
 **Solution:**
+
 ```bash
 # macOS: Add RPATH to executable
 install_name_tool -add_rpath /path/to/lib my_app
@@ -1337,6 +1376,7 @@ export LD_LIBRARY_PATH=/path/to/lib:$LD_LIBRARY_PATH
 **Error:** `Failed to create box: Image error: ...`
 
 **Solutions:**
+
 1. Check internet connection (for image pull)
 2. Verify image name: `"alpine:3.19"` (not `alpine:3.19` without quotes)
 3. Check disk space: `df -h ~/.boxlite`
@@ -1347,6 +1387,7 @@ export LD_LIBRARY_PATH=/path/to/lib:$LD_LIBRARY_PATH
 **Error:** `UnsupportedEngine` or `kvm: Permission denied`
 
 **Solutions:**
+
 ```bash
 # Check KVM support
 kvm-ok
@@ -1368,11 +1409,13 @@ newgrp kvm
 ### Memory Leaks
 
 **Run valgrind:**
+
 ```bash
 valgrind --leak-check=full --show-leak-kinds=all ./my_app
 ```
 
 **Common causes:**
+
 - Not freeing strings: `boxlite_box_id()`
 - Not freeing errors: `boxlite_error_free()`
 - Not freeing results: `boxlite_result_free()` and typed list/info structs
@@ -1380,6 +1423,7 @@ valgrind --leak-check=full --show-leak-kinds=all ./my_app
 ### High Memory Usage
 
 **Check box count:**
+
 ```c
 CRuntimeMetrics metrics = {0};
 CBoxliteError error = {0};
@@ -1388,6 +1432,7 @@ printf("Running boxes: %d\n", metrics.num_running_boxes);
 ```
 
 **Reduce memory per box:**
+
 ```c
 // Simple API: Can't configure (uses defaults)
 // Use native API instead:
@@ -1399,11 +1444,13 @@ boxlite_options_set_memory(opts, 256);
 ### Command Hangs
 
 **Possible causes:**
+
 1. Command waiting for input (use non-interactive commands)
 2. Large output without callback (output buffer full)
 3. Deadlock in callback function
 
 **Solutions:**
+
 - Use streaming callback for large output
 - Don't block in callbacks
 - Set command timeout (future feature)
@@ -1436,12 +1483,14 @@ boxlite/src/runtime/
 ### Development
 
 **Rebuilding Header:**
+
 ```bash
 cargo build -p boxlite-c
 # Outputs: sdks/c/include/boxlite.h
 ```
 
 **Adding New Functions:**
+
 1. Add implementation to the appropriate file in `sdks/c/src/`
 2. Add the exported C symbol in the same domain module
 3. Rebuild: `cargo build -p boxlite-c`

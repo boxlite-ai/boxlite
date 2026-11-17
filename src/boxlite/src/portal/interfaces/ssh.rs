@@ -8,6 +8,17 @@ pub(crate) struct SshInterface {
 }
 
 impl SshInterface {
+    pub(crate) async fn take_usage(
+        &mut self,
+    ) -> Result<proto::SshUsageResponse, Box<tonic::Status>> {
+        Ok(self
+            .client
+            .take_usage(proto::SshUsageRequest {})
+            .await
+            .map_err(Box::new)?
+            .into_inner())
+    }
+
     /// Reuse an established guest channel; connection setup belongs to the session.
     pub(crate) fn new(channel: Channel) -> Self {
         Self {

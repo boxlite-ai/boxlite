@@ -621,6 +621,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 cb,
                 user_data,
                 result,
+            }
+            | RuntimeEvent::SshUsage {
+                cb,
+                user_data,
+                result,
             } => dispatch_string_event(result, user_data, cb),
             RuntimeEvent::RuntimeImport {
                 cb,

@@ -4,6 +4,7 @@ import { DataSource, QueryFailedError } from 'typeorm'
 import {
   DEFAULT_RUNNER_LABELS,
   decodeScope,
+  decodeAllocation,
   scopeKey,
   AppDeliveryRecovery,
   ExecutionJournal,
@@ -28,10 +29,20 @@ import {
   ListenerEvent,
   ScaleSetFailure,
 } from '@boxlite-ai/ci-listener'
+import { v5 } from 'uuid'
+import { recordBusinessEvent } from '../common/utils/business-event.util'
 import { TypedConfigService } from '../config/typed-config.service'
 import { CiGitHubService } from './ci-github.service'
 import { CiNativeState, CiNativeAuthority } from './ci-native-state'
 import { CiNativeWorkers } from './ci-native-workers'
+
+type JobExecutionEvent = {
+  organization: string
+  installation: number
+  boxId: string
+  job: { repository: number; run: number; job: number }
+  startedAt: string
+}
 
 type Binding = {
   id: string
@@ -63,6 +74,8 @@ export class CiNativeHost implements ListenerHost {
   readonly recovery?: Pick<AppDeliveryRecovery, 'step' | 'close'>
   private readonly recoveries: AppDeliveryRecovery[] = []
   private readonly logger = new Logger(CiNativeHost.name)
+  private readonly executionChecks = new Set<Promise<void>>()
+  private readonly maxExecutionChecks: number
   private readonly pending = new Map<number, ListenerCredentials>()
   private readonly directory: InstallationDirectory
   constructor(
@@ -72,6 +85,7 @@ export class CiNativeHost implements ListenerHost {
     private readonly github: CiGitHubService,
     private readonly config: TypedConfigService,
   ) {
+    this.maxExecutionChecks = Math.max(0, Math.min(2, (config.get('database.pool.max') ?? 10) - 1))
     this.directory = new InstallationDirectory({
       index: (lease, signal) => this.index(lease, signal),
       load: (binding, lease, signal) => this.catalog(binding, lease, signal),
@@ -326,8 +340,10 @@ export class CiNativeHost implements ListenerHost {
     })
   }
   async accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
+    let binding: Binding | undefined
     const captured = {
       ...notification,
+      observation: notification.observation && { ...notification.observation },
       hint: { ...notification.hint, job: notification.hint.job ? { ...notification.hint.job } : null },
     }
     const database = new PostgresStateDatabase({
@@ -349,14 +365,76 @@ export class CiNativeHost implements ListenerHost {
           if (hint.repositoryId !== 0) {
             if (!row) throw new ForbiddenException('CI installation is not connected')
             await this.store.admit(tx, authority(row), row.app_client_id)
+            binding = row
           }
           return work(tx)
         }),
     })
-    return new ListenerInbox(new ListenerState(database, this.store.namespace)).receive(captured)
+    const result = await new ListenerInbox(new ListenerState(database, this.store.namespace)).receive(captured)
+    const { observation, hint } = captured
+    if (
+      result === 'stored' &&
+      binding &&
+      hint.job &&
+      observation?.status !== 'queued' &&
+      observation?.startedAt &&
+      observation.runner &&
+      observation.runnerName &&
+      this.executionChecks.size < this.maxExecutionChecks
+    ) {
+      const check = this.matchExecution(binding, observation.runnerName, observation.runner, {
+        organization: binding.organization_id,
+        installation: hint.installationId,
+        job: { repository: hint.repositoryId, run: hint.job.runId, job: hint.job.id },
+        startedAt: observation.startedAt,
+      }).catch(() => this.logger.warn('Could not attribute CI job execution'))
+      this.executionChecks.add(check)
+      void check.finally(() => this.executionChecks.delete(check))
+    }
+    return result
+  }
+
+  // Signed GitHub evidence identifies the job; the Scale Set allocation identifies
+  // the Cloud Box and tenant. These bounded lookups never hold up webhook acknowledgement.
+  private async matchExecution(
+    binding: Binding,
+    name: string,
+    id: number,
+    event: Omit<JobExecutionEvent, 'boxId'>,
+  ): Promise<void> {
+    if (!/^ci-jit-[a-f0-9]{32}$/.test(name)) return
+    const [worker] = await this.store.state.read(['worker/' + name.slice(7)])
+    if (!worker) return
+    const allocation = decodeAllocation(worker.payload)
+    if (
+      !allocation.supply?.scaleSet ||
+      allocation.name !== name ||
+      allocation.runner.id !== id ||
+      allocation.runner.phase !== 'known' ||
+      allocation.box.phase !== 'known' ||
+      !allocation.box.id
+    )
+      return
+    const [row] = await this.store.state.read([allocation.scope])
+    if (!row?.payload || typeof row.payload !== 'object' || Array.isArray(row.payload)) return
+    const scope = decodeScope(row.payload.scope)
+    if (
+      scopeKey(scope) !== allocation.scope ||
+      scope.binding !== binding.id ||
+      scope.generation !== Number(binding.generation) ||
+      scope.organization !== event.organization ||
+      scope.installation.id !== event.installation ||
+      scope.installation.account.id !== Number(binding.account_id) ||
+      (scope.runners.kind === 'repository'
+        ? scope.runners.repository.id !== event.job.repository
+        : !scope.runners.repositories.includes(event.job.repository))
+    )
+      return
+    this.observeExecution({ ...event, boxId: allocation.box.id })
   }
 
   async close(): Promise<void> {
+    await Promise.all(this.executionChecks)
     const results = await Promise.allSettled([this.recovery?.close(), this.directory.close()])
     const failures: unknown[] = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
     for (const [id, credential] of this.pending)
@@ -375,6 +453,20 @@ export class CiNativeHost implements ListenerHost {
       ...context,
       error: error instanceof Error ? error.name : 'Unknown',
       ...(typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? { sqlState: code } : {}),
+    })
+  }
+  observeExecution(event: JobExecutionEvent): void {
+    recordBusinessEvent({
+      name: 'cloud.feature.use',
+      outcome: 'success',
+      organizationId: event.organization,
+      correlationId: event.boxId,
+      occurredAt: new Date(event.startedAt),
+      eventId: v5(
+        `boxlite:ci-execution:${event.installation}:${event.job.repository}:${event.job.run}:${event.job.job}`,
+        v5.URL,
+      ),
+      feature: { name: 'ci', evidence: 'executed_job', source: 'api' },
     })
   }
   observe(event: ListenerEvent): void {

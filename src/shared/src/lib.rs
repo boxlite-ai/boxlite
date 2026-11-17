@@ -30,6 +30,7 @@ pub type BoxByteStream =
 pub mod constants;
 pub mod errors;
 pub mod layout;
+pub mod ssh_usage;
 pub mod tar;
 pub mod transport;
 
