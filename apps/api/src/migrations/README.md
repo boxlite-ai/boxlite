@@ -228,7 +228,7 @@ Existing policies remain unchanged and acquire the documented `initial` revision
 
 Pending candidates and assigned Runner ownership survive coordinator restarts in the same row.
 Reverting drops this recovery evidence; stop versioned outbound writers and resolve pending attempts before rollback.
-See the [outbound durability contract](../../../../../docs/contributing/architecture/outbound-contract.md#cloud-durable-intent).
+See the [outbound durability contract](../../../../docs/contributing/architecture/outbound-contract.md#cloud-durable-intent).
 
 ## Reverting Migrations
 
