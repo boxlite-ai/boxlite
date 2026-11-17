@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/jackc/pgx/v5"
@@ -31,7 +32,11 @@ func VerifyKey(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Ciphe
 	if err != nil {
 		return fmt.Errorf("begin key verification: %w", err)
 	}
-	defer tx.Rollback(context.Background())
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = tx.Rollback(cleanup)
+	}()
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", canaryLock); err != nil {
 		return fmt.Errorf("lock key verification: %w", err)
 	}

@@ -243,6 +243,10 @@ explicit context checkpoints after cryptographic operations to verify that no
 result is released. These checkpoints avoid timing-dependent sleeps.
 Fuzzing covers malformed envelope decoding; it is not a cryptographic proof.
 
+On Linux, CI preserves the full-suite report when it adds nested runtime coverage.
+Database rollback and migration lock cleanup have bounded waits; a connection
+with a failed migration unlock is discarded.
+
 Go reports statement coverage; Codecov also distinguishes partially covered source
 lines, so a passing statement percentage does not imply passing patch coverage.
 The uint32 framing overflow guards remain in place; tests do not allocate multi-GiB

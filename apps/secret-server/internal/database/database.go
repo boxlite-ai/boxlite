@@ -3,10 +3,12 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"fmt"
 	"io/fs"
 	"log"
+	"time"
 
 	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +21,26 @@ import (
 var migrationFiles embed.FS
 
 const schemaVersion = 1
+
+type boundedSessionLocker struct{ lock.SessionLocker }
+
+func (l boundedSessionLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
+	cleanup, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if err := l.SessionLocker.SessionUnlock(cleanup, conn); err != nil {
+		// A failed unlock can leave a session lock held: never return it to the pool.
+		_ = conn.Raw(func(raw any) error {
+			if pg, ok := raw.(*stdlib.Conn); ok {
+				closed, stop := context.WithTimeout(context.Background(), time.Second)
+				defer stop()
+				_ = pg.Conn().Close(closed)
+			}
+			return nil
+		})
+		return err
+	}
+	return nil
+}
 
 // Initialize applies the schema and verifies the configured key before readiness.
 func Initialize(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Cipher) error {
@@ -40,7 +62,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return fmt.Errorf("create migration lock: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, files, goose.WithSessionLocker(locker))
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, files, goose.WithSessionLocker(boundedSessionLocker{locker}))
 	if err != nil {
 		return fmt.Errorf("create migration provider: %w", err)
 	}

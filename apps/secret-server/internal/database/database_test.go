@@ -75,6 +75,10 @@ func TestIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	t.Run("rollback and unlock cleanup are bounded", func(t *testing.T) {
+		t.Run("rollback", func(t *testing.T) { testRollbackCleanup(t, ctx, admin, url) })
+		t.Run("migration unlock", func(t *testing.T) { testMigrationUnlockCleanup(t, ctx, admin, url) })
+	})
 	t.Run("initialize migrates and enrolls key", func(t *testing.T) {
 		name, _ := testdb.Create(t, ctx, admin, url, false)
 		initConfig := config.Copy()
