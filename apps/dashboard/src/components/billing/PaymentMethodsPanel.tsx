@@ -84,6 +84,9 @@ export function PaymentMethodsPanel({
   return (
     <section>
       <SectionTitle title="Payment Method" />
+      <p className="mb-3 font-sans text-meta text-muted-foreground">
+        Connecting or updating a card places a temporary $0.50 hold, released automatically.
+      </p>
 
       {isLoading ? (
         <Panel className="flex items-center gap-5 px-[22px] py-5">
