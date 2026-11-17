@@ -636,8 +636,16 @@ connection-help footer. Successful requests clear filtering and show a reservati
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
-The **All domains** tab lists held platform and customer hostnames; **Custom domains**
-shows setup progress and the separate one-domain allowance, including drafts but excluding replaced configurations.
+The **Managed domain** tab lists only held platform hostnames, using the API's
+`kind` field rather than matching hostname suffixes. Its filter, count and empty
+state apply to those platform names. **Custom domain** shows setup progress and
+the separate one-domain allowance, including drafts but excluding replaced configurations.
+
+Both views use the shared underline tabs: transparent surfaces, a 2px active
+indicator and independent keyboard focus. The API still returns the complete
+held-domain list for binding details in the custom view and Box pages.
+Deploy the API that returns `kind` before this dashboard version.
+
 **Get DNS configuration** creates or resumes a draft and automatically continues preparation until all three records are available.
 Preparation errors require explicit retry; reopening an incomplete draft does not resume preparation automatically.
 **Configured, verify** checks DNS explicitly; successful confirmation closes the dialog, while failed checks retain records and errors.

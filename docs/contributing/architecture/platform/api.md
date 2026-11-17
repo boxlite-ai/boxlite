@@ -678,6 +678,11 @@ Use the returned guest ID with the status, attach, signal, resize, and kill
 routes, including for the main session; terminating main can stop the box.
 Listing a stopped box returns an empty inventory and never starts it.
 
+The domain list includes `kind: platform | custom` on each entry so clients can
+separate managed and custom names without inferring ownership from hostname suffixes.
+The collection includes both kinds; only platform entries consume its allowance.
+Claim and bind responses keep their hostname, URL and target fields.
+
 Custom-domain bind checks persisted readiness and refreshes subscription eligibility through Redis and, when needed, Commerce;
 it performs no DNS challenge. Its fields are unchanged, with new failures `403 subscription_required`,
 `409 subscription_not_ready` and `409 domain_not_ready`. Unbind keeps ownership

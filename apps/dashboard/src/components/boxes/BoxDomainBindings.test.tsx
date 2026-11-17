@@ -26,7 +26,14 @@ const domain = (hostname: string, target: HeldDomain['target']): HeldDomain => (
 })
 const bound = domain('web.example', { type: 'box', box: 'box-1', port: 3000 })
 function result(domains: HeldDomain[]): DomainList {
-  return { domains, limit: 5, used: domains.length, remaining: 5 - domains.length, min_length: 3, domain_suffix: null }
+  return {
+    domains: domains.map((domain) => ({ ...domain, kind: 'platform' })),
+    limit: 5,
+    used: domains.length,
+    remaining: 5 - domains.length,
+    min_length: 3,
+    domain_suffix: null,
+  }
 }
 async function render(boxId = 'box-1', canManage = true) {
   await act(async () =>
