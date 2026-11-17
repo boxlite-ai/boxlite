@@ -1144,3 +1144,685 @@ async fn snapshot_restore_waits_for_lifecycle_while_holding_disk() {
     assert!(LockGuard::try_new(locker.as_ref()).is_some());
     assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_some());
 }
+
+fn create_disk_for_test(bx: &BoxImpl) -> std::path::PathBuf {
+    let disk = bx.config.box_home.join("disks/disk.qcow2");
+    crate::disk::Qcow2Helper::create_disk(&disk, true)
+        .unwrap()
+        .leak();
+    disk
+}
+
+fn assert_disk_admission_released(bx: &BoxImpl) {
+    assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_some());
+    let lifecycle = bx
+        .runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    assert!(LockGuard::try_new(lifecycle.as_ref()).is_some());
+}
+
+#[tokio::test]
+async fn batch_clone_shares_base_and_records_refs_until_last_removal() {
+    enable_disk_operation_logs();
+    use crate::disk::{BaseDiskKind, Qcow2Helper, read_backing_file_path};
+    use crate::runtime::options::{NetworkMode, OutboundNetworkConfig};
+
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    let disk = create_disk_for_test(&bx);
+    let virtual_size = Qcow2Helper::qcow2_virtual_size(&disk).unwrap();
+    // Copy the latest persisted policy, not the handle's original options.
+    runtime
+        .box_manager
+        .save_outbound(
+            source.id(),
+            &OutboundNetworkConfig {
+                mode: NetworkMode::Disabled,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let state = runtime.box_manager.update_box(source.id()).unwrap();
+    let clones = source
+        .clone_boxes(Default::default(), 2, vec!["first".into(), "second".into()])
+        .await
+        .unwrap();
+    let bases = runtime
+        .base_disk_mgr
+        .store()
+        .list_by_box(source.id().as_str(), Some(BaseDiskKind::CloneBase))
+        .unwrap();
+    assert_eq!(bases.len(), 1);
+    let base = &bases[0];
+    let backing = read_backing_file_path(&disk).unwrap().unwrap();
+    assert_eq!(std::path::Path::new(&backing), base.disk_info().as_path());
+    let mut expected_refs = vec![source.id().to_string()];
+    assert_eq!(clones.len(), 2);
+    for clone in &clones {
+        let copy = disk_test_backend(clone);
+        let child = copy.config.box_home.join("disks/disk.qcow2");
+        assert_eq!(
+            read_backing_file_path(&child).unwrap().as_ref(),
+            Some(&backing)
+        );
+        assert_eq!(
+            Qcow2Helper::qcow2_virtual_size(&child).unwrap(),
+            virtual_size
+        );
+        assert_eq!(copy.state.read().status, BoxStatus::Stopped);
+        let policy = OutboundNetworkConfig::from(&copy.config.options.network);
+        assert_eq!(Some(policy), state.outbound_policy);
+        expected_refs.push(clone.id().to_string());
+        assert_disk_admission_released(&copy);
+    }
+    let mut actual_refs = runtime
+        .base_disk_mgr
+        .store()
+        .dependent_boxes(base.id())
+        .unwrap();
+    expected_refs.sort();
+    actual_refs.sort();
+    assert_eq!(actual_refs, expected_refs);
+    assert_disk_admission_released(&bx);
+    for clone in &clones {
+        runtime.remove_box(clone.id(), false).unwrap();
+        assert!(base.disk_info().as_path().exists());
+    }
+    runtime.remove_box(source.id(), false).unwrap();
+    assert!(!base.disk_info().as_path().exists());
+    assert!(
+        runtime
+            .base_disk_mgr
+            .store()
+            .find_by_id(base.id())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn batch_clone_copy_options_failure_cleans_phase_b_staging() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    let disk = create_disk_for_test(&bx);
+
+    // Deleting state before cloning would fail Phase A's lifecycle refresh.
+    // Delete it only when Phase A records the source's base ref, so Phase A
+    // succeeds and options_for_copy fails after all Phase B overlays are built.
+    let database = rusqlite::Connection::open(runtime.layout.db_dir().join("boxlite.db")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TRIGGER delete_source_state AFTER INSERT ON base_disk_ref
+             BEGIN DELETE FROM box_state WHERE id = NEW.box_id; END;",
+        )
+        .unwrap();
+    let error = source
+        .clone_boxes(Default::default(), 3, vec![])
+        .await
+        .err();
+    database
+        .execute_batch("DROP TRIGGER delete_source_state")
+        .unwrap();
+    assert!(
+        matches!(&error, Some(BoxliteError::NotFound(id)) if id == source.id().as_str()),
+        "expected options_for_copy to fail after Phase B: {error:?}"
+    );
+    let bases = runtime
+        .base_disk_mgr
+        .store()
+        .list_by_box(
+            source.id().as_str(),
+            Some(crate::disk::BaseDiskKind::CloneBase),
+        )
+        .unwrap();
+    assert_eq!(bases.len(), 1, "Phase A must complete before the failure");
+    assert_eq!(
+        crate::disk::read_backing_file_path(&disk).unwrap().unwrap(),
+        bases[0].disk_info().as_path().to_string_lossy()
+    );
+    assert_eq!(
+        runtime
+            .base_disk_mgr
+            .store()
+            .dependent_boxes(bases[0].id())
+            .unwrap(),
+        vec![source.id().to_string()]
+    );
+    assert_disk_admission_released(&bx);
+    let box_dirs: std::collections::BTreeSet<_> = std::fs::read_dir(runtime.layout.boxes_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        box_dirs,
+        std::collections::BTreeSet::from([bx.config.box_home.clone()]),
+        "Phase B left staging directories behind after options_for_copy failed"
+    );
+}
+
+#[tokio::test]
+async fn batch_clone_provision_failure_keeps_completed_clone_and_cleans_staging() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    let disk = create_disk_for_test(&bx);
+    assert!(
+        source
+            .clone_boxes(Default::default(), 0, vec![])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        source
+            .clone_boxes(Default::default(), 2, vec!["only-one".into()])
+            .await,
+        Err(BoxliteError::Config(_))
+    ));
+    assert!(matches!(
+        source.clone_boxes(Default::default(), 3, vec!["duplicate".into(), "duplicate".into(), "never-provisioned".into()]).await,
+        Err(BoxliteError::InvalidState(message)) if message.contains("already exists")
+    ));
+    assert!(runtime.get("never-provisioned").await.unwrap().is_none());
+    let completed = runtime.get("duplicate").await.unwrap().unwrap();
+    let completed_bx = disk_test_backend(&completed);
+    let child = completed_bx.config.box_home.join("disks/disk.qcow2");
+    assert_eq!(
+        crate::disk::read_backing_file_path(&child).unwrap(),
+        crate::disk::read_backing_file_path(&disk).unwrap()
+    );
+    assert_eq!(runtime.box_manager.all_boxes(true).unwrap().len(), 2);
+    assert_eq!(
+        std::fs::read_dir(runtime.layout.temp_dir())
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_disk_admission_released(&bx);
+    assert_disk_admission_released(&completed_bx);
+    // Failing in the middle must also clean the never-provisioned third overlay.
+    let box_dirs: std::collections::BTreeSet<_> = std::fs::read_dir(runtime.layout.boxes_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let expected_dirs = std::collections::BTreeSet::from([
+        bx.config.box_home.clone(),
+        completed_bx.config.box_home.clone(),
+    ]);
+    assert_eq!(
+        box_dirs, expected_dirs,
+        "unprovisioned clone staging was leaked"
+    );
+}
+
+#[tokio::test]
+async fn export_archive_round_trips_snapshot_chain_and_persisted_options() {
+    enable_disk_operation_logs();
+    use crate::disk::{Qcow2Helper, read_backing_file_path};
+    use crate::litebox::archive::{
+        ArchiveManifest, MANIFEST_FILENAME, extract_archive, sha256_file,
+    };
+    use crate::runtime::options::{NetworkMode, OutboundNetworkConfig};
+
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    let disk = create_disk_for_test(&bx);
+    let snapshot = source
+        .snapshots()
+        .create(Default::default(), "export-point")
+        .await
+        .unwrap();
+    assert_eq!(
+        std::path::Path::new(&read_backing_file_path(&disk).unwrap().unwrap())
+            .canonicalize()
+            .unwrap(),
+        snapshot.disk_info.as_path().canonicalize().unwrap()
+    );
+    let policy = OutboundNetworkConfig {
+        mode: NetworkMode::Disabled,
+        ..Default::default()
+    };
+    assert_ne!(
+        OutboundNetworkConfig::from(&bx.config.options.network),
+        policy
+    );
+    runtime
+        .box_manager
+        .save_outbound(source.id(), &policy)
+        .unwrap();
+    let mut expected_options = bx.config.options.clone();
+    expected_options.network = policy.clone().try_into().unwrap();
+    let archive = source
+        .export(Default::default(), home.path())
+        .await
+        .unwrap();
+    assert!(archive.path().is_file());
+    let extracted = TempDir::new_in("/tmp").unwrap();
+    extract_archive(archive.path(), extracted.path()).unwrap();
+    let manifest: ArchiveManifest =
+        serde_json::from_slice(&std::fs::read(extracted.path().join(MANIFEST_FILENAME)).unwrap())
+            .unwrap();
+    let flat = extracted.path().join("disk.qcow2");
+    assert_eq!(
+        manifest.container_disk_checksum,
+        sha256_file(&flat).unwrap()
+    );
+    assert_eq!(manifest.box_name, bx.config.name);
+    assert_eq!(
+        serde_json::to_value(manifest.box_options.as_ref().unwrap()).unwrap(),
+        serde_json::to_value(&expected_options).unwrap()
+    );
+    assert_eq!(
+        OutboundNetworkConfig::from(&manifest.box_options.as_ref().unwrap().network),
+        policy
+    );
+    assert!(read_backing_file_path(&flat).unwrap().is_none());
+    assert_eq!(
+        Qcow2Helper::qcow2_virtual_size(&flat).unwrap(),
+        Qcow2Helper::qcow2_virtual_size(&disk).unwrap()
+    );
+    let imported = runtime
+        .import_box(archive, Some("imported".into()))
+        .await
+        .unwrap();
+    let restored = disk_test_backend(&imported);
+    assert_ne!(imported.id(), source.id());
+    assert_eq!(restored.state.read().status, BoxStatus::Stopped);
+    assert_eq!(
+        sha256_file(&restored.config.box_home.join("disks/disk.qcow2")).unwrap(),
+        manifest.container_disk_checksum
+    );
+    assert_disk_admission_released(&bx);
+    assert_eq!(
+        std::fs::read_dir(runtime.layout.temp_dir())
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn export_cancellation_and_phase_errors_release_admissions() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    let dest = home.path().join("archive.boxlite");
+    let lifecycle = runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let held = LockGuard::new(lifecycle.as_ref());
+    let mut export = Box::pin(source.export(Default::default(), &dest));
+    assert!(futures::poll!(&mut export).is_pending());
+    assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_none());
+    drop(export);
+    assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_some());
+    assert!(!dest.exists());
+    drop(held);
+
+    // Phase 1 fails without a container disk.
+    assert!(matches!(
+        source.export(Default::default(), &dest).await,
+        Err(BoxliteError::Storage(_))
+    ));
+    assert_disk_admission_released(&bx);
+    create_disk_for_test(&bx);
+    // Phase 2 fails to create the destination after flatten has completed.
+    let invalid_dest = home.path().join("missing-parent/archive.boxlite");
+    assert!(
+        source
+            .export(Default::default(), &invalid_dest)
+            .await
+            .is_err()
+    );
+    assert!(!invalid_dest.exists());
+    assert_disk_admission_released(&bx);
+    assert_eq!(
+        std::fs::read_dir(runtime.layout.temp_dir())
+            .unwrap()
+            .count(),
+        0
+    );
+    source.export(Default::default(), &dest).await.unwrap();
+    assert!(
+        dest.is_file(),
+        "phase failure must not prevent a later export"
+    );
+}
+
+#[tokio::test]
+async fn snapshot_create_restore_remove_and_marker_failure_release_admission() {
+    enable_disk_operation_logs();
+    use crate::disk::{BackingFormat, Qcow2Helper, read_backing_file_path};
+
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    let disk = create_disk_for_test(&bx);
+    let snapshots = source.snapshots();
+    let marker = bx.config.box_home.join(".snapshot_pending");
+    std::fs::create_dir(&marker).unwrap();
+    assert!(matches!(
+        snapshots.create(Default::default(), "point").await,
+        Err(BoxliteError::Storage(_))
+    ));
+    assert!(snapshots.list().await.unwrap().is_empty());
+    assert_disk_admission_released(&bx);
+    std::fs::remove_dir(&marker).unwrap();
+    let snapshot = snapshots.create(Default::default(), "point").await.unwrap();
+    assert!(!marker.exists());
+    assert_eq!(
+        snapshots.get(&snapshot.name).await.unwrap().unwrap().id,
+        snapshot.id
+    );
+    assert!(matches!(
+        snapshots.create(Default::default(), &snapshot.name).await,
+        Err(BoxliteError::AlreadyExists(_))
+    ));
+    assert_disk_admission_released(&bx);
+    let target_size = Qcow2Helper::qcow2_virtual_size(snapshot.disk_info.as_path()).unwrap();
+    std::fs::remove_file(&disk).unwrap();
+    Qcow2Helper::create_cow_child_disk(
+        snapshot.disk_info.as_path(),
+        BackingFormat::Qcow2,
+        &disk,
+        target_size + 4096,
+    )
+    .unwrap()
+    .leak();
+    let later = snapshots.create(Default::default(), "later").await.unwrap();
+    assert_eq!(
+        std::path::Path::new(&read_backing_file_path(&disk).unwrap().unwrap())
+            .canonicalize()
+            .unwrap(),
+        later.disk_info.as_path().canonicalize().unwrap(),
+    );
+    assert_eq!(
+        Qcow2Helper::qcow2_virtual_size(&disk).unwrap(),
+        target_size + 4096
+    );
+    let before_restore = std::fs::read(&disk).unwrap();
+    snapshots.restore(&snapshot.name).await.unwrap();
+    assert_ne!(std::fs::read(&disk).unwrap(), before_restore);
+    assert_eq!(Qcow2Helper::qcow2_virtual_size(&disk).unwrap(), target_size);
+    assert_eq!(
+        std::path::Path::new(&read_backing_file_path(&disk).unwrap().unwrap())
+            .canonicalize()
+            .unwrap(),
+        snapshot.disk_info.as_path().canonicalize().unwrap()
+    );
+    snapshots.remove(&later.name).await.unwrap();
+    assert!(matches!(
+        snapshots.remove(&snapshot.name).await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    assert_disk_admission_released(&bx);
+    // Detach the live disk using the production flattener, making removal safe.
+    let flat = runtime.layout.temp_dir().join("flat.qcow2");
+    Qcow2Helper::flatten(&disk, &flat).unwrap();
+    std::fs::rename(&flat, &disk).unwrap();
+    snapshots.remove(&snapshot.name).await.unwrap();
+    assert!(snapshots.get(&snapshot.name).await.unwrap().is_none());
+    assert!(!snapshot.disk_info.as_path().exists());
+    assert_disk_admission_released(&bx);
+}
+
+#[tokio::test]
+async fn health_observation_is_idempotent_and_ignores_stopped_runs() {
+    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = &fixture.box_impl;
+    bx.state.write().set_pid(Some(u32::MAX));
+    bx.runtime
+        .box_manager
+        .save_box(bx.id(), &bx.state.read())
+        .unwrap();
+    let run = BoxRun {
+        pid: bx.state.read().pid.unwrap(),
+        started_at: bx.state.read().started_at,
+    };
+    let probe = || BoxEvent::Health {
+        healthy: true,
+        retries: 1,
+    };
+    let health = bx.apply_observation(run, probe()).await.unwrap().unwrap();
+    assert_eq!(health.state, crate::HealthState::Healthy);
+    // An already-healthy result must not need another persistence write.
+    let database =
+        rusqlite::Connection::open(bx.runtime.layout.db_dir().join("boxlite.db")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TRIGGER reject_redundant_health BEFORE UPDATE ON box_state
+         BEGIN SELECT RAISE(ABORT, 'redundant health write'); END;",
+        )
+        .unwrap();
+    assert_eq!(
+        bx.apply_observation(run, probe()).await.unwrap(),
+        Some(health)
+    );
+    database
+        .execute_batch("DROP TRIGGER reject_redundant_health")
+        .unwrap();
+    bx.stop().await.unwrap();
+    // A fresh handle is not cancelled, so admission checks the persisted status.
+    let stopped_state = bx.runtime.box_manager.update_box(bx.id()).unwrap();
+    let stopped = BoxImpl::new(
+        bx.config.clone(),
+        stopped_state.clone(),
+        Arc::clone(&bx.runtime),
+        bx.runtime.shutdown_token.child_token(),
+    );
+    assert!(
+        stopped
+            .apply_observation(run, probe())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let persisted = bx.runtime.box_manager.update_box(bx.id()).unwrap();
+    assert_eq!(persisted.status, BoxStatus::Stopped);
+    assert_eq!(persisted.health_status, stopped_state.health_status);
+}
+
+#[tokio::test]
+async fn disk_admission_rejects_missing_identity_and_exit_cleanup_rechecks_status() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = runtime
+        .create(
+            BoxOptions {
+                auto_delete: Some(1),
+                detach: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let bx = disk_test_backend(&source);
+    let original = bx.state.read().clone();
+    bx.state.write().lock_id = None;
+    let polled = AtomicBool::new(false);
+    let result = bx
+        .with_disk_admission(async {
+            polled.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+    *bx.state.write() = original;
+    assert!(!polled.load(Ordering::SeqCst));
+    assert!(
+        matches!(result, Err(BoxliteError::Internal(message)) if message.contains("missing lock_id"))
+    );
+    // A pending exit cleanup must not delete a box whose state no longer
+    // qualifies for removal once disk and lifecycle admission are reacquired.
+    assert!(bx.config.options.removes_on_stop());
+    bx.state.write().force_status(BoxStatus::Stopped);
+    runtime
+        .box_manager
+        .save_box(bx.id(), &bx.state.read())
+        .unwrap();
+    let lifecycle = runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let held = LockGuard::new(lifecycle.as_ref());
+    let mut cleanup = Box::pin(bx.complete_exit_cleanup());
+    assert!(futures::poll!(&mut cleanup).is_pending());
+    assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_none());
+    let mut no_longer_stopped = runtime.box_manager.update_box(bx.id()).unwrap();
+    no_longer_stopped.force_status(BoxStatus::Configured);
+    runtime
+        .box_manager
+        .save_box(bx.id(), &no_longer_stopped)
+        .unwrap();
+    assert_eq!(bx.state.read().status, BoxStatus::Stopped);
+    drop(held);
+    tokio::time::timeout(Duration::from_secs(1), cleanup)
+        .await
+        .expect("exit cleanup stalled after lifecycle admission")
+        .unwrap();
+    assert_eq!(bx.state.read().status, BoxStatus::Configured);
+    assert!(
+        runtime
+            .box_manager
+            .box_by_id(source.id())
+            .unwrap()
+            .is_some()
+    );
+    assert!(!bx.auto_removed.load(Ordering::Acquire));
+    let before = bx.runtime.box_manager.update_box(bx.id()).unwrap();
+    let run = BoxRun {
+        pid: u32::MAX,
+        started_at: before.started_at,
+    };
+    assert!(
+        bx.apply_observation(
+            run,
+            BoxEvent::Exited {
+                health_checked: false
+            }
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        bx.runtime.box_manager.update_box(bx.id()).unwrap().status,
+        before.status
+    );
+    assert_disk_admission_released(&bx);
+}
+
+#[tokio::test]
+async fn disk_lock_running_auto_delete_stop_completes_without_retry() {
+    let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = Arc::get_mut(&mut fixture.box_impl).unwrap();
+    bx.config.options.auto_delete = Some(1);
+    bx.config.options.detach = false;
+    bx.runtime.box_manager.remove_box(bx.id()).unwrap();
+    bx.runtime
+        .box_manager
+        .add_box(&bx.config, &bx.state.read())
+        .unwrap();
+    let disk = create_disk_for_test(bx);
+    let id = bx.state.read().lock_id.unwrap();
+    bx.stop().await.unwrap();
+    assert!(bx.auto_removed.load(Ordering::Acquire));
+    assert!(bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_none());
+    assert!(!disk.exists());
+    assert!(!bx.runtime.layout.locks_dir().join(id.to_string()).exists());
+    assert!(
+        !bx.runtime
+            .layout
+            .disk_locks_dir()
+            .join(id.to_string())
+            .exists()
+    );
+    bx.stop().await.unwrap();
+}
+
+// Exercise tracing's log-compatible field formatting without installing a
+// process-wide tracing subscriber. Other tests may already own the logger.
+fn enable_disk_operation_logs() {
+    struct Sink;
+    impl tracing::log::Log for Sink {
+        fn enabled(&self, _: &tracing::log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, _: &tracing::log::Record<'_>) {}
+        fn flush(&self) {}
+    }
+    static LOGGER: Sink = Sink;
+    let _ = tracing::log::set_logger(&LOGGER);
+    tracing::log::set_max_level(tracing::log::LevelFilter::Trace);
+}
+
+#[tokio::test]
+async fn stop_commit_tolerates_record_removed_after_lifecycle_admission() {
+    enable_disk_operation_logs();
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    bx.state.write().force_status(BoxStatus::Failed);
+    runtime
+        .box_manager
+        .save_box(bx.id(), &bx.state.read())
+        .unwrap();
+    // Internal initialization cleanup may remove the row after admission has
+    // refreshed it. Exercise stop's commit phase, not a pre-admission NotFound.
+    bx.with_operation(async {
+        runtime.box_manager.remove_box(bx.id())?;
+        bx.stop_inner().await
+    })
+    .await
+    .unwrap();
+    assert_eq!(bx.state.read().status, BoxStatus::Stopped);
+    assert!(bx.shutdown_token.is_cancelled());
+    assert!(!bx.auto_removed.load(Ordering::Acquire));
+    assert!(runtime.box_manager.box_by_id(bx.id()).unwrap().is_none());
+    assert_disk_admission_released(&bx);
+}
