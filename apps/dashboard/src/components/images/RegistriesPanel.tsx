@@ -150,7 +150,8 @@ export const PROVIDERS: Provider[] = [
 
 export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
-const ROW_GRID = 'grid min-w-[680px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_110px] items-center gap-6'
+const ROW_GRID =
+  'grid min-w-[680px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_110px] items-center gap-6'
 
 /** The same Covers label is used for display and local filtering. */
 function registryCoverage(prefix?: string): string {
