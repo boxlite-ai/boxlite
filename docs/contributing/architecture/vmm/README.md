@@ -570,11 +570,13 @@ logged.
     Devices register private control channels under their IDs during
     construction; the completed registry is immutable.
   - `VmControl::resize_disk(block_id, bytes, timeout)` selects the registered
-    sender, queues an absolute target and rings a doorbell socket, registered
-    at each activation. The worker applies it between guest requests; callers
-    receive neither a concrete device nor its per-disk sender.
-  - The device grows the image with imago, updates capacity and configuration
-    space, then raises the configuration interrupt. `PreallocateMode::None`
+    sender and submits `BlockControlRequest::Resize` with a typed reply channel.
+    The sender shares queueing, doorbell wakeup and reply waiting across control
+    operations. The device matches requests on its worker between guest I/O;
+    callers receive neither a concrete device nor its per-disk sender.
+    Only `Resize` is implemented; additional operations extend the same inbox.
+  - Actual growth uses imago, updates capacity and configuration space, then
+    raises the configuration interrupt. Same-size success emits no interrupt. `PreallocateMode::None`
     supports qcow2 backing files and makes the new range read as zeroes.
   - Smaller, unaligned and read-only targets fail; the current size succeeds,
     making retries safe. Requests sent before driver activation wait for it.

@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Growing a disk while the VM runs.
+//! Typed control requests for one disk while the VM runs.
 //!
 //! A [`DiskSender`] queues the request and rings a doorbell socket. The block
 //! device registers the doorbell's other end with the workers at each
@@ -22,10 +22,10 @@ use std::{
 
 use crate::virtio::EventSource;
 
-/// Grows one disk of a running VM from any thread.
+/// Sends control requests to one disk of a running VM from any thread.
 #[derive(Clone)]
 pub(crate) struct DiskSender {
-    requests: Sender<Grow>,
+    requests: Sender<BlockControlRequest>,
     bell: Arc<UnixStream>,
 }
 
@@ -36,16 +36,27 @@ impl fmt::Debug for DiskSender {
 }
 
 impl DiskSender {
-    /// Grows the disk to `bytes` and returns its new size in bytes, after
-    /// the guest has been told. `bytes` must be a multiple of 512 and no
-    /// smaller than the current size; the current size succeeds unchanged, so
+    /// Grows the disk to `bytes` and notifies the guest when capacity increases.
+    /// `bytes` must be a multiple of 512 and no smaller than the current size;
+    /// the current size succeeds without changing capacity or notifying, so
     /// a retry after a timeout is safe. A timeout leaves the request queued:
     /// the device still applies it when the guest activates it.
     pub(crate) fn grow(&self, bytes: u64, timeout: Duration) -> io::Result<u64> {
+        self.request(timeout, |reply| BlockControlRequest::Resize {
+            bytes,
+            reply,
+        })
+    }
+
+    /// The constructor pairs each operation with its own reply type; only the
+    /// request travels to the worker. A timeout leaves that request queued.
+    fn request<T>(
+        &self,
+        timeout: Duration,
+        build: impl FnOnce(SyncSender<io::Result<T>>) -> BlockControlRequest,
+    ) -> io::Result<T> {
         let (reply, done) = mpsc::sync_channel(1);
-        self.requests
-            .send(Grow { bytes, reply })
-            .map_err(|_| gone())?;
+        self.requests.send(build(reply)).map_err(|_| gone())?;
         match (&*self.bell).write(&[1]) {
             // A full doorbell is already ringing.
             Err(error) if error.kind() != io::ErrorKind::WouldBlock => return Err(error),
@@ -54,7 +65,7 @@ impl DiskSender {
         done.recv_timeout(timeout).map_err(|error| match error {
             RecvTimeoutError::Timeout => io::Error::new(
                 io::ErrorKind::TimedOut,
-                "the disk has not applied the resize yet",
+                "the disk has not applied the control request yet",
             ),
             RecvTimeoutError::Disconnected => gone(),
         })?
@@ -65,22 +76,17 @@ fn gone() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "the disk is gone")
 }
 
-/// One queued grow and where its result goes.
-pub(crate) struct Grow {
-    pub(crate) bytes: u64,
-    reply: SyncSender<io::Result<u64>>,
-}
-
-impl Grow {
-    /// Sends the result; a caller that timed out no longer listens.
-    pub(crate) fn finish(self, result: io::Result<u64>) {
-        let _ = self.reply.try_send(result);
-    }
+/// Each operation carries the reply type its caller expects.
+pub(crate) enum BlockControlRequest {
+    Resize {
+        bytes: u64,
+        reply: SyncSender<io::Result<u64>>,
+    },
 }
 
 /// The device's end: the queue and the doorbell it registers.
 pub(crate) struct Controls {
-    requests: Receiver<Grow>,
+    requests: Receiver<BlockControlRequest>,
     bell: UnixStream,
 }
 
@@ -94,13 +100,13 @@ impl Controls {
 
     /// Silences the doorbell, then returns every queued request. Reading the
     /// doorbell first keeps a request queued after this call ringing again.
-    pub(crate) fn take(&mut self) -> Vec<Grow> {
+    pub(crate) fn take(&mut self) -> Vec<BlockControlRequest> {
         let mut buf = [0u8; 64];
         while matches!((&self.bell).read(&mut buf), Ok(read) if read > 0) {}
         let mut taken = Vec::new();
         loop {
             match self.requests.try_recv() {
-                Ok(grow) => taken.push(grow),
+                Ok(request) => taken.push(request),
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => return taken,
             }
         }

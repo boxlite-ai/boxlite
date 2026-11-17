@@ -11,7 +11,7 @@ use super::{
     VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_S_OK,
     backend::{CompletedRequest, DiskBackend, DiskInfo, RequestKind, SubmitOutcome},
     config::BlkConfig,
-    control::Controls,
+    control::{BlockControlRequest, Controls},
     inflight::Inflight,
     request::{self, Decoded, WriteTargets},
 };
@@ -81,17 +81,21 @@ impl VirtioBlk {
         }
     }
 
-    /// Applies every queued grow request on the worker thread.
+    /// Applies queued device control requests on the worker thread.
     fn apply_controls(&mut self) {
         for request in self.controls.take() {
-            let result = self.grow(request.bytes);
-            request.finish(result);
+            match request {
+                BlockControlRequest::Resize { bytes, reply } => {
+                    let result = self.grow(bytes);
+                    // A caller may have timed out; the admitted operation still completes.
+                    let _ = reply.try_send(result);
+                }
+            }
         }
     }
 
-    /// Grows the disk to `bytes`, then tells the driver: the new capacity is
-    /// in the configuration space before the configuration interrupt, which
-    /// also advances the configuration generation.
+    /// Actual growth updates configuration space before raising the config
+    /// interrupt and advancing its generation. The current size is a no-op.
     fn grow(&mut self, bytes: u64) -> io::Result<u64> {
         let current = self.disk_info.capacity_sectors * SECTOR_SIZE;
         if self.disk_info.read_only {

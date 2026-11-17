@@ -786,8 +786,13 @@ took, and then announces that slot on the kernel command line.
   before host resources or images are opened.
 - **Online grow.** `Vm::control()` returns a cloneable `VmControl`. Its
   `resize_disk(block_id, bytes, timeout)` routes to the private sender registered
-  by that device during construction. The registry becomes immutable when
-  construction finishes; `devices::add_all` returns `Result<()>`. An unknown
+  by that device during construction. Each channel carries a
+  `BlockControlRequest` enum; `Resize` carries its absolute target and a typed
+  reply sender. `DiskSender` shares submission, wakeup and reply waiting across
+  operations, while the device matches requests on its worker. Additional block
+  operations extend this inbox; only `Resize` is implemented.
+  The registry becomes immutable when construction finishes;
+  `devices::add_all` returns `Result<()>`. An unknown
   ID returns `InvalidInput`. A request queues the absolute target and writes
   one byte to a doorbell socket pair; the device registers the other end at
   each activation, after the backend source, and on its `BackendReady` drains the doorbell and applies

@@ -14,9 +14,9 @@ pub struct VmControl {
 }
 
 impl VmControl {
-    /// Grows the named disk to `bytes`, returning its capacity after notifying
-    /// the guest. The target must be sector aligned, writable and no smaller
-    /// than its current capacity; repeating the current size is a no-op.
+    /// Grows the named writable disk to `bytes`, returning its capacity.
+    /// The target must be sector aligned and no smaller than its current
+    /// capacity. Actual growth notifies the guest; the current size is a no-op.
     ///
     /// Unknown IDs return `InvalidInput`. A request before device activation
     /// waits for activation. A timeout does not cancel an enqueued request;
