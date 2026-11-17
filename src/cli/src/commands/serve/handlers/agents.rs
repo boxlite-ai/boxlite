@@ -85,19 +85,18 @@ pub(in crate::commands::serve) struct EventQuery {
     after: Option<String>,
 }
 
-fn decode<T: for<'de> Deserialize<'de>>(body: &Bytes) -> Result<T, Response> {
-    serde_json::from_slice(body)
-        .map_err(|error| error_from_boxlite(&BoxliteError::InvalidArgument(error.to_string())))
+fn decode<T: for<'de> Deserialize<'de>>(body: &Bytes) -> Result<T, BoxliteError> {
+    serde_json::from_slice(body).map_err(|error| BoxliteError::InvalidArgument(error.to_string()))
 }
 
-fn empty_body(body: &Bytes) -> Result<(), Response> {
+fn empty_body(body: &Bytes) -> Result<(), BoxliteError> {
     if body.is_empty() {
         return Ok(());
     }
     decode::<EmptyRequest>(body).map(|_| ())
 }
 
-fn key(headers: &HeaderMap) -> Result<Option<String>, Response> {
+fn key(headers: &HeaderMap) -> Result<Option<String>, BoxliteError> {
     let mut values = headers.get_all("Idempotency-Key").iter();
     let Some(value) = values.next() else {
         return Ok(None);
@@ -108,9 +107,9 @@ fn key(headers: &HeaderMap) -> Result<Option<String>, Response> {
         || bytes.len() > 256
         || !bytes.iter().all(|byte| (b'!'..=b'~').contains(byte))
     {
-        return Err(error_from_boxlite(&BoxliteError::InvalidArgument(
+        return Err(BoxliteError::InvalidArgument(
             "invalid Idempotency-Key".into(),
-        )));
+        ));
     }
     Ok(Some(
         String::from_utf8(bytes.to_vec()).expect("visible ASCII"),
@@ -163,11 +162,11 @@ pub(in crate::commands::serve) async fn create(
 ) -> Response {
     let request: CreateRequest = match decode(&body) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let key = match key(&headers) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let config = match request.options.config {
         Some(value) => match agents::records::parse_config(value) {
@@ -226,11 +225,11 @@ pub(in crate::commands::serve) async fn close(
     body: Bytes,
 ) -> Response {
     if let Err(e) = empty_body(&body) {
-        return e;
+        return error_from_boxlite(&e);
     }
     let idempotency_key = match key(&headers) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let agent = match open(&state, &box_id, &agent_id).await {
         Ok(v) => v,
@@ -250,11 +249,11 @@ pub(in crate::commands::serve) async fn send(
 ) -> Response {
     let request: SendRequest = match decode(&body) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let idempotency_key = match key(&headers) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let mode = match request.options.mode.as_deref() {
         None | Some("queue") => AgentSendMode::Queue,
@@ -316,7 +315,7 @@ pub(in crate::commands::serve) async fn respond(
 ) -> Response {
     let request: RespondRequest = match decode(&body) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let response = match agents::records::parse_response(request.response) {
         Ok(v) => v,
@@ -324,7 +323,7 @@ pub(in crate::commands::serve) async fn respond(
     };
     let idempotency_key = match key(&headers) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let agent = match open(&state, &box_id, &agent_id).await {
         Ok(v) => v,
@@ -352,11 +351,11 @@ pub(in crate::commands::serve) async fn steer(
 ) -> Response {
     let request: TextRequest = match decode(&body) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let idempotency_key = match key(&headers) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let agent = match open(&state, &box_id, &agent_id).await {
         Ok(v) => v,
@@ -382,11 +381,11 @@ pub(in crate::commands::serve) async fn interrupt(
     body: Bytes,
 ) -> Response {
     if let Err(e) = empty_body(&body) {
-        return e;
+        return error_from_boxlite(&e);
     }
     let idempotency_key = match key(&headers) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(e) => return error_from_boxlite(&e),
     };
     let agent = match open(&state, &box_id, &agent_id).await {
         Ok(v) => v,

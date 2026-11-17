@@ -294,7 +294,7 @@ fn from_resource(remote: &RestBox, path: String, resource: Resource) -> BoxliteR
 pub(super) async fn get(remote: &RestBox, agent_id: &str) -> BoxliteResult<Agent> {
     let path = format!(
         "/boxes/{}/agents/{}",
-        urlencoding::encode(&remote.id().to_string()),
+        urlencoding::encode(remote.id().as_ref()),
         segment(agent_id)?
     );
     let resource: Resource = remote.agent_client().get_agent(&path).await?;
@@ -311,7 +311,7 @@ pub(super) async fn create(
 ) -> BoxliteResult<Agent> {
     let path = format!(
         "/boxes/{}/agents",
-        urlencoding::encode(&remote.id().to_string())
+        urlencoding::encode(remote.id().as_ref())
     );
     let config = &options.config;
     let has_config = config.model.is_some()
