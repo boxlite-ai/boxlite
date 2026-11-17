@@ -1658,7 +1658,7 @@ enum BoxliteErrorCode boxlite_box_mount_add(struct BoxHandle *handle,
 
 // Lazily detach the mount at a container target.
 //
-// Idempotent: removing an unknown target completes successfully; a mount
+// Removing an unknown target completes with a `NotFound` error; a mount
 // already converging reports success once the record reaches `detaching`.
 //
 // # Safety

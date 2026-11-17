@@ -1301,7 +1301,7 @@ with `BOXLITE_EXPERIMENTAL=native-vmm`; other engines reject the calls.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add` | `await box.mounts().add(MountRequest(source, target, read_only=False)) -> MountInfo` | Bind a host directory at the container target |
+| `add` | `await box.mounts().add(MountRequest(*, source, target, read_only=False)) -> MountInfo` | Bind a host directory at the container target |
 | `remove` | `await box.mounts().remove(target) -> None` | Lazy detach (`MNT_DETACH`); descriptors opened before keep working |
 | `list` | `await box.mounts().list() -> list[MountInfo]` | Every runtime mount of the current VM run |
 | `get` | `await box.mounts().get(target) -> MountInfo \| None` | One mount by container path |

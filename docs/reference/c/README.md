@@ -1714,7 +1714,7 @@ error pointers are borrowed only during dispatch. Successful JSON strings
 belong to the callback recipient and require `boxlite_free_string`.
 
 A mount document reports `source`, `target`, `readOnly` and `state`
-(`"mounted"` / `"detaching"`). `remove` is idempotent: an unknown target
-completes successfully; a mount already converging reports success once the
+(`"mounted"` / `"detaching"`). Removing an unknown target completes with a
+`NotFound` error; a mount already converging reports success once the
 record reaches `detaching`. Mounts do not survive a VM stop.
 
