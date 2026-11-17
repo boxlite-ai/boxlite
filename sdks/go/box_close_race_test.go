@@ -108,8 +108,8 @@ func TestBoxMethodsAfterCloseReturnInvalidState(t *testing.T) {
 		"StartExecution": func() error { _, err := box.StartExecution(ctx, "true", nil, nil); return err },
 		"CopyInto":       func() error { return box.CopyInto(ctx, "/tmp/src", "/dst") },
 		"CopyOut":        func() error { return box.CopyOut(ctx, "/src", "/tmp/dst") },
-		"CopyOutStream":  func() error { return box.CopyOutStream(ctx, "/src", io.Discard, nil) },
-		"CopyInStream":   func() error { return box.CopyInStream(ctx, "/dst", CopySourceUnknown, strings.NewReader("x")) },
+		"CopyOutStream":  func() error { return box.CopyOutStream(ctx, "/src", io.Discard) },
+		"CopyInStream":   func() error { return box.CopyInStream(ctx, "/dst", strings.NewReader("x")) },
 	}
 	for name, call := range checks {
 		if err := call(); !IsInvalidState(err) {

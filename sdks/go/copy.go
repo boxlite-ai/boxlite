@@ -123,18 +123,6 @@ func copyOutBoundaryError(ctx context.Context, closing <-chan struct{}) error {
 	}
 }
 
-func deliverCopyOutMeta(sourceKind CopySourceKind, onMeta func(bool)) {
-	if onMeta == nil {
-		return
-	}
-	switch sourceKind {
-	case CopySourceFile:
-		onMeta(false)
-	case CopySourceDir:
-		onMeta(true)
-	}
-}
-
 func writeCopyOutChunk(w io.Writer, data []byte) error {
 	if w == nil {
 		return nil
@@ -149,16 +137,13 @@ func writeCopyOutChunk(w io.Writer, data []byte) error {
 	return nil
 }
 
-// CopyOutStream streams a tar of guestSrc to w without staging to disk.
-//
-// onMeta (optional) fires before the first write to w when the peer provides
-// a source-is-directory hint. An older peer reports CopySourceUnknown, for
-// which onMeta is not called.
+// CopyOutStream streams a tar of guestSrc to w without staging to disk. The
+// archive's first entry says whether it holds a file or a directory.
 //
 // Context cancellation and Runtime closure are observed between blocking
 // guest reads. They do not interrupt a read or Writer.Write already in
 // progress.
-func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, onMeta func(bool)) error {
+func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer) error {
 	if err := copyOutBoundaryError(ctx, b.runtime.closing); err != nil {
 		return err
 	}
@@ -166,7 +151,6 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	cSrc := toCString(guestSrc)
 	defer C.free(unsafe.Pointer(cSrc))
 
-	var sourceKind C.int32_t
 	var cerr C.CBoxliteError
 	// copy_out_start holds the guard for its whole call, which may
 	// implicitly boot the box and wait on the guest's file service —
@@ -176,7 +160,7 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	if err != nil {
 		return err
 	}
-	stream := C.boxlite_copy_out_start(handle, cSrc, &sourceKind, &cerr)
+	stream := C.boxlite_copy_out_start(handle, cSrc, &cerr)
 	unlock()
 	if stream == nil {
 		return freeError(&cerr)
@@ -186,7 +170,6 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	if err := copyOutBoundaryError(ctx, b.runtime.closing); err != nil {
 		return err
 	}
-	deliverCopyOutMeta(CopySourceKind(sourceKind), onMeta)
 
 	buf := make([]byte, copyStreamBufferSize)
 	for {
@@ -224,40 +207,13 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	}
 }
 
-// CopySourceKind describes the archive shape used by streaming copy operations.
-type CopySourceKind int
-
-const (
-	// CopySourceUnknown means no archive-shape hint is available. For copy-in,
-	// the guest lands the archive by its first entry regardless; for copy-out,
-	// the metadata callback is not called.
-	CopySourceUnknown CopySourceKind = iota
-	// CopySourceFile is a single regular file archive.
-	CopySourceFile
-	// CopySourceDir is a directory tree archive.
-	CopySourceDir
-)
-
-func normalizeCopySourceKind(kind CopySourceKind) CopySourceKind {
-	switch kind {
-	case CopySourceFile, CopySourceDir:
-		return kind
-	default:
-		return CopySourceUnknown
-	}
-}
-
-// CopyInStream streams r (raw tar) into guestDst without staging to disk.
+// CopyInStream streams r (raw tar) into guestDst without staging to disk. The
+// guest lands it by its first entry, as docker cp lands a copy.
 //
-// sourceKind is the archive shape (directory tree vs single file); use
-// CopySourceUnknown when the caller cannot tell. The guest lands the tar by
-// its first entry whatever the kind says.
-//
-// An archive led by one directory becomes a guestDst that does not exist, as
-// docker cp lands a directory. Every later entry must then lie under that
-// directory, or the copy fails with ErrInvalidArgument and keeps the entries
-// written before it, regardless of sourceKind.
-func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind CopySourceKind, r io.Reader) error {
+// An archive led by one directory becomes a guestDst that does not exist.
+// Every later entry must then lie under that directory, or the copy fails
+// with ErrInvalidArgument and keeps the entries written before it.
+func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) error {
 	if r == nil {
 		return &Error{Code: ErrInvalidArgument, Message: "copy-in reader must not be nil"}
 	}
@@ -279,11 +235,7 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	// Like copy_out_start, copy_in_start may implicitly boot the box and
 	// wait on guest file service under the guard; the returned stream is
 	// independent of the box handle.
-	// The C ABI takes the discriminant as int32_t (an out-of-range value a
-	// C caller might pass must map to Unknown, not an invalid Rust enum);
-	// cgo needs the explicit conversion.
-	kind := C.int32_t(normalizeCopySourceKind(sourceKind))
-	stream := C.boxlite_copy_in_start(handle, cDst, kind, C.cbCopy(), handleToPtr(h), &cerr)
+	stream := C.boxlite_copy_in_start(handle, cDst, C.cbCopy(), handleToPtr(h), &cerr)
 	unlock()
 	if stream == nil {
 		deleteHandleForDispatch(h)
