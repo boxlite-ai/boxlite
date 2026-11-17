@@ -11,6 +11,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
+import { toast } from 'sonner'
 import { WalletSection } from './WalletSection'
 
 const mocks = vi.hoisted(() => ({
@@ -194,6 +195,8 @@ describe('WalletSection top-up checkout', () => {
     mocks.memberRole = 'owner'
     mocks.organizations = [{ id: 'org-without-card' }, { id: 'org-other' }]
     mocks.redeemCoupon.mockReset()
+    vi.mocked(toast.success).mockClear()
+    vi.mocked(toast.error).mockClear()
   })
 
   afterEach(() => {
@@ -752,6 +755,8 @@ describe('WalletSection top-up checkout', () => {
     expect(mocks.redeemCoupon).toHaveBeenCalledWith({ organizationId: 'org-without-card', couponCode: 'ACME50' })
     expect(onCouponRedeemed).toHaveBeenCalledTimes(1)
     expect(host.textContent).toContain('Coupon redeemed')
+    // The inline note sits low in the panel and fades; a toast is visible wherever the page is scrolled.
+    expect(toast.success).toHaveBeenCalledWith('Coupon redeemed')
   })
 
   it('does not auto-redeem a coupon link for a member who does not own the organization', async () => {
@@ -777,5 +782,8 @@ describe('WalletSection top-up checkout', () => {
     expect(host.textContent).toContain('Coupon not found')
     expect(input?.value).toBe('NOPE')
     expect(onCouponRedeemed).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Coupon NOPE was not redeemed', {
+      description: 'Error: Coupon not found',
+    })
   })
 })

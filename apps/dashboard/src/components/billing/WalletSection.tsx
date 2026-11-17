@@ -330,10 +330,14 @@ export function WalletSection({
       setTimeout(() => {
         setRedeemCouponSuccess(null)
       }, 3000)
+      // The inline note sits low in the panel and fades; a coupon link may redeem
+      // before the user scrolls there, so the result is also announced as a toast.
+      toast.success(message)
       setCouponCode('')
       onCouponRedeemed?.()
     } catch (error) {
       setRedeemCouponError(String(error))
+      toast.error(`Coupon ${couponCode} was not redeemed`, { description: String(error) })
       console.error('Failed to redeem coupon:', error)
     }
   }, [selectedOrganization, couponCode, redeemCouponMutation, onCouponRedeemed])
