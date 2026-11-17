@@ -6,7 +6,15 @@
   "tags": [],
   "targets": {
     "build": {
-      "inputs": ["default", "{workspaceRoot}/shared/filestore-instances.ts"],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/shared/filestore-instances.ts",
+        {
+          "dependentTasksOutputFiles": "**/*",
+          "transitive": true
+        }
+      ],
       "executor": "@nx/webpack:webpack",
       "options": {
         "outputPath": "dist/apps/api",
