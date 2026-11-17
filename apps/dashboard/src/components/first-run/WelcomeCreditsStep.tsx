@@ -167,7 +167,7 @@ export default function WelcomeCreditsStep({
             >
               <span className="flex items-center gap-2.5">
                 {!busy && <CreditCardIcon aria-hidden className="size-4 shrink-0" />}
-                {busy ? 'Please wait…' : 'Connect card'}
+                {busy ? 'Please wait…' : 'Verify card'}
               </span>
               {!busy && <ArrowRightIcon aria-hidden className="size-4" />}
             </AsciiButton>
