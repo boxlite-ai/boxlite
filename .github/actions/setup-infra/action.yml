@@ -42,6 +42,14 @@ inputs:
     required: false
     default: ''
 
+outputs:
+  platform-cache-key:
+    description: Exact key captured when restoring the SST platform
+    value: ${{ steps.platform.outputs.cache-primary-key }}
+  platform-cache-hit:
+    description: Whether the SST platform restore was an exact hit
+    value: ${{ steps.platform.outputs.cache-hit }}
+
 runs:
   using: composite
   steps:
@@ -51,10 +59,10 @@ runs:
 
     - name: Restore the apps/infra install
       id: modules
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: apps/infra/node_modules
-        key: infra-modules-${{ runner.os }}-node22-${{ hashFiles('apps/infra/package-lock.json') }}
+        key: infra-modules-v2-${{ runner.os }}-node22-${{ hashFiles('apps/infra/package-lock.json') }}
 
     - name: Install
       if: steps.modules.outputs.cache-hit != 'true'
@@ -62,14 +70,24 @@ runs:
       working-directory: apps/infra
       run: npm ci
 
+    # A caller may check out another commit after this action returns.
+    # Snapshot this installation while its lockfile and directory still agree.
+    - name: Save the apps/infra install
+      if: steps.modules.outputs.cache-hit != 'true' && steps.modules.outputs.cache-primary-key != ''
+      uses: actions/cache/save@v4
+      with:
+        path: apps/infra/node_modules
+        key: ${{ steps.modules.outputs.cache-primary-key }}
+
     # Only `platform/`. The rest of `.sst` is one run's own state — `outputs.json`
     # names every resource the stack created — and a cache is readable by every
     # workflow run in the repository.
     - name: Restore the sst platform
-      uses: actions/cache@v4
+      id: platform
+      uses: actions/cache/restore@v4
       with:
         path: apps/infra/mdeploy/.sst/platform
-        key: sst-platform-${{ runner.os }}-${{ hashFiles('apps/infra/package-lock.json', 'apps/infra/mdeploy/sst.config.ts') }}
+        key: sst-platform-v2-${{ runner.os }}-${{ hashFiles('apps/infra/package-lock.json', 'apps/infra/mdeploy/sst.config.ts') }}
 
     # `@pulumi/pulumi/automation` does not bundle the engine — it spawns the
     # `pulumi` binary — so a GCP stage cannot deploy without this on PATH.

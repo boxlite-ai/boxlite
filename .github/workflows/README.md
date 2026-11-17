@@ -26,14 +26,17 @@ SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go 
                                         build-runner-binary ──▶ build-c ──▶ Runner link
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
-                                        mbuild-release-on-release ──▶ mbuild-release (images, GHCR)
+                                        mbuild-release-on-release ──▶ mbuild-release
+                                          GHCR images + required release assets ready
+                                            ──▶ mdeploy-all (dev) ──▶ e2e-cloud (dev, release tag)
+                                            ──▶ mdeploy-all (prod, awaiting approval) ──▶ Slack report
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
                                                       ├─▶ build-c ──▶ build-runner-binary
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
-DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
+DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ plan + build   (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
                                                      └─▶ GHCR import    (release tag ──▶ dev/prod AR/ECR, no build)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
@@ -66,15 +69,20 @@ own.
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
-| `mbuild.yml` | `workflow_call` | call-only | Commit images for dev/stage, using the caller's selected stage; nobody publishes a commit by hand |
-| `mbuild-release.yml` | dispatch | — | Publishes `v<X.Y.Z>-<sha>` images to GHCR, one job per declared artifact. Reuses existing images when recovering partial releases |
-| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images to GHCR |
+| `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes that action inside its planning/build job |
+| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, dispatches dev deployment/E2E, creates a prod approval request, and reports to Slack; `build-only=true` selects publication only |
+| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` using its default full pipeline |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
 
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
+
+The [release runbook](../../apps/infra/docs/release.md) documents fixed child inputs, timeouts, and recovery.
+Full releases require repository secret `SLACK_WEBHOOK_URL` and required reviewers on the `prod` Environment.
+The Slack button opens the exact pending prod run; a reviewer approves it with their own GitHub identity.
+Release deployments need one target Environment approval; commit deployments use two rounds: plan/build, then deploy.
 
 Cloud E2E accepts an optional release-client `tag`; see the
 [suite guide](../../apps/e2e/README.md) for downloaded clients and remaining dev driver builds.
@@ -272,6 +280,9 @@ every consumer.
 
 | Action | Sites | Used by |
 | --- | --- | --- |
+| `mbuild` | 2 | mdeploy-all plan/build and the reusable mbuild workflow |
+| `build-staged-runner` | 1 | mdeploy-all plan/build |
+| `mdeploy` | 2 | mdeploy-all release apply and commit deploy |
 | `ci-config` | 3 | config, lint, test |
 | `setup-rust` | 10 | build-c, build-node, build-runtime ×2, build-wheels, lint ×2, test ×3 |
 | `sccache` | 7 | build-c, build-node, build-runtime, build-wheels, lint, test ×2 |
@@ -281,6 +292,12 @@ every consumer.
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
 | `setup-python` | 5 | lint ×2, test ×3 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
+
+`setup-infra` saves an exact dependency-cache miss immediately after `npm ci`,
+using the key recorded by its restore step. Callers may then change their checkout.
+The deployment action saves a generated SST platform after use, before returning to its caller.
+
+Both caches use `v2` namespaces and exact keys; stage state and configuration stay outside their paths.
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
 `build-guest` and `run-in-manylinux` run after both. They are separate actions rather than one
@@ -430,3 +447,4 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 - `PYPI_API_TOKEN` — PyPI, for the wheels
 - `NPM_TOKEN` — npm, for the Node packages
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
+- `SLACK_WEBHOOK_URL` — incoming webhook for full release reports and the prod approval link

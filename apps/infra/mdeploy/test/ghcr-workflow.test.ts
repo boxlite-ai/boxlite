@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { load } from 'js-yaml'
+import { actionSteps } from './workflow-source.js'
 
 const workflow = load(
   readFileSync(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url), 'utf8'),
@@ -132,11 +133,8 @@ exit ${cloudPresent ? 0 : 66}
 }
 
 test('tag deployment imports before image verification and never calls the release builder', () => {
-  assert.equal(
-    Object.values<any>(workflow.jobs).some((job) => job.uses?.includes('mbuild-release.yml')),
-    false,
-  )
-  const steps = workflow.jobs.deploy.steps as any[]
+  assert.equal(Object.values<any>(workflow.jobs).some((job) => job.uses?.includes('mbuild-release.yml')), false)
+  const steps = actionSteps('mdeploy')
   const imported = steps.findIndex((step) => /mbuild import-release/.test(step.run ?? ''))
   const verified = steps.findIndex((step) => step.name === 'Verify the images')
   const applied = steps.findIndex((step) => step.name === 'Apply')
@@ -149,17 +147,14 @@ test('tag deployment imports before image verification and never calls the relea
 })
 
 test('GCP imports and scans use the publisher, then restore the deployer before deployment checks', () => {
-  const steps = workflow.jobs.deploy.steps as any[]
+  const steps = actionSteps('mdeploy')
   const imported = steps.findIndex((step) => /mbuild import-release/.test(step.run ?? ''))
   const verified = steps.findIndex((step) => step.name === 'Verify the images')
   const isGcpAuth = (step: any) => /^google-github-actions\/auth@/.test(step.uses ?? '')
   const publisher = steps.slice(0, imported).filter(isGcpAuth).at(-1)
-  assert.equal(
-    publisher?.with.service_account,
-    '${{ vars.GCP_IMAGE_PUBLISHER }}',
-    'the deployer has registry reader access; import and scans need the existing publisher permissions',
-  )
-  assert.match(publisher.if, /needs\.plan\.outputs\.api == 'release-import'/)
+  assert.equal(publisher?.with.service_account, '${{ vars.GCP_IMAGE_PUBLISHER }}',
+    'the deployer has registry reader access; import and scans need the existing publisher permissions')
+  assert.match(publisher.if, /inputs\.api-route == 'release-import'/)
   assert.match(publisher.if, /steps\.config\.outputs\.kind == 'artifact-registry'/)
   const restored = steps.slice(imported + 1, verified).find(isGcpAuth)
   assert.equal(
