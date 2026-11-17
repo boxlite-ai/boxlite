@@ -628,7 +628,28 @@ export const gcpApiProvider =
       networkEndpointType: 'SERVERLESS',
       cloudRun: { service: service.name },
     })
+    const internalRoutePolicy = new gcp.compute.SecurityPolicy('ApiInternalRoutePolicy', {
+      project,
+      rules: [
+        {
+          priority: 100,
+          action: 'deny(403)',
+          match: {
+            expr: { expression: "request.path.urlDecode().lower().contains('/internal/')" },
+          },
+        },
+        {
+          priority: 2147483647,
+          action: 'allow',
+          match: {
+            versionedExpr: 'SRC_IPS_V1',
+            config: { srcIpRanges: ['*'] },
+          },
+        },
+      ],
+    })
     const backend = new gcp.compute.BackendService('ApiBackend', {
+      securityPolicy: internalRoutePolicy.id,
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
       loadBalancingScheme: 'EXTERNAL_MANAGED',
@@ -809,7 +830,14 @@ export const gcpApiProvider =
         {
           name: API_PATH_MATCHER,
           defaultService: internalBackend.id,
-          routeRules: apiPrefixRouteRules(internalBackend.id),
+          routeRules: [
+            {
+              priority: 0,
+              matchRules: [{ fullPathMatch: '/internal/v1/credentials/introspect' }],
+              service: internalBackend.id,
+            },
+            ...apiPrefixRouteRules(internalBackend.id),
+          ],
         },
       ],
     })

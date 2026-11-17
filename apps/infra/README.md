@@ -35,6 +35,23 @@ A successful `npm run bootstrap` does not establish that every runtime prerequis
 
 See [DNS credentials](docs/deployment.md#cloudflare-api-token) for token scope and the cloud guides for storage destinations.
 
+## Internal credential ingress
+
+The public GCP API backend blocks URL-decoded, lowercase paths containing
+`/internal/` with Cloud Armor. The private backend preserves the exact
+`/internal/v1/credentials/introspect` path instead of adding the `/api` prefix.
+Both AWS deployment builders attach an equivalent WAF rule to the public API
+ALB; request sampling is disabled to avoid retaining credential-bearing requests.
+
+Deploy these policies before exposing credential introspection or enabling
+Secret Server. Verify rejection through public API and dashboard hosts, including
+`/api` aliases, mixed case, encoded paths, and spoofed Host headers. Then redeem
+a fresh credential through the private endpoint. Resource synthesis tests verify
+policy construction; they do not prove deployed isolation.
+
+Local deployments must bind the credential-serving listener to a private or
+loopback network. See [the credential design](https://github.com/boxlite-ai/boxlite/issues/2735).
+
 ## Validate changes
 
 Run from the repository root:

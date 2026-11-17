@@ -22,6 +22,7 @@
 
 import type { Api, ApiCapability, ApiDependencies, ApiProvider, ApiRequest } from '../../api.ts'
 import { publicHostsFor } from '../../api.ts'
+import { denyPublicInternalRoutes } from './internal-route-policy.ts'
 import { CACHE_PASSWORD_VARIABLE } from '../../cache.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
 import type { WorkloadHost } from '../../cluster.ts'
@@ -190,6 +191,7 @@ export const awsApiProvider =
      * cycle: the API's environment could carry the name before the role was
      * real.
      */
+    denyPublicInternalRoutes(service.nodes.loadBalancer.arn)
     const vending = new aws.iam.Role('S3AccessRole', {
       name: storage.credentialVending.roleName,
       assumeRolePolicy: service.nodes.taskRole.arn.apply((taskRoleArn: string) =>
