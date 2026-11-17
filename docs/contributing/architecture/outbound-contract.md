@@ -242,6 +242,23 @@ These are trusted-coordinator operations; the existing unconditional setters ret
 
 The C boundary tests call the actual exported functions through a REST runtime, inspect the resulting HTTP requests, free returned strings, and check output initialization and rejection without dispatch.
 
+### Go coordinator API
+
+`Network.OutboundSnapshot` reads durable intent; `Network.OutboundStatus` reads the durable/live comparison and pending evidence.
+`ReplaceOutboundSnapshot(ctx, expected, candidate)` preserves the coordinator's fresh candidate across the C ABI and selected Runtime backend.
+Check both its error and `OutboundReplaceOutcome`: `OutboundPreconditionFailed` with a nil error is a rejected update, not application.
+
+`OutboundPolicy` supplies explicit wire field names without changing the existing `OutboundNetworkSpec` structure or setter request shapes.
+
+Revision strings are validated before C-string conversion, including embedded NUL, length, and ASCII-token checks.
+Network calls retain a shared lifetime lock; Close takes the exclusive lock before freeing the C handle.
+Policy updates remain serialized by Runtime's Box operation lock, while a concurrent status read through the same Go Network handle remains available.
+
+As with the existing blocking setters, context cancellation is checked before entering the native call; it does not cancel an in-flight native update.
+
+Go tests use the actual Go/C/Rust stack against controlled HTTP peers, including a held update with concurrent status read.
+They cover precondition failure, malformed ACK, unsupported peers, and invalid or cancelled calls rejected before dispatch.
+
 Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
 They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
 These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
