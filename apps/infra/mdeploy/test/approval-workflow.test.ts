@@ -101,6 +101,7 @@ test('composite boolean strings preserve preview and protected confirmation argu
   writeFileSync(join(directory, 'npm'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$APPLY_CALLS"\n', { mode: 0o755 })
   const script = actionSteps('mdeploy').find((step) => step.name === 'Apply').run
   const stage = workflow.on.workflow_dispatch.inputs.stage.options[0]
+  const components = workflow.on.workflow_dispatch.inputs.components.default
   for (const apply of ['true', 'false']) {
     for (const confirm of ['true', 'false']) {
       writeFileSync(calls, '')
@@ -111,12 +112,13 @@ test('composite boolean strings preserve preview and protected confirmation argu
       const result = spawnSync('bash', ['-c', rendered], {
         encoding: 'utf8',
         timeout: 10_000,
-        env: { ...process.env, PATH: directory + ':' + process.env.PATH, APPLY_CALLS: calls },
+        env: { ...process.env, PATH: directory + ':' + process.env.PATH, APPLY_CALLS: calls, COMPONENTS: components },
       })
       assert.equal(result.status, 0, result.stderr)
       assert.equal(
         readFileSync(calls, 'utf8').trim(),
-        'run mdeploy -- --stage ' + stage + (apply === 'false' ? ' --diff' : confirm === 'true' ? ' --confirm' : ''),
+        'run mdeploy -- --stage ' + stage + ' --components ' + components +
+          (apply === 'false' ? ' --diff' : confirm === 'true' ? ' --confirm' : ''),
       )
     }
   }
