@@ -179,6 +179,8 @@ agent operations to them. Close and interrupt return HTTP 204 without a snapshot
 read a resource separately when its current state is needed. The remote Rust
 `requests()` method remains unsupported, although turn snapshots can include
 pending requests. The CLI does not provide interactive request handling.
+Agent `Idempotency-Key` values must contain 1–256 visible ASCII bytes and are
+forwarded to the adapter; BoxLite does not store retry results.
 
 ### Example: handle operation errors
 

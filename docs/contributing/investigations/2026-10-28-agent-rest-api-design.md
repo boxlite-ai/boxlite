@@ -7,6 +7,8 @@ the close and interrupt responses below: both return HTTP 204 without a snapshot
 
 ## Details
 
+> **Superseded decisions:** [#2672](https://github.com/boxlite-ai/boxlite/issues/2672) replaces this investigation’s journal replay, `410 cursor_expired`, server-side retry store, and `422` retry-conflict contract. The adapter owns cursor and retry support; BoxLite forwards both and rejects unsupported capabilities. The remaining sections are historical design context.
+
 This is a REST contract design for [the agent API](../../reference/agents.md)
 and [tracking issue #2140](https://github.com/boxlite-ai/boxlite/issues/2140).
 This PR adds no HTTP handlers, OpenAPI paths or REST client implementation.
