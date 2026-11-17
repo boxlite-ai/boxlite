@@ -103,7 +103,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await db.synchronize()
     await db.query(`CREATE TABLE ci_installation_binding(id uuid PRIMARY KEY,generation bigint,github_host text,
       app_client_id text,installation_id bigint,account_id bigint,account_login text,account_type text,
-      organization_id uuid,actor_id text,allow_private boolean,follow_installation boolean,state text);
+      organization_id uuid,actor_id text,allow_private boolean,follow_installation boolean,state text,admin_managed boolean NOT NULL DEFAULT false);
       CREATE TABLE "user"(id text PRIMARY KEY,role text);
       CREATE TABLE organization_user("organizationId" uuid,"userId" text,role text);
       CREATE TABLE organization_activation_facts("organizationId" uuid PRIMARY KEY,"lastBoxCreatedAt" timestamptz,"lastBoxModifiedAt" timestamptz)`)

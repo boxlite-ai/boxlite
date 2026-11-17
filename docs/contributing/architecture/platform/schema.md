@@ -38,7 +38,7 @@ The SQL-owned tables below are created by
 [`1793664000000-add-ci-connect-migration.ts`](../../../../apps/api/src/migrations/pre-deploy/1793664000000-add-ci-connect-migration.ts)
 and extended by the later CI migrations listed in the
 [development CI reset procedure](../../../../apps/api/README.md#resetting-development-ci-state).
-They are accessed by `CiConnectService` and have no TypeORM entity mapping.
+They are accessed by the CI connect, administrator and listener services and have no TypeORM entity mapping.
 
 | Table                     | Stored state                                                                                                                                                                                                                                   | Enforced boundaries                                                                                                                       |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
@@ -50,9 +50,23 @@ false default. Hosted Public access is always eligible within App authorization
 and is not a stored opt-in. CI has not shipped, so there is no conversion of old
 Public consent into Private consent.
 
+`1794873600000` adds `admin_managed boolean NOT NULL DEFAULT false`. A true value
+grants binding authority independently of its audit actor's current role or
+membership; generation, installation identity and repository policy still fence
+admission. Ordinary owner connect rejects administrator-managed account history.
+The column rollback refuses retained grants, including disabled records.
+
+`1794873600001` builds nonunique B-tree indexes concurrently on `(organization_id,id)`,
+`(github_host,account_type,lower(account_login),id)` and
+`(github_host,account_type,account_id,id)`. These support bounded UUID cursor pages
+for organization lists and exact reverse lookup; there is no unfiltered global
+listing or total-count query. An invalid index with the expected definition is
+rebuilt; a conflicting definition fails migration. Index DDL uses a two-second lock
+timeout. See [administrator API contracts](../../../../apps/api/README.md#administrator-ci-connections-in-development).
+
 For existing dev state, finish resource
 cleanup with the old version, stop its Listeners, and follow that reset procedure:
-recreate the CI tables and journal, remove only their five migration-history
+recreate the CI tables and journal, remove only their seven migration-history
 entries, then rerun the complete CI migration chain. Replaying only the initial
 connect migration omits OAuth and account-selection fields; deleting rows alone
 retains the old schema. Shared scope
@@ -1208,4 +1222,5 @@ Execution history is stored in the shared `ci_listener_state` records described
 above, independently of current binding/organization rows. Original scope, Box/runner
 IDs and pending effects remain available for cleanup after authorization changes.
 The current PostgreSQL owner/epoch fences execution writes; admission additionally
-requires the live binding and current owner/admin. Deleting history is not cleanup.
+requires the live binding and either an administrator-managed grant or the original
+actor's current owner/admin authority. Deleting history is not cleanup.

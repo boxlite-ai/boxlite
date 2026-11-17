@@ -702,6 +702,14 @@ export class CiConnectService {
       await this.query(tx, 'SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         this.native.namespace + ':bindings',
       ])
+      const [accountBinding] = await this.query(
+        tx,
+        `SELECT id FROM ci_installation_binding WHERE github_host='github.com' AND account_type=$1 AND account_id=$2
+        AND (admin_managed OR (organization_id<>$3 AND state<>'disabled')) LIMIT 1`,
+        [verified.accountType, verified.accountId, attempt.organization_id],
+      )
+      if (accountBinding)
+        throw new ConflictException('GitHub account has an existing connection; contact an administrator')
       await this.query(
         tx,
         `INSERT INTO ci_installation_binding

@@ -5,6 +5,7 @@ import { BadRequestException, ConflictException, ForbiddenException, NotFoundExc
 import { DataSource } from 'typeorm'
 import { ExecutionJournal, ExecutionScope, LeaseLost, StateConflict, StateCorrupt } from '@boxlite-ai/ci-listener'
 import { AddCiConnect1793664000000 } from '../migrations/pre-deploy/1793664000000-add-ci-connect-migration'
+import { AddCiAdminAuthority1794873600000 } from '../migrations/pre-deploy/1794873600000-add-ci-admin-authority-migration'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
 import { BoxState } from '../box/enums/box-state.enum'
 import { CiSettingsService } from './ci-settings.service'
@@ -58,6 +59,7 @@ integration('CI account settings (real Postgres)', () => {
     const runner = db.createQueryRunner()
     try {
       await new AddCiConnect1793664000000().up(runner)
+      await new AddCiAdminAuthority1794873600000().up(runner)
       await new AddCiWebConnect1793786400000().up(runner)
       await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiWebTarget1794000000000().up(runner)
