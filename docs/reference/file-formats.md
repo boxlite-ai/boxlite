@@ -35,7 +35,10 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 │   └── anonymous/             # Anonymous volumes the CLI creates
 ├── db/
 │   └── boxlite.db             # SQLite: boxes, images, base disks, snapshots
-├── locks/                     # Per-box lock files
+├── locks/                     # Per-box lifecycle lock files
+│   ├── <id>                   # Persisted box lock ID
+│   └── disk/
+│       └── <id>               # Disk operations, same ID in a separate namespace
 ├── logs/                      # Daily logs: boxlite.log.*, serve.log.*
 ├── tmp/                       # Temporary files for disk images being built
 ├── credentials.toml           # Credentials from boxlite auth login

@@ -168,7 +168,11 @@ describe('audit refinement contracts', () => {
     async (path) => {
       const res = await fetch(base + path, { method: 'DELETE' })
       expect(res.status).toBe(204)
-      expect(volume.delete).toHaveBeenCalledWith('volume-id', Context.user({ userId: 'user', authMethod: 'jwt' }), false)
+      expect(volume.delete).toHaveBeenCalledWith(
+        'volume-id',
+        Context.user({ userId: 'user', authMethod: 'jwt' }),
+        false,
+      )
       expect(audit.createLog).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'delete', targetId: 'volume-id', organizationId: 'org' }),
       )

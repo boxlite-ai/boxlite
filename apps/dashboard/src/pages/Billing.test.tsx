@@ -36,7 +36,12 @@ vi.mock('@/components/billing/PlansSection', () => ({
 }))
 vi.mock('@/components/billing/UsageSection', () => ({ UsageSection: () => <div>Usage section</div> }))
 vi.mock('@/components/billing/WalletSection', () => ({
-  WalletSection: () => <div data-testid="wallet-section">Wallet section</div>,
+  WalletSection: ({ linkCouponCode, onCouponRedeemed }: { linkCouponCode?: string; onCouponRedeemed?: () => void }) => (
+    <div data-testid="wallet-section">
+      <span data-testid="wallet-link-coupon-code">{linkCouponCode ?? ''}</span>
+      <button onClick={onCouponRedeemed}>Coupon redeemed</button>
+    </div>
+  ),
 }))
 
 function closestPageContainer(element: Element | null): Element | null {
@@ -163,5 +168,23 @@ describe('Billing layout', () => {
     })
     expect(host.querySelector('[data-testid="plans-comparison"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="plan-section"]')).toBeNull()
+  })
+
+  it('passes a coupon link code to Wallet and drops it from the URL once redeemed', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/billing?tab=wallet&code=ACME50']}>
+          <Billing />
+          <LocationProbe />
+        </MemoryRouter>,
+      )
+    })
+    expect(host.querySelector('[data-testid="wallet-link-coupon-code"]')?.textContent).toBe('ACME50')
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Coupon redeemed')!.click())
+    expect(host.querySelector('output')?.textContent).toBe('?tab=wallet')
+    expect(host.querySelector('[data-testid="wallet-link-coupon-code"]')?.textContent).toBe('')
   })
 })

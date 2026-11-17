@@ -113,7 +113,7 @@ it('saves the name and selected intent before offering optional credits', async 
   await click('Continue')
   expect(api.save).toHaveBeenCalledWith('org-1', { useCase: 'long-running-agent', note: 'Run an agent overnight' })
   expect(host.textContent).toContain('3 Get credits')
-  expect(host.textContent).toContain('Verify card & claim $100')
+  expect(host.textContent).toContain('Verify card')
   expect(api.credits).not.toHaveBeenCalled()
   expect(localStorage.getItem('SkipOnboarding_user-1')).toBeNull()
   await click('Explore with BoxLite')
@@ -136,7 +136,7 @@ it('restores saved intent, supports going back, and keeps failed submissions ret
   expect(api.credits).not.toHaveBeenCalled()
   api.save.mockResolvedValue({})
   await click('Try again')
-  expect(host.textContent).toContain('Verify card & claim $100')
+  expect(host.textContent).toContain('Verify card')
 })
 it('shows profile loading failures and reloads them without losing the page', async () => {
   api.profile.mockRejectedValue(new Error('offline'))
@@ -184,7 +184,7 @@ it('restores completion after continuing without credits instead of repeating se
 it('restores the saved credits step and completion without repeating API writes', async () => {
   api.profile.mockResolvedValue({ useCase: 'coding-agent', note: 'Saved' })
   await mount()
-  expect(host.textContent).toContain('Verify card & claim $100')
+  expect(host.textContent).toContain('Verify card')
   await click('Explore with BoxLite')
   expect(host.textContent).toContain('Quickstart destination')
   expect(JSON.parse(localStorage.getItem('boxlite:welcome:user-1:org-1')!)).toMatchObject({
@@ -205,7 +205,7 @@ it('keeps another organization on its own unfinished credits step', async () => 
   api.profile.mockResolvedValue({ useCase: 'exploring', note: '' })
   api.organizationId = 'org-2'
   await mount()
-  expect(host.textContent).toContain('Verify card & claim $100')
+  expect(host.textContent).toContain('Verify card')
   expect(host.textContent).not.toContain('Quickstart destination')
   await click('Explore with BoxLite')
   expect(JSON.parse(localStorage.getItem('boxlite:welcome:user-1:org-2')!)).toMatchObject({

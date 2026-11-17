@@ -70,9 +70,11 @@ interface DisksLike {
 }
 
 interface ZoneOperationsLike {
-  get(request: { project: string; zone: string; operation: string }): Promise<
-    { name?: string; status?: string; error?: { errors?: { code?: string; message?: string }[] } }[]
-  >
+  get(request: {
+    project: string
+    zone: string
+    operation: string
+  }): Promise<{ name?: string; status?: string; error?: { errors?: { code?: string; message?: string }[] } }[]>
 }
 
 /**

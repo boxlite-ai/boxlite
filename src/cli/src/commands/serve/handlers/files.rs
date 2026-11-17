@@ -216,7 +216,6 @@ mod tests {
                     Response::builder()
                         .status(StatusCode::OK)
                         .header("content-type", "application/x-tar")
-                        .header("x-boxlite-source-is-dir", "true")
                         .body(axum::body::Body::from(guest_tar.clone()))
                         .expect("build guest download response")
                 }),

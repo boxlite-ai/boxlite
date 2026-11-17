@@ -350,6 +350,26 @@ wallet, transactions, invoices, plan, and usage so the next view reflects the
 server's result. Welcome shows the returned message and offers Quickstart;
 Explore with BoxLite is available without a card or coupon.
 
+### Coupon links
+
+Share `https://<console>/redeem?code=CODE` to hand out a coupon. The `/redeem`
+route opens `/dashboard/billing?tab=wallet&code=CODE`. Signed-out visitors sign
+in first, and the sign-in return path keeps the query.
+
+Wallet opens the coupon form with the code filled in and names the organization
+that receives the credits. When the user owns their only organization, the code
+redeems once on landing, with no click. With several organizations, or without
+the owner role, nothing is redeemed until the user clicks Redeem.
+
+The result also appears as a toast, since the inline note sits low in the panel.
+A successful redeem removes `code` from the URL. A rejected code is tried once
+and stays in the form for another try. With an unverified email, Wallet asks the
+user to verify it first and redeems nothing.
+
+Coupon limits such as one use per organization, a total cap, and expiry are set
+on the coupon itself. The link carries only the code. In the mock preview
+(`npm run start:mock`), `ACME50` redeems and any other code is rejected.
+
 ## A choice says what it does, and shows which one is picked
 
 The quickstart offers two paths, so each card names its outcome ("Build an app
