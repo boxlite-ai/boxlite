@@ -2,19 +2,23 @@ package fetch
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/boxlite-ai/secret-server/internal/attest"
 
 	"github.com/boxlite-ai/secret-server/internal/database"
+	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/boxlite-ai/secret-server/internal/testdb"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -83,6 +87,97 @@ func TestIntegration(t *testing.T) {
 			t.Fatal(result, err)
 		}
 	}
+	t.Run("real attestation and database ownership boundaries", func(t *testing.T) {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		selector, err := attest.New(attest.Config{Attestors: []string{"dev"}, Environment: "local", Registry: `{}`}, nil, logger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, tc := range []struct {
+			name, organization, box string
+			status                  int
+			result                  string
+		}{
+			{"organization allowed", org, "", 200, "ok"},
+			{"box allowed", org, "box-a", 200, "ok"},
+			{"foreign organization", second, "", 401, "scope_mismatch"},
+			{"foreign box", org, "box-b", 401, "scope_mismatch"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				id := fmt.Sprintf("55555555-5555-5555-5555-%012d", i)
+				row := encrypted(t, c, id)
+				row.Name = fmt.Sprintf("BOUNDARY_%d", i)
+				row.OrganizationID = tc.organization
+				envelope, err := c.Encrypt(ctx, encryption.SecretContext{OrganizationID: row.OrganizationID, SecretID: id, Version: 1, Hosts: row.Hosts, Headers: row.Headers}, []byte("plaintext-marker"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				row.Ciphertext = `\x` + hex.EncodeToString(envelope.Ciphertext)
+				row.EncryptedDEK = `\x` + hex.EncodeToString(envelope.WrappedDEK.Ciphertext)
+				if tc.box != "" {
+					row.Scope = "box"
+					row.BoxID = &tc.box
+				}
+				insert(row)
+				auth := active()
+				auth.Grants = []grant{{id}}
+				var calls atomic.Int32
+				api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					var request map[string]string
+					if json.NewDecoder(r.Body).Decode(&request) != nil || request["runner_id"] != "runner-a" {
+						t.Error("API did not receive attested runner")
+					}
+					_ = json.NewEncoder(w).Encode(auth)
+				}))
+				defer api.Close()
+				handler, err := New(pool, c, selector, api.URL, logger)
+				if err != nil {
+					t.Fatal(err)
+				}
+				server := httptest.NewServer(handler)
+				defer server.Close()
+				for _, proof := range []bool{false, true} {
+					req, err := http.NewRequest(http.MethodPost, server.URL+"/internal/v1/fetch", strings.NewReader(requestBody))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if proof {
+						req.Header.Set(attest.DevHeader, "runner-a")
+					}
+					response, err := server.Client().Do(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					body, err := io.ReadAll(response.Body)
+					response.Body.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					status, result := tc.status, tc.result
+					if !proof {
+						status, result = 401, "attestation_failed"
+						if calls.Load() != 0 {
+							t.Fatal("missing proof reached API")
+						}
+					}
+					if response.StatusCode != status {
+						t.Fatalf("status %d, want %d: %s", response.StatusCode, status, body)
+					}
+					if status != 200 && strings.Contains(string(body), "plaintext-marker") {
+						t.Fatal("denied request exposed plaintext")
+					}
+					var stored string
+					if err := pool.QueryRow(ctx, "SELECT result FROM secret_access_log ORDER BY id DESC LIMIT 1").Scan(&stored); err != nil || stored != result {
+						t.Fatalf("audit %s, want %s: %v", stored, result, err)
+					}
+				}
+				if calls.Load() != 1 {
+					t.Fatal("unexpected consumption calls", calls.Load())
+				}
+			})
+		}
+	})
 	if err := h.store.record(ctx, audit{Result: "invalid-result"}); err == nil {
 		t.Fatal("invalid audit result accepted")
 	}

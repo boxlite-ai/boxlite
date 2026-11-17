@@ -341,3 +341,7 @@ They cover identity ordering, replay, concurrent consumption, ownership, late
 failures, redirect refusal, timeout, limits and audit failures. The PostgreSQL
 integration target includes real fetch queries, audit constraints and schema
 upgrade preservation; staging integration with the real API remains pending.
+It also combines the production local/dev attestation selector with HTTP and
+PostgreSQL to check allowed organization/box access, rejected foreign ownership,
+and missing-proof rejection before API contact. This does not exercise real GCP
+tokens or replace staging identity verification.

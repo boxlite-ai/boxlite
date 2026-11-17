@@ -8,7 +8,7 @@ on the single-value database from [#2571](https://github.com/boxlite-ai/boxlite/
 ## Scope and dependencies
 
 Development starts at database PR [#2612](https://github.com/boxlite-ai/boxlite/pull/2612),
-commit `32e04da7855cdc66d783900956a57fdf4f6dca0e`. That commit includes
+commit `346b3413d72e2edbefdb77ab04bf3983fbc14eba`. That commit includes
 runner attestation and envelope encryption. Merge the database prerequisite before
 this change; do not duplicate its migrations or introduce a versioned secret model.
 
