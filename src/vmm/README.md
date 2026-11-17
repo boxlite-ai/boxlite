@@ -564,9 +564,15 @@ let exit = execution.join()?;
   the backend cannot stop a vCPU; they never detach it or unmap live RAM.
 
 Pause fences vCPU execution, not host time: KVM clocks/timers continue while
-parked. This execution boundary targets the **same host, same KVM environment,
-non-stable ABI**; it makes no portable or cross-version compatibility promise.
-It provides no device snapshot or restore API.
+parked. Export therefore captures the clock and timer state as of the export
+call, not as of the pause before it, so the exported instant is the end of that
+parked interval; a caller that needs a tight bound exports immediately after
+pausing. Restore installs the captured clock without adding the wall-clock time
+spent suspended, so the guest continues from the captured instant and catching
+its wall clock up with real time is the guest's own responsibility. This
+execution boundary targets the **same host, same KVM environment, non-stable
+ABI**; it makes no portable or cross-version compatibility promise. It provides
+no device snapshot or restore API.
 
 `make test:unit:vmm FILTER=control::tests` exercises epoch/ACK state, invalid
 transitions, pending I/O, duplicate/late ACKs, stop races, deadline and actual
