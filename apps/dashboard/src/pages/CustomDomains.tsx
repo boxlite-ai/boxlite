@@ -321,13 +321,8 @@ export default function CustomDomains({
                         }}
                       >
                         <ResourceIdentity icon={<DomainResourceIcon bound={Boolean(target)} />}>
-                          <span className="min-w-0">
-                            <span className="resource-name font-semibold" title={item.hostname}>
-                              <TechnicalText value={item.hostname} kind="hostname" />
-                            </span>
-                            <span className="mt-1 block">
-                              <DomainStatus domain={item} active={data.subscription === 'active'} />
-                            </span>
+                          <span className="resource-name font-semibold" title={item.hostname}>
+                            <TechnicalText value={item.hostname} kind="hostname" />
                           </span>
                         </ResourceIdentity>
                       </button>

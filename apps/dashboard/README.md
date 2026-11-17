@@ -636,22 +636,15 @@ connection-help footer. Successful requests clear filtering and show a reservati
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
-The **Managed domain** tab lists only held platform hostnames, using the API's
-`kind` field rather than matching hostname suffixes. Its filter, count and empty
-state apply to those platform names. **Custom domain** shows setup progress and
-the separate one-domain allowance, including drafts but excluding replaced configurations.
+The **Managed domain** tab lists only platform hostnames, including its filter, count and allowance.
+**Custom domain** includes draft and replaced configurations.
+Its separate one-domain allowance excludes replaced configurations.
 
-Both tables use Domain, Target type, Associated with, Port and Actions with matching column widths.
-The custom table shows DNS/HTTPS status below the hostname and offers hostname copying in Actions.
-Box targets link to their details page; drafts and unbound hostnames show Unbound and —.
+Both tabs use underline navigation and the same Domain, Target type, Associated with, Port and Actions columns.
+Actions copies the hostname; select a custom hostname to view DNS/HTTPS status, retry configuration or delete it.
+Binding and unbinding use the CLI or SDK.
 
-Select the custom hostname to manage DNS, HTTPS and deletion.
-Binding and unbinding use the CLI or SDK; the custom-domain dialogs only configure DNS and HTTPS.
-
-Both views use the shared underline tabs: transparent surfaces, a 2px active
-indicator and independent keyboard focus. The API still returns the complete
-held-domain list for binding details in the custom view and Box pages.
-Deploy the API that returns `kind` before this dashboard version.
+Deploy the API returning domain `kind` before this dashboard version.
 
 **Get DNS configuration** creates or resumes a draft and automatically continues preparation until all three records are available.
 Preparation errors require explicit retry; reopening an incomplete draft does not resume preparation automatically.

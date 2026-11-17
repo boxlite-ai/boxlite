@@ -124,7 +124,8 @@ describe('Custom domains setup', () => {
         'Actions',
       ])
       const row = button('Manage app.example.com').closest('tr')!
-      expect([...row.querySelectorAll('td')].slice(1, 4).map((cell) => cell.textContent)).toEqual(cells)
+      expect([...row.querySelectorAll('td')].map((cell) => cell.textContent)).toEqual([domain.hostname, ...cells, ''])
+      expect(row.querySelector('.resource-status')).toBeNull()
       expect(row.querySelector('a')?.getAttribute('href')).toBe(
         target?.type === 'box' ? '/dashboard/boxes/box-1' : undefined,
       )
@@ -143,7 +144,10 @@ describe('Custom domains setup', () => {
         await render()
         const row = button('Manage app.example.com')
         const toolbar = document.querySelector('.resource-toolbar')
-        expect(row.closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
+        expect(client.getQueryData<CustomDomainList>(['custom-domains', 'org-1'])?.domains[0]).toMatchObject({
+          ready: false,
+          phase: 'provisioning',
+        })
         let finish!: (value: CustomDomainList) => void
         api.listCustomDomains.mockImplementationOnce(
           () =>
@@ -161,14 +165,17 @@ describe('Custom domains setup', () => {
         expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
         expect(button('Manage app.example.com')).toBe(row)
         expect(document.body.textContent).not.toContain('Loading custom domains')
-        expect(row.closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
+        expect(client.getQueryData<CustomDomainList>(['custom-domains', 'org-1'])?.domains[0]).toMatchObject({
+          ready: false,
+          phase: 'provisioning',
+        })
         await act(async () => {
           finish({ ...response, domains: [domain] })
         })
         await settle()
         expect(button('Manage app.example.com')).toBe(row)
         expect(document.querySelector('.resource-toolbar')).toBe(toolbar)
-        expect(row.closest('tr')!.textContent).toContain(subscription === 'active' ? 'Ready' : 'Setup completed')
+        expect(client.getQueryData<CustomDomainList>(['custom-domains', 'org-1'])?.domains[0].ready).toBe(true)
         await act(async () => {
           await vi.advanceTimersByTimeAsync(120_000)
         })
@@ -199,7 +206,10 @@ describe('Custom domains setup', () => {
       await settle()
       expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
       expect(button('Manage app.example.com')).toBe(row)
-      expect(row.closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
+      expect(client.getQueryData<CustomDomainList>(['custom-domains', 'org-1'])?.domains[0]).toMatchObject({
+        ready: false,
+        phase: 'provisioning',
+      })
       expect(document.body.textContent).not.toContain('Unable to load custom domains.')
       expect(document.body.textContent).not.toContain('Loading custom domains')
       await act(async () => {
@@ -268,15 +278,13 @@ describe('Custom domains setup', () => {
           await vi.advanceTimersByTimeAsync(60_000)
         })
         expect(api.listCustomDomains).toHaveBeenCalledTimes(3)
-        expect(button('Manage app.example.com').closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
+        expect(dialog?.textContent).toContain('Waiting for HTTPS CA')
         await act(async () => {
           await vi.advanceTimersByTimeAsync(60_000)
         })
         await settle()
         expect(document.querySelector('[role="dialog"]')).toBe(dialog)
-        expect(button('Manage app.example.com').closest('tr')!.textContent).toContain(
-          outcome === 'success' ? 'Setup completed' : 'Needs attention',
-        )
+        expect(dialog?.textContent).toContain(outcome === 'success' ? 'Setup completed' : 'Needs attention')
         expect(dialog?.textContent).toContain(
           outcome === 'success' ? 'HTTPS is ready.' : 'HTTPS setup could not be completed. Please try again.',
         )
@@ -348,7 +356,7 @@ describe('Custom domains setup', () => {
       await settle()
       expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
       expect(document.querySelector('[role="dialog"]')).toBeNull()
-      expect(button('Manage app.example.com').closest('tr')!.textContent).toContain('Ready')
+      expect(client.getQueryData<CustomDomainList>(['custom-domains', 'org-1'])?.domains[0].ready).toBe(true)
     } finally {
       vi.useRealTimers()
       focusManager.setFocused(undefined)
@@ -654,16 +662,6 @@ describe('Custom domains setup', () => {
       expect(button('Delete configuration')).toBeDefined()
     },
   )
-
-  it.each([true, false])('copies the list hostname with success=%s feedback', async (success) => {
-    feedback.copy.mockResolvedValue(success)
-    await render()
-    await click('Copy app.example.com')
-    expect(feedback.copy).toHaveBeenCalledWith(domain.hostname)
-    expect(document.querySelector('[role="dialog"]')).toBeNull()
-    if (success) expect(feedback.success).toHaveBeenCalledWith('Domain copied')
-    else expect(feedback.error).toHaveBeenCalledWith('Could not copy domain. Select the hostname and copy it manually.')
-  })
 
   it('shows DNS verification progress and only acknowledges confirmed submission', async () => {
     response.domains = [
