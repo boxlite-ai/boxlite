@@ -4,6 +4,7 @@ import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { AddCiConnect1793664000000 } from '../migrations/pre-deploy/1793664000000-add-ci-connect-migration'
+import { AddCiAdminAuthority1794873600000 } from '../migrations/pre-deploy/1794873600000-add-ci-admin-authority-migration'
 import { CiConnectService } from './ci-connect.service'
 import { CiGitHubService, CiInstallationRequired } from './ci-github.service'
 import { CiSecretsService } from './ci-secrets.service'
@@ -89,6 +90,7 @@ integration('CI connect persistence (real Postgres)', () => {
     const runner = db.createQueryRunner()
     try {
       await new AddCiConnect1793664000000().up(runner)
+      await new AddCiAdminAuthority1794873600000().up(runner)
       await new AddCiWebConnect1793786400000().up(runner)
       await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiWebTarget1794000000000().up(runner)
@@ -1197,6 +1199,23 @@ integration('CI connect persistence (real Postgres)', () => {
     expect(await service.poll(actor, expanded.id)).toMatchObject({ status: 'failed' })
     expect((await db.query('SELECT allow_private FROM ci_installation_binding'))[0].allow_private).toBe(false)
   })
+  it.each(['ready', 'disabled'])(
+    'ordinary reconnect cannot inherit administrator authority from %s history',
+    async (state) => {
+      const first = await begin()
+      await service.poll(actor, first.id)
+      await db.query('UPDATE ci_installation_binding SET admin_managed=true,state=$1', [state])
+      github.verifyUserInstallation.mockResolvedValue({
+        installationId: 124,
+        accountId: 456,
+        accountLogin: 'alice',
+        accountType: 'User',
+      })
+      const next = await begin()
+      expect(await service.poll(actor, next.id)).toMatchObject({ status: 'failed' })
+      expect(await db.query('SELECT admin_managed FROM ci_installation_binding')).toEqual([{ admin_managed: true }])
+    },
+  )
   it('cancellation wins against an already exchanged token before binding commits', async () => {
     let entered!: () => void, release!: () => void
     const waiting = new Promise<void>((resolve) => {

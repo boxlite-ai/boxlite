@@ -4,6 +4,23 @@ import { EntityManager } from 'typeorm'
 
 export type CiActor = { organizationId: string; userId: string; apiKey?: { keyHash: string } }
 
+export type CiAdministrator = { userId: string; email?: string; apiKey?: { keyHash: string } }
+
+/** Administrative credentials retain their issuing organization, independently of the target. */
+export async function lockCiAdministrator(tx: EntityManager, actor: CiAdministrator): Promise<void> {
+  if (!actor.userId) throw new ForbiddenException('An authenticated administrator is required')
+  const [user] = await tx.query('SELECT role FROM "user" WHERE id=$1 FOR SHARE', [actor.userId])
+  if (user?.role !== 'admin') throw new ForbiddenException('Current administrator authority is required')
+  if (!actor.apiKey) return
+  if (!/^[a-f0-9]{64}$/.test(actor.apiKey.keyHash || '')) throw new ForbiddenException('Verified API key required')
+  const [key] = await tx.query(
+    `SELECT 1 FROM api_key WHERE "keyHash"=$1 AND "userId"=$2
+    AND ("expiresAt" IS NULL OR "expiresAt">clock_timestamp()) FOR SHARE`,
+    [actor.apiKey.keyHash, actor.userId],
+  )
+  if (!key) throw new ForbiddenException('Current administrator API key is required')
+}
+
 /** Keep authority rows locked until the caller commits its authorized change. */
 export async function lockCiAuthority(tx: EntityManager, actor: CiActor): Promise<void> {
   if (!actor.organizationId || !actor.userId) throw new ForbiddenException('An authenticated CI owner is required')

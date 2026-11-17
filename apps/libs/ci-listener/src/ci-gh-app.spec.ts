@@ -20,6 +20,79 @@ describe('CI GitHub App credentials and admission roles', () => {
       dashboardUrl: 'https://console.test',
       ...options,
     })
+  it.each(['User', 'Organization'] as const)(
+    'verifies an installed %s account using only a signed App JWT',
+    async (accountType) => {
+      const app = web({ accountType, clientSecret: undefined })
+      global.fetch = jest.fn(async (url, options) => {
+        expect(String(url)).toBe(
+          `https://api.github.com/${accountType === 'User' ? 'users' : 'orgs'}/alice/installation`,
+        )
+        expect(options?.redirect).toBe('error')
+        const token = new Headers(options?.headers).get('authorization')!.split(' ')[1]
+        const parts = token.split('.')
+        expect(JSON.parse(Buffer.from(parts[1], 'base64url').toString()).iss).toBe('app-client')
+        expect(
+          verify(
+            'RSA-SHA256',
+            Buffer.from(parts.slice(0, 2).join('.')),
+            keys[0].publicKey,
+            Buffer.from(parts[2], 'base64url'),
+          ),
+        ).toBe(true)
+        return new Response(
+          JSON.stringify({
+            id: 10,
+            account: { id: 20, login: 'Alice', type: accountType },
+            suspended_at: null,
+            permissions: {
+              actions: 'read',
+              [accountType === 'User' ? 'administration' : 'organization_self_hosted_runners']: 'write',
+            },
+          }),
+        )
+      }) as typeof fetch
+      expect(await app.verifyInstalledAccount('alice')).toEqual({
+        installationId: 10,
+        accountId: 20,
+        accountLogin: 'Alice',
+        accountType,
+      })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    },
+  )
+  it.each([
+    { id: -1 },
+    { account: { id: 0, login: 'alice', type: 'User' } },
+    { account: { id: 20, login: 'other', type: 'User' } },
+    { account: { id: 20, login: 'alice', type: 'Organization' } },
+    { suspended_at: '2026-01-01' },
+    { permissions: { administration: 'read', actions: 'read' } },
+    { permissions: { administration: 'write' } },
+  ])('denies invalid installed-account responses %p', async (invalid) => {
+    global.fetch = jest.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 10,
+            account: { id: 20, login: 'alice', type: 'User' },
+            suspended_at: null,
+            permissions: { administration: 'write', actions: 'read' },
+            ...invalid,
+          }),
+        ),
+    ) as typeof fetch
+    await expect(web({ accountType: 'User' }).verifyInstalledAccount('alice')).rejects.toThrow()
+  })
+  it('bounds installed-account lookup failures without exposing response credentials', async () => {
+    global.fetch = jest.fn(async () => new Response('private-credential', { status: 404 })) as typeof fetch
+    await expect(web({ accountType: 'User' }).verifyInstalledAccount('alice')).rejects.toMatchObject({ status: 403 })
+    global.fetch = jest.fn(async () => new Response('private-credential', { status: 500 })) as typeof fetch
+    await expect(web({ accountType: 'User' }).verifyInstalledAccount('alice')).rejects.toMatchObject({
+      status: 502,
+      message: 'GitHub CI installation lookup failed',
+    })
+  })
   it('completes the legacy browser and Device Flow transport with bounded fixed destinations', async () => {
     const app = web()
     const auth = new URL(app.authorizeWeb('state', 'A'.repeat(43)))

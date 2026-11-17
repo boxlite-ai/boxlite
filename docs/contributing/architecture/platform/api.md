@@ -523,6 +523,16 @@ its durable `listener_status`; authorization success can precede runner setup. S
 
 ## Experimental GitHub CI management
 
+Administrative management uses `GET/POST /api/admin/organizations/{organizationId}/ci/connections`
+and `PATCH/DELETE` on `/{bindingId}`. `GET /api/admin/ci/connections` reverses an
+exact GitHub account login or stable ID to retained BoxLite organization mappings.
+These routes require current platform administrator authority, independently of
+organization ownership. Creation defaults to conflict; replacement requires
+`force:true` and the observed binding ID/generation. PATCH and DELETE require the
+observed generation. Lists use indexed UUID cursors, cap pages at 100 and require
+an account filter for global lookup. See the
+[request and migration contracts](../../../../apps/api/README.md#administrator-ci-connections-in-development).
+
 Registered by `ci-management.controller.ts`; these routes also accept the
 authenticated-organization form without `{prefix}` and are excluded from generated clients.
 

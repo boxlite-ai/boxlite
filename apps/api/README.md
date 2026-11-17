@@ -635,6 +635,78 @@ sequenceDiagram
 
 Design: [Account-first CI connect](https://linear.app/polygala/issue/BUI-1511/github-ci-account-first-connect-flow).
 
+## Administrator CI connections (in development)
+
+Platform administrators can connect an installed GitHub CI App directly to the
+BoxLite organization that supplies workers, quota and billing. No GitHub user OAuth
+or BoxLite organization membership is required. Administrator API keys retain their
+issuing organization and need no Box permission scopes. Every read and mutation
+rechecks the current administrator role and key validity in PostgreSQL.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/admin/organizations/{organizationId}/ci/connections` | Lists retained connections, including disabled history. |
+| POST | Same collection path | Creates a connection; verifies the installed App, account type, runner/Actions permissions and suspension status. |
+| PATCH | Collection path + `/{bindingId}` | Changes `allow_private_repositories`, using `expected_generation`. |
+| DELETE | Collection path + `/{bindingId}` | Disables the connection using a JSON body containing `expected_generation`. |
+| GET | `/api/admin/ci/connections` | Reverse lookup by required `account_type` and exactly one `github_account` or `github_account_id`. |
+
+Lists use UUID `cursor` pagination with `limit` defaulting to 25, capped at 100.
+Reverse lookup matches an exact case-insensitive login or stable account ID; it
+requires a filter and does not compute a total count. Responses include the target
+organization ID/name, binding/App/installation IDs, policy, state and generation.
+GitHub IDs and generations are decimal strings.
+
+Illustrative request with an already installed Personal CI App:
+
+```http
+POST /api/admin/organizations/11111111-1111-4111-8111-111111111111/ci/connections
+Authorization: Bearer <administrator-key>
+Content-Type: application/json
+
+{"github_account":"alice","account_type":"User","allow_private_repositories":false}
+```
+
+An existing connection returns `409`, even for the same target or disabled history.
+First inspect `GET /api/admin/ci/connections?account_type=User&github_account=alice`.
+To replace the observed mapping, repeat POST with `force:true`, its
+`expected_binding_id` and `expected_generation`; successful replacement returns
+`200`, while first creation returns `201`. Stale versions and ambiguous active
+mappings return `409` without changes. PATCH and DELETE also reject stale versions,
+including when a connection moved away and then back to the original organization.
+
+```mermaid
+sequenceDiagram
+  participant Admin
+  participant API
+  participant GitHub
+  participant DB as PostgreSQL
+  Admin->>API: POST source account + target organization
+  API->>GitHub: Signed App JWT installation lookup
+  GitHub-->>API: Verified account and installation
+  API->>DB: Lock current admin, target, binding version
+  DB->>DB: Commit mapping + generation + audit + inventory wake
+  API-->>Admin: Connection and new generation
+```
+
+Replacement preserves historical worker scopes, App identities, organization billing
+and cleanup records. Newly admitted work uses the new binding version; external
+effects authorized before replacement may finish afterward. Reinstalling the App
+creates a new binding and disables the observed old one; a different retained
+binding claiming that installation must be explicitly resolved first.
+
+Administrator-managed grants survive changes to the creator's role or membership;
+the creator is retained for audit. Ordinary owner connect cannot adopt this account's
+administrator-managed history, including disabled rows and App reinstallations.
+Mutations atomically audit before/after mappings without credentials.
+
+Upgrade every API replica with both migrations before using this feature. The
+authority column uses a short transactional DDL lock; the three lookup indexes
+build concurrently in a separate nontransactional migration. Interrupted invalid
+builds are retried, while conflicting definitions fail explicitly. Retire all
+administrator-managed grants before a binary/schema downgrade; rollback rejects
+remaining grants, including disabled rows, to prevent changing admission authority.
+
 ## GitHub CI webhook ingress (in development)
 
 `POST /api/v1/ci/github/webhook` (Personal App) and
@@ -648,7 +720,9 @@ value as the GitHub App webhook secret, separately from the App private key.
 HMAC-SHA256 verification precedes JSON parsing and database access. The shared
 `Listener.receive` and `ListenerInbox` store receipts, notices and wakes in
 `ci_listener_state`. Each ingress read/write transaction rechecks the configured
-App, live installation binding and original actor's current owner/admin authority.
+App and live installation binding. Owner-created bindings additionally require the
+original actor's current owner/admin authority; administrator-managed grants use
+the binding's authority independently of that actor.
 Unbound or revoked workflow notifications return 503 without storing a receipt.
 An unconnected installation does not enqueue inventory: connect itself commits
 the authoritative binding and wake together. Job notifications cannot create or
@@ -1690,15 +1764,17 @@ promised. Deployment and dev data reset remain operator actions.
      'AddCiListenerState1793700000000',
      'AddCiWebConnect1793786400000',
      'AddCiAccountSelection1793894400000',
-     'AddCiWebTarget1794000000000'
+     'AddCiWebTarget1794000000000',
+     'AddCiAdminAuthority1794873600000',
+     'AddCiAdminIndexes1794873600001'
    );
    COMMIT;
    ```
 
 3. Before starting the new API, run the complete
    [pre-deploy migration set](src/migrations/README.md#migration-scripts) with the same `DB_*` settings.
-   The five entries above restore the connection tables, Listener journal, web OAuth
-   fields, account-selection state and web target, respectively.
+   The seven entries above restore the connection tables, Listener journal, web OAuth
+   fields, account-selection state, web target, administrator authority and lookup indexes.
    Other tables and migration records remain intact; retained CI history would
    incorrectly make these migrations appear already applied.
    Match exact names, since unrelated migrations can share a timestamp.

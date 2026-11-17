@@ -252,6 +252,42 @@ export class CiGitHubApp {
     return { ...account, installationId: value.id }
   }
 
+  /** App authority verifies installation identity without borrowing a GitHub user's authority. */
+  async verifyInstalledAccount(login: string): Promise<VerifiedInstallation> {
+    if (!this.accountType || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login))
+      throw this.failure(403, 'Invalid GitHub account')
+    let value: Installation
+    try {
+      value = (await githubRequest({
+        url: `https://api.github.com/${this.accountType === 'User' ? 'users' : 'orgs'}/${encodeURIComponent(login)}/installation`,
+        token: await this.appJwt(),
+        signal: AbortSignal.timeout(45_000),
+      })) as Installation
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404)
+        throw this.failure(403, 'Install the configured CI App on this GitHub account first')
+      throw this.failure(502, 'GitHub CI installation lookup failed')
+    }
+    this.id(value?.id)
+    this.id(value.account?.id)
+    if (
+      value.account?.type !== this.accountType ||
+      typeof value.account?.login !== 'string' ||
+      value.account.login.toLowerCase() !== login.toLowerCase() ||
+      value.suspended_at !== null ||
+      value.permissions?.[this.accountType === 'User' ? 'administration' : 'organization_self_hosted_runners'] !==
+        'write' ||
+      !['read', 'write'].includes(value.permissions?.actions)
+    )
+      throw this.failure(403, 'GitHub CI installation identity, status or permissions denied')
+    return {
+      installationId: value.id,
+      accountId: value.account.id,
+      accountLogin: value.account.login,
+      accountType: this.accountType,
+    }
+  }
+
   private async userInstallations(token: string, signal: AbortSignal) {
     const user = await this.api('/user', token, signal)
     this.id(user.id)

@@ -174,7 +174,7 @@ export class CiNativeState {
       throw new ForbiddenException('GitHub account type does not match this App')
     const account = scope.installation.account
     const rows = await tx.query(
-      `SELECT id FROM ci_installation_binding
+      `SELECT id,admin_managed FROM ci_installation_binding
       WHERE id=$1 AND generation=$2 AND github_host='github.com' AND app_client_id=$3
       AND installation_id=$4 AND account_id=$5 AND lower(account_login)=$6 AND account_type=$7
       AND organization_id=$8 AND actor_id=$9 AND allow_private=$10 AND follow_installation=true
@@ -193,6 +193,8 @@ export class CiNativeState {
       ],
     )
     if (rows.length !== 1) throw new ForbiddenException('Original hosted CI binding is no longer active')
+    // Administrative grants belong to the binding; its creator remains an audit identity.
+    if (rows[0].admin_managed === true) return
     const [user] = await tx.query('SELECT role FROM "user" WHERE id=$1 FOR SHARE', [scope.actor])
     if (!user) throw new ForbiddenException('Original CI actor is unavailable')
     if (user.role !== 'admin') {

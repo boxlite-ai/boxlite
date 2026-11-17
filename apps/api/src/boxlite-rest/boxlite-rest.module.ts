@@ -8,6 +8,8 @@ import { Module } from '@nestjs/common'
 import { CiWebhookController } from '../ci/ci-webhook.controller'
 import { CiWebhookService } from '../ci/ci-webhook.service'
 import { CiConnectController } from '../ci/ci-connect.controller'
+import { CiAdminController } from '../ci/ci-admin.controller'
+import { CiAdminService } from '../ci/ci-admin.service'
 import { CiSettingsController } from '../ci/ci-settings.controller'
 import { CiManagementController } from '../ci/ci-management.controller'
 import { CiSettingsService } from '../ci/ci-settings.service'
@@ -56,6 +58,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,
     CiConnectController,
+    CiAdminController,
     CiSettingsController,
     CiManagementController,
     CiWebhookController,
@@ -73,6 +76,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     BoxliteWsProxyService,
     CommerceBoxLimitService,
     CiConnectService,
+    CiAdminService,
     CiSettingsService,
     CiNativeState,
     CiNativeHost,

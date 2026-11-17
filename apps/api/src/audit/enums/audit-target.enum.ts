@@ -5,6 +5,7 @@
  */
 
 export enum AuditTarget {
+  CI_CONNECTION = 'ci_connection',
   API_KEY = 'api_key',
   ORGANIZATION = 'organization',
   ORGANIZATION_INVITATION = 'organization_invitation',
