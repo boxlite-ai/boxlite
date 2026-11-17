@@ -609,6 +609,11 @@ export const handlers = [
       usageChargeMultiplier: '1.0000',
     })
   }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/redeem-coupon/:code`, async ({ params }) =>
+    params.code === 'ACME50'
+      ? HttpResponse.json({ message: 'Coupon ACME50 redeemed: $50.00 added to your wallet' })
+      : HttpResponse.json({ message: `Coupon ${params.code} not found` }, { status: 400 }),
+  ),
   http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
     if (newUserPreview)
       return HttpResponse.json({ paymentMethods: [], meta: { currentPage: 1, totalPages: 0, totalCount: 0 } })

@@ -82,7 +82,7 @@ describe('billing surface contracts', () => {
     const row = (label: string) =>
       [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === label)!
     expect(host.querySelector('thead')?.textContent).toContain('Starter')
-    expect(host.querySelector('thead')?.textContent).toContain('$4.99')
+    expect(host.querySelector('thead')?.textContent).toContain('Starter$5')
     expect(host.querySelector('thead')?.textContent).not.toContain('/ month')
     expect(row('Bonus amount').textContent).toContain('—Not specified$20$400')
     expect(row('Max Box size').textContent).toContain('1C · 2G · 10G')
@@ -134,7 +134,7 @@ describe('billing surface contracts', () => {
       const host = render(
         <MemoryRouter>
           <PlanComparison
-            plans={catalog.map((entry, index) => ({ ...entry, priceMonthlyCents: [0, 499, 10000][index] }))}
+            plans={catalog.map((entry, index) => ({ ...entry, priceMonthlyCents: [0, 500, 10000][index] }))}
             organizationPlan={subscription}
           />
           <RouteProbe />
@@ -194,10 +194,31 @@ describe('billing surface contracts', () => {
         <RouteProbe />
       </MemoryRouter>,
     )
-    expect(host.querySelector('thead')?.textContent).toContain('$4.99')
+    expect(host.querySelector('thead')?.textContent).toContain('Starter$5')
     expect(host.querySelectorAll('thead a[href="https://boxlite.ai/contact"]')).toHaveLength(3)
     expect([...host.querySelectorAll('thead button')].every((button) => button.disabled)).toBe(true)
     expect(host.querySelector('output')?.textContent).toBe('/')
+  })
+  it.each([500, 499])('checks the Starter catalogue price before checkout (%i cents)', (priceMonthlyCents) => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison plans={[{ ...catalog[1], priceMonthlyCents }]} />
+        <RouteProbe />
+      </MemoryRouter>,
+    )
+    const starter = host.querySelectorAll('thead th')[1]
+    expect(starter.textContent).toContain('Starter$5')
+    if (priceMonthlyCents === 500) {
+      expect(starter.querySelector('a')).toBeNull()
+      const button = starter.querySelector('button')!
+      expect(button.disabled).toBe(false)
+      act(() => button.click())
+      expect(host.querySelector('output')?.textContent).toBe('/dashboard/billing/plan/pro')
+    } else {
+      expect(starter.querySelector('button')).toBeNull()
+      expect(starter.querySelector('a')?.getAttribute('href')).toBe('https://boxlite.ai/contact')
+      expect(host.querySelector('output')?.textContent).toBe('/')
+    }
   })
   it('keeps plan price, consumed quota and wallet distinct in the compact summary', () => {
     const host = render(<CycleOverview wallet={wallet} organizationPlan={plan} catalogPlan={catalog[1]} />)
@@ -229,7 +250,7 @@ describe('billing surface contracts', () => {
     const host = render(
       <MemoryRouter>
         <PlanComparison
-          plans={catalog.map((entry, index) => ({ ...entry, priceMonthlyCents: [0, 499, 10000][index] }))}
+          plans={catalog.map((entry, index) => ({ ...entry, priceMonthlyCents: [0, 500, 10000][index] }))}
           organizationPlan={plan}
         />
         <RouteProbe />
