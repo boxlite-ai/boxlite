@@ -491,7 +491,10 @@ Auth0-managed. The [branding guide](../auth0/branding/README.md) records hashes,
 Prompt text lives in `auth0/branding/prompts/<language>/<prompt>.json`, one Auth0 prompt per file;
 keys starting with `_` are comments the command never sends. Identifier First serves `login-id` and
 `signup-id`, and the single-step `login` and `signup` return when it is off, so each pair carries the
-same copy. The checked-in-copy test in `auth0/universal-login.test.ts` pins both.
+same copy. The checked-in-copy test in `auth0/universal-login.test.ts` pins both. Auth0 renders
+its own default for a missing or empty text value, such as "Log in to BoxLite to continue to ..."
+for `description`. To show no line, set the value to a zero-width space (`"\u200b"`), as the
+login screens do.
 
 The copy renders on the stage's Auth0 domain (`auth.dev.boxlite.ai` for dev), not the dashboard
 origin, and only to a visitor without an Auth0 session. After `apply`, run `preview` again: it reads
