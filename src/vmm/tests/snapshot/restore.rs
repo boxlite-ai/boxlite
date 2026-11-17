@@ -749,6 +749,171 @@ fn linux_wait_for_progress(
     }
 }
 
+/// PPR (0xA0) is KVM's derived shadow of the SDM max(TPR, ISRV) rule: retain
+/// full TPR when its priority class is >= ISRV's, otherwise use ISRV & 0xF0.
+/// KVM refreshes it on TPR/ISR changes, so KVM_GET_LAPIC can return a stale value:
+/// a real failure differed only at 0xA0, with source PPR=0xE0 despite TPR=0x10
+/// and an empty ISR (canonical PPR=0x10). Source PPR carries no guest state and
+/// is excluded from comparison. KVM_SET_LAPIC recomputes PPR. This test allows
+/// no vCPU guest entry before re-export, so restored PPR must be canonical;
+/// all other bytes must match.
+fn lapic_differences(
+    expected: &[i8; 1024],
+    actual: &[i8; 1024],
+) -> std::result::Result<(), String> {
+    let isrv = (0..256)
+        .rev()
+        .find(|&vector| {
+            // Eight 32-bit ISR registers occupy 16-byte slots in the APIC page.
+            let offset = 0x100 + (vector / 32) * 16 + (vector % 32) / 8;
+            actual[offset] as u8 & (1 << (vector & 7)) != 0
+        })
+        .unwrap_or(0) as u8;
+    let tpr = actual[0x80] as u8;
+    let ppr = if tpr >> 4 >= isrv >> 4 {
+        tpr
+    } else {
+        isrv & 0xF0
+    };
+    let mut differences = Vec::new();
+    if actual[0xA0] as u8 != ppr {
+        differences.push(format!(
+            "0xA0 PPR: expected canonical {ppr:#04x}, actual {:#04x}",
+            actual[0xA0] as u8
+        ));
+    }
+    for (offset, (&expected, &actual)) in expected.iter().zip(actual).enumerate() {
+        if offset == 0xA0 || expected == actual {
+            continue;
+        }
+        let register = match offset {
+            0x80 => "TPR",
+            0x100..=0x17F => "ISR",
+            0x180..=0x1FF => "TMR",
+            0x200..=0x27F => "IRR",
+            0x320 => "LVT timer",
+            0x380 => "initial count",
+            0x390 => "current count",
+            0x3E0 => "divide configuration",
+            _ => "LAPIC",
+        };
+        differences.push(format!(
+            "{offset:#05x} {register}: expected {:#04x}, actual {:#04x}",
+            expected as u8, actual as u8
+        ));
+    }
+    if differences.is_empty() {
+        Ok(())
+    } else {
+        Err(differences.join("; "))
+    }
+}
+
+#[test]
+fn lapic_comparison_ignores_stale_source_ppr() {
+    let mut expected = [0i8; 1024];
+    expected[0x80] = 0x10;
+    expected[0xA0] = 0xE0u8 as i8;
+    let mut actual = expected;
+    actual[0xA0] = 0x10;
+    // The real failure's only difference is the stale source PPR.
+    assert_ne!(expected, actual);
+    assert_eq!(lapic_differences(&expected, &actual), Ok(()));
+}
+
+#[test]
+fn lapic_comparison_rejects_non_ppr_differences() {
+    let mut expected = [0i8; 1024];
+    expected[0x80] = 0x10;
+    expected[0xA0] = 0x10;
+    let mut actual = expected;
+    actual[0x80] = 0x20;
+    actual[0xA0] = 0x20;
+    let detail = lapic_differences(&expected, &actual).unwrap_err();
+    assert!(detail.contains("0x080 TPR"), "{detail}");
+    assert!(detail.contains("expected 0x10, actual 0x20"), "{detail}");
+
+    actual = expected;
+    actual[0x180] = 1;
+    let detail = lapic_differences(&expected, &actual).unwrap_err();
+    assert!(detail.contains("0x180 TMR"), "{detail}");
+    assert!(detail.contains("expected 0x00, actual 0x01"), "{detail}");
+}
+
+#[test]
+fn lapic_comparison_rejects_noncanonical_restored_ppr() {
+    let mut expected = [0i8; 1024];
+    expected[0x80] = 0x80u8 as i8;
+    expected[0xA0] = 0x80u8 as i8;
+    let mut actual = expected;
+    actual[0xA0] = 0x10;
+    let detail = lapic_differences(&expected, &actual).unwrap_err();
+    assert!(detail.contains("0xA0 PPR"), "{detail}");
+    assert!(
+        detail.contains("expected canonical 0x80, actual 0x10"),
+        "{detail}"
+    );
+}
+
+#[test]
+fn lapic_comparison_preserves_tpr_subpriority() {
+    let mut expected = [0i8; 1024];
+    expected[0x80] = 0x1F;
+    expected[0xA0] = 0x1F;
+    let mut actual = expected;
+    assert_eq!(lapic_differences(&expected, &actual), Ok(()));
+    actual[0xA0] = 0x10;
+    let detail = lapic_differences(&expected, &actual).unwrap_err();
+    assert!(detail.contains("0xA0 PPR"), "{detail}");
+    assert!(
+        detail.contains("expected canonical 0x1f, actual 0x10"),
+        "{detail}"
+    );
+
+    // TPR also keeps its subpriority when its class equals ISRV's class.
+    expected[0x103] = 0x80u8 as i8; // Vector 31.
+    actual = expected;
+    assert_eq!(lapic_differences(&expected, &actual), Ok(()));
+}
+
+#[test]
+fn lapic_comparison_uses_highest_in_service_vector() {
+    let mut expected = [0i8; 1024];
+    expected[0x80] = 0x10;
+    expected[0x100] = 1; // Vector 0.
+    expected[0x173] = 0x80u8 as i8; // Vector 255.
+    expected[0xA0] = 0xF0u8 as i8;
+    let mut actual = expected;
+    assert_eq!(lapic_differences(&expected, &actual), Ok(()));
+    actual[0xA0] = 0x10;
+    let detail = lapic_differences(&expected, &actual).unwrap_err();
+    assert!(detail.contains("0xA0 PPR"), "{detail}");
+    assert!(
+        detail.contains("expected canonical 0xf0, actual 0x10"),
+        "{detail}"
+    );
+}
+
+#[test]
+fn lapic_comparison_ignores_reserved_bytes_for_isrv() {
+    let mut expected = [0i8; 1024];
+    expected[0x80] = 0x10;
+    expected[0xA0] = 0x10;
+    expected[0x11F] = 0x80u8 as i8; // Reserved, not an ISR vector.
+    assert_eq!(lapic_differences(&expected, &expected), Ok(()));
+}
+
+#[test]
+fn lapic_comparison_reads_isr_slots_at_16_byte_intervals() {
+    for (offset, ppr) in [(0x110, 0x20), (0x170, 0xE0u8 as i8)] {
+        let mut expected = [0i8; 1024];
+        expected[0x80] = 0x10;
+        expected[offset] = 1; // Vectors 32 and 224, respectively.
+        expected[0xA0] = ppr;
+        assert_eq!(lapic_differences(&expected, &expected), Ok(()));
+    }
+}
+
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
@@ -822,10 +987,11 @@ fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
         before.0.vcpus[0].state.regs,
         installed.0.vcpus[0].state.regs
     );
-    assert_eq!(
-        before.0.vcpus[0].state.lapic, installed.0.vcpus[0].state.lapic,
-        "restored LAPIC"
+    let lapic = lapic_differences(
+        &before.0.vcpus[0].state.lapic.regs,
+        &installed.0.vcpus[0].state.lapic.regs,
     );
+    assert!(lapic.is_ok(), "restored LAPIC: {}", lapic.unwrap_err());
     assert_eq!(before.0.platform.irqchips, installed.0.platform.irqchips);
     let after = linux_wait_for_progress(
         &mut restored,

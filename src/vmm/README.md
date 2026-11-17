@@ -700,6 +700,16 @@ resume. Run it through `make test:integration:vmm:kvm` after building the kernel
 Only declared RAM payloads are compared, excluding image headers and machine
 state. Installing KVM's wall-clock MSR can update shared RAM before guest entry,
 so resumed RAM must differ from both the source and a post-import paused export.
+
+The LAPIC fidelity check excludes the source PPR byte at `0xA0`: it is KVM's
+derived shadow of `max(TPR, ISRV)` and can be stale in an export, rather than
+carrying guest state. KVM recomputes PPR on restore. With no guest entry before
+re-export, the restored PPR must follow the SDM priority rule: retain the full
+TPR (including its low nibble) when its priority class is at least ISRV's;
+otherwise use `ISRV & 0xF0`. ISRV is the highest in-service vector, or zero if
+none, read from eight 32-bit ISR registers at 16-byte intervals; reserved bytes
+do not contribute. The remaining 1023 bytes must match the source byte for byte.
+
 The timer check excludes free-running TSC and KVM clock reads. Dropping
 IA32_TSC_DEADLINE during restore makes the progress check time out on a
 TSC-deadline host. This qualifies device-less kernel/timer progress, not network,
