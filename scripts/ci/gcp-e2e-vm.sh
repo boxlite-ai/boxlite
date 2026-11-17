@@ -2,11 +2,12 @@
 # Drive the e2e-local GCP VM from GitHub Actions as the controller service
 # account (ci-gha-e2e-ctl).
 #
-# Usage: gcp-e2e-vm.sh start-pool|start|stop|clear-token
-#   start-pool   try the primary, then the fallback after startup exhaustion;
+# Usage: gcp-e2e-vm.sh start-pool|start-primary|start|stop|clear-token
+#   start-pool   try the primary once, then the fallback after rejection;
 #                write the attempted instance and zone to GITHUB_OUTPUT
+#   start-primary  start with one attempt, for fast pool fallback
 #   start        hand the VM a fresh runner registration token and boot it;
-#                reuse it when it already runs with its runner online
+#                retry rejection up to six times, or reuse an online runner
 #   stop         request a stop without waiting
 #   clear-token  remove the registration token from the VM's metadata
 #
@@ -25,7 +26,6 @@ set -euo pipefail
 TOKEN_KEY=runner-reg-token
 # A zone out of capacity (ZONE_RESOURCE_POOL_EXHAUSTED) rejects a start and
 # leaves the VM TERMINATED; capacity often returns within minutes.
-START_ATTEMPTS=6
 START_RETRY_DELAY=60
 
 vm() {
@@ -46,18 +46,30 @@ wait_status() {
     return 1
 }
 
-# boot_vm: start the VM, retrying while the zone rejects the start.
+capacity_error() {
+    local code='(^|[^[:alnum:]_])ZONE_RESOURCE_POOL_EXHAUSTED(_WITH_DETAILS)?([^[:alnum:]_]|$)'
+    local message="The zone '[^']+' does not have[[:space:]]+enough resources available to fulfill the request"
+    [[ "$1" =~ $code || "$1" =~ $message ]]
+}
+
+# boot_vm ATTEMPTS: retry only recognized capacity errors or observed rejection.
 boot_vm() {
-    local attempt
-    for attempt in $(seq "$START_ATTEMPTS"); do
-        vm start --async
-        if wait_booted; then
-            return 0
+    local attempts=$1 attempt output result
+    for attempt in $(seq "$attempts"); do
+        if output=$(vm start --async 2>&1); then
+            printf '%s\n' "$output"
+            if wait_booted; then
+                return 0
+            fi
+        else
+            result=$?
+            printf '%s\n' "$output" >&2
+            capacity_error "$output" || return "$result"
         fi
-        echo "::warning::$GCP_INSTANCE start attempt $attempt/$START_ATTEMPTS was rejected; $GCP_ZONE may lack capacity" >&2
-        [ "$attempt" = "$START_ATTEMPTS" ] || sleep "$START_RETRY_DELAY"
+        echo "::warning::$GCP_INSTANCE start attempt $attempt/$attempts was rejected; $GCP_ZONE may lack capacity" >&2
+        [ "$attempt" = "$attempts" ] || sleep "$START_RETRY_DELAY"
     done
-    echo "::error::could not start $GCP_INSTANCE after $START_ATTEMPTS attempts" >&2
+    echo "::error::could not start $GCP_INSTANCE after $attempts attempts" >&2
     return 75
 }
 
@@ -142,7 +154,7 @@ start() {
     # Boot only once the startup script can read this token, not a stale one.
     wait_token "$token"
 
-    boot_vm
+    boot_vm "$1"
 }
 
 start_pool() {
@@ -151,7 +163,7 @@ start_pool() {
     # Publish before starting so failure/cancellation cleanup has an identity.
     printf 'instance=%s\nzone=%s\n' "$GCP_INSTANCE" "$GCP_ZONE" >> "$GITHUB_OUTPUT"
     # A separate Bash process preserves errexit inside start and its helpers.
-    if bash "$0" start; then
+    if bash "$0" start-primary; then
         return 0
     else
         result=$?
@@ -160,7 +172,7 @@ start_pool() {
 
     bash "$0" clear-token
     wait_status TERMINATED
-    echo "::notice::$GCP_ZONE exhausted startup attempts; trying $GCP_FALLBACK_ZONE"
+    echo "::notice::$GCP_ZONE rejected the primary start; trying $GCP_FALLBACK_ZONE"
     export GCP_INSTANCE="$GCP_FALLBACK_INSTANCE" GCP_ZONE="$GCP_FALLBACK_ZONE"
     printf 'instance=%s\nzone=%s\n' "$GCP_INSTANCE" "$GCP_ZONE" >> "$GITHUB_OUTPUT"
     bash "$0" start
@@ -168,9 +180,10 @@ start_pool() {
 
 case "${1:-}" in
     start-pool) start_pool ;;
-    start) start ;;
+    start-primary) start 1 ;;
+    start) start 6 ;;
     stop) vm stop --async ;;
     # e2e-tests runs PR code on the VM next, so confirm the token is gone.
     clear-token) set_token "" && wait_token "" ;;
-    *) echo "usage: $0 start-pool|start|stop|clear-token" >&2; exit 2 ;;
+    *) echo "usage: $0 start-pool|start-primary|start|stop|clear-token" >&2; exit 2 ;;
 esac

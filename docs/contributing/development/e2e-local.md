@@ -9,7 +9,7 @@ and how to fix it when it breaks.
 GitHub-hosted runners cannot expose `/dev/kvm`, so BoxLite's integration tests — which boot
 real microVMs through libkrun — only run on hardware that allows nested virtualization. The
 workflow selects one of two **persistent** VMs: it starts the primary in `us-east5-a`,
-or falls back to `us-east4-a` after the primary exhausts its startup attempts. The selected
+or falls back to `us-east4-a` after the first rejected primary start. The selected
 VM runs tests and is **stopped** (never deleted), preserving its build and image caches.
 One e2e run selects from the pool at a time; newer runs queue behind the active run,
 and GitHub keeps only the newest pending run.
@@ -30,11 +30,15 @@ flowchart LR
 - **start-runner** — authenticates to GCP through OIDC, writes a fresh runner registration
   token into the VM's metadata, boots the VM, and waits up to 5 minutes for the runner to
   come online. It then removes the token from the metadata, whether or not the runner came up.
-  When the zone rejects the boot for lack of capacity, the VM stays `TERMINATED`; after a
-  minute in that state the job retries the start, up to 6 attempts a minute apart.
-  After six rejected starts (about 11 minutes), it clears the primary token, confirms
-  that VM is stopped, and tries the backup with the same retry budget. Authentication,
-  metadata, or indeterminate boot failures fail the job without selecting the backup.
+  The primary gets one start attempt. If `gcloud` returns `ZONE_RESOURCE_POOL_EXHAUSTED`,
+  `ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS`, or the documented message that the zone
+  lacks enough resources, selection proceeds immediately to token cleanup and fallback.
+  For accepted asynchronous starts, a VM that stays `TERMINATED` for about one minute
+  is treated as rejected; this is a status heuristic, not an exact operation-error diagnosis.
+  Before starting the backup, the job clears the primary token and confirms it is stopped.
+  The backup retains six attempts with one-minute retry intervals. Explicit permission,
+  quota, network, or metadata errors fail without fallback, as does a boot still pending
+  after five minutes.
 - **e2e-tests** — runs on the selected self-hosted runner (`gcp-e2e` and instance-name
   labels, 50-minute timeout):
   verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`.
@@ -51,7 +55,9 @@ of failing every start. (The previous AWS runner failed this way from 2026-10-20
 registered when an instance was first created.)
 
 [`scripts/ci/gcp-e2e-vm.sh`](../../../scripts/ci/gcp-e2e-vm.sh) drives the VM for the
-workflow: `start-pool`, `start`, `stop`, and `clear-token`. The startup script uses the
+workflow: `start-pool` selects the primary through `start-primary` (one attempt), then
+the backup through `start` (six attempts); `stop` and `clear-token` handle cleanup.
+The startup script uses the
 instance name as its runner name and an additional label. Readiness checks match that
 name, and token cleanup and stop use the selected instance and zone.
 
@@ -217,8 +223,8 @@ gh workflow run e2e-local.yml
 |---|---|---|
 | `Federate a GCP identity` fails | the run's workflow is not `e2e-local.yml` in this repository, or the pool/provider changed | check the provider condition above; reusable or renamed workflows need the condition updated |
 | `start-runner` times out waiting for the runner to come online | the startup script failed | read the VM's serial port output (`gcloud compute instances get-serial-port-output ci-gha-e2e-1 --project boxlite-dev-project --zone us-east5-a`) and search for `startup-script` |
-| Primary logs `could not start ci-gha-e2e-1 after 6 attempts` | Primary zone exhausted its startup budget | Check the following fallback notice; the job tries `ci-gha-e2e-2` in `us-east4-a` |
-| Backup logs `could not start ci-gha-e2e-2 after 6 attempts` | Both zones exhausted their startup budgets | Inspect both zones; retry when capacity is available |
+| Primary logs `rejected the primary start; trying us-east4-a` | Explicit capacity error or a first start that remained `TERMINATED` | The job tries `ci-gha-e2e-2`; explicit capacity errors skip the observation delay |
+| Backup logs `could not start ci-gha-e2e-2 after 6 attempts` | Primary rejected its first start and backup exhausted its retry budget | Inspect both zones; retry when capacity is available |
 | `e2e-tests` fails on low disk | Allowed cache eviction could not restore headroom | cleanup targets below 70% use and at least 50 GiB free before builds and after tests; inspect remaining usage or grow the disk |
 | `e2e-tests` hits its 50-minute timeout with every suite slower | box starts wait on a public registry: `boot_timing_profile` shows `stage_image_prepare` in seconds | Rust, CLI, Python and Node suites pull through a [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry); the C suite's `boxlite_simple_new` test still pulls from docker.io |
 | A pull request doesn't trigger the workflow | the `e2e-local` label is missing | a maintainer adds the label (it is the cost gate) |

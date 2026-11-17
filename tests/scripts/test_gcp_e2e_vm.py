@@ -121,7 +121,8 @@ def save():
     path.write_text(json.dumps(state))
 
 if tool == "sleep":
-    pass
+    vm["sleeps"].append(int(args[0]))
+    save()
 elif tool == "gh":
     if any("registration-token" in a for a in args):
         print("reg-token")
@@ -150,8 +151,12 @@ elif args[:2] == ["compute", "instances"]:
         print(vm["status"])
     elif verb == "start":
         vm["starts"] += 1
+        if vm.get("start_error"):
+            save()
+            print(vm["start_error"], file=sys.stderr)
+            sys.exit(vm.get("start_exit", 1))
         if vm["starts"] > vm["rejected_starts"]:
-            vm["status"] = "RUNNING"
+            vm["status"] = vm.get("start_status", "RUNNING")
         save()
     elif verb == "stop":
         vm["stops"] += 1
@@ -175,7 +180,7 @@ class PoolTest(unittest.TestCase):
 
             def instance(zone, overrides):
                 return dict({"zone": zone, "status": "TERMINATED", "starts": 0,
-                             "stops": 0, "rejected_starts": 0,
+                             "stops": 0, "rejected_starts": 0, "sleeps": [],
                              "metadata": {"items": []}}, **(overrides or {}))
 
             state = directory / "state.json"
@@ -196,13 +201,63 @@ class PoolTest(unittest.TestCase):
             outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
             return result, json.loads(state.read_text())["vms"], outputs
 
-    def test_exhausted_primary_uses_backup_and_clears_primary_token(self):
+    def test_first_rejected_primary_uses_backup_and_clears_primary_token(self):
         result, vms, output = self.run_pool(primary={"rejected_starts": 100})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(vms["primary"]["starts"], 6)
+        self.assertEqual(vms["primary"]["starts"], 1)
+        self.assertEqual(vms["primary"]["sleeps"], [5] * 11)
         self.assertEqual(vms["primary"]["metadata"]["items"], [])
         self.assertEqual(vms["backup"]["starts"], 1)
         self.assertEqual(vms["backup"]["status"], "RUNNING")
+        self.assertEqual(output, {"zone": "us-east4-a", "instance": "backup"})
+
+    def test_explicit_capacity_error_selects_backup_without_waiting(self):
+        for error in (
+            "ERROR: ZONE_RESOURCE_POOL_EXHAUSTED",
+            "ERROR: [ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS] CPU capacity",
+            "The zone 'projects/p/zones/us-east5-a' does not have enough resources available to fulfill the request.",
+            "The zone 'projects/p/zones/us-east5-a' does not have\n enough resources available to fulfill the request.",
+        ):
+            with self.subTest(error=error):
+                result, vms, output = self.run_pool(primary={"start_error": error})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(error, result.stderr)
+                self.assertEqual(vms["primary"]["starts"], 1)
+                self.assertEqual(vms["primary"]["sleeps"], [])
+                self.assertEqual(vms["primary"]["metadata"]["items"], [])
+                self.assertEqual(vms["backup"]["starts"], 1)
+                self.assertEqual(output, {"zone": "us-east4-a", "instance": "backup"})
+
+    def test_other_start_errors_fail_without_retry_or_fallback(self):
+        for error in ("PERMISSION_DENIED", "QUOTA_EXCEEDED", "Connection reset",
+                      "ZONE_RESOURCE_POOL_EXHAUSTED_UNKNOWN", "Unknown failure"):
+            with self.subTest(error=error):
+                result, vms, output = self.run_pool(primary={"start_error": error, "start_exit": 9})
+                self.assertEqual(result.returncode, 9, result.stderr)
+                self.assertIn(error, result.stderr)
+                self.assertEqual(vms["primary"]["starts"], 1)
+                self.assertEqual(vms["primary"]["sleeps"], [])
+                self.assertEqual(vms["backup"]["starts"], 0)
+                self.assertEqual(output, {"zone": "us-east5-a", "instance": "primary"})
+
+    def test_pending_primary_boot_does_not_select_backup(self):
+        result, vms, output = self.run_pool(primary={"start_status": "PROVISIONING"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not reach RUNNING within 5 minutes", result.stderr)
+        self.assertEqual(vms["primary"]["starts"], 1)
+        self.assertEqual(vms["primary"]["sleeps"], [5] * 60)
+        self.assertEqual(vms["backup"]["starts"], 0)
+        self.assertEqual(output, {"zone": "us-east5-a", "instance": "primary"})
+
+    def test_backup_retains_six_attempts_for_explicit_capacity_errors(self):
+        result, vms, output = self.run_pool(
+            primary={"start_error": "ZONE_RESOURCE_POOL_EXHAUSTED"},
+            backup={"start_error": "ZONE_RESOURCE_POOL_EXHAUSTED"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(vms["primary"]["starts"], 1)
+        self.assertEqual(vms["primary"]["sleeps"], [])
+        self.assertEqual(vms["backup"]["starts"], 6)
+        self.assertEqual(vms["backup"]["sleeps"], [60] * 5)
         self.assertEqual(output, {"zone": "us-east4-a", "instance": "backup"})
 
     def test_primary_success_does_not_touch_a_retained_debug_backup(self):
