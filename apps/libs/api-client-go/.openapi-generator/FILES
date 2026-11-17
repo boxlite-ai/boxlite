@@ -28,6 +28,12 @@ model_admin_box_job_reference.go
 model_admin_box_job_reference_page.go
 model_admin_box_overview.go
 model_admin_box_overview_page.go
+model_admin_ci_connection.go
+model_admin_ci_connection_create.go
+model_admin_ci_connection_error.go
+model_admin_ci_connection_page.go
+model_admin_ci_connection_update.go
+model_admin_ci_connection_version.go
 model_admin_component_identities.go
 model_admin_component_identities_api.go
 model_admin_component_version_count.go

@@ -523,6 +523,9 @@ its durable `listener_status`; authorization success can precede runner setup. S
 Administrative management uses `GET/POST /api/admin/organizations/{organizationId}/ci/connections`
 and `PATCH/DELETE` on `/{bindingId}`. `GET /api/admin/ci/connections` reverses an
 exact GitHub account login or stable ID to retained BoxLite organization mappings.
+These operations appear under the product Swagger `admin` tag and in the generated
+[Cloud OpenAPI aggregate](../../../../apps/libs/api-client-go/api/openapi.yaml),
+with matching TypeScript and Go admin client methods.
 These routes require current platform administrator authority, independently of
 organization ownership. Creation defaults to conflict; replacement requires
 `force:true` and the observed binding ID/generation. PATCH and DELETE require the

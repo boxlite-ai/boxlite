@@ -4455,6 +4455,417 @@ paths:
           description: The Health Check is not successful
       tags:
       - Health
+  /admin/ci/connections:
+    get:
+      description: Requires account_type and exactly one of github_account or github_account_id.
+        Includes disabled history. No organization membership or Box key scopes are
+        required.
+      operationId: adminLookupCiConnections
+      parameters:
+      - description: Last binding ID from the previous page.
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          format: uuid
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 25
+          maximum: 100
+          minimum: 1
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: account_type
+        required: true
+        schema:
+          enum:
+          - User
+          - Organization
+          type: string
+        style: form
+      - description: "Exact case-insensitive login; supply this or github_account_id,\
+          \ exclusively."
+        explode: true
+        in: query
+        name: github_account
+        required: false
+        schema:
+          pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+          type: string
+        style: form
+      - description: Stable GitHub account ID as a decimal string; mutually exclusive
+          with github_account.
+        explode: true
+        in: query
+        name: github_account_id
+        required: false
+        schema:
+          example: "20"
+          pattern: "^[1-9][0-9]{0,15}$"
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionPage"
+          description: ""
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid request or precondition fields.
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid credentials.
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Current platform administrator authority is required.
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Organization or connection not found.
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: "Existing, ambiguous or stale mapping; inspect connection or\
+            \ connections when present and repeat lookup."
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      - bearer: []
+      summary: Find CI billing destinations for an exact GitHub account
+      tags:
+      - admin
+  /admin/organizations/{organizationId}/ci/connections:
+    get:
+      operationId: adminListCiConnections
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - description: Last binding ID from the previous page.
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          format: uuid
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 25
+          maximum: 100
+          minimum: 1
+          type: integer
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionPage"
+          description: ""
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid request or precondition fields.
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid credentials.
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Current platform administrator authority is required.
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Organization or connection not found.
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: "Existing, ambiguous or stale mapping; inspect connection or\
+            \ connections when present and repeat lookup."
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      - bearer: []
+      summary: List retained CI connections for an organization
+      tags:
+      - admin
+    post:
+      description: "Uses App authentication, without GitHub user OAuth or either organization\
+        \ ownership. Defaults to conflict for any retained mapping. force:true requires\
+        \ observed expected_binding_id and expected_generation; omit both otherwise.\
+        \ New creation returns 201; replacement returns 200."
+      operationId: adminCreateCiConnection
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCiConnectionCreate"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnection"
+          description: ""
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnection"
+          description: ""
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid request or precondition fields.
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid credentials.
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Current platform administrator authority is required.
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Organization or connection not found.
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: "Existing, ambiguous or stale mapping; inspect connection or\
+            \ connections when present and repeat lookup."
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: GitHub installation verification unavailable.
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: CI App unavailable or connection capacity exceeded.
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      - bearer: []
+      summary: Bind an installed GitHub CI App to a billing organization
+      tags:
+      - admin
+  /admin/organizations/{organizationId}/ci/connections/{bindingId}:
+    delete:
+      description: The JSON body must contain expected_generation. Retains original
+        workers and cleanup identities; stale versions return 409 without mutation.
+      operationId: adminDeleteCiConnection
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: bindingId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCiConnectionVersion"
+        required: true
+      responses:
+        "204":
+          description: Connection disabled; response body is empty.
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid request or precondition fields.
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid credentials.
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Current platform administrator authority is required.
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Organization or connection not found.
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: "Existing, ambiguous or stale mapping; inspect connection or\
+            \ connections when present and repeat lookup."
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      - bearer: []
+      summary: Disable a CI connection with an observed version
+      tags:
+      - admin
+    patch:
+      operationId: adminUpdateCiConnection
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: bindingId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCiConnectionUpdate"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnection"
+          description: "Updated connection, including the resulting generation."
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid request or precondition fields.
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Invalid credentials.
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Current platform administrator authority is required.
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: Organization or connection not found.
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCiConnectionError"
+          description: "Existing, ambiguous or stale mapping; inspect connection or\
+            \ connections when present and repeat lookup."
+      security:
+      - oauth2:
+        - openid
+        - profile
+        - email
+      - bearer: []
+      summary: Update CI private-repository policy with an observed version
+      tags:
+      - admin
 components:
   schemas:
     Announcement:
@@ -9591,6 +10002,260 @@ components:
       - retryCount
       - svixApplicationId
       - updatedAt
+      type: object
+    AdminCiConnection:
+      example:
+        binding_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        organization_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        organization_name: organization_name
+        app_client_id: app_client_id
+        installation_id: "10"
+        github_account_id: "20"
+        github_account: github_account
+        account_type: User
+        listener_status: provisioning
+        admin_managed: true
+        allow_private_repositories: true
+        generation: "1"
+      properties:
+        binding_id:
+          format: uuid
+          type: string
+        organization_id:
+          format: uuid
+          type: string
+        organization_name:
+          type: string
+        app_client_id:
+          type: string
+        installation_id:
+          example: "10"
+          pattern: "^[1-9][0-9]*$"
+          type: string
+        github_account_id:
+          example: "20"
+          pattern: "^[1-9][0-9]*$"
+          type: string
+        github_account:
+          type: string
+        account_type:
+          enum:
+          - User
+          - Organization
+          type: string
+        listener_status:
+          enum:
+          - provisioning
+          - ready
+          - disabled
+          - failed
+          type: string
+        admin_managed:
+          type: boolean
+        allow_private_repositories:
+          type: boolean
+        generation:
+          example: "1"
+          pattern: "^[1-9][0-9]*$"
+          type: string
+      required:
+      - account_type
+      - admin_managed
+      - allow_private_repositories
+      - app_client_id
+      - binding_id
+      - generation
+      - github_account
+      - github_account_id
+      - installation_id
+      - listener_status
+      - organization_id
+      - organization_name
+      type: object
+    AdminCiConnectionError:
+      example:
+        path: path
+        timestamp: 2000-01-23T04:56:07.000+00:00
+        statusCode: 0
+        error: error
+        message: message
+        connection:
+          binding_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_name: organization_name
+          app_client_id: app_client_id
+          installation_id: "10"
+          github_account_id: "20"
+          github_account: github_account
+          account_type: User
+          listener_status: provisioning
+          admin_managed: true
+          allow_private_repositories: true
+          generation: "1"
+        connections:
+        - binding_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_name: organization_name
+          app_client_id: app_client_id
+          installation_id: "10"
+          github_account_id: "20"
+          github_account: github_account
+          account_type: User
+          listener_status: provisioning
+          admin_managed: true
+          allow_private_repositories: true
+          generation: "1"
+        - binding_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_name: organization_name
+          app_client_id: app_client_id
+          installation_id: "10"
+          github_account_id: "20"
+          github_account: github_account
+          account_type: User
+          listener_status: provisioning
+          admin_managed: true
+          allow_private_repositories: true
+          generation: "1"
+      properties:
+        path:
+          type: string
+        timestamp:
+          format: date-time
+          type: string
+        statusCode:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        connection:
+          $ref: "#/components/schemas/AdminCiConnection"
+        connections:
+          items:
+            $ref: "#/components/schemas/AdminCiConnection"
+          maxItems: 2
+          type: array
+      required:
+      - error
+      - message
+      - path
+      - statusCode
+      - timestamp
+      type: object
+    AdminCiConnectionPage:
+      example:
+        items:
+        - binding_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_name: organization_name
+          app_client_id: app_client_id
+          installation_id: "10"
+          github_account_id: "20"
+          github_account: github_account
+          account_type: User
+          listener_status: provisioning
+          admin_managed: true
+          allow_private_repositories: true
+          generation: "1"
+        - binding_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          organization_name: organization_name
+          app_client_id: app_client_id
+          installation_id: "10"
+          github_account_id: "20"
+          github_account: github_account
+          account_type: User
+          listener_status: provisioning
+          admin_managed: true
+          allow_private_repositories: true
+          generation: "1"
+        next_cursor: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/AdminCiConnection"
+          type: array
+        next_cursor:
+          format: uuid
+          nullable: true
+          type: string
+      required:
+      - items
+      - next_cursor
+      type: object
+    AdminCiConnectionCreate:
+      example:
+        account_type: User
+        github_account: alice
+        allow_private_repositories: true
+        force: true
+        expected_binding_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        expected_generation: "1"
+      properties:
+        account_type:
+          enum:
+          - User
+          - Organization
+          type: string
+        github_account:
+          example: alice
+          pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+          type: string
+        allow_private_repositories:
+          description: Explicitly allow installed private repositories; public repositories
+            remain eligible.
+          type: boolean
+        force:
+          default: false
+          description: Permit replacement only with both observed expected_binding_id
+            and expected_generation.
+          example: true
+          type: boolean
+        expected_binding_id:
+          description: Required with force:true; omit for ordinary creation.
+          format: uuid
+          type: string
+        expected_generation:
+          description: "Observed generation, required with force:true; omit for ordinary\
+            \ creation."
+          example: "1"
+          pattern: "^[1-9][0-9]{0,17}$"
+          type: string
+      required:
+      - account_type
+      - allow_private_repositories
+      - github_account
+      type: object
+    AdminCiConnectionUpdate:
+      example:
+        expected_generation: "1"
+        allow_private_repositories: true
+      properties:
+        expected_generation:
+          description: Caller-observed binding generation; a mismatch returns 409
+            without mutation.
+          example: "1"
+          pattern: "^[1-9][0-9]{0,17}$"
+          type: string
+        allow_private_repositories:
+          type: boolean
+      required:
+      - allow_private_repositories
+      - expected_generation
+      type: object
+    AdminCiConnectionVersion:
+      example:
+        expected_generation: "1"
+      properties:
+        expected_generation:
+          description: Caller-observed binding generation; a mismatch returns 409
+            without mutation.
+          example: "1"
+          pattern: "^[1-9][0-9]{0,17}$"
+          type: string
+      required:
+      - expected_generation
       type: object
     adminSetOrganizationNestedVirtualization_request:
       additionalProperties: false

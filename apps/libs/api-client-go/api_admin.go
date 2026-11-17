@@ -25,6 +25,21 @@ import (
 type AdminAPI interface {
 
 	/*
+	AdminCreateCiConnection Bind an installed GitHub CI App to a billing organization
+
+	Uses App authentication, without GitHub user OAuth or either organization ownership. Defaults to conflict for any retained mapping. force:true requires observed expected_binding_id and expected_generation; omit both otherwise. New creation returns 201; replacement returns 200.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId
+	@return AdminAPIAdminCreateCiConnectionRequest
+	*/
+	AdminCreateCiConnection(ctx context.Context, organizationId string) AdminAPIAdminCreateCiConnectionRequest
+
+	// AdminCreateCiConnectionExecute executes the request
+	//  @return AdminCiConnection
+	AdminCreateCiConnectionExecute(r AdminAPIAdminCreateCiConnectionRequest) (*AdminCiConnection, *http.Response, error)
+
+	/*
 	AdminCreateRunner Create runner
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -35,6 +50,21 @@ type AdminAPI interface {
 	// AdminCreateRunnerExecute executes the request
 	//  @return CreateRunnerResponse
 	AdminCreateRunnerExecute(r AdminAPIAdminCreateRunnerRequest) (*CreateRunnerResponse, *http.Response, error)
+
+	/*
+	AdminDeleteCiConnection Disable a CI connection with an observed version
+
+	The JSON body must contain expected_generation. Retains original workers and cleanup identities; stale versions return 409 without mutation.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId
+	@param bindingId
+	@return AdminAPIAdminDeleteCiConnectionRequest
+	*/
+	AdminDeleteCiConnection(ctx context.Context, organizationId string, bindingId string) AdminAPIAdminDeleteCiConnectionRequest
+
+	// AdminDeleteCiConnectionExecute executes the request
+	AdminDeleteCiConnectionExecute(r AdminAPIAdminDeleteCiConnectionRequest) (*http.Response, error)
 
 	/*
 	AdminDeleteRunner Delete runner
@@ -151,6 +181,19 @@ type AdminAPI interface {
 	AdminListBoxesOverviewExecute(r AdminAPIAdminListBoxesOverviewRequest) (*AdminBoxOverviewPage, *http.Response, error)
 
 	/*
+	AdminListCiConnections List retained CI connections for an organization
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId
+	@return AdminAPIAdminListCiConnectionsRequest
+	*/
+	AdminListCiConnections(ctx context.Context, organizationId string) AdminAPIAdminListCiConnectionsRequest
+
+	// AdminListCiConnectionsExecute executes the request
+	//  @return AdminCiConnectionPage
+	AdminListCiConnectionsExecute(r AdminAPIAdminListCiConnectionsRequest) (*AdminCiConnectionPage, *http.Response, error)
+
+	/*
 	AdminListJobsOverview List jobs with sanitized failure categories
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -223,6 +266,20 @@ type AdminAPI interface {
 	AdminListRunnersExecute(r AdminAPIAdminListRunnersRequest) ([]AdminRunner, *http.Response, error)
 
 	/*
+	AdminLookupCiConnections Find CI billing destinations for an exact GitHub account
+
+	Requires account_type and exactly one of github_account or github_account_id. Includes disabled history. No organization membership or Box key scopes are required.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminLookupCiConnectionsRequest
+	*/
+	AdminLookupCiConnections(ctx context.Context) AdminAPIAdminLookupCiConnectionsRequest
+
+	// AdminLookupCiConnectionsExecute executes the request
+	//  @return AdminCiConnectionPage
+	AdminLookupCiConnectionsExecute(r AdminAPIAdminLookupCiConnectionsRequest) (*AdminCiConnectionPage, *http.Response, error)
+
+	/*
 	AdminQueryUsage Query recorded resource usage with fixed snapshot pagination
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -261,6 +318,20 @@ type AdminAPI interface {
 	AdminSetOrganizationNestedVirtualizationExecute(r AdminAPIAdminSetOrganizationNestedVirtualizationRequest) (*AdminOrganizationNestedVirtualization, *http.Response, error)
 
 	/*
+	AdminUpdateCiConnection Update CI private-repository policy with an observed version
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId
+	@param bindingId
+	@return AdminAPIAdminUpdateCiConnectionRequest
+	*/
+	AdminUpdateCiConnection(ctx context.Context, organizationId string, bindingId string) AdminAPIAdminUpdateCiConnectionRequest
+
+	// AdminUpdateCiConnectionExecute executes the request
+	//  @return AdminCiConnection
+	AdminUpdateCiConnectionExecute(r AdminAPIAdminUpdateCiConnectionRequest) (*AdminCiConnection, *http.Response, error)
+
+	/*
 	AdminUpdateRunnerScheduling Update runner scheduling status
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -275,6 +346,196 @@ type AdminAPI interface {
 
 // AdminAPIService AdminAPI service
 type AdminAPIService service
+
+type AdminAPIAdminCreateCiConnectionRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	organizationId string
+	adminCiConnectionCreate *AdminCiConnectionCreate
+}
+
+func (r AdminAPIAdminCreateCiConnectionRequest) AdminCiConnectionCreate(adminCiConnectionCreate AdminCiConnectionCreate) AdminAPIAdminCreateCiConnectionRequest {
+	r.adminCiConnectionCreate = &adminCiConnectionCreate
+	return r
+}
+
+func (r AdminAPIAdminCreateCiConnectionRequest) Execute() (*AdminCiConnection, *http.Response, error) {
+	return r.ApiService.AdminCreateCiConnectionExecute(r)
+}
+
+/*
+AdminCreateCiConnection Bind an installed GitHub CI App to a billing organization
+
+Uses App authentication, without GitHub user OAuth or either organization ownership. Defaults to conflict for any retained mapping. force:true requires observed expected_binding_id and expected_generation; omit both otherwise. New creation returns 201; replacement returns 200.
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId
+ @return AdminAPIAdminCreateCiConnectionRequest
+*/
+func (a *AdminAPIService) AdminCreateCiConnection(ctx context.Context, organizationId string) AdminAPIAdminCreateCiConnectionRequest {
+	return AdminAPIAdminCreateCiConnectionRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+	}
+}
+
+// Execute executes the request
+//  @return AdminCiConnection
+func (a *AdminAPIService) AdminCreateCiConnectionExecute(r AdminAPIAdminCreateCiConnectionRequest) (*AdminCiConnection, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *AdminCiConnection
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminCreateCiConnection")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/organizations/{organizationId}/ci/connections"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.adminCiConnectionCreate == nil {
+		return localVarReturnValue, nil, reportError("adminCiConnectionCreate is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	// body params
+	localVarPostBody = r.adminCiConnectionCreate
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 400 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 401 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 403 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 409 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 502 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 503 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
 
 type AdminAPIAdminCreateRunnerRequest struct {
 	ctx context.Context
@@ -382,6 +643,167 @@ func (a *AdminAPIService) AdminCreateRunnerExecute(r AdminAPIAdminCreateRunnerRe
 	}
 
 	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminDeleteCiConnectionRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	organizationId string
+	bindingId string
+	adminCiConnectionVersion *AdminCiConnectionVersion
+}
+
+func (r AdminAPIAdminDeleteCiConnectionRequest) AdminCiConnectionVersion(adminCiConnectionVersion AdminCiConnectionVersion) AdminAPIAdminDeleteCiConnectionRequest {
+	r.adminCiConnectionVersion = &adminCiConnectionVersion
+	return r
+}
+
+func (r AdminAPIAdminDeleteCiConnectionRequest) Execute() (*http.Response, error) {
+	return r.ApiService.AdminDeleteCiConnectionExecute(r)
+}
+
+/*
+AdminDeleteCiConnection Disable a CI connection with an observed version
+
+The JSON body must contain expected_generation. Retains original workers and cleanup identities; stale versions return 409 without mutation.
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId
+ @param bindingId
+ @return AdminAPIAdminDeleteCiConnectionRequest
+*/
+func (a *AdminAPIService) AdminDeleteCiConnection(ctx context.Context, organizationId string, bindingId string) AdminAPIAdminDeleteCiConnectionRequest {
+	return AdminAPIAdminDeleteCiConnectionRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+		bindingId: bindingId,
+	}
+}
+
+// Execute executes the request
+func (a *AdminAPIService) AdminDeleteCiConnectionExecute(r AdminAPIAdminDeleteCiConnectionRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodDelete
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminDeleteCiConnection")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/organizations/{organizationId}/ci/connections/{bindingId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"bindingId"+"}", url.PathEscape(parameterValueToString(r.bindingId, "bindingId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.adminCiConnectionVersion == nil {
+		return nil, reportError("adminCiConnectionVersion is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	// body params
+	localVarPostBody = r.adminCiConnectionVersion
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 400 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 401 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 403 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 409 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
 }
 
 type AdminAPIAdminDeleteRunnerRequest struct {
@@ -1351,6 +1773,184 @@ func (a *AdminAPIService) AdminListBoxesOverviewExecute(r AdminAPIAdminListBoxes
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type AdminAPIAdminListCiConnectionsRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	organizationId string
+	cursor *string
+	limit *int32
+}
+
+// Last binding ID from the previous page.
+func (r AdminAPIAdminListCiConnectionsRequest) Cursor(cursor string) AdminAPIAdminListCiConnectionsRequest {
+	r.cursor = &cursor
+	return r
+}
+
+func (r AdminAPIAdminListCiConnectionsRequest) Limit(limit int32) AdminAPIAdminListCiConnectionsRequest {
+	r.limit = &limit
+	return r
+}
+
+func (r AdminAPIAdminListCiConnectionsRequest) Execute() (*AdminCiConnectionPage, *http.Response, error) {
+	return r.ApiService.AdminListCiConnectionsExecute(r)
+}
+
+/*
+AdminListCiConnections List retained CI connections for an organization
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId
+ @return AdminAPIAdminListCiConnectionsRequest
+*/
+func (a *AdminAPIService) AdminListCiConnections(ctx context.Context, organizationId string) AdminAPIAdminListCiConnectionsRequest {
+	return AdminAPIAdminListCiConnectionsRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+	}
+}
+
+// Execute executes the request
+//  @return AdminCiConnectionPage
+func (a *AdminAPIService) AdminListCiConnectionsExecute(r AdminAPIAdminListCiConnectionsRequest) (*AdminCiConnectionPage, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *AdminCiConnectionPage
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminListCiConnections")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/organizations/{organizationId}/ci/connections"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	if r.cursor != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "cursor", r.cursor, "form", "")
+	}
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	} else {
+		var defaultValue int32 = 25
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
+		r.limit = &defaultValue
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 400 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 401 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 403 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 409 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type AdminAPIAdminListJobsOverviewRequest struct {
 	ctx context.Context
 	ApiService AdminAPI
@@ -2150,6 +2750,212 @@ func (a *AdminAPIService) AdminListRunnersExecute(r AdminAPIAdminListRunnersRequ
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type AdminAPIAdminLookupCiConnectionsRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	accountType *string
+	cursor *string
+	limit *int32
+	githubAccount *string
+	githubAccountId *string
+}
+
+func (r AdminAPIAdminLookupCiConnectionsRequest) AccountType(accountType string) AdminAPIAdminLookupCiConnectionsRequest {
+	r.accountType = &accountType
+	return r
+}
+
+// Last binding ID from the previous page.
+func (r AdminAPIAdminLookupCiConnectionsRequest) Cursor(cursor string) AdminAPIAdminLookupCiConnectionsRequest {
+	r.cursor = &cursor
+	return r
+}
+
+func (r AdminAPIAdminLookupCiConnectionsRequest) Limit(limit int32) AdminAPIAdminLookupCiConnectionsRequest {
+	r.limit = &limit
+	return r
+}
+
+// Exact case-insensitive login; supply this or github_account_id, exclusively.
+func (r AdminAPIAdminLookupCiConnectionsRequest) GithubAccount(githubAccount string) AdminAPIAdminLookupCiConnectionsRequest {
+	r.githubAccount = &githubAccount
+	return r
+}
+
+// Stable GitHub account ID as a decimal string; mutually exclusive with github_account.
+func (r AdminAPIAdminLookupCiConnectionsRequest) GithubAccountId(githubAccountId string) AdminAPIAdminLookupCiConnectionsRequest {
+	r.githubAccountId = &githubAccountId
+	return r
+}
+
+func (r AdminAPIAdminLookupCiConnectionsRequest) Execute() (*AdminCiConnectionPage, *http.Response, error) {
+	return r.ApiService.AdminLookupCiConnectionsExecute(r)
+}
+
+/*
+AdminLookupCiConnections Find CI billing destinations for an exact GitHub account
+
+Requires account_type and exactly one of github_account or github_account_id. Includes disabled history. No organization membership or Box key scopes are required.
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminLookupCiConnectionsRequest
+*/
+func (a *AdminAPIService) AdminLookupCiConnections(ctx context.Context) AdminAPIAdminLookupCiConnectionsRequest {
+	return AdminAPIAdminLookupCiConnectionsRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return AdminCiConnectionPage
+func (a *AdminAPIService) AdminLookupCiConnectionsExecute(r AdminAPIAdminLookupCiConnectionsRequest) (*AdminCiConnectionPage, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *AdminCiConnectionPage
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminLookupCiConnections")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/ci/connections"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.accountType == nil {
+		return localVarReturnValue, nil, reportError("accountType is required and must be specified")
+	}
+
+	if r.cursor != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "cursor", r.cursor, "form", "")
+	}
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	} else {
+		var defaultValue int32 = 25
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
+		r.limit = &defaultValue
+	}
+	parameterAddToHeaderOrQuery(localVarQueryParams, "account_type", r.accountType, "form", "")
+	if r.githubAccount != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "github_account", r.githubAccount, "form", "")
+	}
+	if r.githubAccountId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "github_account_id", r.githubAccountId, "form", "")
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 400 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 401 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 403 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 409 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type AdminAPIAdminQueryUsageRequest struct {
 	ctx context.Context
 	ApiService AdminAPI
@@ -2593,6 +3399,176 @@ func (a *AdminAPIService) AdminSetOrganizationNestedVirtualizationExecute(r Admi
 		newErr := &GenericOpenAPIError{
 			body:  localVarBody,
 			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminUpdateCiConnectionRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	organizationId string
+	bindingId string
+	adminCiConnectionUpdate *AdminCiConnectionUpdate
+}
+
+func (r AdminAPIAdminUpdateCiConnectionRequest) AdminCiConnectionUpdate(adminCiConnectionUpdate AdminCiConnectionUpdate) AdminAPIAdminUpdateCiConnectionRequest {
+	r.adminCiConnectionUpdate = &adminCiConnectionUpdate
+	return r
+}
+
+func (r AdminAPIAdminUpdateCiConnectionRequest) Execute() (*AdminCiConnection, *http.Response, error) {
+	return r.ApiService.AdminUpdateCiConnectionExecute(r)
+}
+
+/*
+AdminUpdateCiConnection Update CI private-repository policy with an observed version
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId
+ @param bindingId
+ @return AdminAPIAdminUpdateCiConnectionRequest
+*/
+func (a *AdminAPIService) AdminUpdateCiConnection(ctx context.Context, organizationId string, bindingId string) AdminAPIAdminUpdateCiConnectionRequest {
+	return AdminAPIAdminUpdateCiConnectionRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+		bindingId: bindingId,
+	}
+}
+
+// Execute executes the request
+//  @return AdminCiConnection
+func (a *AdminAPIService) AdminUpdateCiConnectionExecute(r AdminAPIAdminUpdateCiConnectionRequest) (*AdminCiConnection, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPatch
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *AdminCiConnection
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminUpdateCiConnection")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/organizations/{organizationId}/ci/connections/{bindingId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"bindingId"+"}", url.PathEscape(parameterValueToString(r.bindingId, "bindingId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.adminCiConnectionUpdate == nil {
+		return localVarReturnValue, nil, reportError("adminCiConnectionUpdate is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	// body params
+	localVarPostBody = r.adminCiConnectionUpdate
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 400 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 401 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 403 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 409 {
+			var v AdminCiConnectionError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
 		}
 		return localVarReturnValue, localVarHTTPResponse, newErr
 	}

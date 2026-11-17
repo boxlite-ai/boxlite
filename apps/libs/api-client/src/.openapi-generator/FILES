@@ -30,6 +30,12 @@ docs/AdminBoxJobReference.md
 docs/AdminBoxJobReferencePage.md
 docs/AdminBoxOverview.md
 docs/AdminBoxOverviewPage.md
+docs/AdminCiConnection.md
+docs/AdminCiConnectionCreate.md
+docs/AdminCiConnectionError.md
+docs/AdminCiConnectionPage.md
+docs/AdminCiConnectionUpdate.md
+docs/AdminCiConnectionVersion.md
 docs/AdminComponentIdentities.md
 docs/AdminComponentIdentitiesApi.md
 docs/AdminComponentVersionCount.md
@@ -188,6 +194,12 @@ models/admin-box-job-reference-page.ts
 models/admin-box-job-reference.ts
 models/admin-box-overview-page.ts
 models/admin-box-overview.ts
+models/admin-ci-connection-create.ts
+models/admin-ci-connection-error.ts
+models/admin-ci-connection-page.ts
+models/admin-ci-connection-update.ts
+models/admin-ci-connection-version.ts
+models/admin-ci-connection.ts
 models/admin-component-identities-api.ts
 models/admin-component-identities.ts
 models/admin-component-version-count.ts
