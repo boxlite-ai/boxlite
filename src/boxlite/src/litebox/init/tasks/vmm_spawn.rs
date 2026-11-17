@@ -152,13 +152,15 @@ async fn build_config(
     let transport = BoxTransport::unix(layout.socket_path());
     let ready_transport = BoxTransport::unix(layout.ready_socket_path());
 
-    let volume_store = runtime.volume_store.clone();
+    let local_volume_store = runtime.local_volume_store.clone();
     let volume_options = options.clone();
+    // Volume resolution does file IO and takes filesystem locks, so keep it
+    // off Tokio's async worker threads.
     let user_volumes = tokio::task::spawn_blocking(move || {
         resolve_user_volumes(
             &volume_options.volumes,
             &volume_options.mounts,
-            &volume_store,
+            &local_volume_store,
         )
     })
     .await
@@ -202,9 +204,13 @@ async fn build_config(
     // Add user volumes via ContainerVolumeManager
     let mut container_mgr = ContainerVolumeManager::new(&mut volume_mgr);
     for vol in &user_volumes {
+        // The host-side share directory establishes the virtio-fs visibility
+        // boundary for both share kinds below.
         // Single-file volume: stage the file into a dedicated dir under the box's
         // shared tree (already granted to the VMM sandbox) and share that dir, so
         // virtio-fs never exposes the file's host siblings. Directories share as-is.
+        // The later matches also pass the single-file name or managed-directory
+        // sub_path so the guest resolves the correct payload inside that share.
         let share_dir = match &vol.kind {
             crate::litebox::init::types::ResolvedShareKind::SingleFile { file_name } => {
                 let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);

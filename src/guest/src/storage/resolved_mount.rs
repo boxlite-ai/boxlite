@@ -14,6 +14,7 @@ pub(crate) struct ResolvedMount {
     path: PathBuf,
 }
 
+/// Owns a temporary mountpoint until the resolved mount is fully armed.
 struct MountpointGuard {
     path: PathBuf,
     mounted: bool,
@@ -29,12 +30,14 @@ impl MountpointGuard {
         }
     }
 
+    /// Transfer the mountpoint to `ResolvedMount` without cleanup on drop.
     fn disarm(mut self) -> PathBuf {
         self.armed = false;
         self.path.clone()
     }
 }
 
+/// Remove partial setup when mounting fails before ownership is transferred.
 impl Drop for MountpointGuard {
     fn drop(&mut self) {
         if self.armed {
@@ -48,6 +51,11 @@ impl ResolvedMount {
         Self::pin_with_hook(payload_root, sub_path, read_only, || {})
     }
 
+    /// Pin a volume subdirectory at a temporary mountpoint.
+    ///
+    /// Clone the resolved directory into a mountable tree, move that tree onto
+    /// a pre-created guarded directory, then remount the bind read-only when
+    /// requested. The guard removes the mountpoint if any step fails.
     fn pin_with_hook(
         payload_root: &Path,
         sub_path: &str,
@@ -56,6 +64,8 @@ impl ResolvedMount {
     ) -> BoxliteResult<Self> {
         let directory = open_subdir(payload_root, sub_path)?;
         before_pin();
+        // Pre-create a unique directory before mounting so the move target is
+        // private and can be removed deterministically on error.
         let path = payload_root
             .parent()
             .unwrap_or(payload_root)
@@ -119,12 +129,14 @@ impl ResolvedMount {
     }
 }
 
+/// Unmount and remove the mountpoint owned for the container's lifetime.
 impl Drop for ResolvedMount {
     fn drop(&mut self) {
         cleanup_mountpoint(&self.path, true);
     }
 }
 
+/// Best-effort teardown; warnings do not mask the container outcome.
 fn cleanup_mountpoint(path: &Path, mounted: bool) {
     if mounted {
         if let Err(error) = umount(path) {
@@ -136,6 +148,11 @@ fn cleanup_mountpoint(path: &Path, mounted: bool) {
     }
 }
 
+/// Open a payload-relative directory without allowing path-based escape.
+///
+/// `RESOLVE_BENEATH` keeps resolution under the volume root, while refusing
+/// symlinks and magic links prevents a payload-controlled link from redirecting
+/// to a host path outside the volume.
 fn open_subdir(payload_root: &Path, sub_path: &str) -> BoxliteResult<OwnedFd> {
     validate_sub_path(sub_path)?;
     let root = open(

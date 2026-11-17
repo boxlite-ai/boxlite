@@ -477,7 +477,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolved = resolve_user_volumes(&volumes, &[], &runtime.volume_store).unwrap();
+        let resolved = resolve_user_volumes(&volumes, &[], &runtime.local_volume_store).unwrap();
         assert_eq!(resolved.len(), 1);
 
         // owner_uid should be the current user's UID
@@ -503,7 +503,7 @@ mod tests {
         .unwrap();
         let volumes = vec![VolumeSpec::bind_mount("/nonexistent/path/12345", "/data")];
 
-        let result = resolve_user_volumes(&volumes, &[], &runtime.volume_store);
+        let result = resolve_user_volumes(&volumes, &[], &runtime.local_volume_store);
         assert!(result.is_err());
     }
 
@@ -517,14 +517,14 @@ mod tests {
             },
         )
         .unwrap();
-        let volume = runtime.volume_store.create(Some("my-data")).unwrap();
+        let volume = runtime.local_volume_store.create(Some("my-data")).unwrap();
         let options = crate::runtime::options::BoxOptions {
             volumes: vec![VolumeSpec::managed_volume(&volume.id, "/data")],
             ..Default::default()
         };
 
         let resolved =
-            resolve_user_volumes(&options.volumes, &options.mounts, &runtime.volume_store)
+            resolve_user_volumes(&options.volumes, &options.mounts, &runtime.local_volume_store)
                 .expect("resolve a managed volume through the local store");
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].guest_path, "/data");
@@ -562,7 +562,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolved = resolve_user_volumes(&volumes, &[], &runtime.volume_store).unwrap();
+        let resolved = resolve_user_volumes(&volumes, &[], &runtime.local_volume_store).unwrap();
         assert_eq!(resolved.len(), 1);
         // Keeps the file's own path (staged into a share dir later) plus its name.
         assert_eq!(resolved[0].host_path, file_path.canonicalize().unwrap());

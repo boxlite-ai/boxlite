@@ -34,6 +34,10 @@ pub(crate) enum VolumeReferenceMode {
     CanonicalId,
 }
 
+/// Managed-volume backend for the local runtime. Owns the on-disk layout
+/// under `~/.boxlite/volumes` (one canonical UUID directory per volume, with
+/// `.metadata.json` and a `_data/` payload) and serializes every mutation
+/// through a flock on `.registry.lock`.
 #[derive(Debug, Clone)]
 pub(crate) struct LocalVolumeStore {
     root: PathBuf,
@@ -60,6 +64,8 @@ impl LocalVolumeStore {
         Ok(Self { root, box_manager })
     }
 
+    /// Startup-only cleanup: remove leftovers from crashed staging or trash
+    /// operations. Never touches canonical volume directories.
     pub(crate) fn recover(&self) -> BoxliteResult<()> {
         self.with_registry_lock(true, || {
             for directory in [STAGING_DIR, TRASH_DIR] {
@@ -108,6 +114,8 @@ impl LocalVolumeStore {
                 name: name.clone(),
                 created_at: Utc::now(),
             };
+            // Build the volume inside .staging, then rename it into place so
+            // a partially written volume never appears in the registry.
             let operation = Uuid::new_v4().simple().to_string();
             let staging = self.root.join(STAGING_DIR).join(&operation);
             std::fs::create_dir(&staging)
@@ -129,6 +137,8 @@ impl LocalVolumeStore {
                 let _ = std::fs::remove_dir_all(&staging);
                 return Err(error);
             }
+            // Hook runs before the rename publishes the volume (used by
+            // callers that must observe the payload while it is still hidden).
             before_publish(&id, &staging);
             if let Err(error) = std::fs::rename(&staging, &final_path) {
                 let _ = std::fs::remove_dir_all(&staging);
@@ -191,6 +201,8 @@ impl LocalVolumeStore {
                     Err(BoxliteError::NotFound(format!("volume {id}")))
                 };
             }
+            // Refuse deletion while any box still mounts this volume, in
+            // either the legacy or typed mount format.
             for config in self.box_manager.all_box_configs()? {
                 let legacy_holder = config
                     .options
@@ -208,6 +220,9 @@ impl LocalVolumeStore {
                 }
             }
 
+            // Rename out of the registry first so the volume disappears
+            // atomically; deleting the payload below is best-effort — a crash
+            // mid-way leaves trash for recover() to clean on next startup.
             let operation = Uuid::new_v4().simple().to_string();
             let trash = self.root.join(TRASH_DIR).join(operation);
             if path_exists(&trash)? {
@@ -252,6 +267,10 @@ impl LocalVolumeStore {
         if !has_managed {
             return self.box_manager.add_box(config, state);
         }
+        // Persist canonical ids, never user selectors: the stored config must
+        // stay resolvable regardless of later resolution rules. Selector
+        // resolution and duplicate rejection share the registry's exclusive
+        // lock with holder registration.
         self.with_registry_lock(true, || {
             if !config.options.volumes.is_empty() && !config.options.mounts.is_empty() {
                 return Err(BoxliteError::InvalidArgument(
@@ -296,6 +315,9 @@ impl LocalVolumeStore {
         })
     }
 
+    /// Resolve every managed-volume reference (legacy and typed formats) to
+    /// its current payload path for a box boot. Mirrors the validation in
+    /// add_box_impl so a persisted config always boots.
     pub(crate) fn resolve_for_boot(
         &self,
         options: &crate::runtime::options::BoxOptions,
@@ -482,6 +504,11 @@ impl LocalVolumeStore {
         Ok(info)
     }
 
+    /// flock-based cross-process lock over the registry: LOCK_EX for mutations
+    /// (create/remove/add_box), LOCK_SH for reads. Holder checks and renames
+    /// run inside one critical section with resolution, so there is no
+    /// TOCTOU window between "no box references this volume" and its removal.
+    /// The guard releases on drop, including on early returns.
     fn with_registry_lock<T>(
         &self,
         exclusive: bool,
@@ -543,6 +570,7 @@ fn path_exists(path: &Path) -> BoxliteResult<bool> {
     }
 }
 
+/// Delete a trash entry without ever following a symlink out of the trash dir.
 fn remove_entry_nofollow(path: &Path) -> BoxliteResult<()> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| storage("inspect volume trash", path, error))?;
@@ -581,6 +609,8 @@ fn validate_name(name: &str) -> BoxliteResult<()> {
     }
 }
 
+/// Reject path traversal up front, then verify every component actually
+/// resolves inside `payload_root` via an O_NOFOLLOW openat walk.
 fn validate_sub_path(payload_root: &Path, sub_path: &str) -> BoxliteResult<()> {
     if sub_path.is_empty()
         || sub_path.contains('\0')
@@ -622,6 +652,8 @@ fn sub_path_io_error(_root: &Path, error: nix::errno::Errno) -> BoxliteError {
     }
 }
 
+/// Error constructors deliberately omit internal volume paths: public errors
+/// must not leak where the runtime stores payloads on the host.
 fn storage(action: &str, _path: &Path, error: std::io::Error) -> BoxliteError {
     BoxliteError::Storage(format!("{action}: {error}"))
 }
@@ -645,7 +677,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
         let options = BoxOptions {
             volumes: vec![VolumeSpec {
                 read_only: true,
@@ -655,7 +687,7 @@ mod tests {
         };
 
         let resolved = runtime
-            .volume_store
+            .local_volume_store
             .resolve_for_boot(&options)
             .expect("resolve a persisted volume for boot");
         assert_eq!(resolved.len(), 1);
@@ -682,7 +714,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
         let payload = runtime
             .layout
             .volumes_dir()
@@ -700,7 +732,7 @@ mod tests {
         };
 
         let resolved = runtime
-            .volume_store
+            .local_volume_store
             .resolve_for_boot(&options("team/backend"))
             .expect("accept an existing subdirectory");
         assert_eq!(resolved[0].sub_path.as_deref(), Some("team/backend"));
@@ -715,7 +747,7 @@ mod tests {
             "team/\0backend",
         ] {
             let error = runtime
-                .volume_store
+                .local_volume_store
                 .resolve_for_boot(&options(invalid))
                 .err()
                 .unwrap_or_else(|| panic!("{invalid} must be rejected"));
@@ -725,7 +757,7 @@ mod tests {
             );
         }
         let error = runtime
-            .volume_store
+            .local_volume_store
             .resolve_for_boot(&options("team/missing"))
             .expect_err("a missing subdirectory must fail");
         assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
@@ -739,7 +771,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
         for directory in [STAGING_DIR, TRASH_DIR] {
             let operation = runtime
                 .layout
@@ -766,7 +798,7 @@ mod tests {
             );
         }
         assert_eq!(
-            runtime.volume_store.get(&volume.id).unwrap().name,
+            runtime.local_volume_store.get(&volume.id).unwrap().name,
             "workspace"
         );
     }
@@ -779,7 +811,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
         std::fs::remove_file(
             runtime
                 .layout
@@ -790,7 +822,7 @@ mod tests {
         .unwrap();
 
         let error = runtime
-            .volume_store
+            .local_volume_store
             .get(&volume.id)
             .expect_err("missing metadata must fail");
         assert!(
@@ -811,22 +843,22 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let good = runtime.volume_store.create(Some("workspace")).unwrap();
+        let good = runtime.local_volume_store.create(Some("workspace")).unwrap();
         let bad_id = Uuid::new_v4().to_string();
         let bad_path = runtime.layout.volumes_dir().join(&bad_id);
         std::fs::create_dir_all(&bad_path).unwrap();
         std::fs::write(bad_path.join(METADATA_FILE), b"not json").unwrap();
 
-        let listed = runtime.volume_store.list().unwrap();
+        let listed = runtime.local_volume_store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, good.id);
         let error = runtime
-            .volume_store
+            .local_volume_store
             .get(&bad_id)
             .expect_err("corrupt metadata must be diagnosable");
         assert!(matches!(error, BoxliteError::MetadataError(_)), "{error:?}");
-        runtime.volume_store.remove(&bad_id, false).unwrap();
-        assert_eq!(runtime.volume_store.list().unwrap().len(), 1);
+        runtime.local_volume_store.remove(&bad_id, false).unwrap();
+        assert_eq!(runtime.local_volume_store.list().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -837,7 +869,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let store = runtime.volume_store.clone();
+        let store = runtime.local_volume_store.clone();
         let occupied_id = Arc::new(std::sync::Mutex::new(String::new()));
         let occupied_id_for_hook = Arc::clone(&occupied_id);
         let root_for_hook = store.root.clone();
@@ -852,7 +884,7 @@ mod tests {
         assert!(matches!(error, BoxliteError::Storage(_)), "{error:?}");
         let final_path = store.root.join(occupied_id.lock().unwrap().as_str());
         assert_eq!(std::fs::read(final_path.join("keep")).unwrap(), b"original");
-        assert!(runtime.volume_store.list().unwrap().is_empty());
+        assert!(runtime.local_volume_store.list().unwrap().is_empty());
         assert!(
             std::fs::read_dir(store.root.join(STAGING_DIR))
                 .unwrap()
@@ -869,7 +901,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let store = runtime.volume_store.clone();
+        let store = runtime.local_volume_store.clone();
         let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
         let (release_sender, release_receiver) = std::sync::mpsc::channel();
         let task = tokio::task::spawn_blocking(move || {
@@ -884,15 +916,15 @@ mod tests {
 
         let mut volumes = Vec::new();
         for _ in 0..100 {
-            volumes = runtime.volume_store.list().unwrap();
+            volumes = runtime.local_volume_store.list().unwrap();
             if !volumes.is_empty() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(volumes.len(), 1);
-        runtime.volume_store.get(&volumes[0].id).unwrap();
-        runtime.volume_store.remove(&volumes[0].id, false).unwrap();
+        runtime.local_volume_store.get(&volumes[0].id).unwrap();
+        runtime.local_volume_store.remove(&volumes[0].id, false).unwrap();
     }
 
     fn seed_raw_volume(root: &Path, id: &str, name: &str) {
@@ -925,7 +957,7 @@ mod tests {
         }
 
         let error = runtime
-            .volume_store
+            .local_volume_store
             .create(Some("another"))
             .expect_err("duplicate metadata names must fail creation");
         assert!(matches!(error, BoxliteError::MetadataError(_)), "{error:?}");
@@ -949,14 +981,14 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let good = runtime.volume_store.create(Some("workspace")).unwrap();
+        let good = runtime.local_volume_store.create(Some("workspace")).unwrap();
         let root = runtime.layout.volumes_dir();
         let bad_id = Uuid::new_v4().to_string();
         seed_raw_volume(&root, &bad_id, "unrelated");
         std::fs::remove_dir(root.join(&bad_id).join(PAYLOAD_DIR)).unwrap();
 
         runtime
-            .volume_store
+            .local_volume_store
             .create(Some("another"))
             .expect("name audit should not require unrelated payload health");
         let options = BoxOptions {
@@ -977,7 +1009,7 @@ mod tests {
             Some(good.id.as_str())
         );
         let error = runtime
-            .volume_store
+            .local_volume_store
             .get(&bad_id)
             .expect_err("the selected corrupt payload must still fail");
         assert!(matches!(error, BoxliteError::MetadataError(_)), "{error:?}");
@@ -991,7 +1023,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let volume = runtime.volume_store.create(Some("workspace")).unwrap();
+        let volume = runtime.local_volume_store.create(Some("workspace")).unwrap();
         let box_id = crate::runtime::id::BoxIDMint::mint();
         let mut config = BoxConfig {
             id: box_id.clone(),
@@ -1010,7 +1042,7 @@ mod tests {
         };
         let state = BoxState::new();
         let mut removed_config = config.clone();
-        let store = runtime.volume_store.clone();
+        let store = runtime.local_volume_store.clone();
         let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
         let (release_sender, release_receiver) = std::sync::mpsc::channel();
         let add_task = tokio::task::spawn_blocking(move || {
@@ -1021,7 +1053,7 @@ mod tests {
         });
         ready_receiver.recv().unwrap();
         let remove_task = tokio::task::spawn_blocking({
-            let store = runtime.volume_store.clone();
+            let store = runtime.local_volume_store.clone();
             let id = volume.id.clone();
             move || store.remove(&id, false)
         });
@@ -1039,9 +1071,9 @@ mod tests {
         assert!(matches!(error, BoxliteError::InvalidState(_)), "{error:?}");
 
         runtime.box_manager.remove_box(&box_id).unwrap();
-        runtime.volume_store.remove(&volume.id, false).unwrap();
+        runtime.local_volume_store.remove(&volume.id, false).unwrap();
         let error = runtime
-            .volume_store
+            .local_volume_store
             .add_box_with_resolved_volumes(
                 &mut removed_config,
                 &BoxState::new(),

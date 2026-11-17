@@ -133,7 +133,7 @@ pub struct RuntimeImpl {
     /// Box manager with integrated persistence (has internal RwLock)
     pub(crate) box_manager: BoxManager,
     /// Local managed-volume storage
-    pub(crate) volume_store: crate::volumes::LocalVolumeStore,
+    pub(crate) local_volume_store: crate::volumes::LocalVolumeStore,
     /// Image management (has internal RwLock via ImageStore)
     pub(crate) image_manager: ImageManager,
 
@@ -336,14 +336,16 @@ impl RuntimeImpl {
         let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
         let box_store = BoxStore::new(db);
         let box_manager = BoxManager::new(box_store);
-        let volume_store =
+        let local_volume_store =
             crate::volumes::LocalVolumeStore::new(layout.volumes_dir(), box_manager.clone())
                 .map_err(|error| {
                     BoxliteError::Storage(format!(
                         "Failed to initialize local volume store: {error}"
                     ))
                 })?;
-        volume_store.recover().map_err(|error| {
+        // Reconcile staging/trash left by a crashed volume operation before
+        // any box can start and refer to a volume.
+        local_volume_store.recover().map_err(|error| {
             BoxliteError::Storage(format!("Failed to recover local volume store: {error}"))
         })?;
 
@@ -380,7 +382,7 @@ impl RuntimeImpl {
                 active_boxes_by_name: HashMap::new(),
             }),
             box_manager,
-            volume_store,
+            local_volume_store,
             image_manager,
             layout,
             image_disk_mgr,
@@ -510,6 +512,8 @@ impl RuntimeImpl {
         let (mut config, mut state) = self.init_box_variables(&options, name.clone());
 
         // Persist Configured state only after both lock namespaces are allocated.
+        // Persisting a new box also registers its selected volume holders.
+        // Clone/import re-registers volume holders before the new box persists.
         if let Err(e) = self
             .persist_box_with_locks(
                 &mut config,
@@ -1461,7 +1465,7 @@ impl RuntimeImpl {
         }
         state.set_lock_id(id);
 
-        let store = self.volume_store.clone();
+        let store = self.local_volume_store.clone();
         let mut persisted_config = config.clone();
         let state_for_persist = state.clone();
         let persist_task = tokio::task::spawn_blocking(move || {
@@ -2124,6 +2128,8 @@ impl super::images::ImageBackend for LocalRuntime {
 }
 
 // Named-volume operations (separate from RuntimeBackend).
+// Each volume action performs filesystem work on a blocking thread while
+// retaining an async shutdown check on the caller thread.
 #[async_trait::async_trait]
 impl super::volumes::VolumeBackend for LocalRuntime {
     async fn create_volume(&self, name: Option<&str>) -> BoxliteResult<crate::volumes::VolumeInfo> {
@@ -2132,7 +2138,7 @@ impl super::volumes::VolumeBackend for LocalRuntime {
                 "Cannot create volume: runtime is shut down".into(),
             ));
         }
-        let store = self.0.volume_store.clone();
+        let store = self.0.local_volume_store.clone();
         let name = name.map(str::to_owned);
         tokio::task::spawn_blocking(move || store.create(name.as_deref()))
             .await
@@ -2147,7 +2153,7 @@ impl super::volumes::VolumeBackend for LocalRuntime {
                 "Cannot list volumes: runtime is shut down".into(),
             ));
         }
-        let store = self.0.volume_store.clone();
+        let store = self.0.local_volume_store.clone();
         tokio::task::spawn_blocking(move || store.list())
             .await
             .map_err(|error| BoxliteError::Internal(format!("volume list task failed: {error}")))?
@@ -2159,7 +2165,7 @@ impl super::volumes::VolumeBackend for LocalRuntime {
                 "Cannot get volume: runtime is shut down".into(),
             ));
         }
-        let store = self.0.volume_store.clone();
+        let store = self.0.local_volume_store.clone();
         let id = id.to_owned();
         tokio::task::spawn_blocking(move || store.get(&id))
             .await
@@ -2172,7 +2178,7 @@ impl super::volumes::VolumeBackend for LocalRuntime {
                 "Cannot remove volume: runtime is shut down".into(),
             ));
         }
-        let store = self.0.volume_store.clone();
+        let store = self.0.local_volume_store.clone();
         let id = id.to_owned();
         tokio::task::spawn_blocking(move || store.remove(&id, force))
             .await

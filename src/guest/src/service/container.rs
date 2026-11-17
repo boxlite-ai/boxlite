@@ -330,6 +330,7 @@ impl ContainerService for GuestServer {
         // container's volume folder in the share: <shared>/containers/{id}/volumes/{name}
         let container_layout = self.layout.shared().container(&container_id);
 
+        // Keep every resolved volume subpath mount alive until startup is done.
         let mut resolved_mounts = Vec::new();
         let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
         for m in &init_req.mounts {
@@ -427,6 +428,9 @@ impl ContainerService for GuestServer {
             devices,
             cgroup,
         );
+        // Dropping now unmounts only the temporary host-side mountpoints;
+        // they must outlive container creation so the guest cannot unmount
+        // them while startup is still configuring mounts.
         drop(resolved_mounts);
         match container_result {
             Ok(mut container) => {
