@@ -394,6 +394,25 @@ test('GCP deduplicates Filestore projects and rejects malformed placement', () =
       }),
     /FILESTORE_INSTANCES/,
   )
+
+  for (const [label, entry] of [
+    ['missing instance', { project_id: 'valid-project', zone: 'us-east5-a' }],
+    ['missing project_id', { instance: 'shared', zone: 'us-east5-a' }],
+    ['missing zone', { instance: 'shared', project_id: 'valid-project' }],
+  ] as const) {
+    assert.throws(
+      () =>
+        apiEnvironmentFrom({
+          environment: { ...base, FILESTORE_INSTANCES: JSON.stringify([entry]) },
+          declaration: groups([]),
+          region: 'us-east5',
+          stage: 'dev',
+          home: 'gcp',
+        }),
+      /FILESTORE_INSTANCES/,
+      label,
+    )
+  }
 })
 
 test('the two dashboard origins are different on purpose, and both have a default', () => {

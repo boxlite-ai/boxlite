@@ -340,11 +340,15 @@ function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {
     if (
       typeof entry !== 'object' ||
       entry === null ||
+      typeof entry.instance !== 'string' ||
+      !entry.instance.trim() ||
       typeof entry.project_id !== 'string' ||
-      !entry.project_id.trim()
+      !entry.project_id.trim() ||
+      typeof entry.zone !== 'string' ||
+      !entry.zone.trim()
     ) {
       throw new ApiEnvironmentError(
-        'FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects with a project_id',
+        'FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects',
       )
     }
     return entry.project_id.trim()

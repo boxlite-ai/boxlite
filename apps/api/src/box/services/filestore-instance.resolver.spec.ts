@@ -109,15 +109,15 @@ describe('FilestoreInstanceResolver', () => {
   })
 
   it.each([[2], ['NFS_V4_1']])('accepts an instance with NFSv4.1 protocol %p', async (protocol) => {
-    const getInstance = jest.fn().mockResolvedValue([{ ...readyInstance, protocols: [protocol] }])
+    const getInstance = jest.fn().mockResolvedValue([{ ...readyInstance, protocol }])
     const { resolver } = createResolver(getInstance)
 
     await expect(resolver.resolve('ml-scratch', 'request')).resolves.toEqual({ server: '10.0.0.7', export: '/vol1' })
   })
 
-  it.each([[1], ['NFS_V3']])('rejects an instance that only supports NFSv3 protocol %p', async (protocol) => {
+  it.each([[1], ['NFS_V3']])('rejects an instance with NFSv3 protocol %p', async (protocol) => {
     const logError = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
-    const getInstance = jest.fn().mockResolvedValue([{ ...readyInstance, protocols: [protocol] }])
+    const getInstance = jest.fn().mockResolvedValue([{ ...readyInstance, protocol }])
     const { resolver } = createResolver(getInstance)
 
     try {
@@ -127,7 +127,7 @@ describe('FilestoreInstanceResolver', () => {
     }
   })
 
-  it('accepts an instance whose protocols field is absent', async () => {
+  it('accepts an instance whose protocol field is absent', async () => {
     const getInstance = jest.fn().mockResolvedValue([readyInstance])
     const { resolver } = createResolver(getInstance)
 

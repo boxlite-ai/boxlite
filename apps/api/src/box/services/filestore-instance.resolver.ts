@@ -15,7 +15,7 @@ export type FilestoreLookupSource = 'request' | 'configured'
 
 interface FilestoreApiInstance {
   state?: unknown
-  protocols?: Array<unknown> | null
+  protocol?: unknown
   networks?: Array<{
     ipAddresses?: Array<string | null | undefined> | null | undefined
   }> | null
@@ -140,10 +140,10 @@ export class FilestoreInstanceResolver {
       throw this.notUsable(source, resourceName, 'is not ready')
     }
 
-    const protocols = instance.protocols
-    if (Array.isArray(protocols) && protocols.length > 0) {
-      const supportsV4 = protocols.includes(NFS_V4_PROTOCOL) || protocols.includes('NFS_V4_1')
-      if (!supportsV4) throw this.notUsable(source, resourceName, 'does not support NFSv4.1')
+    const protocol = instance.protocol
+    if (protocol !== undefined && protocol !== null) {
+      const isV4 = protocol === NFS_V4_PROTOCOL || protocol === 'NFS_V4_1'
+      if (!isV4) throw this.notUsable(source, resourceName, 'does not support NFSv4.1')
     }
 
     const addresses = (instance.networks ?? [])
