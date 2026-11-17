@@ -57,6 +57,7 @@
         "{projectRoot}/src/**/*.ts",
         "!{projectRoot}/src/**/*.spec.ts",
         "{projectRoot}/tsconfig.app.json",
+        "^production",
         "{workspaceRoot}/shared/filestore-instances.ts",
         {
           "dependentTasksOutputFiles": "**/*",
