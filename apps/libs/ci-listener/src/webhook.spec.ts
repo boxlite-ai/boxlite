@@ -198,6 +198,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           'wake/9/21',
           'notice/9/55',
           'job-fact/9/55',
+          'queue-revision/9/21',
           'demand/9/21/' +
             createHash('sha256')
               .update(JSON.stringify(['boxlite']))

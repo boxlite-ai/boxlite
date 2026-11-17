@@ -179,6 +179,33 @@ describe('CI shared execution authority', () => {
     rmSync(directory, { recursive: true, force: true })
   })
   const launch = () => ({ name, image: 'runner', cpus: 2, memoryMiB: 2048, entrypoint: ['bash', '-c', 'run'] })
+  it('rejects a late authorization after close without issuing a new credential or creating a Box', async () => {
+    let enter!: () => void, resume!: () => void
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve
+    })
+    const released = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    jest.mocked(host.authorize).mockImplementationOnce(async () => {
+      enter()
+      await released
+    })
+    const creating = backend.workers.create(launch())
+    const rejected = expect(creating).rejects.toThrow('backend is closed')
+    try {
+      await entered
+      await backend.close()
+      resume()
+      await rejected
+      expect(calls.some((call) => call.path.endsWith('/access_tokens'))).toBe(false)
+      expect(host.workers.create).not.toHaveBeenCalled()
+      await expect(backend.runners(async () => {}, undefined, ['boxlite'], name)).rejects.toThrow('backend is closed')
+    } finally {
+      resume()
+      await creating.catch(() => {})
+    }
+  })
   it('reads the authorized runner inventory and releases the credential borrow', async () => {
     runners.push({
       id: 91,

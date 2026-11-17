@@ -49,6 +49,7 @@ describe('Standalone BoxLite execution boundary', () => {
     calls: { path: string; method: string; body: unknown }[]
   let meGate: { entered(): void; wait: Promise<void> } | undefined
   let createHttpStatus: number | undefined
+  let createHttpBody: unknown
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), 'ci-self-rest-'))
     db = new SqliteStateDatabase(directory)
@@ -60,6 +61,7 @@ describe('Standalone BoxLite execution boundary', () => {
     allowed = true
     initialStatus = 'running'
     createHttpStatus = undefined
+    createHttpBody = {}
     meGate = undefined
     afterUpload = afterList = undefined
     box = undefined
@@ -79,7 +81,7 @@ describe('Standalone BoxLite execution boundary', () => {
         const input = body as { name: string }
         box = { box_id: 'original-box', name: input.name, status: initialStatus }
         if (loseCreate) throw new Error('Lost create response')
-        if (createHttpStatus) return json({}, createHttpStatus)
+        if (createHttpStatus) return json(createHttpBody, createHttpStatus)
         return json(box, 201)
       }
       if (path === '/v1/tenant-a/boxes' && method === 'GET') {
@@ -161,6 +163,211 @@ describe('Standalone BoxLite execution boundary', () => {
     await advance({ delivery: 'requested', effect: { id: randomUUID(), kind: 'jit-deliver' } })
   }
   const posts = () => calls.filter((call) => call.path === '/v1/tenant-a/boxes' && call.method === 'POST')
+  describe('boxlite-workers timeout-ID recovery', () => {
+    const timeoutCreate = async () => {
+      await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })
+      createHttpStatus = 408
+      createHttpBody = { boxId: 'original-box', message: 'private timeout details' }
+    }
+    const restart = async () => {
+      await db.close()
+      db = new SqliteStateDatabase(directory)
+      state = new ListenerState(db, namespace)
+      journal = new ExecutionJournal(state)
+      service = await BoxLiteWorkers.connect(state, 'https://box.test', 'private-box-api-key')
+      worker = service.bind(scope, lease, async () => {
+        if (!allowed) throw new Error('Admission revoked')
+      })
+    }
+    it('persists the timeout ID before any following principal or Box read', async () => {
+      await timeoutCreate()
+      const previous = global.fetch
+      let dispatched = false
+      global.fetch = jest.fn(async (input, options) => {
+        if (new URL(String(input)).pathname === '/v1/tenant-a/boxes' && options?.method === 'POST') {
+          dispatched = true
+        } else if (dispatched) {
+          const [ledger] = await state.read(['box-rest/' + name])
+          expect(ledger.payload).toMatchObject({ box: 'original-box', name, scope: key })
+          expect(ledger.payload).toHaveProperty('dispatchEffect', expect.any(String))
+          throw new Error('Following reads unavailable')
+        }
+        return previous(input, options)
+      }) as typeof fetch
+      await expect(worker.create(launch())).rejects.toThrow()
+      const [ledger] = await state.read(['box-rest/' + name])
+      expect(ledger.payload).toMatchObject({ box: 'original-box' })
+      global.fetch = previous
+      await restart()
+      expect(await worker.get(name)).toMatchObject({ box_id: 'original-box', status: 'running' })
+      expect(posts()).toHaveLength(1)
+      expect(JSON.stringify(await state.recover(lease))).not.toContain('private timeout details')
+    })
+    it.each(['unknown', 'stopping'])(
+      'retains requested recovery for %s and boots that original after restart',
+      async (status) => {
+        await timeoutCreate()
+        initialStatus = status
+        await expect(worker.create(launch())).rejects.toThrow('boot is pending')
+        const unexpected = async (): Promise<never> => {
+          throw new Error('Unexpected admission or runner operation')
+        }
+        const pool = new WorkerPool(
+          journal,
+          key,
+          async () => ({ workers: worker, admit: unexpected, job: unexpected, runners: unexpected }),
+          { image: 'runner', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
+        )
+        try {
+          await expect(pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))).rejects.toThrow('boot is pending')
+        } finally {
+          await pool.close()
+        }
+        const row = [...(await inspectJournal(state, lease)).allocations.values()][0]
+        expect(row.value.box).toEqual({ phase: 'requested', id: null })
+        expect(await journal.hasCapacity(lease, key, testCapacity({ account: 1, tenant: 1 }))).toBe(false)
+        expect(calls.filter((call) => call.path.endsWith('/start'))).toHaveLength(0)
+        await restart()
+        box!.status = 'configured'
+        expect(await worker.get(name)).toMatchObject({ box_id: 'original-box', status: 'running' })
+        expect(posts()).toHaveLength(1)
+        expect(calls.filter((call) => call.path.endsWith('/start'))).toHaveLength(1)
+      },
+    )
+    it.each(['GET', 'start'])('recovers after a failed original %s request and SQLite restart', async (operation) => {
+      await timeoutCreate()
+      initialStatus = 'configured'
+      const previous = global.fetch
+      let failures = 0
+      global.fetch = jest.fn(async (input, options) => {
+        const path = new URL(String(input)).pathname
+        if (failures === 0 && (operation === 'GET' ? path.endsWith('/original-box') : path.endsWith('/start'))) {
+          failures++
+          return new Response('{}', { status: 503 })
+        }
+        return previous(input, options)
+      }) as typeof fetch
+      await expect(worker.create(launch())).rejects.toThrow('request failed')
+      expect(failures).toBe(1)
+      const [ledger] = await state.read(['box-rest/' + name])
+      expect(ledger.payload).toMatchObject({ box: 'original-box' })
+      await restart()
+      expect(await worker.get(name)).toMatchObject({ box_id: 'original-box', status: 'running' })
+      expect(posts()).toHaveLength(1)
+    })
+    it.each(['allocation', 'dispatch'])('fences timeout-ID persistence against changed %s state', async (changed) => {
+      await timeoutCreate()
+      const previous = global.fetch
+      global.fetch = jest.fn(async (input, options) => {
+        const result = await previous(input, options)
+        if (new URL(String(input)).pathname === '/v1/tenant-a/boxes' && options?.method === 'POST') {
+          if (changed === 'allocation') await advance({ closing: true })
+          else {
+            const [ledger] = await state.read(['box-rest/' + name])
+            await state.commit(lease, [{ key: ledger.key, expected: ledger.version, payload: ledger.payload }])
+          }
+        }
+        return result
+      }) as typeof fetch
+      await expect(worker.create(launch())).rejects.toThrow('changed')
+      const [ledger] = await state.read(['box-rest/' + name])
+      expect(ledger.payload).toMatchObject({ box: null })
+      expect(calls.filter((call) => call.path.endsWith('/start'))).toHaveLength(0)
+      expect(posts()).toHaveLength(1)
+    })
+    it('observes a lost start response after SQLite restart without repeating either mutation', async () => {
+      await timeoutCreate()
+      initialStatus = 'configured'
+      loseStart = true
+      await expect(worker.create(launch())).rejects.toThrow('request failed')
+      await restart()
+      expect(await worker.get(name)).toMatchObject({ box_id: 'original-box', status: 'running' })
+      expect(posts()).toHaveLength(1)
+      expect(calls.filter((call) => call.path.endsWith('/start'))).toHaveLength(1)
+    })
+    it('keeps an ID persistence failure uncertain without subsequent network reads', async () => {
+      await timeoutCreate()
+      const commit = state.commit.bind(state)
+      const spy = jest.spyOn(state, 'commit').mockImplementation(async (owner, changes, checks) => {
+        if (changes.some((change) => (change.payload as { box?: unknown } | undefined)?.box === 'original-box'))
+          throw new Error('Original ID persistence unavailable')
+        return commit(owner, changes, checks)
+      })
+      await expect(worker.create(launch())).rejects.toThrow('persistence unavailable')
+      spy.mockRestore()
+      const post = calls.findIndex((call) => call.path === '/v1/tenant-a/boxes' && call.method === 'POST')
+      expect(calls.slice(post + 1)).toEqual([])
+      await restart()
+      await expect(worker.get(name)).rejects.toThrow('not durably known')
+      expect(posts()).toHaveLength(1)
+    })
+    it.each(['known', 'closing'])('leaves %s observations passive', async (phase) => {
+      await timeoutCreate()
+      initialStatus = 'unknown'
+      await worker.create(launch()).catch(() => {})
+      if (phase === 'known') await advance({ box: { phase: 'known', id: 'original-box' } })
+      else await advance({ closing: true })
+      box!.status = 'configured'
+      expect(await worker.get(name)).toMatchObject({ status: 'starting' })
+      expect(calls.filter((call) => call.path.endsWith('/start'))).toHaveLength(0)
+    })
+    it.each([
+      'admission',
+      'principal',
+      'effect',
+      'allocation-version',
+      'ledger-id',
+      'ledger-effect',
+      'ledger-version',
+      'lease',
+    ])('rechecks %s at the recovery start boundary', async (changed) => {
+      await timeoutCreate()
+      initialStatus = 'unknown'
+      await worker.create(launch()).catch(() => {})
+      box!.status = 'configured'
+      const bound = service.bind(scope, lease, async () => {
+        if (changed === 'admission') throw new Error('Admission revoked')
+        if (changed === 'principal') principal.sub = 'different-owner'
+        if (changed === 'effect') await advance({ effect: { id: randomUUID(), kind: 'box-create' } })
+        if (changed === 'allocation-version') await advance({ closing: false })
+        if (changed.startsWith('ledger-')) {
+          const [ledger] = await state.read(['box-rest/' + name])
+          await state.commit(lease, [
+            {
+              key: ledger.key,
+              expected: ledger.version,
+              payload: {
+                ...(ledger.payload as object),
+                ...(changed === 'ledger-id' ? { box: 'foreign-box' } : {}),
+                ...(changed === 'ledger-effect' ? { dispatchEffect: randomUUID() } : {}),
+              },
+            },
+          ])
+        }
+        if (changed === 'lease')
+          await db.transaction(namespace, async (tx) => {
+            const owner = (await tx.get('@owner', true))!
+            await tx.put(
+              { ...owner, version: randomUUID(), payload: { ...(owner.payload as object), epoch: lease.epoch + 1 } },
+              owner.version,
+            )
+          })
+      })
+      await expect(bound.get(name)).rejects.toThrow()
+      expect(calls.filter((call) => call.path.endsWith('/start'))).toHaveLength(0)
+      expect(posts()).toHaveLength(1)
+    })
+    it('does not accept a renamed or replaced original after a timeout', async () => {
+      await timeoutCreate()
+      initialStatus = 'unknown'
+      await worker.create(launch()).catch(() => {})
+      box!.name = 'different-name'
+      box!.status = 'configured'
+      await expect(worker.get(name)).rejects.toThrow('identity or state changed')
+      expect(calls.filter((call) => call.path.endsWith('/start'))).toHaveLength(0)
+      expect(posts()).toHaveLength(1)
+    })
+  })
   it.each(['admission', 'principal-read'])('settles a create rejected before dispatch: %s', async (failure) => {
     const effect = randomUUID()
     const row = await advance({ box: { phase: 'requested', id: null }, effect: { id: effect, kind: 'box-create' } })

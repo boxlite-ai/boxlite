@@ -40,6 +40,10 @@ the normal lease duration, so CI scheduling cannot expire it before the tested b
 `make test:apps:api TEST_FILES=main.spec.ts` exercises the real bootstrap entry
 with infrastructure dependencies mocked and checks the address passed to Nest's
 listener for all three cases. It does not start PostgreSQL or a VM.
+The CI Listener service is mocked at the service boundary, so bootstrap tests do
+not load its runtime and archive dependencies through the partial filesystem mock.
+They also check that Listener startup occurs once, after HTTP starts listening;
+the Listener's own suites exercise its implementation.
 
 ### Hosted CI lease storage
 
@@ -1413,6 +1417,15 @@ quota but no longer exclusively cover their trigger jobs. Actual job observation
 support recovery, while new reservations use independent allocation identities.
 Hosted PostgreSQL and standalone SQLite use this shared implementation.
 
+Fresh webhook counts cannot authorize more Boxes: potential capacity changes
+first rebuild the complete current GitHub queue for the original runner scope.
+Incomplete refreshes defer changes while known stopped resources still clean up.
+Surplus online idle workers follow the shared
+[retirement protocol](../libs/ci-listener/README.md#surplus-idle-retirement), including
+the registration grace, exact unregister acknowledgement and original-Box absence
+checks. Pending `runner-retire` effects survive takeover and make older state
+readers fail closed; consult that section before deployment or rollback.
+
 The controller recovers historical allocations alongside new capacity demand.
 Transient journal initialization failures retry through the existing session
 loop. An unexpectedly stopped hosted scheduler rejects new webhook ingress
@@ -1422,6 +1435,16 @@ runner cleanup does not hold physical capacity. Query failures retain capacity
 until the original outcome is known. Lease loss, corrupt/conflicting state, abort
 and pending credential retirement stop further work. These rules match standalone
 Listener Boxes and recover from the existing PostgreSQL journal after restart.
+
+A newer deployment permanently retires the old hosted Listener after its local
+credential, discovery, replay and compensation owners have closed. Successful
+token revocation followed by a lease-lost metadata deletion no longer keeps that
+old process in a retry loop; the current scheduler owns eligible metadata
+collection. Remote revocation failures retain their handles and retry with backoff.
+Existing Box/runner recovery and quota remain with the current execution lease.
+Normal deployment retirement preserves authorized webhook ingress. API connections
+and shared database pools remain under the API host's shutdown lifecycle. See the
+[deployment retirement contract](../libs/ci-listener/README.md#deployment-retirement).
 
 The CI state migration refuses rollback while its table contains any records.
 Stop the Listener and reconcile retained resource and credential state before
@@ -1533,14 +1556,42 @@ checked in the reservation transaction. Dashboard → CI → Runners shows and e
 this account total; Connects shows connected-account setup state.
 Repository-specific limits are not available yet.
 
-If another Box consumes the last Commerce slot after CI admission, the native
-adapter records a definitive refusal for `BoxCreationLimitExceededError`
-before `onPersist` starts. It also fences revocation before dispatch or a rejected
-native persistence transaction. The durable original-operation fact shares the Box-ID
-ledger key, preventing conflicting outcomes. The shared kernel can return the CI
-reservation while keeping its queued notice, including after restart. A failed
-proof write, generic HTTP error or uncertain persistence outcome keeps the
-reservation for recovery. See the shared [worker recovery contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
+Native creation classifies failures by their persistence boundary, rather than an
+exception whitelist. Any failure before `onPersist` begins records a definitive
+refusal: cold-pull throttling, unavailable placement, image policy, organization
+lookup and Commerce failures all return their CI reservation immediately. Queued
+demand remains eligible for later scheduling. An error after persistence begins
+retains capacity until the original ledger can establish the outcome.
+
+The scheduler's existing background recovery also checks historical native creates
+with no known Box ID. After five minutes from reservation, it rereads the original
+scope, operation and ledger. If no Box or ownership record exists, a conditional
+rejection write fences a delayed creation transaction before the slot is returned.
+The Box row and original-ID ledger commit together, so a creation that loses that
+write must roll back. A committed original Box always retains its ID and capacity;
+a same-name Box without ownership is never adopted or removed.
+
+This correction applies to existing records after deployment, including historical
+scopes after disconnect. Five minutes enables correction; sweep time and temporary
+failures can extend recovery. Lease loss, database/proof-write failures and corrupt
+identity retain capacity for subsequent checks. No timeout alone authorizes release,
+and standalone REST creation retains its original uncertainty contract. See the shared
+[worker recovery contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
+
+### Hosted CI asynchronous scheduling
+
+The shared Listener maintains independent scope-planning and allocation-execution
+queues under the current execution lease. Each committed reservation is eligible
+for execution immediately; a slow Box create or JIT delivery does not hold a
+whole scheduling batch open. The PostgreSQL allocation journal is the durable
+source; in-memory queues are bounded execution indexes, not another service.
+
+Scope planners use eight concurrent I/O positions and allocation consumers use
+32. These management budgets are separate from organization/Commerce limits.
+Repository observation versions fence delayed retirement tasks, including demand
+found by an authoritative scan without a webhook. Before enabling this protocol,
+drain older webhook writers that cannot advance these observation versions.
+No CI-state reset is required. See [queue and shutdown contracts](../libs/ci-listener/README.md#asynchronous-allocation-queue).
 
 ### Hosted CI management
 

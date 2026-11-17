@@ -1,7 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
 import { GitHubAppSource, GitHubCredential, GitHubInstallation, GitHubTokenPurpose } from './github-app'
-import { Json, StateRecord } from './state/database'
+import { Json, LeaseLost, StateRecord } from './state/database'
 import { ExecutionLease, ListenerState } from './state/store'
 
 export type CredentialSource =
@@ -77,6 +77,11 @@ export class ListenerCredentials {
         installation: source.kind === 'app' ? source.installation.id : 0,
         requestedAt: Date.now(),
         phase: 'requested',
+        holder: {
+          owner: this.lease.owner,
+          epoch: this.lease.epoch,
+          ...(this.lease.deployment === undefined ? {} : { deployment: this.lease.deployment }),
+        },
       }
       const [intent] = await this.state.commit(this.lease, [{ key: recordKey, expected: null, payload }])
       let credential: GitHubCredential
@@ -143,7 +148,13 @@ export class ListenerCredentials {
     if (entry.retiring) return entry.retiring
     const retirement = (async () => {
       await entry.credential.close()
-      await this.state.commit(this.lease, [{ key: entry.record.key, expected: entry.record.version }])
+      try {
+        await this.state.commit(this.lease, [{ key: entry.record.key, expected: entry.record.version }])
+      } catch (error) {
+        // The token is closed. Its metadata now belongs to the current owner's
+        // collector; a lost lease cannot become permanent local cleanup debt.
+        if (!(error instanceof LeaseLost)) throw error
+      }
       if (this.held.get(key) === entry) this.held.delete(key)
     })()
     entry.retiring = retirement
