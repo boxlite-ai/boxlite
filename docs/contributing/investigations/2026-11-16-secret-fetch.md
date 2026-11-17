@@ -8,7 +8,8 @@ on the single-value database from [#2571](https://github.com/boxlite-ai/boxlite/
 ## Scope and dependencies
 
 Development starts at database PR [#2612](https://github.com/boxlite-ai/boxlite/pull/2612),
-commit `346b3413d72e2edbefdb77ab04bf3983fbc14eba`. That commit includes
+with the prerequisite synchronized through commit
+`c757c81b782761077c71df2fc72c8c35634a51fc`. That commit includes
 runner attestation and envelope encryption. Merge the database prerequisite before
 this change; do not duplicate its migrations or introduce a versioned secret model.
 
@@ -16,6 +17,19 @@ The API implements atomic consumption in BUI-1385. This handler calls that API
 once and cannot independently guarantee consumption if the API violates its
 contract. Tests provide a consuming fake over HTTP. The service skeleton owns
 process startup, role selection and mounting the fetch handler.
+
+| Dependency | Integration boundary | Required before |
+| --- | --- | --- |
+| [Database #2612](https://github.com/boxlite-ai/boxlite/pull/2612) | Schema, key verification, pool and encryption foundations | Merging this change into `main` |
+| [Runtime #2617](https://github.com/boxlite-ai/boxlite/pull/2617) | Initialize storage before readiness and mount fetch for `fetch`/`all` roles | Deploying the fetch service |
+| [Credential API #2769](https://github.com/boxlite-ai/boxlite/pull/2769) | Internal-only introspection with atomic consumption and runner binding | End-to-end deployment |
+
+The credential API contract can be checked before its merge using the pinned
+production controller and service in the
+[contract integration harness](../../../apps/secret-server/README.md#credential-api-contract-integration).
+This isolated check does not validate service startup or deployed ingress.
+After the database prerequisite merges, synchronize with `main` and retarget the
+fetch change; runtime and API integration can proceed independently.
 
 ## Contract
 
