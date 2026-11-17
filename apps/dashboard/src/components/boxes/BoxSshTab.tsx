@@ -236,7 +236,7 @@ function SshControls({
               Run these commands in your local terminal.
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4 font-mono text-body leading-5 [scrollbar-width:thin] [scrollbar-color:hsl(var(--muted-foreground)/0.5)_transparent] sm:px-6">
+          <div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4 text-body leading-5 [scrollbar-width:thin] [scrollbar-color:hsl(var(--muted-foreground)/0.5)_transparent] sm:px-6">
             <p className="text-muted-foreground">
               Start the Box and enable Inbound access in Network. Requires Box-write permission, ssh and ssh-keygen.
             </p>
@@ -266,7 +266,7 @@ function SshControls({
               open.
             </p>
             <p className="text-meta leading-5 text-muted-foreground">
-              For self-hosted endpoints, other organizations or an existing CLI setup, follow the{' '}
+              For other organizations or an existing CLI setup, follow the{' '}
               <a href={BOXLITE_SSH_DOCS_URL} target="_blank" rel="noreferrer" className="resource-guide-link">
                 SSH guide ↗
               </a>
@@ -311,7 +311,7 @@ function SshStep({
           {result === 'copied' ? 'Copied' : result === 'failed' ? 'Copy failed — retry' : 'Copy'}
         </AsciiButton>
       </div>
-      <pre className="whitespace-pre-wrap break-all border border-border bg-[hsl(var(--code-background))] p-3 text-body leading-5">
+      <pre className="whitespace-pre-wrap break-all border border-border bg-[hsl(var(--code-background))] p-3 font-mono text-body leading-5">
         {command}
       </pre>
       {children}

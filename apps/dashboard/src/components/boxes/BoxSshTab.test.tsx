@@ -99,6 +99,11 @@ describe('SSH BoxSshTab static guide and saved access', () => {
       'boxlite ssh box-1',
     ])
     const dialog = document.querySelector('[role="dialog"]')!
+    const body = dialog.querySelector('ol')?.parentElement
+    expect(body?.classList.contains('font-mono')).toBe(false)
+    for (const command of dialog.querySelectorAll('pre')) {
+      expect(command.classList.contains('font-mono')).toBe(true)
+    }
     expect(dialog.textContent).toContain(
       'Select the API-key method, then enter an API key ↗ for this organization when prompted.',
     )
@@ -109,7 +114,7 @@ describe('SSH BoxSshTab static guide and saved access', () => {
     const docs = dialog.querySelectorAll('a[href="https://docs.boxlite.ai/cloud/ssh"]')
     expect(docs).toHaveLength(1)
     expect(docs[0].parentElement!.textContent).toBe(
-      'For self-hosted endpoints, other organizations or an existing CLI setup, follow the SSH guide ↗.',
+      'For other organizations or an existing CLI setup, follow the SSH guide ↗.',
     )
     expect(docs[0].parentElement!.classList.contains('text-meta')).toBe(true)
     expect(docs[0].parentElement!.classList.contains('text-muted-foreground')).toBe(true)

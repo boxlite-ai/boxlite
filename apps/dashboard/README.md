@@ -81,8 +81,8 @@ See [Checkpoint controls and recovery](#checkpoint-controls-and-recovery) for re
 
 **Connect via SSH**, beside start/stop, opens a static local-terminal guide.
 Opening, closing and copying commands make no SSH or network changes. The guide
-uses the shared compact dialog, square code surfaces and monospace typography;
-its header stays fixed while the body scrolls. The overview remains mounted throughout.
+uses the shared compact dialog and square code surfaces, with sans-serif interface
+text and monospace commands; its header stays fixed while the body scrolls. The overview remains mounted throughout.
 Copy actions sit beside step headings rather than in repeated code headers. The
 desktop dialog is 760px wide with compact spacing; shorter windows scroll only
 the body, keeping the title and close control visible.
@@ -118,8 +118,8 @@ Commands are deliberately short: the CLI default endpoint is the hosted API,
 `https://api.boxlite.ai`, and successful login caches the organization's routing
 prefix. Bare login writes the selected CLI context; the guide does not isolate
 existing CLI state or override exported `BOXLITE_*` variables. Its muted docs line
-points users with self-hosted endpoints, other organizations or an existing CLI
-setup to the [SSH guide](https://docs.boxlite.ai/cloud/ssh). The browser does not
+points users working with other organizations or an existing CLI setup to the
+[SSH guide](https://docs.boxlite.ai/cloud/ssh). The browser does not
 detect these cases. Box IDs are validated before inclusion in commands.
 
 Dashboard does not duplicate the CLI's identity-file paths, known-hosts handling
