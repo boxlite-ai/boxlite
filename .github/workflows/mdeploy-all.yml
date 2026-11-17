@@ -108,6 +108,7 @@ jobs:
       version: ${{ steps.classify.outputs.version }}
       image_tag: ${{ steps.tag.outputs.image }}
       line: ${{ steps.classify.outputs.line }}
+      prepare_components: ${{ steps.tag.outputs.prepare_components }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -327,6 +328,7 @@ jobs:
           VERSION: ${{ steps.classify.outputs.version }}
           RESOLVED: ${{ steps.ref.outputs.sha }}
           MERGED: ${{ steps.pr.outputs.sha }}
+          COMPONENTS: ${{ inputs.components }}
         run: |
           set -Eeuo pipefail
           sha="${RESOLVED:-$MERGED}"
@@ -336,10 +338,19 @@ jobs:
           fi
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
           printf 'image=%s\n' "${VERSION:+${VERSION}-}${sha}" >> "$GITHUB_OUTPUT"
+          if [ -n "$VERSION" ]; then
+            echo 'prepare_components=["release"]' >> "$GITHUB_OUTPUT"
+          else
+            case "$COMPONENTS" in
+              api+runner) echo 'prepare_components=["api","runner"]' >> "$GITHUB_OUTPUT" ;;
+              api|runner) printf 'prepare_components=["%s"]\n' "$COMPONENTS" >> "$GITHUB_OUTPUT" ;;
+              *) echo '::error title=components::Unsupported artifact selection'; exit 1 ;;
+            esac
+          fi
 
-  # Plan and prepare commit artifacts; releases also apply within this protected job.
+  # Each commit artifact plans/builds on its own runner; releases use one apply leg.
   plan:
-    name: ${{ needs.resolve.outputs.version != '' && 'deploy release' || 'plan and build' }} ${{ inputs.stage }}
+    name: ${{ matrix.component == 'release' && 'deploy release' || format('plan and build {0}', matrix.component) }} ${{ inputs.stage }}
     permissions:
       contents: read
       id-token: write
@@ -348,12 +359,14 @@ jobs:
     if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        component: ${{ fromJSON(needs.resolve.outputs.prepare_components) }}
     concurrency:
-      group: mbuild-publish-${{ inputs.stage }}
+      group: ${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
-    outputs:
-      api: ${{ steps.plan.outputs.api }}
-      runner: ${{ steps.plan.outputs.runner }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -409,7 +422,7 @@ jobs:
           VERSION: ${{ needs.resolve.outputs.version }}
           LINE: ${{ needs.resolve.outputs.line }}
           STAGE: ${{ inputs.stage }}
-          COMPONENTS: ${{ inputs.components }}
+          COMPONENTS: ${{ matrix.component == 'release' && inputs.components || matrix.component }}
           GHCR_REPOSITORY: ${{ github.repository }}
         run: |
           set -Eeuo pipefail
@@ -493,15 +506,6 @@ jobs:
           tag: ${{ needs.resolve.outputs.sha }}
           stage: ${{ inputs.stage }}
 
-      # Image builds check out the selected commit. Restore action definitions
-      # from this workflow before resolving the next local composite.
-      - name: Restore orchestration sources
-        if: steps.plan.outputs.api == 'build'
-        uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-
       - name: Build and upload the missing Runner
         if: steps.plan.outputs.runner == 'build'
         uses: ./.github/actions/build-staged-runner
@@ -541,7 +545,7 @@ jobs:
       packages: read
     needs: [resolve, plan]
     if: >-
-      ${{ !cancelled() && !failure() && needs.resolve.outputs.version == ''
+      ${{ !cancelled() && !failure() && needs.plan.result == 'success' && needs.resolve.outputs.version == ''
       && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
@@ -564,6 +568,6 @@ jobs:
           image-tag: ${{ needs.resolve.outputs.image_tag }}
           line: ${{ needs.resolve.outputs.line }}
           components: ${{ inputs.components }}
-          api-route: ${{ needs.plan.outputs.api }}
+          api-route: skip
           apply: ${{ inputs.apply }}
           confirm: ${{ inputs.confirm }}

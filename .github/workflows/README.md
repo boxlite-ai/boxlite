@@ -36,7 +36,7 @@ LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api
                                                       ├─▶ build-c ──▶ build-runner-binary
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
-DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ plan + build   (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
+DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ parallel plan/build legs (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
                                                      └─▶ GHCR import    (release tag ──▶ dev/prod AR/ECR, no build)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
@@ -69,7 +69,7 @@ own.
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
-| `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes that action inside its planning/build job |
+| `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes it in its image preparation leg |
 | `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, dispatches dev deployment/E2E, creates a prod approval request, and reports to Slack; `build-only=true` selects publication only |
 | `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` using its default full pipeline |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
@@ -82,7 +82,8 @@ runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../a
 The [release runbook](../../apps/infra/docs/release.md) documents fixed child inputs, timeouts, and recovery.
 Full releases require repository secret `SLACK_WEBHOOK_URL` and required reviewers on the `prod` Environment.
 The Slack button opens the exact pending prod run; a reviewer approves it with their own GitHub identity.
-Release deployments need one target Environment approval; commit deployments use two rounds: plan/build, then deploy.
+Release deployments need one target Environment approval; commit deployments use two batches: parallel artifact preparation, then deploy.
+Wait until both preparation legs are awaiting review before approving their shared Environment; queued or later jobs can require another review.
 
 Cloud E2E accepts an optional release-client `tag`; see the
 [suite guide](../../apps/e2e/README.md) for downloaded clients and remaining dev driver builds.
@@ -290,8 +291,8 @@ Run them with `make test:apps:mdeploy`; workflow lint alone does not exercise lo
 
 | Action | Sites | Used by |
 | --- | --- | --- |
-| `mbuild` | 2 | mdeploy-all plan/build and the reusable mbuild workflow |
-| `build-staged-runner` | 1 | mdeploy-all plan/build |
+| `mbuild` | 2 | mdeploy-all image preparation and the reusable mbuild workflow |
+| `build-staged-runner` | 1 | mdeploy-all Runner preparation |
 | `mdeploy` | 2 | mdeploy-all release apply and commit deploy |
 | `ci-config` | 3 | config, lint, test |
 | `setup-rust` | 10 | build-c, build-node, build-runtime ×2, build-wheels, lint ×2, test ×3 |
