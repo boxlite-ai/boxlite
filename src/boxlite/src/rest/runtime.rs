@@ -852,26 +852,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_import_box_discovers_server_version() {
-        let (port, server) = json_server(vec![r#"{"api_version":"0.11.0"}"#]).await;
+    async fn test_import_box_sends_archive_without_version_discovery() {
+        let (port, server) = exchange_server(vec![(200, BOX_RESPONSE)]).await;
         let options = BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"));
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
         let archive = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(
-            archive.path(),
-            b"archive bytes must not reach an old server",
-        )
-        .unwrap();
+        std::fs::write(archive.path(), b"archive bytes").unwrap();
 
-        let result = RuntimeBackend::import_box(
+        RuntimeBackend::import_box(
             &runtime,
             BoxArchive::new(archive.path()),
             Some("x".to_string()),
         )
-        .await;
+        .await
+        .unwrap();
 
-        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
-        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+        assert_eq!(
+            server.await.unwrap(),
+            [(
+                "POST /v1/boxes/import?name=x HTTP/1.1".into(),
+                "archive bytes".into()
+            )]
+        );
     }
 
     #[tokio::test]

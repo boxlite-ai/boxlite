@@ -778,7 +778,6 @@ paths:
       - $ref: "#/components/parameters/prefix"
     post:
       operationId: importBox
-      x-boxlite-min-server-version: "next-release"
       summary: Import a box from an archive
       description: |
         Imports a `.boxlite` archive (produced by the export endpoint) to create

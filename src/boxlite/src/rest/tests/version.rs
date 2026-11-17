@@ -310,42 +310,65 @@ async fn defaults_are_sent_unchanged_without_discovery() {
 }
 
 #[tokio::test]
-async fn all_send_paths_enforce_the_route_inventory() {
-    let client = ApiClient::new(&BoxliteRestOptions::new("http://127.0.0.1:1")).unwrap();
-    let mut errors = vec![
-        client.get::<Value>("/undeclared").await.unwrap_err(),
-        client
-            .post_no_content("/undeclared", &json!({}))
-            .await
-            .unwrap_err(),
-        client
-            .post_for_bytes("/undeclared", &json!({}))
-            .await
-            .unwrap_err(),
-        client
-            .post_bytes_for_json::<Value>("/undeclared", vec![1], &[])
-            .await
-            .unwrap_err(),
-        client.head_exists("/undeclared").await.unwrap_err(),
-        client
-            .send_file(
-                Method::PUT,
-                "/undeclared",
-                Some(reqwest::Body::wrap_stream(futures::stream::pending::<
-                    Result<bytes::Bytes, std::io::Error>,
-                >())),
-            )
-            .await
-            .unwrap_err(),
-        client
-            .send_file(Method::GET, "/undeclared", None)
-            .await
-            .unwrap_err(),
-    ];
-    errors.push(client.connect_ws("/undeclared").await.unwrap_err());
-    for error in errors {
-        assert!(matches!(error, BoxliteError::Internal(_)), "{error}");
+async fn unmatched_routes_reach_the_server_without_discovery() {
+    let mut replies = vec![(200, "{}".into()); 7];
+    replies.push((400, "{}".into()));
+    let (options, task) = server(replies).await;
+    let client = ApiClient::new(&options).unwrap();
+    client.get::<Value>("/undeclared").await.unwrap();
+    client
+        .post_no_content("/undeclared", &json!({}))
+        .await
+        .unwrap();
+    client
+        .post_for_bytes("/undeclared", &json!({}))
+        .await
+        .unwrap();
+    client
+        .post_bytes_for_json::<Value>("/undeclared", b"1".to_vec(), &[])
+        .await
+        .unwrap();
+    assert!(client.head_exists("/undeclared").await.unwrap());
+    client
+        .send_file(Method::PUT, "/undeclared", Some(reqwest::Body::from("{}")))
+        .await
+        .unwrap();
+    client
+        .send_file(Method::GET, "/undeclared", None)
+        .await
+        .unwrap();
+    assert!(client.connect_ws("/undeclared").await.is_err());
+    let requests = task.await.unwrap();
+    assert_eq!(requests.len(), 8);
+    for ((headers, _), method) in requests
+        .iter()
+        .zip(["GET", "POST", "POST", "POST", "HEAD", "PUT", "GET", "GET"])
+    {
+        assert!(
+            headers.starts_with(&format!("{method} /v1/undeclared HTTP/1.1")),
+            "{headers}"
+        );
     }
+    assert!(
+        requests[7]
+            .0
+            .to_ascii_lowercase()
+            .contains("upgrade: websocket")
+    );
+}
+
+#[tokio::test]
+async fn import_sends_archive_without_version_discovery() {
+    let (options, task) = server(vec![(200, "{}".into())]).await;
+    ApiClient::new(&options)
+        .unwrap()
+        .post_bytes_for_json::<Value>("/boxes/import", b"1".to_vec(), &[])
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].0.starts_with("POST /v1/boxes/import HTTP/1.1"));
+    assert_eq!(requests[0].1, json!(1));
 }
 
 #[tokio::test]
@@ -360,10 +383,6 @@ async fn operation_rules_cover_empty_bytes_and_json_responses() {
             .unwrap_err(),
         client
             .get::<Value>("/boxes/id/snapshots")
-            .await
-            .unwrap_err(),
-        client
-            .post_bytes_for_json::<Value>("/boxes/import", vec![1], &[])
             .await
             .unwrap_err(),
     ];

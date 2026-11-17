@@ -90,8 +90,62 @@ fn routing_uses_exact_base_prefix_and_encoded_segments() {
             .get(format!("{base}wrong/boxes"))
             .build()
             .unwrap();
-        assert!(requirement(&request, &root, prefix).is_err());
+        assert!(requirement(&request, &root, prefix).unwrap().is_none());
     }
+}
+
+#[test]
+fn normalized_prefixes_preserve_operation_and_field_gates() {
+    let root = Url::parse("https://example.test/api/v1").unwrap();
+    for prefix in [
+        "team alpha",
+        "-team ' \" \\ % ; $(touch injected)",
+        "region/team alpha",
+        "region/",
+        "region//team",
+        "region/./team",
+        "region/deleted/../team",
+        "team%20alpha",
+        "team%2Falpha",
+        "团队",
+    ] {
+        for (path, operation, body) in [
+            ("/boxes/id/snapshots", "listSnapshots", None),
+            (
+                "/boxes/id/exec",
+                "startExecution",
+                Some(json!({"user":"1000"})),
+            ),
+        ] {
+            let url = format!("{root}/{prefix}{path}");
+            let builder = match body {
+                Some(body) => Client::new().post(url).json(&body),
+                None => Client::new().get(url),
+            };
+            let request = builder.build().unwrap();
+            let gate = requirement(&request, &root, Some(prefix)).unwrap().unwrap();
+            assert_eq!(gate.operation, operation, "{prefix}");
+            assert!(gate.check(&Version::parse("0.0.0").unwrap()).is_err());
+            assert!(gate.check(&Version::parse(api_version()).unwrap()).is_ok());
+        }
+    }
+}
+
+#[test]
+fn unmatched_routes_skip_version_checks_within_the_rest_base() {
+    let root = Url::parse("https://example.test/v1").unwrap();
+    for (method, path) in [("GET", "/undeclared"), ("PATCH", "/boxes")] {
+        let request = Client::new()
+            .request(method.parse().unwrap(), format!("{root}{path}"))
+            .build()
+            .unwrap();
+        assert!(requirement(&request, &root, None).unwrap().is_none());
+    }
+    let request = Client::new()
+        .get("https://other.test/v1/boxes")
+        .build()
+        .unwrap();
+    assert!(requirement(&request, &root, None).is_err());
 }
 
 #[test]

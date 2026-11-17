@@ -146,21 +146,28 @@ fn evaluate<'a>(
         .ok_or_else(|| {
             BoxliteError::Internal("request is outside the configured Box REST base".into())
         })?;
-    let prefix = prefix.filter(|s| !s.is_empty()).map(|s| format!("/{s}"));
-    let route = routes
+    // Match the URL parser used by the transport, including encoding and dot
+    // segments. The trailing slash keeps the prefix's final segment complete.
+    let normalized_prefix = prefix
+        .filter(|s| !s.is_empty())
+        .map(|prefix| Url::parse(&format!("{root}/{prefix}/")))
+        .transpose()
+        .map_err(|error| BoxliteError::Config(format!("invalid REST path prefix: {error}")))?;
+    let prefix = normalized_prefix.as_ref().map(|url| {
+        let path = url.path().strip_prefix(root.path()).unwrap_or(url.path());
+        path.strip_suffix('/').unwrap_or(path)
+    });
+    let Some(route) = routes
         .iter()
         .filter(|r| r.method == request.method().as_str())
         .filter(|r| {
-            let (template, candidate) = route_path(&r.path, path, prefix.as_deref());
+            let (template, candidate) = route_path(&r.path, path, prefix);
             matches_path(template, candidate)
         })
         .max_by_key(|r| r.path.split('/').filter(|s| !s.starts_with('{')).count())
-        .ok_or_else(|| {
-            BoxliteError::Internal(format!(
-                "{} request has no matching OpenAPI operation; regenerate SDK version rules",
-                request.method()
-            ))
-        })?;
+    else {
+        return Ok(None);
+    };
     let mut required = route.minimum.as_ref().map(|minimum| Requirement {
         operation: &route.operation,
         field: None,
@@ -209,7 +216,7 @@ fn evaluate<'a>(
                 })
                 .collect::<BoxliteResult<Vec<_>>>()?,
             "path" => {
-                let (template, candidate) = route_path(&route.path, path, prefix.as_deref());
+                let (template, candidate) = route_path(&route.path, path, prefix);
                 template
                     .split('/')
                     .zip(candidate.split('/'))

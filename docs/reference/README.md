@@ -59,6 +59,14 @@ applies only when that property triggers its declared condition. JSON, empty
 responses, binary responses, file streams, and WebSocket handshakes all use the
 same evaluator. Proxy CONNECT is a separate protocol; its REST preparation is checked.
 
+Route matching normalizes the configured prefix with the transport's URL parser.
+For example, `team alpha` matches `/v1/team%20alpha/boxes/id/snapshots` and still
+applies the snapshot minimum. Requests within the REST base without a matching
+route proceed without version discovery; server validation remains authoritative.
+
+Archive import has no operation minimum and sends its payload without querying
+`/v1/config`. Export retains its declared operation minimum.
+
 The first request that needs a version fetches `/v1/config`. Successful discovery
 is cached for the client lifetime and shared with clones and derived boxes.
 There is no TTL or refresh API. Failed or cancelled discovery is retryable;
@@ -118,8 +126,8 @@ Numeric minima cannot exceed the workspace release. `unplanned` dominates all tr
 
 CI rejects stale generated rules/identity, ungated new operations and reachable
 request fields, malformed minima, and numeric requirements newer than the workspace.
-Response-only/read-only additions do not require request gates. Unknown SDK routes
-fail locally instead of bypassing checks.
+Response-only/read-only additions do not require request gates. Requests without a
+matching generated route skip version checks and proceed to the server.
 
 The generator supports local references, nested object properties, `allOf`,
 whole-property `present` checks, scalar `non-default` checks, and scalar query,
@@ -155,7 +163,7 @@ Include those changes in the bump PR. Release checks refuse remaining `next-rele
 stale artifacts, and mismatched release tags; `unplanned` remains valid and explicitly refused.
 SDK release workflows and cloud image release publication enforce these checks.
 
-The initial migration's snapshot, clone/export/import, capability policy,
+The initial migration's snapshot, clone/export, capability policy,
 privilege, execution-user, and private-tunnel rules are `next-release`.
 They make no claim that released `0.12.0` supports the new compatibility contract.
 

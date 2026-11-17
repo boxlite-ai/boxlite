@@ -91,10 +91,6 @@ func TestCheckpointClientOrdinaryImportUsesNativePresenceAndCachesSuccess(t *tes
 			imports := 0
 			client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				if r.URL.Path == "/v1/config" {
-					_, _ = io.WriteString(w, `{"capabilities":{"import_enabled":true}}`)
-					return
-				}
 				if r.Method == http.MethodGet {
 					if scenario == "already-present" {
 						_, _ = io.WriteString(w, checkpointWireBox("existing", "target", "stopped", "alpine:latest"))
@@ -162,7 +158,7 @@ func TestCheckpointClientLifecycleUsesNativeRESTUnderTargetLease(t *testing.T) {
 				client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					if r.URL.Path == "/v1/config" {
-						_, _ = io.WriteString(w, `{"capabilities":{"export_enabled":true}}`)
+						_, _ = fmt.Fprintf(w, `{"api_version":%q}`, sdk.Version())
 						return
 					}
 					if r.Method == http.MethodGet {
@@ -290,10 +286,6 @@ func TestCheckpointNativeAdapterImport(t *testing.T) {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				if r.URL.Path == "/v1/config" {
-					_, _ = io.WriteString(w, `{"capabilities":{"import_enabled":true}}`)
-					return
-				}
 				if r.Method != http.MethodPost || r.URL.Path != "/v1/boxes/import" || r.URL.Query().Get("name") != "checkpoint-test" {
 					t.Errorf("unexpected import request: %s %s", r.Method, r.URL)
 				}
@@ -355,7 +347,7 @@ func TestCheckpointClientExportThroughNativeREST(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				switch {
 				case r.URL.Path == "/v1/config":
-					_, _ = io.WriteString(w, `{"capabilities":{"export_enabled":true}}`)
+					_, _ = fmt.Fprintf(w, `{"api_version":%q}`, sdk.Version())
 				case scenario == "lookup-error" || (scenario == "export-error" && r.Method == http.MethodPost):
 					w.WriteHeader(http.StatusConflict)
 					_, _ = io.WriteString(w, `{"error":{"code":"invalid_state","message":"native operation rejected"}}`)

@@ -35,7 +35,7 @@
   {"method":"GET","path":"/{prefix}/volumes/{volume_id}","operation":"getVolume","rules":[]},
   {"method":"HEAD","path":"/{prefix}/boxes/{box_id}","operation":"boxExists","rules":[]},
   {"method":"POST","path":"/{prefix}/boxes","operation":"createBox","rules":[{"location":"body","path":["advanced","privileged"],"minimum":"0.13.1","condition":"non-default","default":false},{"location":"body","path":["advanced","capabilities"],"minimum":"0.13.1","condition":"present"}]},
-  {"method":"POST","path":"/{prefix}/boxes/import","operation":"importBox","rules":[],"minimum":"0.13.1"},
+  {"method":"POST","path":"/{prefix}/boxes/import","operation":"importBox","rules":[]},
   {"method":"POST","path":"/{prefix}/boxes/{box_id}/clone","operation":"cloneBox","rules":[],"minimum":"0.13.1"},
   {"method":"POST","path":"/{prefix}/boxes/{box_id}/exec","operation":"startExecution","rules":[{"location":"body","path":["user"],"minimum":"0.13.1","condition":"present"}]},
   {"method":"POST","path":"/{prefix}/boxes/{box_id}/executions/{exec_id}/resize","operation":"resizeExecution","rules":[]},
