@@ -6,6 +6,9 @@ promo redemption, or direct entry to Quickstart.
 ## Card setup and optional credits
 
 The steps are Organization, Use case, and Get credits.
+The card step offers **Connect card**, promo redemption, and an optional exploration
+exit without advertising a fixed welcome-credit amount. Visible and screen-reader
+copy describe setup rather than promising a reward; actual balances come from billing.
 The organization form includes terms and privacy links with an explicit checkbox;
 that confirmation is local form state. The organization API continues to save the name only.
 Confirmed name changes survive reloads before use-case submission.

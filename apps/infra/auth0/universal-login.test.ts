@@ -353,8 +353,8 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   assert.deepEqual([...copy.keys()].sort(), ['login', 'login-id', 'signup', 'signup-id'])
   // Identifier First serves login-id/signup-id, so both variants of each screen carry the same copy.
   for (const [prompt, title, description] of [
-    ['login-id', 'Start building on BoxLite', '$100 in free credits with your new account.'],
-    ['login', 'Start building on BoxLite', '$100 in free credits with your new account.'],
+    ['login-id', 'Start building on BoxLite', 'Log in to your BoxLite account.'],
+    ['login', 'Start building on BoxLite', 'Log in to your BoxLite account.'],
     ['signup-id', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
     ['signup', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
   ] as const) {

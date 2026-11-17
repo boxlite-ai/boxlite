@@ -493,6 +493,11 @@ keys starting with `_` are comments the command never sends. Identifier First se
 `signup-id`, and the single-step `login` and `signup` return when it is off, so each pair carries the
 same copy. The checked-in-copy test in `auth0/universal-login.test.ts` pins both.
 
+Login and signup prompts use account instructions without promising welcome credits.
+The checked-in verification and password-reset emails likewise contain no credit offer.
+Keep promotional amounts out of these identity messages; billing owns credit grants.
+Prompt-copy updates require the preview/apply procedure above even after deploying the dashboard.
+
 The copy renders on the stage's Auth0 domain (`auth.dev.boxlite.ai` for dev), not the dashboard
 origin, and only to a visitor without an Auth0 session. After `apply`, run `preview` again: it reads
 the tenant back and reports `already up to date` once every write has landed.
