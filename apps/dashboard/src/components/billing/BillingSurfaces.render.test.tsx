@@ -84,7 +84,7 @@ describe('billing surface contracts', () => {
     expect(host.querySelector('thead')?.textContent).toContain('Starter')
     expect(host.querySelector('thead')?.textContent).toContain('$4.99')
     expect(host.querySelector('thead')?.textContent).not.toContain('/ month')
-    expect(row('Bonus amount').textContent).toContain('—$20$400')
+    expect(row('Bonus amount').textContent).toContain('—Not specified$20$400')
     expect(row('Max Box size').textContent).toContain('1C · 2G · 10G')
     expect([...row('Max concurrency').querySelectorAll('td')].map((td) => td.textContent)).toEqual([
       '2',
@@ -121,7 +121,44 @@ describe('billing surface contracts', () => {
     expect(headers[2].textContent).toContain('Pay as you go')
     expect(headers[3].textContent).toContain('Unrecognized$12.34')
     const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === 'Hosted secrets')!
-    expect([...row.querySelectorAll('td')].map((td) => td.textContent)).toEqual(['Unlimited', '2', '—', 'By agreement'])
+    expect([...row.querySelectorAll('td')].map((td) => td.textContent)).toEqual([
+      'Unlimited',
+      '2',
+      '—Not specified',
+      'By agreement',
+    ])
+  })
+  it.each([undefined, { ...plan, status: 'canceled' as const }])(
+    'shows PAYG as current without an active subscription',
+    (subscription) => {
+      const host = render(
+        <MemoryRouter>
+          <PlanComparison
+            plans={catalog.map((entry, index) => ({ ...entry, priceMonthlyCents: [0, 499, 10000][index] }))}
+            organizationPlan={subscription}
+          />
+          <RouteProbe />
+        </MemoryRouter>,
+      )
+      const payg = host.querySelectorAll('thead th')[1]
+      const button = payg.querySelector('button')
+      expect(button?.textContent).toBe('Current plan')
+      expect(button?.disabled).toBe(true)
+      act(() => button?.click())
+      expect(host.querySelector('output')?.textContent).toBe('/')
+    },
+  )
+  it('exposes unspecified allowances and benefits to screen readers', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison plans={catalog} />
+      </MemoryRouter>,
+    )
+    for (const label of ['Usage funding', 'Bonus amount', 'Trial eligibility', 'Volumes']) {
+      const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === label)!
+      expect(row.querySelector('[aria-hidden="true"]')?.textContent).toBe('—')
+      expect(row.querySelector('.sr-only')?.textContent).toBe('Not specified')
+    }
   })
   it('handles empty and extra catalogue entries without inventing benefits', () => {
     const host = render(
@@ -132,7 +169,7 @@ describe('billing surface contracts', () => {
     )
     expect(host.textContent).toContain('No plans are available right now.')
     const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === 'Max Box size')!
-    expect(row.querySelectorAll('td')[3].textContent).toBe('—')
+    expect(row.querySelectorAll('td')[3].textContent).toBe('—Not specified')
   })
   it('presents PAYG without a monthly price and prevents non-owner plan actions', () => {
     const host = render(
@@ -147,6 +184,7 @@ describe('billing surface contracts', () => {
     expect(host.querySelectorAll('thead th')[1].textContent).toContain('Pay as you go')
     expect(host.querySelectorAll('thead th')[1].textContent).not.toContain('$0')
     expect([...host.querySelectorAll('button')].every((button) => button.disabled)).toBe(true)
+    expect(host.querySelectorAll('colgroup col[class]')).toHaveLength(1)
     expect(host.querySelector('a[href="mailto:support@boxlite.ai"]')).toBeNull()
   })
   it('offers contact instead of checkout when catalogue prices differ from the displayed design', () => {

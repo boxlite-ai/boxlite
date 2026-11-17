@@ -36,7 +36,8 @@ export function PlansSection() {
           </Button>
         </div>
       ) : loading ? (
-        <div aria-label="Loading plans" className="space-y-3">
+        <div role="status" className="space-y-3">
+          <span className="sr-only">Loading plans</span>
           <Skeleton className="h-36 w-full" />
           <Skeleton className="h-64 w-full" />
         </div>

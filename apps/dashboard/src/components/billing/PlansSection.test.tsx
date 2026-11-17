@@ -54,7 +54,7 @@ describe('Plans section states', () => {
   it('shows a loading surface instead of an empty comparison during catalogue loading', () => {
     state.catalog.isLoading = true
     const host = render()
-    expect(host.querySelector('[aria-label="Loading plans"]')).not.toBeNull()
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Loading plans')
     expect(host.querySelector('table')).toBeNull()
   })
   it('retries both owner queries after an error', () => {

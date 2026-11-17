@@ -36,7 +36,10 @@ Billing tabs use `?tab=overview|plans|usage|wallet`, preserving other parameters
 Browser back/forward and direct links restore the selected tab. Owners can use
 existing current/scheduled/upgrade/downgrade actions. Other members can compare
 public plans but are directed to their organization owner to change a plan.
-Existing APIs, charge calculations and confirmation routes are unchanged.
+For owners with confirmed subscription data, accounts without a live subscription show the zero-priced PAYG tier as current,
+matching Overview, and cannot enter subscription checkout for that tier. Existing
+APIs, charge calculations and paid-plan confirmation routes are unchanged.
+Loading uses a status message; unspecified values include screen-reader text.
 
 Retention is split into its reference point and maximum time after that point:
 PAYG uses overdue time; paid tiers use subscription end. All apply only when
@@ -104,7 +107,7 @@ catalogue; the final screenshots use the subscription-cards preview catalogue.
 
 [Light theme](plans-light.png) · [Mobile](plans-mobile.png)
 
-Dashboard tests: 147 files / 1,582 tests passed. Production build passed.
+Dashboard tests: 147 files / 1,585 tests passed. Production build passed.
 The catalogue-reordering regression failed before the mapping fix and passed
 afterward. Workspace lint reports three pre-existing module-boundary errors in
 infra/deployment/release-audit-workflow.test.ts, outside this change.

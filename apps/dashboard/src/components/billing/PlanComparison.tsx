@@ -20,6 +20,17 @@ const currency = (cents: number) =>
 const CELL = 'border-b border-border px-4 py-2.5 text-left align-top font-normal'
 const LABEL = `${CELL} sticky left-0 z-10 bg-background text-muted-foreground`
 
+function UnspecifiedValue() {
+  return (
+    <>
+      <span aria-hidden="true" className="text-muted-foreground">
+        —
+      </span>
+      <span className="sr-only">Not specified</span>
+    </>
+  )
+}
+
 function ComparisonRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <tr>
@@ -42,7 +53,13 @@ export function PlanComparison({
   canManage?: boolean
 }) {
   const navigate = useNavigate()
-  const currentId = organizationPlan?.status === 'canceled' ? undefined : organizationPlan?.planId
+  // No live subscription is wallet-funded PAYG, as in the account Overview.
+  const currentId =
+    organizationPlan && organizationPlan.status !== 'canceled'
+      ? organizationPlan.planId
+      : canManage
+        ? plans.find((plan) => planTierIndex(plan.name) === 0 && plan.priceMonthlyCents === 0)?.id
+        : undefined
   const currentPriceCents = plans.find((plan) => plan.id === currentId)?.priceMonthlyCents ?? null
   const columnCount = plans.length + 2
   const custom = <td className={`${CELL} text-muted-foreground`}>By agreement</td>
@@ -92,7 +109,10 @@ export function PlanComparison({
                 const index = planTierIndex(plan.name)
                 const presentation = PLAN_PRESENTATION[index]
                 const priceMatches = !presentation || plan.priceMonthlyCents === presentation.priceCents
-                const cta = planCardCta({ plan, organizationPlan, currentPriceCents })
+                const cta =
+                  plan.id === currentId
+                    ? { label: 'Current plan', disabled: true }
+                    : planCardCta({ plan, organizationPlan, currentPriceCents })
                 return (
                   <th
                     scope="col"
@@ -163,13 +183,7 @@ export function PlanComparison({
             <ComparisonRow label="Usage funding">
               {plans.map((plan) => (
                 <td key={plan.id} className={CELL}>
-                  {planTierIndex(plan.name) === 0 ? (
-                    'Usage charged to your wallet'
-                  ) : (
-                    <span aria-label="Not specified" className="text-muted-foreground">
-                      —
-                    </span>
-                  )}
+                  {planTierIndex(plan.name) === 0 ? 'Usage charged to your wallet' : <UnspecifiedValue />}
                 </td>
               ))}
               {custom}
@@ -179,13 +193,7 @@ export function PlanComparison({
                 const bonusCents = PLAN_PRESENTATION[planTierIndex(plan.name)]?.bonusCents
                 return (
                   <td key={plan.id} className={CELL}>
-                    {bonusCents != null ? (
-                      currency(bonusCents)
-                    ) : (
-                      <span aria-label="Not specified" className="text-muted-foreground">
-                        —
-                      </span>
-                    )}
+                    {bonusCents != null ? currency(bonusCents) : <UnspecifiedValue />}
                   </td>
                 )
               })}
@@ -197,9 +205,7 @@ export function PlanComparison({
                   {planTierIndex(plan.name) === 1 || planTierIndex(plan.name) === 2 ? (
                     '3-day free trial · card verification required'
                   ) : (
-                    <span aria-label="Not specified" className="text-muted-foreground">
-                      —
-                    </span>
+                    <UnspecifiedValue />
                   )}
                 </td>
               ))}
@@ -219,11 +225,7 @@ export function PlanComparison({
                   <ComparisonRow key={row.label} label={row.label}>
                     {plans.map((plan) => (
                       <td key={plan.id} className={CELL}>
-                        {row.values[planTierIndex(plan.name)] ?? (
-                          <span aria-label="Not specified" className="text-muted-foreground">
-                            —
-                          </span>
-                        )}
+                        {row.values[planTierIndex(plan.name)] ?? <UnspecifiedValue />}
                       </td>
                     ))}
                     {custom}
