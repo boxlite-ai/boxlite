@@ -16,6 +16,10 @@ use crate::{Error, Result, VcpuExit};
 /// Number of u32 words in kvm_xsave.region, before its flexible-array tail.
 const XSAVE_REGION_WORDS: usize = 1024;
 
+/// KVM_SET_MSRS returns E2BIG when nmsrs >= KVM_MAX_MSR_ENTRIES;
+/// each ioctl can write at most 255 entries.
+const MAX_MSR_BATCH_ENTRIES: usize = kvm_bindings::KVM_MAX_MSR_ENTRIES - 1;
+
 /// A Linux x86_64 vCPU bound to its creating thread.
 ///
 /// Creation leaves KVM's reset register state intact and reserves the kick
@@ -350,7 +354,7 @@ impl KvmVcpu {
             }
             self.fd.set_sregs(&state.sregs)?;
             self.fd.set_lapic(&state.lapic)?;
-            for chunk in state.msrs.chunks(kvm_bindings::KVM_MAX_MSR_ENTRIES) {
+            for chunk in state.msrs.chunks(MAX_MSR_BATCH_ENTRIES) {
                 let msrs = kvm_bindings::Msrs::from_entries(chunk)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
                 let written = self.fd.set_msrs(&msrs)?;
@@ -513,6 +517,190 @@ mod tests {
                 buffer.decode(),
                 Err(Error::UnhandledExit { id: 7, .. })
             ));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_rejects_xsave_and_xcr_shapes_before_writing_registers() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let valid = cpu.save_state().unwrap();
+        let original = cpu.fd.get_regs().unwrap();
+        for case in 0..4 {
+            let mut state = valid.clone();
+            state.regs.rax = original.rax ^ 0x1234;
+            match case {
+                0 => state.xsave.clear(),
+                1 => {
+                    state.xsave.pop();
+                }
+                2 => state.xsave.push(0),
+                3 => state.xcrs.nr_xcrs = state.xcrs.xcrs.len() as u32 + 1,
+                _ => unreachable!(),
+            }
+            let error = cpu.restore_state(&state).unwrap_err();
+            assert!(
+                matches!(error, Error::ConfigureVcpu { id: 0, operation: "restore CPU state", ref source }
+                if source.kind() == io::ErrorKind::InvalidInput
+                    && source.to_string() == "invalid XSAVE/XCR snapshot shape"),
+                "{error:?}"
+            );
+            assert_eq!(cpu.fd.get_regs().unwrap(), original);
+        }
+        // A real capture is still accepted after every pre-write rejection.
+        cpu.restore_state(&valid).unwrap();
+        assert_eq!(cpu.fd.get_regs().unwrap(), valid.regs);
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_rejects_a_cpu_after_interrupted_entry() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let state = cpu.save_state().unwrap();
+        cpu.fd.set_kvm_immediate_exit(1);
+        assert!(matches!(cpu.run().unwrap(), VcpuExit::Interrupted));
+        let error = cpu.restore_state(&state).unwrap_err();
+        assert!(matches!(error, Error::ConfigureVcpu { ref source, .. }
+            if source.kind() == io::ErrorKind::InvalidInput
+                && source.to_string() == "restore requires a fresh, never-entered vCPU"));
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_handles_empty_and_multiple_msr_batches() {
+        let mut failures = Vec::new();
+        for count in [
+            0,
+            kvm_bindings::KVM_MAX_MSR_ENTRIES - 1,
+            kvm_bindings::KVM_MAX_MSR_ENTRIES,
+            kvm_bindings::KVM_MAX_MSR_ENTRIES + 1,
+            4096,
+        ] {
+            // Failed restores are not transactional: use a fresh destination
+            // for each boundary and report all failures, not just the first.
+            let vm = super::super::KvmVm::new().unwrap();
+            let mut cpu = vm.create_vcpu(0).unwrap();
+            cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+            let mut state = cpu.save_state().unwrap();
+            state.msrs = (0..count)
+                .map(|i| kvm_bindings::kvm_msr_entry {
+                    index: 0xc0000102,
+                    data: (i + 1) as u64,
+                    ..Default::default()
+                })
+                .collect();
+            // The codec's 4096-entry ceiling exceeds one KVM ioctl batch.
+            let encoded = postcard::to_allocvec(&state).unwrap();
+            let decoded = postcard::from_bytes(&encoded).unwrap();
+            if let Err(error) = cpu.restore_state(&decoded) {
+                failures.push((count, error));
+                continue;
+            }
+            let actual = cpu.save_state().unwrap();
+            assert_eq!(
+                actual
+                    .msrs
+                    .iter()
+                    .find(|e| e.index == 0xc0000102)
+                    .unwrap()
+                    .data,
+                count as u64
+            );
+        }
+        assert!(
+            failures.is_empty(),
+            "MSR batch restore failures: {failures:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_matches_kvm_for_a_changed_tsc_scale() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let mut state = cpu.save_state().unwrap();
+        assert!(state.tsc_khz > 1);
+        let original = state.tsc_khz;
+        state.tsc_khz /= 2;
+        // Query the real ioctl as the oracle: hosts without TSC scaling
+        // reject a lower rate. Restore must preserve that failure too.
+        let expected = cpu.fd.set_tsc_khz(state.tsc_khz);
+        cpu.fd.set_tsc_khz(original).unwrap();
+        match expected {
+            Ok(()) => {
+                cpu.restore_state(&state).unwrap();
+                assert_eq!(cpu.fd.get_tsc_khz().unwrap(), state.tsc_khz);
+            }
+            Err(expected) => {
+                let error = cpu.restore_state(&state).unwrap_err();
+                assert!(
+                    matches!(error, Error::ConfigureVcpu { operation: "restore CPU state", ref source, .. }
+                    if source.raw_os_error() == Some(expected.errno()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_reports_the_first_rejected_msr() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let mut state = cpu.save_state().unwrap();
+        state.msrs = vec![kvm_bindings::kvm_msr_entry {
+            index: u32::MAX,
+            ..Default::default()
+        }];
+        let error = cpu.restore_state(&state).unwrap_err();
+        assert!(
+            matches!(error, Error::ConfigureVcpu { operation: "restore CPU state", ref source, .. }
+            if source.to_string().contains("first rejected index 0xffffffff"))
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_vcpus_share_the_kvm_advertised_msr_index_cache() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let first = vm.create_vcpu(0).unwrap();
+        let indices = Arc::clone(&first.msr_indices);
+        // One worker owns at most one reserved kick signal at a time.
+        drop(first);
+        let second = vm.create_vcpu(1).unwrap();
+        let advertised = kvm_ioctls::Kvm::new()
+            .unwrap()
+            .get_msr_index_list()
+            .unwrap();
+        assert_eq!(&*indices, advertised.as_slice());
+        assert!(Arc::ptr_eq(&indices, &second.msr_indices));
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_legacy_xsave_capture_uses_the_fixed_region() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        // Exercise the pre-XSAVE2 fallback on an XSAVE2-capable host too.
+        // GET_XSAVE is always the fixed-size ioctl; do not issue SET_XSAVE2
+        // with a buffer smaller than the real destination's capability.
+        cpu.xsave_size = 0;
+        let fixed = cpu.fd.get_xsave().unwrap();
+        let state = cpu.save_state().unwrap();
+        assert_eq!(state.xsave.len(), XSAVE_REGION_WORDS);
+        assert_eq!(state.xsave, fixed.region);
+        for extra_bytes in [1, 4, 5] {
+            cpu.xsave_size = size_of::<kvm_bindings::kvm_xsave>() + extra_bytes;
+            assert_eq!(
+                cpu.xsave_buffer().unwrap().as_slice().len(),
+                extra_bytes.div_ceil(4)
+            );
         }
     }
 
