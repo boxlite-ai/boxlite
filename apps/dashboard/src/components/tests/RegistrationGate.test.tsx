@@ -17,7 +17,6 @@ const businessUnmount = vi.fn()
 vi.mock('@/hooks/useApi', () => ({ useApi: () => api }))
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ turnstile: { sitekey: 'sitekey', action: 'signup' } }) }))
 vi.mock('react-oidc-context', () => ({ useAuth: () => auth }))
-vi.mock('../LoadingFallback', () => ({ default: () => <p>Checking account</p> }))
 vi.mock('../Turnstile', () => ({
   Turnstile: ({ onToken }: { onToken: (value: string | null) => void }) => {
     useEffect(() => {
@@ -103,7 +102,8 @@ describe('RegistrationGate', () => {
     await render()
     expect(api.userApi.getAuthenticatedUser).not.toHaveBeenCalled()
     expect(businessMount).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('Checking account')
+    expect(document.body.textContent).toContain('Loading')
+    expect(document.body.textContent).not.toContain('Account setup')
     await act(async () => onlineManager.setOnline(true))
     await flush()
     expect(businessMount).toHaveBeenCalledTimes(1)
@@ -130,7 +130,7 @@ describe('RegistrationGate', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(9_999)
       })
-      expect(document.body.textContent).toContain(phase === 'initial' ? 'Checking account' : 'Confirming your account')
+      expect(document.body.textContent).toContain('Loading')
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1)
       })
@@ -224,7 +224,7 @@ describe('RegistrationGate', () => {
     )
     await render()
     expect(businessMount).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('Checking account')
+    expect(document.body.textContent).toContain('Loading')
     await act(async () => resolve(userResponse))
     await flush()
     expect(businessMount).toHaveBeenCalledTimes(1)
@@ -246,7 +246,7 @@ describe('RegistrationGate', () => {
       }),
     )
     await render()
-    expect(document.body.textContent).toContain('Checking account')
+    expect(document.body.textContent).toContain('Loading')
     expect(businessMount).not.toHaveBeenCalled()
     expect(widgetMount).not.toHaveBeenCalled()
     await act(async () => resolve(userResponse))

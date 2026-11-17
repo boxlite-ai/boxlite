@@ -11,7 +11,8 @@ import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { shouldAutoOpenOnboarding } from '@/lib/onboarding-visibility'
 import { getLocalStorageItem } from '@/lib/local-storage'
 import { Button } from './ui/button'
-import { SetupLayout, SetupPending } from './SetupLayout'
+import { SetupLayout } from './SetupLayout'
+import LoadingFallback from './LoadingFallback'
 
 /** Resolve default entry before mounting navigation; explicit resource links keep their destination. */
 export function OnboardingEntryGate({ children }: { children: ReactNode }) {
@@ -85,7 +86,7 @@ function AccountEntry({
   }
   if (requested) return <Navigate to={RoutePath.QUICKSTART} replace />
   if (dismissed || admitted) return children
-  if (decision.isPending || decision.isFetching || !decision.isFetchedAfterMount) return <SetupPending />
+  if (decision.isPending || decision.isFetching || !decision.isFetchedAfterMount) return <LoadingFallback />
   if (decision.isError)
     return (
       <SetupLayout

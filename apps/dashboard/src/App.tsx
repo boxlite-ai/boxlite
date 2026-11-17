@@ -15,7 +15,6 @@ import { useAuth } from 'react-oidc-context'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import LoadingFallback from './components/LoadingFallback'
-import { SetupPending } from './components/SetupLayout'
 import { RegistrationGate } from './components/RegistrationGate'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
@@ -147,7 +146,7 @@ function App() {
       <Route
         path={RoutePath.DASHBOARD}
         element={
-          <Suspense fallback={<SetupPending />}>
+          <Suspense fallback={<LoadingFallback />}>
             <ApiProvider>
               <RegistrationGate key={user?.profile.sub}>
                 <OrganizationsProvider>
