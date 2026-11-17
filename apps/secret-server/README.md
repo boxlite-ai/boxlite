@@ -345,3 +345,31 @@ It also combines the production local/dev attestation selector with HTTP and
 PostgreSQL to check allowed organization/box access, rejected foreign ownership,
 and missing-proof rejection before API contact. This does not exercise real GCP
 tokens or replace staging identity verification.
+
+### Credential API contract integration
+
+`make test:apps:secret-server:credential-api` runs the actual service, controller
+and migration from API PR #2769 at commit
+`bd10e984f00758222bfe6724fa3994a17c8e1329`, with the Go fetch handler and real
+PostgreSQL. The harness reads these files from Git into a temporary directory;
+it does not change the API checkout or implement a second credential service.
+
+Prerequisites: the pinned commit must be available locally (`git fetch origin
+pull/2769/head`), Node.js, installed apps dependencies (`make _ensure-apps-deps`),
+Go, and a disposable PostgreSQL instance allowing database creation.
+
+```sh
+SECRET_TEST_DATABASE_URL=postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite \
+  make test:apps:secret-server:credential-api
+```
+
+`NODE_PATH` may point to an existing apps dependency installation; otherwise the
+target uses this worktree's `apps/node_modules`. The harness creates a temporary
+API schema and a separate secret database, then removes both. Its loopback-only
+issuance fixture invokes the real service; it is not a production API endpoint.
+
+The test verifies wrong-runner rejection without consumption, successful
+redemption and decryption, replay rejection, and persisted audit outcomes. A
+missing or skipped Go test fails the harness. This validates the pinned API
+contract in an isolated Nest application, not full API startup, ingress controls,
+service deployment, or GCP attestation. Those checks remain pending.
