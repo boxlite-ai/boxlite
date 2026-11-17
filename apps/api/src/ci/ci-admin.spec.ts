@@ -516,6 +516,11 @@ integration('CI administrator HTTP + PostgreSQL contract', () => {
       await builder.query('DROP INDEX ci_binding_account_login_idx')
       await builder.query('CREATE INDEX ci_binding_account_login_idx ON ci_installation_binding (account_login)')
       await expect(new AddCiAdminIndexes1794873600001().up(builder)).rejects.toThrow('unexpected definition')
+      await builder.query('DROP INDEX ci_binding_account_login_idx')
+      await builder.query(
+        'CREATE INDEX ci_binding_account_login_idx ON ci_installation_binding USING brin (github_host,account_type,lower(account_login),id)',
+      )
+      await expect(new AddCiAdminIndexes1794873600001().up(builder)).rejects.toThrow('unexpected definition')
     } finally {
       if (writer.isTransactionActive) await writer.rollbackTransaction()
       await writer.release()
