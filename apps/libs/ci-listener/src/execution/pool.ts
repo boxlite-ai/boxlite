@@ -97,6 +97,7 @@ export class WorkerPool {
   private demandAfter = 0
   private executionAfter = 0
   private readonly idleRetryAt = new Map<string, number>()
+  private readonly creationFailures = new Map<string, { attempts: number; retryAt: number }>()
   constructor(
     private readonly journal: ExecutionJournal,
     private readonly scopeKey: string,
@@ -199,6 +200,8 @@ export class WorkerPool {
         if (current.repository !== demand.repository || current.run !== demand.run || current.job !== demand.job)
           throw new Error('Original job identity changed at admission')
         if (!jobMatches(current, this.settings.labels)) return
+        const selection = selectRunnerLabels(current.labels, this.settings.labels)
+        if (!selection || !this.creationReady(selection.label)) return
         const allocation = await this.journal.reserve(lease, this.scopeKey, demand, {
           ...policy,
           checks: [...(policy.checks ?? []), { key: scope.activity.key, version: this.recovery.version }],
@@ -385,6 +388,7 @@ export class WorkerPool {
               row.record.key,
               row.record.version,
               { closing: true },
+              queueChecks,
             )
           } else retiring.add(row.record.key)
         }
@@ -393,7 +397,7 @@ export class WorkerPool {
         pending = false
         for (const [label, target] of requested) {
           const available = supplied.get(label) ?? 0
-          if (available >= target.count) continue
+          if (available >= target.count || !this.creationReady(label)) continue
           signal?.throwIfAborted()
           await backend.admit(signal)
           const notice = {
@@ -433,6 +437,18 @@ export class WorkerPool {
     } finally {
       this.busy = false
     }
+  }
+  private creationReady(label: string): boolean {
+    return (this.creationFailures.get(label)?.retryAt ?? 0) <= Date.now()
+  }
+  private creationRejected(label: string): void {
+    const attempts = (this.creationFailures.get(label)?.attempts ?? 0) + 1
+    this.creationFailures.delete(label)
+    this.creationFailures.set(label, {
+      attempts,
+      retryAt: Date.now() + (attempts >= 3 ? 60000 : 1000 * 2 ** (attempts - 1)),
+    })
+    if (this.creationFailures.size > 4096) this.creationFailures.delete(this.creationFailures.keys().next().value!)
   }
   private async reconcileAll(
     lease: ExecutionLease,
@@ -627,6 +643,7 @@ export class WorkerPool {
           }
           const created = await backend.workers.create(launch)
           await update({ box: { phase: 'known', id: created.box_id } })
+          this.creationFailures.delete(selected.label)
         }
       }
       if (row.value.box.phase === 'requested') {
@@ -638,6 +655,10 @@ export class WorkerPool {
     } catch (error) {
       if (!(error instanceof ConfirmedWorkerCreationRejected)) throw error
       await this.journal.rejectCreation(lease, row.record.key, row.record.version, error.rejectedCreationEffect)
+      this.creationRejected(
+        selectRunnerLabels(row.value.supply?.labels ?? selection?.labels ?? this.settings.labels, this.settings.labels)!
+          .label,
+      )
       this.event(scope, row, 'ci-worker-create-rejected', 'warn')
       return
     }

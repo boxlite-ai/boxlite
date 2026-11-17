@@ -96,6 +96,8 @@ revocation. If that write loses its lease, local retirement finishes and leaves
 the metadata to the current scheduler; remote revocation failures still retain
 the handle. This grants no stale owner permission to modify execution state.
 
+## Credential metadata collection
+
 New issuance metadata records its holder's lease owner, epoch and optional
 deployment, never the token. The current scheduler collects at most sixteen
 credential records per step, using database time and version-conditional writes.
@@ -105,6 +107,13 @@ requires a recorded former holder and never revokes the user's token. Unknown
 issuance, invalid expiry and legacy PAT records without holder proof remain.
 This collector cannot stop Boxes, unregister runners or change capacity.
 
+A malformed non-scan credential record aborts the current page without committing
+its metadata deletions or advancing the collection cursor. Subsequent cycles
+report `credential-collection` with `StateCorrupt` and retry the same page;
+records on later pages remain uncollected until an operator repairs the original
+record or restores consistent state. Corruption does not authorize skipping or
+deleting unknown metadata, revoking a PAT, or releasing worker capacity.
+
 ## Deployment retirement
 
 A positively observed higher deployment permanently retires the old Listener;
@@ -113,8 +122,9 @@ The old process stops scheduling and new compensation claims, cancels discovery
 and replay, and closes its worker/backend, scanner and host credential owners.
 Every owner is attempted even when another close fails. Pending local revocation
 uses exponential retry delay capped at sixty seconds without restarting scheduling.
-An in-flight scan opening does not delay the other owners' retirement. The old
-Listener still waits for that operation to settle, closes any late reader without
+An in-flight scan opening or uncancellable worker create does not delay the
+other owners' retirement. The old Listener retains ownership until each actual
+operation settles, closes any late reader without
 querying GitHub, and retries failed retirement before returning.
 
 The current owner restores existing Box/runner identities, allocations and quota;
@@ -416,13 +426,22 @@ periodic recovery for 60 seconds. Version conflicts reload without consuming
 that remote-failure budget. A retry reconciles the original intent: it does not
 repeat an uncertain create, runner registration or JIT delivery.
 
+A confirmed creation refusal returns quota immediately and delays replacement
+admission at the stable scope/resource-label boundary: one second, then two,
+then sixty seconds for the third and later refusals. New allocation keys and
+completion wakes do not reset this delay. Other labels and resource cleanup
+remain eligible. A successful persisted create clears its label's refusal
+history. This bounded history belongs to the pool in the current owner session;
+it is not a persisted cooldown across owner restarts.
+
 `queue-revision/<installation>/<repository>` is an ingress-owned observation
 fence. Webhook observations and changed authoritative snapshots advance it in
 the same transaction as their facts/counters. Unchanged snapshots retain their
 versions, so polling cannot continually invalidate waiting consumers. A scan
 captures the revision before HTTP and verifies it on commit, including when a
-wake was acknowledged during the request. Queued idle retirement checks the
-captured repository revisions in the original intent transaction; a stale task
+wake was acknowledged during the request. Undispatched cancellation and queued
+idle retirement check the captured repository revisions in the same transaction
+as their closing update or original intent; a stale task
 cannot use an older queue snapshot to authorize deletion. Pending retirement
 intents are reconsidered against current demand after restart.
 

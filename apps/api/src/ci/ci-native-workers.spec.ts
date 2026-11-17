@@ -466,6 +466,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     expect(await db.getRepository(Box).count()).toBe(0)
     const pool = recoveringPool(host)
+    const now = Date.now(),
+      clock = jest.spyOn(Date, 'now').mockReturnValue(now)
     try {
       await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
       await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
@@ -480,9 +482,13 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         return box
       })
       await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }), { repository: 30, run: 40, job: 50 })
+      expect(await db.getRepository(Box).count()).toBe(0)
+      clock.mockReturnValue(now + 1000)
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }), { repository: 30, run: 40, job: 50 })
       expect(await db.getRepository(Box).count()).toBe(1)
       expect(await journal.used(org)).toBe(1)
     } finally {
+      clock.mockRestore()
       await pool.close()
     }
   })

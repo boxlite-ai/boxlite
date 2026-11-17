@@ -1193,6 +1193,61 @@ describe('CI shared Listener orchestration', () => {
       abort.abort()
     }
   })
+  it('retires independent deployment owners while an uncancellable create is still pending', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const entered = deferred(),
+      release = deferred(),
+      closed = deferred()
+    const close = jest.fn(async () => closed.resolve())
+    jest.mocked(backend.workers.create).mockImplementation(async () => {
+      entered.resolve()
+      await release.promise
+      return { box_id: 'late-created-box', status: 'running' }
+    })
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 300 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    const running = listener.run(abort.signal)
+    let stopped = false
+    void running.then(
+      () => {
+        stopped = true
+      },
+      () => {
+        stopped = true
+      },
+    )
+    try {
+      await entered.promise
+      await replacement.activate()
+      const result = await Promise.race([
+        closed.promise.then(() => 'closed'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ])
+      expect(result).toBe('closed')
+      expect(stopped).toBe(false)
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+      release.resolve()
+      await running
+      const current = (await replacement.acquire('replacement', 3000))!
+      const active = await inspectJournal(replacement, current)
+      expect(active.allocations.size).toBe(1)
+      expect([...active.allocations.values()][0].value.box.phase).toBe('requested')
+    } finally {
+      release.resolve()
+      abort.abort()
+      await running.catch(() => {})
+    }
+  })
   it('ends an already superseded deployment before opening discovery or worker backends', async () => {
     state = new ListenerState(db, namespace, 1)
     await new ExecutionJournal(state).initialize()

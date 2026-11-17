@@ -103,8 +103,14 @@ export class Listener {
     if (this.running) throw new Error('Listener is already running')
     this.running = true
     const scanStop = new AbortController()
-    let scans: Promise<void> | undefined
+    let scans: Promise<PromiseSettledResult<void>> | undefined
     let superseded = false
+    let retirement: Promise<void> | undefined
+    const retireDeployment = () => {
+      superseded = true
+      scanStop.abort()
+      return (retirement ??= this.drain(signal))
+    }
     try {
       while (!signal.aborted) {
         try {
@@ -113,10 +119,13 @@ export class Listener {
             superseded = true
             break
           }
-          scans ??= this.compensation.run(AbortSignal.any([signal, scanStop.signal]))
+          // Observe scan failures while in-flight execution still owns this session.
+          scans ??= Promise.allSettled([this.compensation.run(AbortSignal.any([signal, scanStop.signal]))]).then(
+            ([result]) => result,
+          )
           await this.retireKnown()
           const lease = await this.options.state.acquire(randomUUID(), this.timing.leaseMs)
-          if (lease) await this.session(lease, signal)
+          if (lease) await this.session(lease, signal, retireDeployment)
         } catch (error) {
           if (signal.aborted && error instanceof AggregateError) throw error
           if (!signal.aborted) this.options.host.report(error, 'listener-session')
@@ -128,13 +137,17 @@ export class Listener {
       try {
         if (superseded) {
           // A pending scan must not delay retirement of independent owners.
-          const retirement = this.drain(signal)
-          const [, scan] = await Promise.allSettled([retirement, scans])
-          if (scan.status === 'rejected') this.options.host.report(scan.reason, 'compensation-retirement')
-          await retirement
+          const closing = retirement ?? this.drain(signal)
+          const [, scan] = await Promise.all([Promise.allSettled([closing]), scans])
+          if (scan?.status === 'rejected') this.options.host.report(scan.reason, 'compensation-retirement')
+          await closing
           // A scan may return a reader after the first drain has finished.
           await this.drain(signal)
-        } else await scans
+        } else {
+          await scans?.then((scan) => {
+            if (scan.status === 'rejected') throw scan.reason
+          })
+        }
       } finally {
         this.running = false
       }
@@ -161,7 +174,11 @@ export class Listener {
       backoff = Math.min(backoff * 2, 60000)
     }
   }
-  private async session(lease: ExecutionLease, external: AbortSignal): Promise<void> {
+  private async session(
+    lease: ExecutionLease,
+    external: AbortSignal,
+    retireDeployment: () => Promise<void>,
+  ): Promise<void> {
     const stop = new AbortController(),
       signal = AbortSignal.any([external, stop.signal]),
       report = (operation: string) => (error: unknown) => {
@@ -226,7 +243,7 @@ export class Listener {
       const results = await Promise.allSettled([
         session.planning.close(),
         session.execution.close(),
-        this.retireKnown(),
+        this.retireSession(retireDeployment),
       ])
       const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
       if (failures.length) {
@@ -237,6 +254,21 @@ export class Listener {
       }
     }
     if (failed) throw failure
+  }
+  private async retireSession(retireDeployment: () => Promise<void>): Promise<void> {
+    let superseded: boolean
+    try {
+      superseded = await this.options.state.superseded()
+    } catch (error) {
+      try {
+        await this.retireKnown()
+      } catch (retirement) {
+        throw new AggregateError([error, retirement], 'Listener retirement and deployment observation failed')
+      }
+      throw error
+    }
+    if (superseded) await retireDeployment()
+    else await this.retireKnown()
   }
   private async retireKnown(): Promise<void> {
     const failures: unknown[] = []

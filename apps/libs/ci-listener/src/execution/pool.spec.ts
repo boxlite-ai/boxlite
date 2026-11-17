@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JitRegistration, RunnerIdentity, RunnerObservation } from '../runners'
-import { LeaseLost, StateCorrupt } from '../state/database'
+import { LeaseLost, StateConflict, StateCorrupt } from '../state/database'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { SqliteStateDatabase } from '../state/sqlite'
 import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected, WorkerState } from '../worker'
@@ -470,6 +470,82 @@ describe('CI shared worker lifecycle', () => {
       expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
     },
   )
+  it('rejects stale cancellation when a queued observation changes the repository revision', async () => {
+    supplyInventory()
+    const hint = { installationId: 1, accountId: 7, repositoryId: 21, job: { id: 55, runId: 33 } }
+    await state.ingress('1/21', async (tx) => {
+      await tx.write(await observeDemand(tx, hint, { status: 'completed', labels: ['boxlite'], runner: null }))
+    })
+    const [snapshot] = await state.read(['queue-revision/1/21'])
+    const original = (await journal.reserve(lease, key, demand, limits, { labels: ['boxlite'] }))!
+    const advance = journal.advance.bind(journal)
+    const pending = jest.spyOn(journal, 'advance').mockImplementation(async (...args) => {
+      if (args[3].closing) {
+        await state.ingress('1/21', async (tx) => {
+          await tx.write(
+            await observeDemand(
+              tx,
+              { ...hint, job: { id: 56, runId: 33 } },
+              {
+                status: 'queued',
+                labels: ['boxlite'],
+                runner: null,
+              },
+            ),
+          )
+        })
+      }
+      return advance(...args)
+    })
+    try {
+      await expect(
+        pool.balance(lease, limits, [], undefined, true, [{ key: snapshot.key, version: snapshot.version }]),
+      ).rejects.toBeInstanceOf(StateConflict)
+      expect((await journal.allocation(lease, original.record.key))!.record.version).toBe(original.record.version)
+      expect((await journal.allocation(lease, original.record.key))!.value.closing).toBe(false)
+      expect(await journal.used(definition.organization)).toBe(1)
+      expect(backend.workers.create).not.toHaveBeenCalled()
+    } finally {
+      pending.mockRestore()
+    }
+  })
+  it.each([false, true])('retains creation backoff across replacement allocations (async=%s)', async (asynchronous) => {
+    supplyInventory()
+    const clock = jest.spyOn(Date, 'now')
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const queue = new WorkQueue(2, (error) => {
+      throw error
+    })
+    const wake = jest.fn()
+    if (asynchronous) pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake })
+    jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
+      const row = await byName(launch.name)
+      throw new ConfirmedWorkerCreationRejected(row.value.effect!.id)
+    })
+    const plan = async () => {
+      await pool.balance(lease, limits, countedDemand(), undefined, true)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    try {
+      for (const [attempt, delay] of [1000, 2000, 60000].entries()) {
+        await plan()
+        expect(backend.workers.create).toHaveBeenCalledTimes(attempt + 1)
+        expect(await journal.used(definition.organization)).toBe(0)
+        expect((await rows()).allocations.size).toBe(0)
+        if (asynchronous) expect(wake).toHaveBeenCalledTimes(attempt + 1)
+        await plan()
+        expect(backend.workers.create).toHaveBeenCalledTimes(attempt + 1)
+        now += delay - 1
+        await plan()
+        expect(backend.workers.create).toHaveBeenCalledTimes(attempt + 1)
+        now++
+      }
+    } finally {
+      await queue.close()
+      clock.mockRestore()
+    }
+  })
   it('refreshes demand before creating a recovered reservation and cancels it for an empty queue', async () => {
     supplyInventory()
     const reserved = await journal.reserve(lease, key, demand, limits, { labels: settings.labels })
@@ -1003,20 +1079,79 @@ describe('CI shared worker lifecycle', () => {
     expect((await rows()).allocations.size).toBe(1)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
   })
-  it('creation refusal regression: a definitive refusal returns capacity and permits the same queued demand', async () => {
+  it('creation refusal regression: returns capacity immediately and retries queued demand after the delay', async () => {
+    const now = Date.now(),
+      clock = jest.spyOn(Date, 'now').mockReturnValue(now)
     jest.mocked(backend.workers.create).mockImplementationOnce(async (launch) => {
       const row = await byName(launch.name)
       throw new ConfirmedWorkerCreationRejected(row.value.effect!.id)
     })
-    await expect(tick()).resolves.toBeUndefined()
-    expect((await rows()).allocations.size).toBe(0)
-    expect((await rows()).workers).toHaveLength(0)
-    expect(backend.runners).not.toHaveBeenCalled()
-    expect(backend.workers.get).not.toHaveBeenCalled()
-    await tick()
-    expect((await rows()).allocations.size).toBe(1)
-    expect(backend.workers.create).toHaveBeenCalledTimes(2)
-    expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    try {
+      await expect(tick()).resolves.toBeUndefined()
+      expect((await rows()).allocations.size).toBe(0)
+      expect((await rows()).workers).toHaveLength(0)
+      expect(backend.runners).not.toHaveBeenCalled()
+      expect(backend.workers.get).not.toHaveBeenCalled()
+      await tick()
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      clock.mockReturnValue(now + 1000)
+      await tick()
+      expect((await rows()).allocations.size).toBe(1)
+      expect(backend.workers.create).toHaveBeenCalledTimes(2)
+      expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+  it('allows another resource profile while default creation is backing off', async () => {
+    supplyInventory()
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now())
+    jest.mocked(backend.workers.create).mockImplementationOnce(async (launch) => {
+      const row = await byName(launch.name)
+      throw new ConfirmedWorkerCreationRejected(row.value.effect!.id)
+    })
+    try {
+      await pool.balance(lease, capacity, countedDemand(), undefined, true)
+      await pool.balance(lease, capacity, countedDemand(1, ['boxlite-4vcpu-8gbmem-20gbdisk']), undefined, true)
+      expect(backend.workers.create).toHaveBeenCalledTimes(2)
+      expect(backend.workers.create).toHaveBeenLastCalledWith(expect.objectContaining({ cpus: 4 }))
+      jest.mocked(backend.inventory!).mockResolvedValue(
+        [...runners.values()].map((runner) => ({
+          ...runner,
+          busy: false,
+          status: 'online',
+          labels: ['self-hosted', 'linux', 'x64', 'boxlite-4vcpu-8gbmem-20gbdisk'],
+        })),
+      )
+      await pool.balance(lease, capacity, countedDemand(), undefined, true)
+      expect(backend.workers.create).toHaveBeenCalledTimes(2)
+      expect(await journal.used(definition.organization)).toBe(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+  it('clears creation refusal history after a successful persisted create', async () => {
+    let now = Date.now()
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => now)
+    const refuse = async (launch: Parameters<typeof backend.workers.create>[0]) => {
+      throw new ConfirmedWorkerCreationRejected((await byName(launch.name)).value.effect!.id)
+    }
+    try {
+      jest.mocked(backend.workers.create).mockImplementationOnce(refuse)
+      await tick()
+      now += 1000
+      await tick()
+      await finishBox()
+      jest.mocked(backend.workers.create).mockImplementationOnce(refuse)
+      await tick({ ...demand, job: 56 })
+      now += 1000
+      await tick({ ...demand, job: 56 })
+      expect(backend.workers.create).toHaveBeenCalledTimes(4)
+      expect((await allocation()).value.delivery).toBe('done')
+    } finally {
+      clock.mockRestore()
+    }
   })
   it('creation refusal regression: restart consumes a persisted refusal without retrying the original create', async () => {
     loseBox = true
