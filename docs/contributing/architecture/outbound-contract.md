@@ -348,6 +348,73 @@ Redirects are rejected, and public errors omit endpoint credentials and upstream
 `make test:apps:api TEST_FILES=runner-adapter/outbound-control.spec` exercises actual loopback HTTP, including stalled bodies and invalid acknowledgements.
 The fixture models a Runner control peer; it does not boot a guest VM.
 
+### Cloud durable intent
+
+`OutboundPolicyStore` keeps private control metadata in the Box's nullable `outboundControl` JSONB column.
+Apply pre-deploy migration `AddOutboundControl1794888000000` before deploying callers; older records use revision `initial`.
+Ordinary entity reads omit the column.
+
+The pending record contains the expected Runtime revision, full candidate policy and revision, and assigned Runner identity.
+Policy and persisted revision change together when finalization clears pending.
+
+`OutboundPolicyCoordinator` reserves pending in one transaction before dispatch.
+A second transaction reacquires the same organization-scoped Box row lock and verifies that reservation and Runner still own the attempt.
+It holds the lock through matching acknowledgement or confirmed Runtime readback and final persistence.
+
+Five seconds bounds database lock acquisition; each Runner request independently has the adapter's ten-second deadline.
+Failed or ambiguous application leaves the already committed pending evidence intact.
+
+```mermaid
+sequenceDiagram
+    participant C as Cloud coordinator
+    participant P as PostgreSQL primary
+    participant R as Runner / Runtime
+    C->>P: Tx1 lock Box; write full pending
+    P-->>C: COMMIT reservation; release lock
+    C->>P: Tx2 lock Box; verify exact pending owner
+    C->>R: CAS expected to candidate
+    R-->>C: Matching complete ACK
+    C->>P: Write policy + revision; clear pending; COMMIT
+    alt COMMIT reply received
+        P-->>C: Completion; release lock
+    else Publication failed or COMMIT outcome unknown
+        C->>P: Release failed connection; new primary transaction and lock
+        P-->>C: Durable policy, revision, pending owner
+        alt Matching candidate is already durable
+            Note over C,P: Keep the committed candidate; no restoration
+        else Original pending still owns the previous durable policy
+            C->>P: Write fresh restoration pending; COMMIT reservation
+            C->>P: Reacquire Box lock; verify restoration and Runner owner
+            C->>R: CAS acknowledged candidate to fresh restoration
+            Note over C,R: Failed restoration keeps its pending evidence
+            Note over C,P: Completed restoration uses the same finalization path
+        else Superseded owner or primary unavailable
+            Note over C,R: Return failure; no restoration dispatch
+        end
+    end
+```
+
+`OutboundCommitUnknown` distinguishes an unacknowledged commit from an error inside the transaction callback.
+Recovery reads through a new primary transaction before deciding whether restoration is allowed.
+A matching durable candidate needs no restoration; a superseded owner or unavailable database cannot authorize one.
+
+Proven failed persistence may reserve the previous policy with a fresh revision and apply it conditionally against the acknowledged candidate.
+Restoration failure preserves its own pending evidence and returns failure.
+A successful restoration repairs state but does not make the original failed replacement successful.
+
+Cloud status compares its persisted snapshot with both Runtime persistence and completed backend observation.
+GET does not reconcile pending or wait behind the writer's row lock.
+
+A later mutation may finalize a completed pending candidate before checking its public precondition; stale callers then receive 412.
+An unconditional complete replacement may fence unresolved older requests through a fresh CAS.
+
+Run `make test:apps:api TEST_FILES=outbound-policy.store.integration` with loopback `DB_HOST`, `DB_PORT`, `DB_USERNAME`, and `DB_DATABASE`.
+The suite owns a temporary schema and a PostgreSQL frame proxy that disconnects before forwarding COMMIT or before forwarding its server completion.
+It combines real transactions and HTTP with a controlled Runner peer; it does not exercise a guest VM or deployed Cloud instance.
+
+A real PostgreSQL trigger rejects final publication after the Runner ACK to exercise restoration and failed-restoration intent.
+Socket loss and pending/uncertain readback checks distinguish matching revisions from completed application.
+
 ### Runtime readback and coordinator recovery
 
 `NetworkHandle::outbound_status` compares a durable snapshot with the backend's observed snapshot and installation phase.
