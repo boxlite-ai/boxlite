@@ -19,11 +19,13 @@ Go → Starter, Team → Team. Replacement names are also accepted. Order change
 and missing tiers do not change the mapping; unknown names receive no inferred benefits. Missing facts show a dash,
 accessible as unspecified, never unsupported. Custom terms are negotiated.
 
-Plans displays Notion names, prices and bonus amounts without adding a monthly
-cycle or grant cadence. Overview retains real account data. A self-serve action
+Plans displays the documented names and bonuses with the approved $5 Starter
+price, without adding a monthly cycle or grant cadence. Overview retains real account data. A self-serve action
 is available only when its catalogue price matches the displayed price; otherwise
-the user can contact support. This keeps the Go/$5 catalogue entry from silently
-charging against a Starter/$4.99 display. Existing plan IDs remain unchanged.
+the user can contact support. A Go or Starter catalogue price of 500 cents matches the $5 display and uses
+the existing confirmation route. Any differing price retains the contact
+fallback; the UI does not round or rewrite a server charge. Existing plan IDs
+remain unchanged.
 The table does not activate trials or upcoming features. Trial eligibility is
 presented as documented (3 days with card verification), not an activation CTA.
 Hosted secrets and key management are the same capability per product clarification,
@@ -63,7 +65,7 @@ checkout or payment is performed by this preview.
 ## Source audit (2026-11-17)
 
 - Names: PAYG is the display name replacing for Notion Free; Starter and
-  Team use the document names. Prices are 4.99 and 100, with no inferred period.
+  Team use the document names. Prices are 5 and 100, with no inferred period.
 - Bonuses: 20 and 400, no inferred issue frequency, expiry or credit type.
 - Trials: 3 days with card verification on the two paid tiers; no trial activation
   behavior is added.
@@ -84,8 +86,8 @@ checkout or payment is performed by this preview.
 - Funder support and Region support are absent from the public comparison until
   their meanings are confirmed. The document's “Double Limited of Free” does
   not override its explicit Team values.
-- Website docs link currently points to an older plan document; this change
-  does not claim that external document is synchronized.
+- Starter uses the approved five-dollar display, matching the public website
+  and subscription documentation. The included bonus remains 20.
 
 Earlier presentation decisions retained: no Free or zero-monthly headline for
 PAYG, aligned plan actions, no shared-slots jargon,
