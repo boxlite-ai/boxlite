@@ -64,7 +64,7 @@ own.
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
-| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the main suite and identity lane on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
+| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
 | `mbuild.yml` | `workflow_call` | call-only | Commit images for dev/stage, using the caller's selected stage; nobody publishes a commit by hand |
 | `mbuild-release.yml` | dispatch | — | Publishes `v<X.Y.Z>-<sha>` images to GHCR, one job per declared artifact. Reuses existing images when recovering partial releases |
@@ -80,7 +80,9 @@ Cloud E2E accepts an optional release-client `tag`; see the
 [suite guide](../../apps/e2e/README.md) for downloaded clients and remaining dev driver builds.
 Cloud dev E2E also requires the three-profile [identity configuration](../../apps/e2e/README.md#the-cloud-legs-ci).
 Its separate identity step verifies cross-organization isolation and same-organization
-read-only access; missing or mis-scoped credentials fail setup. Prod keeps its single-key smoke suite.
+read-only access; missing or mis-scoped credentials fail setup. The catalog lane uses
+p2's independent image quota and requires image read/delete scopes on its key.
+Prod keeps its single-key smoke suite.
 The p1 dev suite reads `BOXLITE_E2E_DOMAIN` from repository Actions Variables
 for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 
