@@ -12,6 +12,8 @@ export enum RoutePath {
   // Main routes
   LANDING = '/',
   LOGOUT = '/logout',
+  /** Shareable coupon link; see pages/Redeem.tsx. */
+  REDEEM = '/redeem',
   DASHBOARD = '/dashboard',
   DOCS = '/docs',
   SLACK = '/slack',

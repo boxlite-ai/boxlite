@@ -153,7 +153,20 @@ function Billing() {
         </TabsContent>
         <TabsContent value="wallet">
           <div className={TAB_PANE}>
-            <WalletSection />
+            <WalletSection
+              linkCouponCode={searchParams.get('code') ?? undefined}
+              onCouponRedeemed={() =>
+                // Dropping the redeemed code keeps a reload from submitting it again.
+                setSearchParams(
+                  (previous) => {
+                    const next = new URLSearchParams(previous)
+                    next.delete('code')
+                    return next
+                  },
+                  { replace: true },
+                )
+              }
+            />
           </div>
         </TabsContent>
       </div>
