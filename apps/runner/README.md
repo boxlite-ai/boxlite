@@ -934,6 +934,9 @@ development against the Rust SDK directly, see `boxlite serve` at
 
 ## Tests
 
+HTTP fixtures for execution recovery capture the API box name before replacing SDK handles.
+They retain that URL identity when recovered handles have empty `Name()` metadata.
+
 SSH control boundary tests run without a VM using
 `make test:apps:runner FILTER=TestSSHControlLifecycle`. They verify that enable
 and disable reject idle boxes before fetching a handle, send one bodyless
