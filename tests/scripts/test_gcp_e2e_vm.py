@@ -103,5 +103,150 @@ class StartRetryTest(unittest.TestCase):
         self.assertIn("could not start vm after 6 attempts", result.stderr)
 
 
+POOL_TOOL = """#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+path = Path(os.environ["FAKE_VM_STATE"])
+state = json.loads(path.read_text())
+name = os.environ["GCP_INSTANCE"]
+vm = state["vms"][name]
+tool = Path(sys.argv[0]).name
+args = sys.argv[1:]
+
+def save():
+    path.write_text(json.dumps(state))
+
+if tool == "sleep":
+    pass
+elif tool == "gh":
+    if any("registration-token" in a for a in args):
+        print("reg-token")
+    else:
+        result = subprocess.run(["jq", "-r", args[args.index("--jq") + 1]],
+            input=json.dumps({"runners": state.get("runners", [])}), text=True)
+        sys.exit(result.returncode)
+elif tool == "curl":
+    assert "/zones/" + os.environ["GCP_ZONE"] + "/instances/" + name + "/" in args[-1]
+    data = json.load(sys.stdin)
+    if vm.get("metadata_error") or (vm.get("cleanup_error") and not data["items"]):
+        sys.exit(22)
+    vm["metadata"] = data
+    save()
+elif args[:2] == ["auth", "print-access-token"]:
+    print("access-token")
+elif args[:2] == ["compute", "instances"]:
+    assert args[3] == name
+    assert args[args.index("--zone") + 1] == vm["zone"]
+    verb = args[2]
+    if vm.get("auth_error"):
+        sys.exit(9)
+    if verb == "describe" and "--format=json" in args:
+        print(json.dumps({"metadata": dict(vm["metadata"], fingerprint="f")}))
+    elif verb == "describe":
+        print(vm["status"])
+    elif verb == "start":
+        vm["starts"] += 1
+        if vm["starts"] > vm["rejected_starts"]:
+            vm["status"] = "RUNNING"
+        save()
+    elif verb == "stop":
+        vm["stops"] += 1
+        vm["status"] = "TERMINATED"
+        save()
+    else:
+        sys.exit("unexpected verb: " + verb)
+else:
+    sys.exit("unexpected tool call: " + tool)
+"""
+
+
+class PoolTest(unittest.TestCase):
+    def run_pool(self, primary=None, backup=None, runners=None):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            for name in ("gcloud", "gh", "curl", "sleep"):
+                executable = directory / name
+                executable.write_text(POOL_TOOL)
+                executable.chmod(0o755)
+
+            def instance(zone, overrides):
+                return dict({"zone": zone, "status": "TERMINATED", "starts": 0,
+                             "stops": 0, "rejected_starts": 0,
+                             "metadata": {"items": []}}, **(overrides or {}))
+
+            state = directory / "state.json"
+            state.write_text(json.dumps({
+                "vms": {"primary": instance("us-east5-a", primary),
+                        "backup": instance("us-east4-a", backup)},
+                "runners": runners or [],
+            }))
+            output = directory / "output"
+            output.touch()
+            env = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ["PATH"],
+                       FAKE_VM_STATE=str(state), GCP_PROJECT="p", GCP_ZONE="us-east5-a",
+                       GCP_INSTANCE="primary", GCP_FALLBACK_ZONE="us-east4-a",
+                       GCP_FALLBACK_INSTANCE="backup", RUNNER_LABEL="gcp-e2e", REPO="o/r",
+                       GITHUB_OUTPUT=str(output))
+            result = subprocess.run(["bash", str(SCRIPT), "start-pool"], env=env,
+                                    capture_output=True, text=True, timeout=60)
+            outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            return result, json.loads(state.read_text())["vms"], outputs
+
+    def test_exhausted_primary_uses_backup_and_clears_primary_token(self):
+        result, vms, output = self.run_pool(primary={"rejected_starts": 100})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(vms["primary"]["starts"], 6)
+        self.assertEqual(vms["primary"]["metadata"]["items"], [])
+        self.assertEqual(vms["backup"]["starts"], 1)
+        self.assertEqual(vms["backup"]["status"], "RUNNING")
+        self.assertEqual(output, {"zone": "us-east4-a", "instance": "backup"})
+
+    def test_primary_success_does_not_touch_a_retained_debug_backup(self):
+        result, vms, output = self.run_pool(backup={"status": "RUNNING"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(vms["primary"]["starts"], 1)
+        self.assertEqual(vms["backup"]["starts"], 0)
+        self.assertEqual(vms["backup"]["stops"], 0)
+        self.assertEqual(vms["backup"]["status"], "RUNNING")
+        self.assertEqual(output, {"zone": "us-east5-a", "instance": "primary"})
+
+    def test_both_exhausted_preserves_backup_cleanup_identity(self):
+        result, vms, output = self.run_pool(
+            primary={"rejected_starts": 100}, backup={"rejected_starts": 100})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(vms["primary"]["metadata"]["items"], [])
+        self.assertEqual(vms["backup"]["starts"], 6)
+        self.assertEqual(output, {"zone": "us-east4-a", "instance": "backup"})
+
+    def test_authentication_and_metadata_errors_do_not_select_backup(self):
+        for error in ("auth_error", "metadata_error", "cleanup_error"):
+            with self.subTest(error=error):
+                result, vms, output = self.run_pool(primary={error: True, "rejected_starts": 100})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(vms["backup"]["starts"], 0)
+                self.assertEqual(output, {"zone": "us-east5-a", "instance": "primary"})
+
+    def test_other_online_runner_does_not_skip_primary_registration(self):
+        result, vms, _ = self.run_pool(primary={"status": "RUNNING"}, runners=[
+            {"name": "backup", "status": "online", "labels": [{"name": "gcp-e2e"}]},
+        ])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(vms["primary"]["stops"], 1)
+        self.assertEqual(vms["primary"]["starts"], 1)
+
+    def test_reuses_the_selected_online_runner(self):
+        result, vms, _ = self.run_pool(primary={"status": "RUNNING"}, runners=[
+            {"name": "primary", "status": "online", "labels": [{"name": "gcp-e2e"}]},
+        ])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(vms["primary"]["stops"], 0)
+        self.assertEqual(vms["primary"]["starts"], 0)
+        self.assertEqual(vms["backup"]["starts"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

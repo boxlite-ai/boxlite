@@ -2,19 +2,22 @@
 # Drive the e2e-local GCP VM from GitHub Actions as the controller service
 # account (ci-gha-e2e-ctl).
 #
-# Usage: gcp-e2e-vm.sh start|stop|clear-token
+# Usage: gcp-e2e-vm.sh start-pool|start|stop|clear-token
+#   start-pool   try the primary, then the fallback after startup exhaustion;
+#                write the attempted instance and zone to GITHUB_OUTPUT
 #   start        hand the VM a fresh runner registration token and boot it;
 #                reuse it when it already runs with its runner online
 #   stop         request a stop without waiting
 #   clear-token  remove the registration token from the VM's metadata
 #
 # The controller holds only compute.instances.get/start/stop/setMetadata on
-# this one VM. It lacks compute.zoneOperations.get, so nothing here waits on
+# each configured VM. It lacks compute.zoneOperations.get, so nothing here waits on
 # a gcloud operation: start/stop use --async, status is polled, and metadata
 # is written through the setMetadata REST call.
 #
 # Env: GCP_PROJECT, GCP_ZONE, GCP_INSTANCE, RUNNER_LABEL, REPO, and GH_TOKEN
 # (a GitHub App token with administration:write).
+# start-pool also requires GCP_FALLBACK_ZONE, GCP_FALLBACK_INSTANCE, GITHUB_OUTPUT.
 set -euo pipefail
 
 : "${GCP_PROJECT:?}" "${GCP_ZONE:?}" "${GCP_INSTANCE:?}" "${RUNNER_LABEL:?}" "${REPO:?}"
@@ -55,7 +58,7 @@ boot_vm() {
         [ "$attempt" = "$START_ATTEMPTS" ] || sleep "$START_RETRY_DELAY"
     done
     echo "::error::could not start $GCP_INSTANCE after $START_ATTEMPTS attempts" >&2
-    return 1
+    return 75
 }
 
 # wait_booted: succeed once RUNNING; fail when the VM sits TERMINATED for a
@@ -80,7 +83,8 @@ wait_booted() {
 
 runner_online() {
     gh api "repos/$REPO/actions/runners" --jq "any(.runners[];
-        .status == \"online\" and any(.labels[]; .name == \"$RUNNER_LABEL\"))" | grep -qx true
+        .name == \"$GCP_INSTANCE\" and .status == \"online\"
+        and any(.labels[]; .name == \"$RUNNER_LABEL\"))" | grep -qx true
 }
 
 # set_token VALUE: store VALUE under TOKEN_KEY, or drop the key when VALUE is empty.
@@ -141,10 +145,32 @@ start() {
     boot_vm
 }
 
+start_pool() {
+    : "${GCP_FALLBACK_ZONE:?}" "${GCP_FALLBACK_INSTANCE:?}" "${GITHUB_OUTPUT:?}"
+    local result
+    # Publish before starting so failure/cancellation cleanup has an identity.
+    printf 'instance=%s\nzone=%s\n' "$GCP_INSTANCE" "$GCP_ZONE" >> "$GITHUB_OUTPUT"
+    # A separate Bash process preserves errexit inside start and its helpers.
+    if bash "$0" start; then
+        return 0
+    else
+        result=$?
+    fi
+    [ "$result" -eq 75 ] || return "$result"
+
+    bash "$0" clear-token
+    wait_status TERMINATED
+    echo "::notice::$GCP_ZONE exhausted startup attempts; trying $GCP_FALLBACK_ZONE"
+    export GCP_INSTANCE="$GCP_FALLBACK_INSTANCE" GCP_ZONE="$GCP_FALLBACK_ZONE"
+    printf 'instance=%s\nzone=%s\n' "$GCP_INSTANCE" "$GCP_ZONE" >> "$GITHUB_OUTPUT"
+    bash "$0" start
+}
+
 case "${1:-}" in
+    start-pool) start_pool ;;
     start) start ;;
     stop) vm stop --async ;;
     # e2e-tests runs PR code on the VM next, so confirm the token is gone.
     clear-token) set_token "" && wait_token "" ;;
-    *) echo "usage: $0 start|stop|clear-token" >&2; exit 2 ;;
+    *) echo "usage: $0 start-pool|start|stop|clear-token" >&2; exit 2 ;;
 esac
