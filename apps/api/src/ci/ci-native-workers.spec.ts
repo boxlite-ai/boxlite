@@ -120,6 +120,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         cpu: dto.cpu,
         mem: dto.memory,
         disk: dto.disk,
+        privileged: dto.privileged ?? false,
+        runAsUser: dto.runAsUser,
         runnerId,
         osUser: 'runner',
         labels: {},
@@ -261,6 +263,11 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await value.host.remove(value.config.name)
     return value
   }
+  it('Docker bootstrap persists a privileged native CI guest', async () => {
+    const { box } = await created()
+    expect((await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).privileged).toBe(true)
+    expect((await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).runAsUser).toBe('root')
+  })
   it('preserves a delivered running worker after a real policy update and retains original cleanup', async () => {
     const { host, config, row, box } = await forDelivery()
     await host.deliverJit(config.name, jit)

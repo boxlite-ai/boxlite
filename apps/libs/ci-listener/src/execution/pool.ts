@@ -75,16 +75,63 @@ export interface WorkerEvent {
   durationMs?: number
 }
 const RUNNER_BOOTSTRAP_SECONDS = 300
-const bootstrap = `set -eu
+const bootstrap = String.raw`set -eu
+export DOCKER_HOST=unix:///var/run/docker.sock
+unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+docker_pid=
+docker_log=/tmp/boxlite-ci-dockerd.log
+docker_deadline=$((SECONDS + 120))
+
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2329
+cleanup_docker() {
+  local bootstrap_status=$?
+  if ((bootstrap_status != 0)) && [[ -f "$docker_log" ]]; then
+    tail -n 60 "$docker_log" >&2 || true
+  fi
+  if [[ -n "$docker_pid" ]]; then
+    kill "$docker_pid" >/dev/null 2>&1 || true
+    wait "$docker_pid" 2>/dev/null || true
+  fi
+}
+trap 'cleanup_docker' EXIT
+
+docker_ready() {
+  local remaining=$((docker_deadline - SECONDS))
+  ((remaining > 0)) || return 1
+  ((remaining <= 5)) || remaining=5
+  timeout "$remaining" sudo -n -H -u runner -g docker docker info >/dev/null 2>&1
+}
+
+if ! docker_ready; then
+  if ! command -v iptables >/dev/null 2>&1; then
+    timeout "$((docker_deadline - SECONDS))" /bin/sh -ec '
+      apt-get update -qq
+      apt-get install -y --no-install-recommends iptables
+    '
+  fi
+  dockerd --host="$DOCKER_HOST" --group=docker \
+    --storage-driver=overlay2 --dns-search=. >"$docker_log" 2>&1 &
+  docker_pid=$!
+  until docker_ready; do
+    if ((SECONDS >= docker_deadline)) || ! kill -0 "$docker_pid" 2>/dev/null; then
+      printf 'CI Docker daemon failed to become ready within 120 seconds\n' >&2
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+
 for ((attempt=0; attempt<${RUNNER_BOOTSTRAP_SECONDS}; attempt++)); do
   if [[ -f /home/runner/.boxlite-jitconfig.ready && -r /home/runner/.boxlite-jitconfig ]]; then
     ACTIONS_RUNNER_INPUT_JITCONFIG="$(cat /home/runner/.boxlite-jitconfig)"
     export ACTIONS_RUNNER_INPUT_JITCONFIG
     rm -f /home/runner/.boxlite-jitconfig /home/runner/.boxlite-jitconfig.ready
-    exec /home/runner/run.sh
+    exec sudo -n -E -H -u runner -g docker /home/runner/run.sh
   fi
   sleep 1
 done
+printf 'CI runner JIT configuration timed out\n' >&2
 exit 1`
 
 /** One scope supplies ephemeral runner capacity; a triggering job is not a runner assignment. */

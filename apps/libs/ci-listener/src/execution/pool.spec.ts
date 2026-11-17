@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { inspectJournal } from '../../tests/journal'
 import { testCapacity } from '../../tests/capacity'
+import { executeWorkerBootstrap } from '../../tests/worker-bootstrap'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -180,6 +181,43 @@ describe('CI shared worker lifecycle', () => {
       job: { id: demand.job, runId: demand.run },
     },
   ]
+  it.each(['delayed', 'install-success'])(
+    'Docker bootstrap waits for the API before runner startup: %s',
+    async (scenario) => {
+      await tick()
+      const launch = jest.mocked(backend.workers.create).mock.calls[0][0]
+      const result = executeWorkerBootstrap(launch.entrypoint, directory, scenario)
+      expect(result.trace.at(-1)).toBe('runner:ready')
+      expect(result.status).toBe(0)
+      expect(result.trace).toContain('dockerd')
+      expect(result.jit).toBe('dGVzdC1qaXQ=')
+      expect(result.jitRemoved).toBe(true)
+      if (scenario === 'install-success') expect(result.trace).toContain('apt-get:install')
+    },
+  )
+  it.each(['crash', 'timeout', 'install-failure', 'missing-jit'])(
+    'Docker bootstrap fails before runner execution: %s',
+    async (scenario) => {
+      await tick()
+      const launch = jest.mocked(backend.workers.create).mock.calls[0][0]
+      const result = executeWorkerBootstrap(launch.entrypoint, directory, scenario)
+      expect(result.status).not.toBe(0)
+      expect(result.trace.some((line) => line.startsWith('runner:'))).toBe(false)
+      if (scenario === 'crash') expect(result.stderr).toContain('fixture-daemon-failed')
+      if (scenario === 'missing-jit') {
+        expect(result.trace).toContain('dockerd')
+        expect(result.daemonRunning).toBe(false)
+      }
+    },
+  )
+  it('Docker bootstrap reuses an existing daemon without starting another', async () => {
+    await tick()
+    const launch = jest.mocked(backend.workers.create).mock.calls[0][0]
+    const result = executeWorkerBootstrap(launch.entrypoint, directory, 'existing')
+    expect(result.status).toBe(0)
+    expect(result.trace.at(-1)).toBe('runner:ready')
+    expect(result.trace).not.toContain('dockerd')
+  })
   it('rotates past an allocation in retry backoff on the next capacity plan', async () => {
     const policy = testCapacity({ account: 2, tenant: 2 })
     await pool.tick(lease, policy, demand)

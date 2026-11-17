@@ -267,6 +267,10 @@ GitHub runner group independently of the workflow label.
 
 ## Dispatch and recovery
 
+Worker Boxes request guest privilege and prepare a local Docker daemon before
+the GitHub runner accepts jobs. See the [shared Docker startup contract](../libs/ci-listener/README.md#docker-startup)
+for image requirements, the preparation deadline and failure diagnostics.
+
 1. A signed `workflow_job.queued` event stores a receipt and exact job identity,
    then wakes the shared controller; it does not assign the job itself.
 2. The controller verifies the installation/repository, rebuilds the complete
