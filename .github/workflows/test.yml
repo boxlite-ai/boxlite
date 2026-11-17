@@ -680,7 +680,7 @@ jobs:
           BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS: '1'
         run: |
           mkdir -p target/coverage/full-go
-          for module in go-sdk gvproxy runner image-service; do
+          for module in go-sdk gvproxy runner image-service secret-server; do
             cp "target/coverage/$module.out" "target/coverage/full-go/$module.out"
           done
           sudo chmod a+rw /dev/kvm
@@ -688,7 +688,7 @@ jobs:
           make coverage:go GOTEST_FILTER='-count=1 -run NestedVirtualization'
           # Both passes instrument this checkout with the same atomic mode.
           # Keep the complete suite's blocks as well as the hardware pass.
-          for module in go-sdk gvproxy runner image-service; do
+          for module in go-sdk gvproxy runner image-service secret-server; do
             report="target/coverage/$module.out"
             full="target/coverage/full-go/$module.out"
             if [[ "$(head -n 1 "$report")" != 'mode: atomic' || "$(head -n 1 "$full")" != 'mode: atomic' ]]; then

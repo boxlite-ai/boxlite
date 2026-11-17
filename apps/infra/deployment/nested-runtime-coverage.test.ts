@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const workflow: any = loadYaml(readFileSync(join(root, '.github/workflows/test.yml'), 'utf8'))
 const steps = workflow.jobs.go.steps
 const qualify = steps.find((step: any) => step.id === 'nested-runtime-coverage')
-const modules = ['go-sdk', 'gvproxy', 'runner', 'image-service']
+const modules = ['go-sdk', 'gvproxy', 'runner', 'image-service', 'secret-server']
 
 test('nested metadata qualification runs after full coverage and only on Linux x64', () => {
   assert.ok(qualify)
@@ -52,7 +52,7 @@ fi
 [[ "$1" == 'coverage:go' ]]
 [[ "$2" == 'GOTEST_FILTER=-count=1 -run NestedVirtualization' ]]
 [[ "$BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS" == '1' ]]
-for module in go-sdk gvproxy runner image-service; do
+for module in go-sdk gvproxy runner image-service secret-server; do
   printf 'mode: %s\\nexample/%s/source.go:2.1,2.2 1 5\\n' "$NESTED_TEST_FOCUSED_MODE" "$module" > "target/coverage/$module.out"
 done
 `, { mode: 0o755 })
