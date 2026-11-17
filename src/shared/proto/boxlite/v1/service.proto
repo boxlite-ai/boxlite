@@ -50,6 +50,12 @@ service Guest {
   // Thaw previously quiesced filesystems (FITHAW ioctl).
   // Must be called after SIGCONT to unblock writes.
   rpc Thaw(ThawRequest) returns (ThawResponse);
+
+  // Set the guest system clock (CLOCK_REALTIME) to the supplied UTC instant.
+  // The host samples its own clock right before sending, once per resume
+  // event. The call succeeds only when the guest kernel accepts the setting;
+  // errors carry the reason (invalid timestamp, permission, syscall failure).
+  rpc SyncClock(SyncClockRequest) returns (SyncClockResponse);
 }
 
 // Persistent SSH desired state and live listener control.
@@ -237,6 +243,15 @@ message ThawResponse {
   // Number of filesystems successfully thawed
   uint32 thawed_count = 1;
 }
+
+message SyncClockRequest {
+  // Seconds since the Unix epoch (UTC), sampled on the host.
+  int64 unix_sec = 1;
+  // Nanosecond part of the same instant (0-999999999).
+  int32 nanos = 2;
+}
+
+message SyncClockResponse {}
 
 // ============================================================================
 // SSH runtime configuration

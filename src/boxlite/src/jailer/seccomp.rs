@@ -20,7 +20,8 @@
 //! all threads — including Go runtime threads from gvproxy — share the same
 //! filter. New threads created after application inherit it automatically.
 //!
-//! - VMM filter: Core VMM + libkrun + Go runtime syscalls (~106 entries)
+//! - VMM filter: Core VMM + libkrun + Go runtime + shim async runtime
+//!   (resume clock sync timerfds) syscalls (~106 entries)
 //! - vCPU filter: Compiled; vCPU threads inherit from main thread
 //! - API filter: Not used in BoxLite (reserved for compatibility)
 //!

@@ -7,7 +7,8 @@ use crate::service::server::GuestServer;
 use boxlite_shared::{
     guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
     GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
-    QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
+    QuiesceResponse, ShutdownRequest, ShutdownResponse, SyncClockRequest, SyncClockResponse,
+    ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -214,10 +215,107 @@ impl GuestService for GuestServer {
 
         Ok(Response::new(ThawResponse { thawed_count }))
     }
+
+    /// Set the guest system clock (CLOCK_REALTIME) from host-sampled UTC.
+    ///
+    /// The host sends this once per resume event with its own current UTC.
+    /// Success means the kernel accepted the setting; every rejection
+    /// propagates to the host so a failed correction is never reported as
+    /// applied.
+    async fn sync_clock(
+        &self,
+        request: Request<SyncClockRequest>,
+    ) -> Result<Response<SyncClockResponse>, Status> {
+        let ts = match sync_clock_timespec(request.into_inner()) {
+            Ok(ts) => ts,
+            Err(reject) => return Err(Status::invalid_argument(reject.reason())),
+        };
+        if let Err(error) = set_system_clock(&ts) {
+            error!(%error, "clock_settime(CLOCK_REALTIME) rejected the host time");
+            return Err(clock_settime_status(&error));
+        }
+        info!(
+            sec = ts.tv_sec,
+            nsec = ts.tv_nsec,
+            "Guest system clock set to host UTC"
+        );
+        Ok(Response::new(SyncClockResponse {}))
+    }
+}
+
+/// Why a host-supplied timestamp was rejected.
+///
+/// The host is the clock authority: the RPC arrives over the host control
+/// socket with a stamp the host sampled, and a guest-side ahead bound could
+/// only reject legitimate corrections after long host suspends. Validation
+/// stays structural.
+#[derive(Debug)]
+enum SyncClockReject {
+    NanosOutOfRange(i32),
+    BeforeEpoch,
+}
+
+impl SyncClockReject {
+    fn reason(&self) -> String {
+        match self {
+            Self::NanosOutOfRange(nanos) => {
+                format!("nanos out of range 0-999999999: {nanos}")
+            }
+            Self::BeforeEpoch => "unix_sec must be after the Unix epoch".into(),
+        }
+    }
+}
+
+/// Validate a host-supplied UTC instant into a `timespec`.
+///
+/// Structural bounds only: the nanosecond part must be a valid subsecond
+/// offset and the instant must sit after the epoch. The host is the clock
+/// authority — the stamp is what the host sampled — and a guest-side bound
+/// on how far ahead it may sit would reject legitimate corrections after
+/// long host suspends, so any post-epoch instant is accepted.
+fn sync_clock_timespec(request: SyncClockRequest) -> Result<nix::libc::timespec, SyncClockReject> {
+    const NANOS_UPPER_BOUND: i32 = 999_999_999;
+
+    let SyncClockRequest { unix_sec, nanos } = request;
+    if !(0..=NANOS_UPPER_BOUND).contains(&nanos) {
+        return Err(SyncClockReject::NanosOutOfRange(nanos));
+    }
+    if unix_sec <= 0 {
+        return Err(SyncClockReject::BeforeEpoch);
+    }
+    Ok(nix::libc::timespec {
+        tv_sec: unix_sec,
+        tv_nsec: i64::from(nanos),
+    })
+}
+
+/// Set the guest system clock. Returns the raw OS error for callers to map.
+fn set_system_clock(ts: &nix::libc::timespec) -> Result<(), std::io::Error> {
+    // SAFETY: clock_settime only reads the timespec; there are no other inputs.
+    let rc = unsafe { nix::libc::clock_settime(nix::libc::CLOCK_REALTIME, ts) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Map a `clock_settime` failure to the RPC status the host should see.
+fn clock_settime_status(error: &std::io::Error) -> Status {
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied => Status::permission_denied(format!(
+            "the guest agent lacks permission to set the system clock: {error}"
+        )),
+        std::io::ErrorKind::InvalidInput => {
+            Status::invalid_argument(format!("the kernel rejected the timestamp: {error}"))
+        }
+        _ => Status::internal(format!("clock_settime(CLOCK_REALTIME) failed: {error}")),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
     use crate::layout::GuestLayout;
     use crate::reaper::ExitSlot;
@@ -248,5 +346,74 @@ mod tests {
         assert_eq!(status.code(), tonic::Code::DeadlineExceeded);
         let written = boxlite_shared::layout::ExitRecord::read(&exit_file);
         assert_eq!(written.map(|record| record.exit_code), Some(7));
+    }
+
+    /// Structural bounds only: a bad subsecond part or a pre-epoch instant
+    /// are rejected, while past instants, today's host time, and stamps far
+    /// ahead (a long host suspend) are accepted unchanged.
+    #[test]
+    fn sync_clock_rejects_invalid_timestamps() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is after the epoch")
+            .as_secs() as i64;
+
+        for (unix_sec, nanos) in [(1, -1), (1, 1_000_000_000)] {
+            assert!(matches!(
+                sync_clock_timespec(SyncClockRequest { unix_sec, nanos }),
+                Err(SyncClockReject::NanosOutOfRange(_))
+            ));
+        }
+        for unix_sec in [0, -5] {
+            assert!(matches!(
+                sync_clock_timespec(SyncClockRequest { unix_sec, nanos: 0 }),
+                Err(SyncClockReject::BeforeEpoch)
+            ));
+        }
+        // A host that slept longer than a day is still authoritative; the
+        // stamp far ahead of the guest clock must be accepted.
+        let long_suspend = sync_clock_timespec(SyncClockRequest {
+            unix_sec: now + 90_000,
+            nanos: 0,
+        })
+        .expect("a host stamp ahead by more than a day is accepted");
+        assert_eq!(long_suspend.tv_sec, now + 90_000);
+
+        let behind = sync_clock_timespec(SyncClockRequest {
+            unix_sec: now - 100_000,
+            nanos: 500,
+        })
+        .expect("a past host instant is accepted");
+        assert_eq!(behind.tv_sec, now - 100_000);
+        let fresh = sync_clock_timespec(SyncClockRequest {
+            unix_sec: now,
+            nanos: 0,
+        })
+        .expect("the host's current instant is accepted");
+        assert_eq!((fresh.tv_sec, fresh.tv_nsec), (now, 0));
+    }
+
+    /// A guest that cannot set the clock (here: seccomp EPERM, standing in
+    /// for the non-root agent) must fail the RPC instead of reporting a
+    /// correction it did not apply.
+    #[tokio::test]
+    async fn sync_clock_propagates_clock_settime_denial() {
+        crate::test_syscalls::deny(nix::libc::SYS_clock_settime);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is after the epoch")
+            .as_secs() as i64;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        let status = server
+            .sync_clock(Request::new(SyncClockRequest {
+                unix_sec: now,
+                nanos: 0,
+            }))
+            .await
+            .expect_err("a denied clock_settime must fail the RPC");
+
+        assert_eq!(status.code(), tonic::Code::PermissionDenied);
     }
 }

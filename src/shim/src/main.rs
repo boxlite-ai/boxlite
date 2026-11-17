@@ -14,6 +14,7 @@
 //! shim subprocess, not the main boxlite process.
 
 mod crash_capture;
+mod resume;
 
 use std::path::Path;
 use std::thread;
@@ -192,6 +193,7 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // Save detach/transport before config is moved into engine.create()
     let detach = config.detach;
     let transport = config.transport.clone();
+    let engine_kind = config.engine;
 
     // Initialize engine options with defaults
     let options = VmmConfig::default();
@@ -214,6 +216,10 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     timing("instance created (krun FFI calls done)");
 
     tracing::info!("Box instance created, handing over process control to Box");
+
+    // Wake-event clock sync, native engine only: one correction per host
+    // resume. Spawned before the VM takes over the process, like SIGTERM.
+    resume::spawn(engine_kind, transport.clone());
 
     // Install SIGTERM handler for graceful shutdown (all boxes, detached or not).
     // When SIGTERM is received: Guest.Shutdown() RPC (flush qcow2) → re-raise SIGTERM.

@@ -100,7 +100,14 @@ impl Sandbox for BwrapSandbox {
             // enabled (#645).
             .ro_bind_if_exists("/etc/resolv.conf", "/etc/resolv.conf")
             .ro_bind_if_exists("/etc/hosts", "/etc/hosts")
-            .ro_bind_if_exists("/etc/nsswitch.conf", "/etc/nsswitch.conf");
+            .ro_bind_if_exists("/etc/nsswitch.conf", "/etc/nsswitch.conf")
+            // The resume clock sync subscribes to logind's PrepareForSleep
+            // on the system bus; without the socket the subscription logs
+            // that it stays off and no wake correction ever happens.
+            .ro_bind_if_exists(
+                "/run/dbus/system_bus_socket",
+                "/run/dbus/system_bus_socket",
+            );
 
         // =====================================================================
         // Devices and special mounts
@@ -142,7 +149,16 @@ impl Sandbox for BwrapSandbox {
             .with_clearenv()
             .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .setenv("HOME", "/root")
-            .setenv("LD_LIBRARY_PATH", shim_dir);
+            .setenv("LD_LIBRARY_PATH", shim_dir)
+            // The resume clock sync subscribes to logind on the system bus.
+            // zbus' default probe walks /var/run, which this allowlist
+            // sandbox does not mount, so point it at the ro-bound socket
+            // under /run. On hosts without a system bus the connect fails
+            // and the subscription stays off, as before.
+            .setenv(
+                "DBUS_SYSTEM_BUS_ADDRESS",
+                "unix:path=/run/dbus/system_bus_socket",
+            );
 
         // Preserve debugging environment variables
         if let Ok(rust_log) = std::env::var("RUST_LOG") {

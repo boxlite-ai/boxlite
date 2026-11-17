@@ -4,6 +4,10 @@ The Linux guest agent receives volume instructions through the guest initializat
 
 The same guest agent bootstraps itself as native PID 1 or as a child of libkrun's init, with shared container and RPC behavior.
 
+## Clock recovery
+
+`Guest.SyncClock` sets `CLOCK_REALTIME` to the UTC instant the host sampled right before sending, once per host resume. The agent accepts the call only from the host control plane (the vsock listener rejects non-host peers before tonic sees them), validates the timestamp structurally — a valid subsecond part, past the epoch; the host is the clock authority, so no ahead-of-guest bound exists and any legitimate post-epoch stamp, including one from a host that slept for days, is accepted — and reports success only when the kernel accepted `clock_settime`; every rejection propagates to the host as a gRPC error. The correction never touches the RTC or `CLOCK_MONOTONIC`, so the guest's own RTC offset and alarms survive it.
+
 ## Startup ownership
 
 | Responsibility | Native PID 1 | libkrun child |

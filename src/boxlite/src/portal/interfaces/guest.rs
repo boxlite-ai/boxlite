@@ -2,8 +2,8 @@
 
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
-    guest_init_response,
+    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, SyncClockRequest, ThawRequest,
+    VirtiofsSource, Volume, guest_init_response,
 };
 use tonic::transport::Channel;
 
@@ -101,6 +101,20 @@ impl GuestInterface {
     pub async fn thaw(&mut self) -> BoxliteResult<u32> {
         let response = self.client.thaw(ThawRequest {}).await?.into_inner();
         Ok(response.thawed_count)
+    }
+
+    /// Set the guest system clock (CLOCK_REALTIME) to a host-sampled UTC
+    /// instant, sent once per resume event.
+    ///
+    /// Succeeds only when the guest confirms the kernel accepted the
+    /// setting; a guest rejection or an agent without the method surfaces
+    /// as an error.
+    pub async fn sync_clock(&mut self, unix_sec: i64, nanos: i32) -> BoxliteResult<()> {
+        let _response = self
+            .client
+            .sync_clock(SyncClockRequest { unix_sec, nanos })
+            .await?;
+        Ok(())
     }
 }
 
