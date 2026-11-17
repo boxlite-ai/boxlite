@@ -112,7 +112,12 @@ exec ${process.platform === 'darwin' ? 'grm' : '/bin/rm'} "$@"
 for (const phase of ['before', 'after']) {
   test(`${phase} tests: reclaim caches without helper files from the PR head`, (t) => {
     const f = fixture(t)
-    const git = (args: string[]) => spawnSync('git', args, { cwd: f.workspace, encoding: 'utf8' })
+    // Fixture Git commands target their own checkout when invoked from Git hooks.
+    const gitEnv = { ...process.env }
+    const localEnv = spawnSync('git', ['rev-parse', '--local-env-vars'], { cwd: root, encoding: 'utf8' })
+    assert.equal(localEnv.status, 0, localEnv.stderr)
+    for (const name of localEnv.stdout.trim().split('\n')) delete gitEnv[name]
+    const git = (args: string[]) => spawnSync('git', args, { cwd: f.workspace, env: gitEnv, encoding: 'utf8' })
     assert.equal(git(['init', '-q']).status, 0)
     assert.equal(
       git([

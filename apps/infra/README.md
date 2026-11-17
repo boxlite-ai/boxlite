@@ -50,6 +50,9 @@ On macOS, install GNU coreutils and flock (`brew install coreutils flock`) and p
 The Linux runner cleanup tests execute GNU `realpath` and `rm --one-file-system`;
 their confinement wrapper uses Homebrew's `grm` on macOS and `/bin/rm` on Linux.
 
+Temporary checkout fixtures clear Git's repository variables for child commands,
+keeping setup and verification in the fixture when Git hooks run.
+
 `test:apps:infra` typechecks tooling and runs the infrastructure suites. `coverage:infra` runs those same
 checks with c8 and writes repository-relative LCOV to `target/coverage/infra/lcov.info`, including
 unloaded production modules at zero coverage. Setup reinstalls dependencies if the c8 executable is
