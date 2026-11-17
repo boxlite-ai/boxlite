@@ -45,7 +45,8 @@ export interface ApiInputs {
   clickHouseReadyDependency?: any
 }
 
-export function buildApi(input: ApiInputs) {
+export async function buildApi(input: ApiInputs) {
+  const { denyPublicInternalRoutes } = await import('mdeploy/internal-route-policy')
   const {
     foundation: { cluster, db, redis, storage },
     region: REGION,
@@ -406,6 +407,8 @@ export function buildApi(input: ApiInputs) {
       dependsOn: clickHouseReadyDependency ? [clickHouseReadyDependency] : [],
     },
   )
+
+  denyPublicInternalRoutes(api.nodes.loadBalancer.arn)
 
   // Assumed by the Api task role to vend per-org box storage credentials
   // (see section 3). The permission set mirrors the session policy's action

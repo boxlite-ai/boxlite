@@ -580,6 +580,44 @@ of unsupported stored representations and v0 dispatch.
 Design: [API forwarding](https://github.com/boxlite-ai/boxlite/issues/2736) and
 [Secret Server write contract](https://github.com/boxlite-ai/boxlite/issues/2626).
 
+### One-time secret credentials (staging)
+
+With `SECRET_SERVER_ENABLED=true`, v2 CREATE_BOX sends a `secretCredential`
+containing a `bxsc_` token and `expiresAt`; its `secrets` array contains metadata
+without values. The token uses 32 random bytes and expires 15 minutes after issue.
+Boxes without secrets receive no credential. START_BOX reuses runtime state.
+
+The `secret_credential` table stores SHA-256 of the complete token, bound to the
+runner, Box, organization, and granted secret IDs. The job payload temporarily
+stores the bearer token; COMPLETED and FAILED updates remove it in the same
+transaction. Run migration `1794873600000` before deploying the API.
+
+`POST /internal/v1/credentials/introspect` accepts `{token, runner_id}`.
+One conditional PostgreSQL UPDATE checks the runner, expiry and unused state
+while consuming the credential. Success returns `active`, `credential_id`,
+`runner_id`, `box_id`, `organization_id`, `grants: [{secret_id}]`, and `expires_at`.
+Invalid requests return only `{active:false}`; a wrong runner does not consume
+the credential. A second valid request is inactive and logs the credential ID
+as a replay warning. Deleting the Box cascades to its credentials.
+
+The route has no caller authentication in this MVP and is excluded from OpenAPI.
+GCP's external backend denies decoded internal paths using Cloud Armor; only the
+private backend passes the exact root route without adding `/api`.
+AWS's public ALB denies internal paths with WAF, including dashboard origin traffic.
+Local deployments must keep the listener on a private or loopback network.
+These policies must deploy before enabling Secret Server.
+
+Before merge, verify public rejection on API and dashboard hosts, including `/api`
+aliases, mixed case, encoded paths and spoofed Host headers; verify private
+redemption of a fresh token. Local tests do not establish deployed isolation.
+Observe staging queue delays before rollout: delays beyond 15 minutes fail creation.
+
+There is no reissue or fetch retry. V0 creation and recovery reject references,
+and reject any secrets while the flag is enabled. V2 rejects inline secrets when
+enabled and references when disabled; migrate inline Boxes explicitly before rollout.
+Never log bearer tokens, hashes or grants. Caller authentication and expiration
+cleanup remain outside this MVP; see [design #2735](https://github.com/boxlite-ai/boxlite/issues/2735).
+
 ### Hosted routes
 
 **Service:** `apps/api` · **Base URL:** `https://api.<domain>/v1` · **Port:** `3000` in
