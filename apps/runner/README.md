@@ -765,6 +765,10 @@ This releases references and does not promise memory zeroization.
 
 `make test:apps:runner FILTER='Secret|Credential|RequireExisting'` exercises fake
 metadata/Secret Server boundaries and the real SDK REST adoption path without a VM.
+The credential tests also verify that missing lookup capability, missing fetch
+configuration, empty instance identity and unsupported configured attestors stop
+creation before dispatching a credential. Collect runner coverage with
+`make test:apps:runner GOTEST_FILTER='-covermode=atomic -coverpkg=./... -coverprofile=/tmp/runner-coverage.out'`.
 
 ### Portable archive storage
 

@@ -196,6 +196,65 @@ func fixedIdentity() metadataGetter {
 	})
 }
 
+func TestSecretCredentialMissingPrerequisites(t *testing.T) {
+	for _, missing := range []string{"lookup capability", "fetch configuration", "identity"} {
+		t.Run(missing, func(t *testing.T) {
+			var fetches, identities atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fetches.Add(1)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer server.Close()
+			f := newSecretFetcher(server.URL, "")
+			f.metadata = metadataFunc(func(context.Context, string) (string, error) {
+				identities.Add(1)
+				return " \n\t", nil
+			})
+			b := &secretBackend{}
+			e := secretExecutor(b, f)
+			want := "attestation_failed"
+			wantIdentities := int32(1)
+			switch missing {
+			case "lookup capability":
+				// Expose only BoxBackend, hiding the optional BoxExists capability.
+				e.backend = struct{ backend.BoxBackend }{b}
+				want, wantIdentities = "local box lookup unavailable", 0
+			case "fetch configuration":
+				e.secretFetcher = nil
+				want, wantIdentities = "secret server configuration unavailable", 0
+			}
+			job := secretJob(t, true, requestedSecrets())
+			_, err := e.executeJob(context.Background(), job)
+			if err == nil || err.Error() != want {
+				t.Fatalf("error = %v, want %q", err, want)
+			}
+			if fetches.Load() != 0 || identities.Load() != wantIdentities || len(b.created) != 0 {
+				t.Fatalf("fetches=%d identities=%d creates=%d", fetches.Load(), identities.Load(), len(b.created))
+			}
+			if job.Payload != nil {
+				t.Fatal("failed job retained credential payload")
+			}
+		})
+	}
+}
+
+func TestSecretCredentialExecutorConfiguration(t *testing.T) {
+	t.Setenv("BOXLITE_API_URL", "http://127.0.0.1")
+	t.Setenv("BOXLITE_RUNNER_TOKEN", "test-runner-token")
+	t.Setenv("SECRET_SERVER_URL", "http://127.0.0.1")
+	t.Setenv("BOXLITE_RUNNER_ATTESTOR", "dev")
+	b := &secretBackend{}
+	e, err := NewExecutor(&ExecutorConfig{Backend: b, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Construction must wire the environment into the actual create path.
+	_, err = e.executeJob(context.Background(), secretJob(t, true, requestedSecrets()))
+	if err == nil || err.Error() != "unsupported runner attestor" || len(b.created) != 0 {
+		t.Fatalf("unsupported configured attestor: error=%v creates=%d", err, len(b.created))
+	}
+}
+
 func TestSecretCredentialResponseValidation(t *testing.T) {
 	for _, damage := range []string{"wrong box", "missing", "extra", "different name", "duplicate", "empty value", "missing headers", "malformed", "oversized"} {
 		t.Run(damage, func(t *testing.T) {
