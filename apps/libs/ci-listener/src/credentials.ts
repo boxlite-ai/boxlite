@@ -142,6 +142,11 @@ export class ListenerCredentials {
       }
     if (errors.length) throw new AggregateError(errors, 'GitHub credential retirement remains pending')
   }
+  /** Share captured authority, never the borrower's mutable handles or purpose locks. */
+  fork(owner: string): ListenerCredentials {
+    if (this.closed) throw new Error('GitHub credential provider is closed')
+    return new ListenerCredentials(this.state, this.lease, owner, this.#source)
+  }
   private async retire(key: string, expected?: Entry): Promise<void> {
     const entry = this.held.get(key)
     if (!entry || (expected && entry !== expected)) return

@@ -172,6 +172,28 @@ describe('CI shared execution authority', () => {
     backend = makeBackend()
   })
   const makeBackend = () => new GitHubExecutionBackend(state, lease, scope, source, host, ['boxlite'])
+  it('isolates complete background reads from foreground notified-job credentials', async () => {
+    const fetch = global.fetch
+    let entered!: () => void, release!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const held = new Promise<void>((resolve) => { release = resolve })
+    global.fetch = jest.fn(async (input, options) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/actions/runs')) { entered(); await held }
+      return fetch(input, options)
+    }) as typeof fetch
+    const updated = backend as unknown as {
+      reader(): { queued(repository: number): Promise<unknown>; close(): Promise<void> }
+      pending(notices: readonly typeof notice[]): Promise<unknown>
+    }
+    const reader = updated.reader(), scanning = reader.queued(21)
+    try {
+      await started
+      await expect(updated.pending([notice])).resolves.toEqual([expect.objectContaining(notice)])
+    } finally { release(); await scanning; await reader.close() }
+    expect(calls.filter((call) => call.path.endsWith('/access_tokens'))).toHaveLength(2)
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(2)
+  })
   afterEach(async () => {
     await backend.close().catch(() => {})
     global.fetch = originalFetch

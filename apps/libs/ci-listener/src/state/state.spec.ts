@@ -916,6 +916,95 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         expect((await state.recover(await owner()))[0].key).toBe('notice/restart')
       })
     if (backend === 'postgres') {
+      it('rejects expired proof even when its record version still matches', async () => {
+        const lease = await owner()
+        const [proof] = await state.commit(lease, [{ key: 'notice/proof', expected: null, payload: true }])
+        const check = Object.assign(
+          { key: proof.key, version: proof.version },
+          { expiresAt: (await state.now(lease)) - 1 },
+        )
+        await expect(
+          state.commit(lease, [{ key: 'worker/expired-proof', expected: null, payload: true }], [check]),
+        ).rejects.toBeInstanceOf(StateConflict)
+        expect(await state.read(['worker/expired-proof'], lease)).toEqual([])
+        await expect(
+          state.commit(
+            lease,
+            [{ key: 'worker/live-proof', expected: null, payload: true }],
+            [Object.assign({}, check, { expiresAt: (await state.now(lease)) + 1000 })],
+          ),
+        ).resolves.toHaveLength(1)
+      })
+      it.each(['read', 'scan', 'recover', 'now', 'commit', 'ingress'] as const)(
+        'allows independent %s during a guarded read',
+        async (operation) => {
+          const lease = await owner()
+          await state.commit(lease, [{ key: 'worker/held', expected: null, payload: 'original' }])
+          let entered!: () => void, release!: () => void
+          const hasRead = new Promise<void>((resolve) => {
+            entered = resolve
+          })
+          const released = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          const holding = new ListenerState(
+            {
+              transaction: (ns, work, mode) =>
+                database.transaction(
+                  ns,
+                  (tx) => {
+                    const wrapped = Object.create(tx) as typeof tx
+                    wrapped.getMany = async (keys) => {
+                      if (keys.includes('worker/held')) {
+                        entered()
+                        await released
+                      }
+                      return tx.getMany!(keys)
+                    }
+                    return work(wrapped)
+                  },
+                  mode,
+                ),
+            },
+            namespace,
+          ).read(['worker/held'], lease)
+          const bounded = new ListenerState(
+            new PostgresStateDatabase({
+              transaction: (isolation, work) =>
+                pg!.transaction(isolation, async (tx) => {
+                  await tx.query("SET LOCAL lock_timeout='250ms'")
+                  return work(tx)
+                }),
+            }),
+            namespace,
+          )
+          const operations = {
+            read: () => bounded.read(['worker/held'], lease),
+            scan: () => bounded.scan(lease, { prefix: 'worker/' }),
+            recover: () => bounded.recover(lease),
+            now: () => bounded.now(lease),
+            commit: () => bounded.commit(lease, [{ key: 'worker/other', expected: null, payload: true }]),
+            ingress: () =>
+              bounded.ingress(
+                'independent',
+                (tx) => tx.write([{ key: 'notice/other', expected: null, payload: true }]),
+                lease,
+              ),
+          }
+          try {
+            await Promise.race([
+              hasRead,
+              holding.then(() => {
+                throw new Error('The guarded read finished before its barrier')
+              }),
+            ])
+            await expect(operations[operation]()).resolves.toBeDefined()
+          } finally {
+            release()
+            await holding
+          }
+        },
+      )
       it('checks actual lease time after waiting for the owner row lock', async () => {
         const lease = (await state.acquire('waiting-owner', 500))!
         let locked!: () => void, release!: () => void

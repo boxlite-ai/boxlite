@@ -43,14 +43,14 @@ describe('CI shared Listener orchestration', () => {
     abort: AbortController,
     publishScan: jest.Mock<Promise<void>, [ScanClaim, readonly WorkflowJob[]]>
   const settings = { image: 'runner-test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] }
-  const notification = (job = 55, installation = 1, account = 7, repository = 21) => {
+  const notification = (job = 55, installation = 1, account = 7, repository = 21, run = 33) => {
     const secret = Buffer.alloc(32, 1),
       raw = Buffer.from(
         JSON.stringify({
           action: 'queued',
           installation: { id: installation },
           repository: { id: repository, owner: { id: account } },
-          workflow_job: { id: job, run_id: 33, status: 'queued', labels: ['boxlite'] },
+          workflow_job: { id: job, run_id: run, status: 'queued', labels: ['boxlite'] },
         }),
       )
     return verifyWebhook(
@@ -190,6 +190,186 @@ describe('CI shared Listener orchestration', () => {
     }
   }
   const ingressRows = () => state.recover(lease, 1000, ['notice/', 'wake/', 'receipt/'])
+  it('retires a failed verification reader before opening its replacement', async () => {
+    const reopened = deferred(),
+      trace: string[] = []
+    let reads = 0,
+      closeFailed = false
+    Object.assign(backend, {
+      inventory: jest.fn(async () => []),
+      reader: () => {
+        let verification = false,
+          first = false
+        return {
+          queued: backend.queued,
+          pending: async (notices: readonly { repository: number; run: number; job: number }[]) => {
+            verification = true
+            first = ++reads === 1
+            trace.push('verify-' + reads)
+            if (reads === 2) reopened.resolve()
+            return notices.map((notice) => ({
+              ...notice,
+              status: 'queued' as const,
+              runner: null,
+              labels: ['boxlite'],
+            }))
+          },
+          close: async () => {
+            if (!verification || !first) return
+            if (!closeFailed) {
+              closeFailed = true
+              trace.push('close-failed')
+              throw new Error('Token retirement pending')
+            }
+            trace.push('close-succeeded')
+          },
+        }
+      },
+    })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    await listener.receive(notification())
+    await runUntil(reopened.promise)
+    expect(trace.indexOf('close-succeeded')).toBeGreaterThan(trace.indexOf('close-failed'))
+    expect(trace.indexOf('verify-2')).toBeGreaterThan(trace.indexOf('close-succeeded'))
+  })
+  it('verifies another run in the same scope while the first run job lookup is pending', async () => {
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    const untilAbort = (signal?: AbortSignal) =>
+      new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    jest.mocked(backend.queued).mockImplementation(async (_repository, signal) => {
+      await untilAbort(signal)
+      return []
+    })
+    jest.mocked(backend.job).mockImplementation(async (notice, signal) => {
+      if (notice.run === 33) {
+        await untilAbort(signal)
+        signal?.throwIfAborted()
+      }
+      return { ...notice, status: 'queued', runner: null, labels: ['boxlite'] }
+    })
+    const created = deferred(),
+      create = jest.mocked(backend.workers.create).getMockImplementation()!
+    let count = 0
+    jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
+      const box = await create(launch)
+      if (++count === 16) created.resolve()
+      return box
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 16, tenant: 16 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    for (let id = 55; id < 71; id++) await listener.receive(notification(id))
+    for (let id = 71; id < 87; id++) await listener.receive(notification(id, 1, 7, 21, 34))
+    const running = listener.run(abort.signal)
+    try {
+      await Promise.race([created.promise, new Promise((resolve) => setTimeout(resolve, 1000))])
+      expect(backend.workers.create).toHaveBeenCalledTimes(16)
+      const rows = [...(await inspectJournal(state, lease)).allocations.values()]
+      expect(rows).toHaveLength(16)
+      expect(rows.every((row) => row.value.job.run === 34)).toBe(true)
+    } finally {
+      abort.abort()
+      await running
+    }
+  })
+  it('accumulates 64 notified jobs across verification turns while enumeration is blocked', async () => {
+    const created = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockImplementation(async (_repository, signal) => {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return []
+    })
+    const create = backend.workers.create
+    let count = 0
+    jest.mocked(create).mockImplementation(async () => {
+      if (++count === 64) created.resolve()
+      return { box_id: randomUUID(), status: 'running' }
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 64, tenant: 64 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    for (let id = 55; id < 119; id++) {
+      await listener.receive(notification(id, 1, 7, 21, id + 1000))
+    }
+    await runUntil(created.promise)
+    expect(create).toHaveBeenCalledTimes(64)
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(64)
+  })
+  it('does not grant positive capacity from stale queued HTTP data after recorded completion', async () => {
+    const checked = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(backend.queued).mockRejectedValue(new Error('Background scan unavailable'))
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    await listener.receive(observePhase('completed', 55))
+    const { observation: _observation, ...replayed } = notification()
+    await listener.receive(replayed)
+    await listener.receive(notification(56))
+    const balance = WorkerPool.prototype.balance
+    const balanced = jest.spyOn(WorkerPool.prototype, 'balance').mockImplementation(async function (
+      this: WorkerPool,
+      ...args
+    ) {
+      await balance.apply(this, args)
+      if (String(args[4]) === 'positive' && (await inspectJournal(state, lease)).allocations.size) checked.resolve()
+    })
+    try {
+      await runUntil(Promise.all([checked.promise, delivered.promise]).then(() => {}))
+      const rows = [...(await inspectJournal(state, lease)).allocations.values()]
+      expect(rows).toHaveLength(1)
+      expect(rows[0].value.job.job).toBe(56)
+      expect(backend.job).toHaveBeenCalledWith({ repository: 21, run: 33, job: 55 }, expect.any(AbortSignal))
+    } finally {
+      balanced.mockRestore()
+    }
+  })
+  it('admits a notified job while complete repository enumeration is blocked', async () => {
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockImplementation(async (_repository, signal) => {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return []
+    })
+    await listener.receive(notification())
+    const task = listener.run(abort.signal)
+    try {
+      await Promise.race([delivered.promise, new Promise((resolve) => setTimeout(resolve, 300))])
+      expect(jest.mocked(host.report).mock.calls).toEqual([])
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(backend.job).toHaveBeenCalledWith({ repository: 21, run: 33, job: 55 }, expect.any(AbortSignal))
+    } finally {
+      abort.abort()
+      await task
+    }
+  })
   const observePhase = (status: 'in_progress' | 'completed', job: number, runner: number | null = null) => {
     const secret = Buffer.alloc(32, 1)
     const raw = Buffer.from(
@@ -226,13 +406,14 @@ describe('CI shared Listener orchestration', () => {
     expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
     expect(backend.queued).toHaveBeenCalledWith(21, expect.any(AbortSignal))
   })
-  it('does not expand from a fresh notification when the authoritative queue cannot be read', async () => {
+  it('does not expand from a fresh notification when its authoritative job cannot be read', async () => {
     const failed = deferred()
     Object.assign(backend, { inventory: jest.fn(async () => []) })
     jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
     jest.mocked(backend.queued).mockRejectedValue(new Error('queue unavailable'))
+    jest.mocked(backend.job).mockRejectedValue(new Error('queue unavailable'))
     jest.mocked(host.report).mockImplementation((error, operation) => {
-      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'label-capacity-balance')
+      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'queue-reconciliation')
         failed.resolve()
     })
     await listener.receive(notification())
@@ -257,9 +438,10 @@ describe('CI shared Listener orchestration', () => {
         { key: counter.key, expected: counter.version, payload: { ...(counter.payload as object), dirty: true } },
       ])
       jest.mocked(backend.queued).mockRejectedValue(new Error('queue unavailable'))
+      jest.mocked(backend.job).mockRejectedValue(new Error('queue unavailable'))
     })
     jest.mocked(host.report).mockImplementation((error, operation) => {
-      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'label-capacity-balance')
+      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'queue-reconciliation')
         failed.resolve()
     })
     await listener.receive(notification())
@@ -293,7 +475,7 @@ describe('CI shared Listener orchestration', () => {
     expect(counter.payload).toMatchObject({ queued: 1, dirty: false })
     expect(backend.queued).toHaveBeenCalledWith(21, expect.any(AbortSignal))
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
   })
   it('rebuilds a legacy notice without an aggregate before label admission', async () => {
     Object.assign(backend, { inventory: jest.fn(async () => []) })
@@ -304,7 +486,7 @@ describe('CI shared Listener orchestration', () => {
     await listener.receive(legacy)
     await runUntil(delivered.promise)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
     expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 1, dirty: false })
   })
   it('retries a conflicting repository scan from fresh counters and wake before balancing', async () => {
@@ -343,10 +525,10 @@ describe('CI shared Listener orchestration', () => {
     expect(observations[0].wake).not.toBe(observations[1].wake)
     expect(observations.slice(0, 2).map((read) => read.queued)).toEqual([1, 0])
     expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 0, dirty: false })
-    expect(host.report).not.toHaveBeenCalledWith(expect.any(StateConflict), 'label-capacity-balance')
+    expect(host.report).not.toHaveBeenCalledWith(expect.any(StateCorrupt), 'queue-reconciliation')
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
-  it('defers capacity changes when an organization queue snapshot remains incomplete', async () => {
+  it('admits verified jobs while another repository snapshot remains incomplete', async () => {
     const settled = deferred()
     const commit = state.commit.bind(state)
     jest.spyOn(state, 'commit').mockImplementation(async (...args) => {
@@ -385,11 +567,11 @@ describe('CI shared Listener orchestration', () => {
         { repository, run: 33, job: repository === 21 ? 55 : 56, status: 'queued', runner: null, labels: ['boxlite'] },
       ]
     })
-    await runUntil(settled.promise)
+    await runUntil(delivered.promise)
     const allocations = [...(await inspectJournal(state, lease)).allocations.values()]
-    expect(allocations).toHaveLength(0)
-    expect(backend.workers.create).not.toHaveBeenCalled()
-    expect(conflictingReads).toBe(4)
+    expect(allocations).toHaveLength(1)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(conflictingReads).toBeGreaterThan(0)
     expect(await state.read(['notice/1/55'])).toHaveLength(1)
     expect((await state.recover(lease, 1000, ['demand/1/21/']))[0].payload).toMatchObject({ queued: 99, dirty: true })
   })
@@ -429,7 +611,7 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     const [counter] = await state.recover(lease, 1000, ['demand/'])
     expect(counter.payload).toMatchObject({ queued: 1, dirty: false })
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
   })
   it('uses a queue fallback for busy PAT-style supply without webhook claim observations', async () => {
     let busy = false,
@@ -457,6 +639,12 @@ describe('CI shared Listener orchestration', () => {
       capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
       timing: { tickMs: 1, leaseMs: 3000 },
     })
+    jest.mocked(backend.job).mockImplementation(async (notice) => ({
+      ...notice,
+      status: busy ? 'in_progress' : 'queued',
+      runner: busy ? 91 : null,
+      labels: ['boxlite'],
+    }))
     await listener.receive(notification())
     await runUntil(repaired.promise)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
@@ -470,7 +658,7 @@ describe('CI shared Listener orchestration', () => {
       .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
     Object.assign(backend, {
       inventory: jest.fn(async () => {
-        if (++reads === 2) await listener.receive(observePhase('completed', 55))
+        if (++reads === 1) await listener.receive(observePhase('completed', 55))
         return []
       }),
     })
@@ -559,7 +747,7 @@ describe('CI shared Listener orchestration', () => {
       await task
     }
     expect(backend.workers.create).toHaveBeenCalledTimes(2)
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
     expect((await inspectJournal(state, lease)).workers).toHaveLength(2)
   })
   it('creates all missing label capacity concurrently within the organization quota', async () => {
@@ -1637,11 +1825,13 @@ describe('CI shared Listener orchestration', () => {
       this: ExecutionJournal,
       ...args
     ) {
-      if (++reservations === 2) {
+      if (reservations === 1) {
         entered.resolve()
         await release.promise
       }
-      return reserve.apply(this, args)
+      const row = await reserve.apply(this, args)
+      if (row) reservations++
+      return row
     })
     const create = jest.mocked(backend.workers.create).getMockImplementation()!
     jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
@@ -1672,6 +1862,9 @@ describe('CI shared Listener orchestration', () => {
     }
   })
   it('plans another scope while the first runner inventory is pending', async () => {
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
     const entered = deferred(),
       release = deferred(),
       started = deferred()

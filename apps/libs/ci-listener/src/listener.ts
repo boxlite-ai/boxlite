@@ -7,7 +7,7 @@ import { DiscoveryRequest, DiscoverySnapshot } from './directory'
 import { PoolBackend, PoolSettings, WorkerEvent, WorkerPool } from './execution/pool'
 import { JobNotice, jobMatches, WorkflowJob } from './jobs'
 import { LeaseLost, StateConflict, StateCorrupt, StateRecord } from './state/database'
-import { ExecutionLease, ListenerState } from './state/store'
+import { ExecutionLease, ListenerState, StateCheck } from './state/store'
 import { FairSelection, matches, pendingJob, repositories } from './scheduling'
 import { VerifiedWebhook } from './webhook'
 import type { AppDeliveryRecovery } from './replay/recovery'
@@ -17,8 +17,11 @@ import { ScanClaim } from './compensation/queue'
 import { decodeDemand, DemandUncertain, LabelDemand, rebuildQueueSnapshot } from './demand'
 import { CredentialCollector } from './credential-retirement'
 import { WorkQueue } from './execution/work-queue'
+import { NotifiedDemand } from './notified-demand'
 
 export interface ListenerBackend extends PoolBackend {
+  pending?(notices: readonly JobNotice[], signal?: AbortSignal): Promise<WorkflowJob[]>
+  reader?(): Pick<ListenerBackend, 'queued' | 'pending' | 'close'>
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
   close(): Promise<void>
 }
@@ -39,6 +42,12 @@ interface Runtime {
   pool: WorkerPool
 }
 interface Session {
+  verifying: WorkQueue
+  verifiedAt: Map<string, { revision: string; until: number }>
+  repairing: WorkQueue
+  snapshots: Map<string, { demands: StateRecord[]; check: StateCheck }>
+  observed: Map<string, string>
+  positive: NotifiedDemand
   planning: WorkQueue
   planningAfter: number
   execution: WorkQueue
@@ -68,6 +77,7 @@ export class Listener {
   private readonly timing: { tickMs: number; leaseMs: number; discoveryMs: number; compensationMs: number }
   private running = false
   private readonly retiring = new Set<Runtime>()
+  private readonly failedReaders = new Map<string, Pick<ListenerBackend, 'queued' | 'pending' | 'close'>>()
   private wake?: () => void
   constructor(private readonly options: ListenerOptions) {
     this.journal = new ExecutionJournal(options.state)
@@ -189,6 +199,12 @@ export class Listener {
         if (!signal.aborted || error instanceof LeaseLost) this.options.host.report(error, operation)
       },
       session: Session = {
+        verifying: new WorkQueue(8, report('job-verification')),
+        verifiedAt: new Map(),
+        repairing: new WorkQueue(2, report('queue-reconciliation')),
+        snapshots: new Map(),
+        observed: new Map(),
+        positive: new NotifiedDemand(this.options.state, lease, this.worker.labels),
         planning: new WorkQueue(8, report('label-capacity-balance')),
         planningAfter: 0,
         execution: new WorkQueue(32, report('allocation-work')),
@@ -241,6 +257,8 @@ export class Listener {
       await renewal
       for (const runtime of session.runtimes.values()) this.retiring.add(runtime)
       const results = await Promise.allSettled([
+        session.verifying.close().then(() => this.retireReaders()),
+        session.repairing.close().then(() => this.retireReaders()),
         session.planning.close(),
         session.execution.close(),
         this.retireSession(retireDeployment),
@@ -289,7 +307,50 @@ export class Listener {
       }
       if (retired) this.retiring.delete(runtime)
     }
+    try {
+      await this.retireReaders()
+    } catch (error) {
+      failures.push(error)
+    }
     if (failures.length) throw new AggregateError(failures, 'Listener credential retirement is incomplete')
+  }
+  private async retireReaders(): Promise<void> {
+    for (const [key, reader] of this.failedReaders) {
+      await reader.close()
+      if (this.failedReaders.get(key) === reader) this.failedReaders.delete(key)
+    }
+  }
+  private async readWithSession(
+    id: string,
+    backend: ListenerBackend,
+    read: (reader: Pick<ListenerBackend, 'queued' | 'pending' | 'close'>) => Promise<void>,
+  ): Promise<void> {
+    const failed = this.failedReaders.get(id)
+    if (failed) {
+      await failed.close()
+      this.failedReaders.delete(id)
+    }
+    const reader = backend.reader?.() ?? {
+      queued: backend.queued.bind(backend),
+      pending: backend.pending?.bind(backend),
+      close: async () => {},
+    }
+    let failure: unknown,
+      rejected = false
+    try {
+      await read(reader)
+    } catch (error) {
+      failure = error
+      rejected = true
+    }
+    try {
+      await reader.close()
+    } catch (error) {
+      this.failedReaders.set(id, reader)
+      failure = rejected ? new AggregateError([failure, error], 'CI read and credential retirement failed') : error
+      rejected = true
+    }
+    if (rejected) throw failure
   }
   private async runtime(session: Session, key: string, scope: ExecutionScope): Promise<Runtime> {
     let runtime = session.runtimes.get(key)
@@ -497,144 +558,237 @@ export class Listener {
     capacity: (scope: ExecutionScope, repository: number, job?: JobNotice) => Promise<CapacityPolicy>,
     signal: AbortSignal,
   ): Promise<void> {
-    const counters = new Map(records.filter((row) => row.key.startsWith('demand/')).map((row) => [row.key, row]))
     const revision = JSON.stringify(records.map((row) => [row.key, row.version]))
+    const pending = records.filter((row) => row.key.startsWith('notice/')).map(pendingJob)
+    const chosen = session.jobs.take(
+      pending.flatMap((job) =>
+        [...runtimes]
+          .filter(([key, { scope }]) => session.current.has(key) && matches(scope, job))
+          .map(([key, { scope }]) => ({ scope, value: { key, job } })),
+      ),
+      32,
+    )
+    const groups = new Map<string, { key: string; scope: ExecutionScope; runtime: Runtime; notices: typeof pending }>()
+    for (const { key, job } of chosen) {
+      const { scope, runtime } = runtimes.get(key)!
+      const id = `${key}/${job.notice.repository}/${job.notice.run}`
+      const group = groups.get(id) ?? { key, scope, runtime, notices: [] }
+      group.notices.push(job)
+      groups.set(id, group)
+    }
+    for (const [id, group] of groups) {
+      const revision = JSON.stringify(group.notices.map((job) => [job.record.key, job.record.version]))
+      const verified = session.verifiedAt.get(id)
+      if (verified?.revision === revision && verified.until > Date.now()) continue
+      session.verifying.enqueue(id, revision, async () => {
+        signal.throwIfAborted()
+        const backend = group.runtime.backend
+        let observations: WorkflowJob[] = []
+        let checkedAt = Date.now()
+        await this.readWithSession(id, backend, async (reader) => {
+          await session.positive.read(
+            group.scope,
+            group.notices.map((job) => job.notice),
+            async (jobs) => {
+              const pending = reader?.pending?.bind(reader) ?? backend.pending?.bind(backend)
+              observations = pending ? await pending(jobs, signal) : []
+              if (!pending) for (const job of jobs) observations.push(await backend.job(job, signal))
+              signal.throwIfAborted()
+              checkedAt = Date.now()
+              return observations
+            },
+          )
+          for (const job of observations.filter((job) => job.status !== 'queued' || job.runner !== null)) {
+            const notice = group.notices.find((notice) => notice.notice.job === job.job)
+            if (notice) await this.settle(session.lease, notice.record)
+          }
+        })
+        session.verifiedAt.set(id, { revision, until: checkedAt + 30000 })
+        if (session.verifiedAt.size > 4096) session.verifiedAt.delete(session.verifiedAt.keys().next().value!)
+        this.wake?.()
+      })
+    }
     const entries = [...runtimes]
     for (let offset = 0; offset < entries.length; offset++) {
       const index = (session.planningAfter + offset) % entries.length
       const [key, { scope, runtime }] = entries[index]
       const accepted = session.planning.enqueue(key, revision, async () => {
         signal.throwIfAborted()
-        const current = session.current.has(key)
-        const related = (row: StateRecord) =>
-          row.key.startsWith(`demand/${scope.installation.id}/`) &&
-          repositories(scope).some((id) => row.key.startsWith(`demand/${scope.installation.id}/${id}/`))
-        const notices = records.filter(
-          (row) =>
-            row.key.startsWith(`notice/${scope.installation.id}/`) &&
+        const current = session.current.has(key),
+          repos = repositories(scope)
+        for (const row of records.filter((row) =>
+          repos.some((repository) => row.key.startsWith(`demand/${scope.installation.id}/${repository}/`)),
+        ))
+          if (
             object(row.payload) &&
-            repositories(scope).includes(row.payload.repositoryId as number),
-        )
-        const repairs = new Set<number>()
-        const now = Date.now()
-        for (const row of [...counters.values()].filter(related)) {
-          try {
-            const value = decodeDemand(row)
-            const refreshKey = `${scope.installation.id}/${value.repositoryId}`
-            if (
-              value.dirty ||
-              (value.queued > 0 &&
-                now - value.updatedAt >= 30000 &&
-                now - (session.demandRefresh.get(refreshKey) ?? 0) >= 30000)
-            )
-              repairs.add(value.repositoryId)
-          } catch {
-            repairs.add(Number(row.key.split('/')[2]))
-          }
-        }
-        for (const notice of notices)
-          if (object(notice.payload) && notice.payload.counted !== true)
-            repairs.add(notice.payload.repositoryId as number)
-        const queueChecks = new Map<number, { key: string; version: string }>()
-        const deferredRepositories = new Set<number>()
-        const refreshCounts = async (targets: Iterable<number>) => {
-          for (const repository of targets) {
-            if (!repositories(scope).includes(repository)) throw new StateCorrupt()
-            const prefix = `demand/${scope.installation.id}/${repository}/`
-            for (let attempt = 0; attempt < 2; attempt++) {
-              const wakeKey = `wake/${scope.installation.id}/${repository}`
-              const revisionKey = `queue-revision/${scope.installation.id}/${repository}`
-              const before = new Map(
-                (await this.options.state.read([wakeKey, revisionKey], session.lease)).map((row) => [row.key, row]),
-              )
-              const wake = before.get(wakeKey)
-              const jobs = (await runtime.backend.queued(repository, signal)).filter((job) =>
-                jobMatches(job, this.worker.labels),
-              )
-              signal.throwIfAborted()
-              try {
-                const snapshot = await rebuildQueueSnapshot(
-                  this.options.state,
-                  session.lease,
-                  {
-                    installationId: scope.installation.id,
-                    accountId: scope.installation.account.id,
-                    repositoryId: repository,
-                  },
-                  [...counters.values()].filter((row) => row.key.startsWith(prefix)),
-                  jobs,
-                  wake?.version,
-                  { version: before.get(revisionKey)?.version },
-                )
-                for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
-                for (const row of snapshot.demands) counters.set(row.key, row)
-                deferredRepositories.delete(repository)
-                queueChecks.set(repository, { key: snapshot.revision.key, version: snapshot.revision.version })
-                session.demandRefresh.set(`${scope.installation.id}/${repository}`, Date.now())
-                break
-              } catch (error) {
-                if (!(error instanceof StateConflict)) throw error
-                // A racing webhook invalidates this entire repository snapshot.
-                // Never reserve from it; leave unsettled notices for the next cycle.
-                for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
-                if (attempt === 1) {
-                  deferredRepositories.add(repository)
-                  break
-                }
-                for (const row of await this.options.state.recover(session.lease, 100000, [prefix]))
-                  counters.set(row.key, row)
-              }
-            }
-          }
-        }
-        if (current) {
-          try {
-            await refreshCounts(repairs)
-          } catch (error) {
-            if (error instanceof LeaseLost || error instanceof StateCorrupt || signal.aborted) throw error
-            // Failed queue reads retain demand, but must not strand known stopped
-            // resources. Unverified balancing cannot dispatch unsent reservations.
-            try {
-              await runtime.pool.balance(session.lease, closedCapacity, [], signal)
-            } catch (recovery) {
-              if (!(recovery instanceof DemandUncertain)) throw recovery
-            }
-            throw error
-          }
-        }
-        const readCounts = (): LabelDemand[] => {
-          const values = current ? [...counters.values()].filter(related).map(decodeDemand) : []
-          if (values.some((value) => value.accountId !== scope.installation.account.id)) throw new StateCorrupt()
-          return values
-        }
+            positive(row.payload.accountId) &&
+            row.payload.accountId !== scope.installation.account.id
+          )
+            throw new StateCorrupt()
+        const notices = pending.filter((job) => matches(scope, job))
+        const signature = JSON.stringify(notices.map((job) => [job.record.key, job.record.version]))
         const resolve = async (values: readonly LabelDemand[]) => {
           const target = values.find((value) => value.queued > 0)
           return target ? capacity(scope, target.repositoryId) : closedCapacity
         }
-        let demands = readCounts()
-        try {
-          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal)
-        } catch (error) {
-          if (!(error instanceof DemandUncertain) || !current) throw error
-          // Notifications cannot authorize expansion or idle retirement. A partial
-          // rebuild is not an empty queue and cannot authorize either operation.
-          await refreshCounts(repositories(scope))
-          demands = readCounts()
-          if (!deferredRepositories.size)
-            await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true, [
-              ...queueChecks.values(),
-            ])
+        if (current)
+          for (const repository of repos) this.reconcileQueue(session, key, scope, runtime, repository, signal)
+        const snapshots = repos.map((repository) => session.snapshots.get(`${key}/${repository}`))
+        const checks = snapshots.flatMap((snapshot) => (snapshot ? [snapshot.check] : []))
+        const actual = new Map(
+          (checks.length
+            ? await this.options.state.read(
+                checks.map((check) => check.key),
+                session.lease,
+              )
+            : []
+          ).map((row) => [row.key, row.version]),
+        )
+        if (
+          current &&
+          checks.length === repos.length &&
+          checks.every((check) => check.expiresAt! > Date.now() && actual.get(check.key) === check.version)
+        ) {
+          const demands = snapshots.flatMap((snapshot) =>
+            snapshot!.demands.map((row) => ({ ...decodeDemand(row), expiresAt: snapshot!.check.expiresAt })),
+          )
+          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true, checks)
+          for (const repository of repos) session.snapshots.delete(`${key}/${repository}`)
+          return
         }
-        for (const notice of current ? notices : [])
-          if (object(notice.payload) && !deferredRepositories.has(notice.payload.repositoryId as number))
-            await this.settle(session.lease, notice)
+        const values: LabelDemand[] = []
+        if (current)
+          for (const row of records.filter((row) =>
+            repos.some((repository) => row.key.startsWith(`demand/${scope.installation.id}/${repository}/`)),
+          )) {
+            try {
+              const demand = decodeDemand(row)
+              if (demand.accountId !== scope.installation.account.id) throw new StateCorrupt()
+              if (!demand.dirty) values.push(demand)
+              else if (session.observed.get(row.key) !== row.version) {
+                session.demandRefresh.delete(`${key}/${demand.repositoryId}`)
+                this.reconcileQueue(session, key, scope, runtime, demand.repositoryId, signal, true)
+                session.observed.set(row.key, row.version)
+              }
+            } catch (error) {
+              if (
+                object(row.payload) &&
+                positive(row.payload.accountId) &&
+                row.payload.accountId !== scope.installation.account.id
+              )
+                throw error
+              this.reconcileQueue(session, key, scope, runtime, Number(row.key.split('/')[2]), signal, true)
+            }
+          }
+        const fresh = current && notices.length > 0 && session.observed.get(key) !== signature
+        if (!fresh) {
+          try {
+            await runtime.pool.balance(session.lease, await resolve(values), values, signal)
+            return
+          } catch (error) {
+            if (!(error instanceof DemandUncertain) || !current) throw error
+            if (error.requiresJobRefresh) {
+              await this.invalidateVerification(session, key, scope)
+              return
+            }
+            for (const repository of repos) this.reconcileQueue(session, key, scope, runtime, repository, signal, true)
+          }
+        }
+        if (!current) return
+        const demands = await session.positive.read(scope, [], async () => [])
+        if (!demands.length && values.some((value) => value.queued > 0)) {
+          for (const id of session.verifiedAt.keys()) if (id.startsWith(key + '/')) session.verifiedAt.delete(id)
+          return
+        }
+        try {
+          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, 'positive')
+        } catch (error) {
+          if (!(error instanceof DemandUncertain) || !error.requiresJobRefresh) throw error
+          await this.invalidateVerification(session, key, scope)
+          return
+        }
+        session.observed.set(key, signature)
       })
-      if (!accepted) {
-        session.planningAfter = (index + 1) % entries.length
-        break
-      }
-      if (offset === entries.length - 1) session.planningAfter = (index + 1) % entries.length
+      session.planningAfter = (index + 1) % entries.length
+      if (!accepted) break
     }
+  }
+  private async invalidateVerification(session: Session, key: string, scope: ExecutionScope): Promise<void> {
+    for (const repository of repositories(scope)) await session.positive.invalidate(scope.installation.id, repository)
+    for (const id of session.verifiedAt.keys()) if (id.startsWith(key + '/')) session.verifiedAt.delete(id)
+    this.wake?.()
+  }
+  private reconcileQueue(
+    session: Session,
+    key: string,
+    scope: ExecutionScope,
+    runtime: Runtime,
+    repository: number,
+    signal: AbortSignal,
+    urgent = false,
+  ): void {
+    const id = `${key}/${repository}`,
+      previous = session.demandRefresh.get(id) ?? 0
+    if (Date.now() - previous < (urgent ? 30000 : this.timing.compensationMs)) return
+    session.repairing.enqueue(id, String(previous), async () => {
+      const prefix = `demand/${scope.installation.id}/${repository}/`,
+        wakeKey = `wake/${scope.installation.id}/${repository}`,
+        revisionKey = `queue-revision/${scope.installation.id}/${repository}`
+      let proof: { demands: StateRecord[]; check: StateCheck } | undefined
+      await this.readWithSession(id, runtime.backend, async (reader) => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const records = await this.options.state.recover(session.lease, 100000, [
+            prefix,
+            `notice/${scope.installation.id}/`,
+          ])
+          const before = new Map(
+            (await this.options.state.read([wakeKey, revisionKey], session.lease)).map((row) => [row.key, row]),
+          )
+          const jobs = (await reader.queued(repository, signal)).filter((job) => jobMatches(job, this.worker.labels))
+          signal.throwIfAborted()
+          try {
+            const snapshot = await rebuildQueueSnapshot(
+              this.options.state,
+              session.lease,
+              {
+                installationId: scope.installation.id,
+                accountId: scope.installation.account.id,
+                repositoryId: repository,
+              },
+              records.filter((row) => row.key.startsWith(prefix)),
+              jobs,
+              before.get(wakeKey)?.version,
+              { version: before.get(revisionKey)?.version },
+            )
+            await session.positive.invalidate(scope.installation.id, repository)
+            for (const id of session.verifiedAt.keys())
+              if (id.startsWith(`${key}/${repository}/`)) session.verifiedAt.delete(id)
+            proof = {
+              demands: snapshot.demands,
+              check: {
+                key: snapshot.revision.key,
+                version: snapshot.revision.version,
+                expiresAt: (await this.options.state.now(session.lease)) + 30000,
+              },
+            }
+            const queued = new Set(jobs.map((job) => job.job))
+            for (const row of records.filter((row) => row.key.startsWith('notice/'))) {
+              const notice = pendingJob(row)
+              if (notice.notice.repository === repository && !queued.has(notice.notice.job))
+                await this.settle(session.lease, row)
+            }
+            break
+          } catch (error) {
+            if (!(error instanceof StateConflict) || attempt === 1) throw error
+          }
+        }
+      })
+      if (proof) {
+        session.snapshots.set(id, proof)
+        session.demandRefresh.set(id, Date.now())
+        this.wake?.()
+      }
+    })
   }
   private validateWake(row: StateRecord): void {
     const value = row.payload

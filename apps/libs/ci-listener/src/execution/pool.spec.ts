@@ -313,6 +313,82 @@ describe('CI shared worker lifecycle', () => {
   }
   const durableDemands = async () =>
     (await state.recover(lease, 1000, ['demand/'])).map(decodeDemand).sort((a, b) => a.repositoryId - b.repositoryId)
+  it('keeps live idle runners when only partial positive demand was verified', async () => {
+    supplyInventory()
+    const retire = idleRetirement()
+    await tick()
+    await ageRunners()
+    await pool.balance(lease, limits, [], undefined, 'positive' as never)
+    expect(retire).not.toHaveBeenCalled()
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+    expect(runners.size).toBe(1)
+  })
+  it('rechecks a queue proof deadline after retirement waits in the execution queue', async () => {
+    supplyInventory()
+    idleRetirement()
+    await tick()
+    await ageRunners()
+    const [proof] = await state.commit(lease, [{ key: 'queue-revision/1/21', expected: null, payload: true }])
+    await pool.close()
+    let release!: () => void, completed!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const finished = new Promise<void>((resolve) => {
+      completed = resolve
+    })
+    const queue = new WorkQueue(1, () => {})
+    queue.enqueue('barrier', '1', () => held)
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    const now = Date.now(),
+      clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      await pool.balance(lease, limits, [], undefined, true, [
+        Object.assign({ key: proof.key, version: proof.version }, { expiresAt: now + 100 }),
+      ])
+      queue.enqueue('after-retirement', '1', async () => completed())
+      clock.mockReturnValue(now + 101)
+      release()
+      await finished
+      expect(runners.size).toBe(1)
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect((await allocation()).value.effect?.kind).not.toBe('runner-retire')
+    } finally {
+      release()
+      await queue.close()
+      clock.mockRestore()
+    }
+  })
+  it('recovers a stopped Box even when complete retirement proof exceeds 100 checks', async () => {
+    supplyInventory()
+    const retire = idleRetirement()
+    await tick()
+    await ageRunners()
+    for (const box of boxes.values()) box.status = 'stopped'
+    const checks = []
+    for (let offset = 0; offset < 101; offset += 100) {
+      const rows = await state.commit(
+        lease,
+        Array.from({ length: Math.min(100, 101 - offset) }, (_, index) => ({
+          key: `queue-revision/1/${offset + index + 21}`,
+          expected: null,
+          payload: true,
+        })),
+      )
+      checks.push(...rows.map(({ key, version }) => ({ key, version })))
+    }
+    await pool.close()
+    const queue = new WorkQueue(1, () => {})
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    try {
+      await pool.balance(lease, limits, [], undefined, true, checks)
+      await queue.close()
+    } finally {
+      await queue.close()
+    }
+    expect(retire).not.toHaveBeenCalled()
+    expect(backend.workers.remove).toHaveBeenCalledTimes(1)
+  })
   it('requires an authoritative queue snapshot before expanding counted supply', async () => {
     supplyInventory()
     await expect(pool.balance(lease, limits, countedDemand())).rejects.toBeInstanceOf(DemandUncertain)
