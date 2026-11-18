@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// ```text
 /// create()  → Configured (persisted to DB, no VM)
 /// start()   → Running (VM initialized)
-/// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
+/// SIGSTOP   → Quiesced (VM frozen, used during export/snapshot)
 /// SIGCONT   → Running (VM resumed)
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
@@ -42,10 +42,11 @@ pub enum BoxStatus {
     /// Rootfs is preserved, box can be restarted.
     Stopped,
 
-    /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
-    /// Used during export/snapshot for point-in-time consistency.
-    /// Equivalent to Docker's cgroup freezer pause.
+    /// Box VM pause confirmed by the checkpoint control interface.
     Paused,
+
+    /// Brief guest freeze + SIGSTOP state during disk-consistency operations.
+    Quiesced,
 
     /// Init pipeline failed (e.g., guest_connect timeout, vmm_spawn error).
     /// Record + rootfs preserved so the user/control-plane can retry or destroy.
@@ -54,9 +55,12 @@ pub enum BoxStatus {
 }
 
 impl BoxStatus {
+    /// States with an active VM process, including frozen VMs.
+    pub(crate) const ACTIVE: [Self; 3] = [Self::Running, Self::Paused, Self::Quiesced];
+
     /// Check if this status represents an active VM (process is running or paused).
     pub fn is_active(&self) -> bool {
-        matches!(self, BoxStatus::Running | BoxStatus::Paused)
+        Self::ACTIVE.contains(self)
     }
 
     pub fn is_running(&self) -> bool {
@@ -90,9 +94,12 @@ impl BoxStatus {
     }
 
     /// Check if stop() can be called from this state.
-    /// Running and Paused boxes can be stopped.
+    /// Running, Paused, and Quiesced boxes can be stopped.
     pub fn can_stop(&self) -> bool {
-        matches!(self, BoxStatus::Running | BoxStatus::Paused)
+        matches!(
+            self,
+            BoxStatus::Running | BoxStatus::Paused | BoxStatus::Quiesced
+        )
     }
 
     /// Check if remove() can be called from this state.
@@ -136,10 +143,11 @@ impl BoxStatus {
             (Configured, Stopped) |
             (Configured, Failed) |
             (Configured, Unknown) |
-            // Running → Stopping (graceful), Stopped (crash), Paused (SIGSTOP), or Failed (runtime crash)
+            // Running → Stopping, Stopped, Paused (checkpoint), Quiesced (disk operation), or Failed
             (Running, Stopping) |
             (Running, Stopped) |
             (Running, Paused) |
+            (Running, Quiesced) |
             (Running, Failed) |
             (Running, Unknown) |
             // Stopping → Stopped (complete), Failed (shutdown error), or Unknown (error)
@@ -150,10 +158,13 @@ impl BoxStatus {
             (Stopped, Running) |
             (Stopped, Failed) |
             (Stopped, Unknown) |
-            // Paused → Running (SIGCONT resume) or Stopped (killed while paused)
+            // Frozen states → Running (resume), Stopped (killed), or Unknown (recovery)
             (Paused, Running) |
             (Paused, Stopped) |
             (Paused, Unknown) |
+            (Quiesced, Running) |
+            (Quiesced, Stopped) |
+            (Quiesced, Unknown) |
             // Failed → Running (control-plane retry), Stopped (manual reset), or Unknown (recovery)
             (Failed, Running) |
             (Failed, Stopped) |
@@ -170,6 +181,7 @@ impl BoxStatus {
             BoxStatus::Stopping => "stopping",
             BoxStatus::Stopped => "stopped",
             BoxStatus::Paused => "paused",
+            BoxStatus::Quiesced => "quiesced",
             BoxStatus::Failed => "failed",
         }
     }
@@ -188,6 +200,7 @@ impl std::str::FromStr for BoxStatus {
             "stopping" => Ok(BoxStatus::Stopping),
             "stopped" => Ok(BoxStatus::Stopped),
             "paused" => Ok(BoxStatus::Paused),
+            "quiesced" => Ok(BoxStatus::Quiesced),
             "failed" => Ok(BoxStatus::Failed),
             // Legacy: old transient statuses map to Stopped (DB backward compat)
             "snapshotting" | "restoring" | "exporting" | "cloning" => Ok(BoxStatus::Stopped),
@@ -402,13 +415,23 @@ impl BoxState {
     /// shim writing its PID file and this row being saved. A `started_at` written
     /// for the PID we are replacing cannot describe the adopted one, so recovery
     /// clears it. This keeps the PID and timestamp safe to read together as one
-    /// snapshot.
+    /// snapshot. Frozen states are preserved only for the same verified PID.
     pub fn adopt_recovered_shim(&mut self, pid: u32) {
-        if self.pid != Some(pid) {
+        let same_pid = self.pid == Some(pid);
+        if !same_pid {
             self.started_at = None;
         }
+        let status = match self.status {
+            // Reattaching does not resume a frozen VM. A different shim is
+            // live, but we cannot claim it has the recorded frozen state.
+            BoxStatus::Paused | BoxStatus::Quiesced if !same_pid => BoxStatus::Unknown,
+            BoxStatus::Paused | BoxStatus::Quiesced => self.status,
+            // A live shim still does not establish guest state on subsequent recovery.
+            BoxStatus::Unknown if self.pid.is_some() => BoxStatus::Unknown,
+            _ => BoxStatus::Running,
+        };
         self.set_pid(Some(pid));
-        self.set_status(BoxStatus::Running);
+        self.set_status(status);
     }
 
     /// Set lock ID and update timestamp.
@@ -478,7 +501,7 @@ impl BoxState {
 
     /// Reset state after system reboot.
     ///
-    /// Active boxes (Running or Paused) become Stopped since VM rootfs is preserved.
+    /// Active boxes (Running, Paused, or Quiesced) become Stopped since VM rootfs is preserved.
     /// PID is cleared since all processes are gone after reboot.
     pub fn reset_for_reboot(&mut self) {
         if self.status.is_active() {
@@ -622,6 +645,76 @@ mod tests {
     }
 
     #[test]
+    fn test_frozen_state_matrix_and_admission() {
+        use BoxStatus::*;
+        let statuses = [
+            Unknown, Configured, Running, Stopping, Stopped, Paused, Quiesced, Failed,
+        ];
+        for frozen in [Paused, Quiesced] {
+            assert!(frozen.is_active());
+            assert!(frozen.can_stop());
+            assert!(!frozen.can_start());
+            assert!(!frozen.can_exec());
+            assert!(!frozen.can_remove());
+            for status in statuses {
+                assert_eq!(
+                    frozen.can_transition_to(status),
+                    matches!(status, Running | Stopped | Unknown),
+                    "{frozen} -> {status}"
+                );
+                assert_eq!(
+                    status.can_transition_to(frozen),
+                    matches!(status, Running | Unknown),
+                    "{status} -> {frozen}"
+                );
+            }
+            let mut state = BoxState::new();
+            state.status = frozen;
+            let other = if frozen == Paused { Quiesced } else { Paused };
+            assert!(state.transition_to(other).is_err());
+            assert_eq!(state.status, frozen);
+            state.pid = Some(4242);
+            state.reset_for_reboot();
+            assert_eq!(state.status, Stopped);
+            assert_eq!(state.pid, None);
+        }
+        assert!(!Quiesced.is_paused());
+    }
+
+    #[test]
+    fn test_frozen_status_wire_roundtrip() {
+        for (status, wire) in [
+            (BoxStatus::Paused, "paused"),
+            (BoxStatus::Quiesced, "quiesced"),
+        ] {
+            assert_eq!(status.as_str(), wire);
+            assert_eq!(status.to_string(), wire);
+            assert_eq!(wire.parse(), Ok(status));
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(json, format!("\"{wire}\""));
+            assert_eq!(serde_json::from_str::<BoxStatus>(&json).unwrap(), status);
+        }
+    }
+
+    #[test]
+    fn adopting_frozen_shim_preserves_status_only_for_same_pid() {
+        for status in [BoxStatus::Paused, BoxStatus::Quiesced] {
+            let mut state = BoxState::new();
+            state.set_pid(Some(4242));
+            state.mark_started();
+            let started_at = state.started_at;
+            state.status = status;
+            state.adopt_recovered_shim(4242);
+            assert_eq!(state.status, status);
+            assert_eq!(state.started_at, started_at);
+            state.adopt_recovered_shim(4243);
+            assert_eq!(state.status, BoxStatus::Unknown);
+            assert_eq!(state.pid, Some(4243));
+            assert_eq!(state.started_at, None);
+        }
+    }
+
+    #[test]
     fn test_state_transition() {
         let mut state = BoxState::new();
         assert_eq!(state.status, BoxStatus::Configured);
@@ -629,11 +722,11 @@ mod tests {
         assert!(state.transition_to(BoxStatus::Running).is_ok());
         assert_eq!(state.status, BoxStatus::Running);
 
-        // Running → Paused
-        assert!(state.transition_to(BoxStatus::Paused).is_ok());
-        assert_eq!(state.status, BoxStatus::Paused);
+        // Disk operations use Quiesced, not checkpoint Paused.
+        assert!(state.transition_to(BoxStatus::Quiesced).is_ok());
+        assert_eq!(state.status, BoxStatus::Quiesced);
 
-        // Paused → Running
+        // Quiesced → Running
         assert!(state.transition_to(BoxStatus::Running).is_ok());
         assert_eq!(state.status, BoxStatus::Running);
 
@@ -696,6 +789,7 @@ mod tests {
         assert_eq!(BoxStatus::Stopping.as_str(), "stopping");
         assert_eq!(BoxStatus::Stopped.as_str(), "stopped");
         assert_eq!(BoxStatus::Paused.as_str(), "paused");
+        assert_eq!(BoxStatus::Quiesced.as_str(), "quiesced");
         assert_eq!(BoxStatus::Failed.as_str(), "failed");
     }
 
@@ -708,6 +802,7 @@ mod tests {
         assert_eq!("stopping".parse(), Ok(BoxStatus::Stopping));
         assert_eq!("stopped".parse(), Ok(BoxStatus::Stopped));
         assert_eq!("paused".parse(), Ok(BoxStatus::Paused));
+        assert_eq!("quiesced".parse(), Ok(BoxStatus::Quiesced));
         assert_eq!("failed".parse(), Ok(BoxStatus::Failed));
         // Legacy transient statuses map to Stopped
         assert_eq!("snapshotting".parse(), Ok(BoxStatus::Stopped));

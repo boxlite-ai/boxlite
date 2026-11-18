@@ -360,8 +360,12 @@ for a control handle. Call `kill()`, `signal()`, `resize_tty()`, or `wait()` on
 that handle.
 Listing reads the guest's own registry, never boots or resumes a box, and lists
 only unfinished sessions: a finished execution's exit status is read through
-`wait()`. A created or stopped box returns an empty list; a paused box returns
+`wait()`. A created or stopped box returns an empty list; a paused or quiesced box returns
 an invalid-state error. See [`ExecutionInfo`](#boxliteexecutioninfo) for the fields.
+
+`paused` means a pause confirmed by the checkpoint control interface;
+`quiesced` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+Neither state allows exec or an implicit cold start.
 
 `attach()` with no argument follows the box's main command — the container
 init, which is what `run IMAGE COMMAND` starts. Pass `execution_id` to

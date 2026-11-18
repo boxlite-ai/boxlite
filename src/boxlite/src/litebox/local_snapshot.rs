@@ -139,6 +139,7 @@ impl LocalSnapshotBackend {
                                     "Cannot restore snapshot while box is running. Stop the box first.".into(),
                                 ));
                             }
+                            self.inner.reject_unknown_shim_for_disk_work(&state)?;
                         }
 
                         let box_id = self.inner.id().as_str();

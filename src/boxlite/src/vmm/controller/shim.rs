@@ -1,10 +1,16 @@
 //! ShimController and ShimHandler - Universal process management for all Box engines.
 
-use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    process::Child,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use crate::{
     BoxID,
     runtime::layout::BoxFilesystemLayout,
+    util::{PidFileReader, ProcessIdentity, process::pid_may_be_alive},
     vmm::{InstanceSpec, VmmKind},
 };
 
@@ -76,6 +82,43 @@ impl ShimHandler {
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
+    }
+
+    /// Stop a frozen shim without attaching to the guest. Caller holds the lifecycle lock.
+    pub(crate) fn stop_frozen(
+        box_id: &BoxID,
+        persisted_pid: Option<u32>,
+        pid_file: &Path,
+    ) -> BoxliteResult<()> {
+        let reader = PidFileReader::at(pid_file);
+        match reader.process_identity() {
+            ProcessIdentity::Verified(pid)
+                if persisted_pid == Some(pid) && (1..=i32::MAX as u32).contains(&pid) =>
+            {
+                Self::from_pid(pid, box_id.clone()).stop()?;
+                // The attached handler can return immediately after sending SIGKILL.
+                let deadline = Instant::now() + Duration::from_secs(1);
+                while pid_may_be_alive(pid) {
+                    if Instant::now() >= deadline {
+                        return Err(BoxliteError::Internal(format!(
+                            "Frozen box {box_id} shim (PID {pid}) did not exit"
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            _ if persisted_pid.is_some_and(pid_may_be_alive)
+                || reader
+                    .read()
+                    .is_ok_and(|record| pid_may_be_alive(record.pid)) =>
+            {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Cannot verify live shim identity for frozen box {box_id}"
+                )));
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.

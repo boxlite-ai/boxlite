@@ -214,6 +214,14 @@ pub fn is_process_alive(pid: u32) -> bool {
     !is_process_zombie(pid)
 }
 
+/// Liveness evidence for fail-closed lifecycle checks, including inaccessible PIDs.
+pub(crate) fn pid_may_be_alive(pid: u32) -> bool {
+    (1..=i32::MAX as u32).contains(&pid)
+        && (is_process_alive(pid)
+            || (unsafe { libc::kill(pid as i32, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)))
+}
+
 fn is_process_zombie(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {

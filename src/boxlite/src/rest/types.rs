@@ -969,6 +969,7 @@ fn parse_box_status(status: &str) -> BoxStatus {
         "stopping" => BoxStatus::Stopping,
         "stopped" => BoxStatus::Stopped,
         "paused" => BoxStatus::Paused,
+        "quiesced" => BoxStatus::Quiesced,
         "failed" => BoxStatus::Failed,
         _ => BoxStatus::Unknown,
     }
@@ -1656,6 +1657,8 @@ mod tests {
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Unknown);
         resp.status = "paused".to_string();
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Paused);
+        resp.status = "quiesced".to_string();
+        assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Quiesced);
     }
 
     #[test]

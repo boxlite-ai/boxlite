@@ -203,7 +203,7 @@ async fn cold_execution_list_failure_preserves_running_shim() {
 }
 
 #[tokio::test]
-async fn list_executions_rejects_paused_and_leaves_idle_boxes_unstarted() {
+async fn list_executions_rejects_frozen_and_leaves_idle_boxes_unstarted() {
     let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
     let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
@@ -211,7 +211,12 @@ async fn list_executions_rejects_paused_and_leaves_idle_boxes_unstarted() {
         ..Default::default()
     })
     .expect("create runtime");
-    for status in [BoxStatus::Configured, BoxStatus::Stopped, BoxStatus::Paused] {
+    for status in [
+        BoxStatus::Configured,
+        BoxStatus::Stopped,
+        BoxStatus::Paused,
+        BoxStatus::Quiesced,
+    ] {
         let id = BoxIDMint::mint();
         let config = BoxConfig {
             id: id.clone(),
@@ -229,6 +234,12 @@ async fn list_executions_rejects_paused_and_leaves_idle_boxes_unstarted() {
         };
         let mut state = BoxState::new();
         state.status = status;
+        let lock_id = runtime.lock_manager.allocate().unwrap();
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
+        state.set_lock_id(lock_id);
         runtime
             .box_manager
             .add_box(&config, &state)
@@ -240,8 +251,22 @@ async fn list_executions_rejects_paused_and_leaves_idle_boxes_unstarted() {
             runtime.shutdown_token.child_token(),
         );
 
+        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+            assert!(matches!(
+                box_impl.ensure_booted().await,
+                Err(BoxliteError::InvalidState(_))
+            ));
+            assert!(matches!(
+                box_impl.start().await,
+                Err(BoxliteError::InvalidState(_))
+            ));
+            assert!(matches!(
+                box_impl.live_state().await,
+                Err(BoxliteError::InvalidState(_))
+            ));
+        }
         let result = box_impl.list_executions().await;
-        if status == BoxStatus::Paused {
+        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
             assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
         } else {
             assert!(result.expect("list idle box").is_empty());
@@ -257,4 +282,206 @@ async fn list_executions_rejects_paused_and_leaves_idle_boxes_unstarted() {
         assert_eq!(persisted.status, status);
         assert_eq!(persisted.pid, None);
     }
+}
+
+async fn recovered_frozen_standin(
+    status: BoxStatus,
+    legacy: bool,
+) -> (TempDir, SharedRuntimeImpl, ChildGuard, BoxID, u32) {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let options = BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    };
+    let runtime = RuntimeImpl::new_for_test(options.clone()).unwrap();
+    let (child, id, pid) = running_box_with_standin(&runtime, false, 0, Vec::new());
+    let mut state = runtime.box_manager.update_box(&id).unwrap();
+    state.set_status(status);
+    runtime.box_manager.save_box(&id, &state).unwrap();
+    if legacy {
+        let layout = runtime.layout.box_layout(id.as_str(), false).unwrap();
+        std::fs::write(layout.pid_file_path(), pid.to_string()).unwrap();
+    }
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+    // No handles were handed out by the first runtime; leave the shim for recovery.
+    runtime.shutdown(None).await.unwrap();
+    drop(runtime);
+    let recovered = RuntimeImpl::new_for_test(options).unwrap();
+    (home, recovered, child, id, pid)
+}
+
+#[tokio::test]
+async fn stop_terminates_recovered_frozen_shim() {
+    for status in [BoxStatus::Paused, BoxStatus::Quiesced] {
+        let (_home, runtime, _child, id, pid) = recovered_frozen_standin(status, false).await;
+        let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+        let bx = Arc::clone(&handle.box_backend)
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .ok()
+            .unwrap();
+        assert_eq!(bx.state.read().status, status);
+        assert!(!bx.live.initialized());
+
+        handle.stop().await.unwrap();
+
+        assert!(!is_process_alive(pid), "stop left the {status} shim alive");
+        assert!(!bx.live.initialized());
+        assert!(!bx.layout.pid_file_path().exists());
+        let persisted = runtime.box_manager.update_box(&id).unwrap();
+        assert_eq!(
+            (persisted.status, persisted.pid),
+            (BoxStatus::Stopped, None)
+        );
+    }
+}
+
+#[tokio::test]
+async fn sync_shutdown_terminates_recovered_frozen_shim() {
+    let (_home, runtime, _child, id, pid) =
+        recovered_frozen_standin(BoxStatus::Quiesced, false).await;
+    runtime.shutdown_sync();
+
+    assert!(!is_process_alive(pid), "sync shutdown left the shim alive");
+    let persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!(
+        (persisted.status, persisted.pid),
+        (BoxStatus::Stopped, None)
+    );
+    let layout = runtime.layout.box_layout(id.as_str(), false).unwrap();
+    assert!(!layout.pid_file_path().exists());
+}
+
+#[tokio::test]
+async fn snapshot_restore_rejects_recovered_unknown_shim() {
+    let (_home, runtime, _child, id, pid) = recovered_frozen_standin(BoxStatus::Paused, true).await;
+    let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+    let (config, persisted) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+    assert_eq!(
+        (persisted.status, persisted.pid),
+        (BoxStatus::Unknown, Some(pid))
+    );
+    let disks = config.box_home.join("disks");
+    std::fs::create_dir_all(&disks).unwrap();
+    let disk = disks.join(crate::disk::constants::filenames::CONTAINER_DISK);
+    crate::disk::Qcow2Helper::create_disk(&disk, true)
+        .unwrap()
+        .leak();
+    for name in ["restore-point", "current-point"] {
+        runtime
+            .snapshot_mgr
+            .create(&config.box_home, name, id.as_str())
+            .unwrap();
+    }
+    let before = std::fs::read(&disk).unwrap();
+
+    let result = handle.snapshots().restore("restore-point").await;
+
+    assert!(
+        std::fs::read(&disk).unwrap() == before,
+        "restore replaced the Unknown box's disk: {result:?}"
+    );
+    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+}
+
+async fn assert_snapshot_rejects_recovered_frozen_shim(status: BoxStatus) {
+    let (_home, runtime, _child, id, pid) = recovered_frozen_standin(status, false).await;
+    if status == BoxStatus::Quiesced {
+        // Simulate SIGCONT having landed without the Running state being saved.
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
+    }
+    let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+    let (config, persisted) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+    assert_eq!((persisted.status, persisted.pid), (status, Some(pid)));
+    let layout = runtime.layout.box_layout(id.as_str(), false).unwrap();
+    let pid_file = layout.pid_file_path();
+    let pid_record = std::fs::read(&pid_file).unwrap();
+    assert_eq!(PidFileReader::at(&pid_file).read().unwrap().pid, pid);
+
+    let disks = config.box_home.join("disks");
+    std::fs::create_dir_all(&disks).unwrap();
+    let disk = disks.join(crate::disk::constants::filenames::CONTAINER_DISK);
+    crate::disk::Qcow2Helper::create_disk(&disk, true)
+        .unwrap()
+        .leak();
+    let before = std::fs::read(&disk).unwrap();
+
+    let snapshots = handle.snapshots();
+    let result = snapshots.create(Default::default(), "blocked").await;
+
+    assert!(
+        std::fs::read(&disk).unwrap() == before,
+        "snapshot disk callback ran for {status}: {result:?}"
+    );
+    assert!(snapshots.list().await.unwrap().is_empty());
+    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+    let persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!((persisted.status, persisted.pid), (status, Some(pid)));
+    assert_eq!(std::fs::read(pid_file).unwrap(), pid_record);
+}
+
+#[tokio::test]
+async fn snapshot_rejects_recovered_quiesced_shim() {
+    assert_snapshot_rejects_recovered_frozen_shim(BoxStatus::Quiesced).await;
+}
+
+#[tokio::test]
+async fn snapshot_rejects_recovered_paused_shim() {
+    assert_snapshot_rejects_recovered_frozen_shim(BoxStatus::Paused).await;
+}
+
+#[tokio::test]
+async fn quiesce_rejects_recovered_unknown_shim_from_pid_file() {
+    let (_home, runtime, _child, id, _) = recovered_frozen_standin(BoxStatus::Quiesced, true).await;
+    let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+    let bx = Arc::clone(&handle.box_backend)
+        .as_any_arc()
+        .downcast::<BoxImpl>()
+        .ok()
+        .unwrap();
+    let mut persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!(persisted.status, BoxStatus::Unknown);
+    persisted.set_pid(None);
+    runtime.box_manager.save_box(&id, &persisted).unwrap();
+
+    let mut called = false;
+    let result = bx
+        .with_quiesce_async(async {
+            called = true;
+            Ok(())
+        })
+        .await;
+
+    assert!(!called, "quiesce ran disk work for a live Unknown box");
+    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+    assert_eq!(bx.state.read().pid, None);
+}
+
+#[tokio::test]
+async fn stop_preserves_unverified_frozen_shim() {
+    let (_home, runtime, _child, id, pid) =
+        recovered_frozen_standin(BoxStatus::Paused, false).await;
+    let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+    let pid_file = runtime
+        .layout
+        .box_layout(id.as_str(), false)
+        .unwrap()
+        .pid_file_path();
+    let fingerprint = crate::util::process_start_time(pid).unwrap();
+    let record = format!("{pid}\n{}\n", fingerprint + 1);
+    std::fs::write(&pid_file, &record).unwrap();
+
+    let result = handle.stop().await;
+
+    assert!(
+        matches!(result, Err(BoxliteError::InvalidState(_))),
+        "stop accepted an unverified frozen shim: {result:?}"
+    );
+    assert!(is_process_alive(pid));
+    assert_eq!(std::fs::read_to_string(pid_file).unwrap(), record);
+    let persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!(
+        (persisted.status, persisted.pid),
+        (BoxStatus::Paused, Some(pid))
+    );
 }

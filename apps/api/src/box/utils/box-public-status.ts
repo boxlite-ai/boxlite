@@ -9,6 +9,7 @@ export const BOX_PUBLIC_STATUSES = [
   'stopping',
   'stopped',
   'paused',
+  'quiesced',
   'failed',
   'unknown',
 ] as const

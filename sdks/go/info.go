@@ -26,6 +26,7 @@ const (
 	StateStopping   State = "stopping"
 	StateStopped    State = "stopped"
 	StatePaused     State = "paused"
+	StateQuiesced   State = "quiesced"
 	StateFailed     State = "failed"
 )
 

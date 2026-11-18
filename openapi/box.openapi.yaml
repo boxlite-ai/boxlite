@@ -2638,15 +2638,22 @@ components:
         - `running`: VM active, accepting commands
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
-        - `paused`: VM frozen via SIGSTOP (during snapshot/export)
+        - `paused`: The checkpoint control interface has confirmed the pause.
+          The VM remains paused until resumed.
+        - `quiesced`: The VM is temporarily frozen for a disk-consistency
+          operation (snapshot, clone, or export) and is unfrozen when it ends.
         - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
+
+        Neither `paused` nor `quiesced` means the VM has stopped. Neither
+        state allows command execution.
       enum:
         - configured
         - running
         - stopping
         - stopped
         - paused
+        - quiesced
         - failed
         - unknown
 

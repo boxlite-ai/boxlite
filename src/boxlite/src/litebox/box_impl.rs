@@ -33,7 +33,8 @@ use crate::portal::GuestSession;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
-use crate::vmm::controller::VmmHandler;
+use crate::util::{PidFileReader, process::pid_may_be_alive};
+use crate::vmm::controller::{ShimHandler, VmmHandler};
 use crate::{BoxID, BoxInfo};
 
 mod operations;
@@ -856,6 +857,14 @@ impl BoxImpl {
             return Ok(());
         }
 
+        let (status, pid) = {
+            let state = self.state.read();
+            (state.status, state.pid)
+        };
+        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+            ShimHandler::stop_frozen(self.id(), pid, &self.layout.pid_file_path())?;
+        }
+
         // Abort the box watcher (if armed) so it does not run past stop().
         // `stop()` also cancels the shutdown token the watcher selects on, but the
         // abort stops it immediately even if it is mid-probe. `abort` takes `&self`,
@@ -881,8 +890,9 @@ impl BoxImpl {
         // shim. Calling live_state() on Configured/Failed would route
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
-        let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted_locked().await {
+        if status == BoxStatus::Running
+            && let Ok(live) = self.ensure_booted_locked().await
+        {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -1315,6 +1325,12 @@ impl BoxImpl {
 
     /// Caller owns lifecycle admission, including when stop attaches for teardown.
     async fn ensure_booted_locked(&self) -> BoxliteResult<&LiveState> {
+        let status = self.state.read().status;
+        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot boot or attach to box in {status} state"
+            )));
+        }
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -1614,7 +1630,8 @@ impl BoxImpl {
     ///   4. SIGCONT shim process (resume vCPUs)
     ///   5. Guest Thaw RPC (FITHAW — unblock writes)
     ///
-    /// If the VM is not running, `fut` is executed directly with no quiesce.
+    /// If the VM is not running, `fut` is executed directly unless its state
+    /// is Paused, Quiesced, or Unknown with evidence of a shim.
     /// Guest RPCs are best-effort with timeout — failure degrades to
     /// crash-consistent (SIGSTOP-only), not operation failure.
     pub(crate) async fn with_quiesce_async<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
@@ -1624,12 +1641,37 @@ impl BoxImpl {
         self.with_operation(self.quiesce_inner(fut)).await
     }
 
+    // Called with refreshed state under lifecycle admission.
+    pub(super) fn reject_unknown_shim_for_disk_work(&self, state: &BoxState) -> BoxliteResult<()> {
+        if state.status == BoxStatus::Unknown
+            && (state.pid.is_some()
+                || PidFileReader::at(self.layout.pid_file_path())
+                    .read()
+                    .is_ok_and(|record| pid_may_be_alive(record.pid)))
+        {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot operate on disks of box {}: shim state is unknown",
+                self.id()
+            )));
+        }
+        Ok(())
+    }
+
     async fn quiesce_inner<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
         let (pid, was_running) = {
             let state = self.state.read();
+            let status = state.status;
+            // A persisted freeze label is not proof this operation froze the VM.
+            if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Box {} is already {status}; resume or stop it before performing disk operations",
+                    self.id()
+                )));
+            }
+            self.reject_unknown_shim_for_disk_work(&state)?;
             let running = state.status.is_running();
             let pid = if running {
                 state.pid.map(|p| p as i32)
@@ -1672,7 +1714,7 @@ impl BoxImpl {
         }
         {
             let mut state = self.state.write();
-            state.force_status(BoxStatus::Paused);
+            state.force_status(BoxStatus::Quiesced);
             let _ = self.runtime.box_manager.save_box(self.id(), &state);
         }
 
