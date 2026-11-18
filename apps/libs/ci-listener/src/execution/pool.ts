@@ -401,7 +401,7 @@ export class WorkerPool {
           (runner?.status === 'online' &&
             (row.value.delivery === 'done' || row.value.delivery === 'requested') &&
             Date.now() - (row.value.runner.registeredAt ?? row.value.createdAt) >= RUNNER_BOOTSTRAP_SECONDS * 1000 &&
-            (this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now())
+            ((this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now() || this.retirementQueued(row)))
         ) {
           const candidates = idle.get(selection.label) ?? []
           candidates.push(row)
@@ -452,6 +452,12 @@ export class WorkerPool {
       for (const [label, candidates] of idle) {
         let excess = Math.max(0, (supplied.get(label) ?? 0) - (totalDemand.get(label) ?? 0))
         candidates.sort((a, b) => Number(a.value.box.phase !== 'none') - Number(b.value.box.phase !== 'none'))
+        if (verified === 'positive' && totalDemand.has(label) && this.execution) {
+          // Only existing retirements can remove supply. Leave at most the verified surplus queued.
+          const pending = candidates.filter((row) => this.retirementQueued(row))
+          for (const row of pending.slice(excess))
+            this.dispatch(lease, row, backend, scope.scope, signal, false, [], true)
+        }
         for (const row of candidates) if (excess-- > 0) surplus.push(row)
       }
       const expanding =
@@ -650,6 +656,15 @@ export class WorkerPool {
         })
     }
   }
+  private retirementQueued(row: AllocationRow): boolean {
+    const revision = this.execution?.queue.revision(row.record.key)
+    if (!revision) return false
+    // Recording the running retirement's intent advances the allocation version.
+    return (
+      revision.startsWith(row.record.version + '/retire/') ||
+      (row.value.effect?.kind === 'runner-retire' && /^[^/]+\/retire\//.test(revision))
+    )
+  }
   private dispatch(
     lease: ExecutionLease,
     planned: AllocationRow,
@@ -658,12 +673,12 @@ export class WorkerPool {
     signal?: AbortSignal,
     retireIdle = false,
     checks: readonly StateCheck[] = [],
-    completePlan = false,
+    replaceRetirement = false,
   ): boolean {
     const queue = this.execution!.queue
     const key = planned.record.key
     const retirement = planned.record.version + '/retire/'
-    if (!completePlan && !retireIdle && queue.revision(key)?.startsWith(retirement)) return true
+    if (!replaceRetirement && !retireIdle && this.retirementQueued(planned)) return true
     const accepted = queue.enqueue(
       key,
       (retireIdle ? retirement : planned.record.version + '/recover/') + JSON.stringify(checks),
@@ -677,7 +692,12 @@ export class WorkerPool {
         if (timed) this.event(scope, current, 'ci-worker-execution-started', 'info', { queueWaitMs })
         try {
           await backend.retire?.(current.value.name)
-          await this.reconcile(lease, current, backend, scope, signal, retireIdle, checks)
+          const checkRetirement = retireIdle
+            ? () => {
+                if (!/^[^/]+\/retire\//.test(queue.revision(key) ?? '')) throw new StateConflict()
+              }
+            : undefined
+          await this.reconcile(lease, current, backend, scope, signal, retireIdle, checks, checkRetirement)
         } finally {
           try {
             await backend.retire?.(current.value.name)
@@ -710,6 +730,7 @@ export class WorkerPool {
     signal?: AbortSignal,
     retireIdle = false,
     checks: readonly StateCheck[] = [],
+    checkRetirement?: () => void,
   ): Promise<void> {
     let row = initial
     let selection: ReturnType<typeof selectRunnerLabels> | undefined
@@ -765,6 +786,7 @@ export class WorkerPool {
             if (row.value.runner.phase !== 'known' || row.value.runner.id !== effect.id)
               throw new Error('Known original CI runner required for removal')
             if (idleRetirement) {
+              checkRetirement?.()
               if (row.value.effect?.kind !== 'runner-retire') await intent('runner-retire')
               else {
                 row = await this.journal.advance(
@@ -884,7 +906,8 @@ export class WorkerPool {
         this.idleRetryAt.set(row.record.key, Date.now() + 60000)
         const retired = await registry(
           (client) =>
-            client.retireIdle?.({ id: row.value.runner.id!, name: row.value.name }, signal) ?? Promise.resolve(false),
+            client.retireIdle?.({ id: row.value.runner.id!, name: row.value.name }, signal, checkRetirement) ??
+            Promise.resolve(false),
           true,
         )
         if (retired) {

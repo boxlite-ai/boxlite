@@ -966,7 +966,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await db.getRepository(Box).delete(box.box_id)
     await expect(unknown.host.get(unknown.config.name)).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
   })
-  it.each(['original', 'wrong tenant', 'wrong ID', 'wrong name'] as const)(
+  it.each(['original', 'wrong tenant', 'wrong ID', 'wrong name', 'wrong worker key'] as const)(
     'retries a failed soft deletion only for the original Hosted CI Box: %s',
     async (scenario) => {
       const { box, config } = await deleting()
@@ -977,6 +977,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         updatedAt: old,
         ...(scenario === 'wrong tenant' && { organizationId: randomUUID() }),
         ...(scenario === 'wrong name' && { name: 'DESTROYED_' + config.name + '_other' }),
+        ...(scenario === 'wrong worker key' && {
+          name: 'DESTROYED_' + config.name.slice(0, -1) + (config.name.endsWith('0') ? '1' : '0') + '_123',
+        }),
       })
       if (scenario === 'wrong ID')
         await db.query(
@@ -1007,79 +1010,109 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }
     },
   )
-  it('returns the slot only after the original runner completes a replacement destroy job', async () => {
-    const { box, host, row } = await deleting()
-    const repository = new BoxRepository(
-      db,
-      { emit: jest.fn() } as never,
-      { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as never,
-    )
-    const jobRows = db.getRepository(Job)
-    const held = new Map<string, LockCode>()
-    const locks = {
-      lock: async (key: string, _ttl: number, code: LockCode) => {
-        held.set(key, code)
-        return true
-      },
-      isLocked: async (key: string) => held.has(key),
-      getCode: async (key: string) => held.get(key) ?? null,
-      unlock: async (key: string) => held.delete(key),
-    }
-    const handler = new JobStateHandlerService(repository, locks as never, {} as never, {} as never, {} as never)
-    const jobs = new JobService(jobRows, { lpush: jest.fn() } as never, handler)
-    const failed = await jobs.createJob(null, JobType.DESTROY_BOX, runnerId, ResourceType.BOX, box.box_id)
-    await jobRows.save(
-      Object.assign(failed, { status: JobStatus.FAILED, completedAt: new Date(), errorMessage: 'timed out' }),
-    )
-    await handler.handleJobCompletion(failed)
-    const runner = { id: runnerId, state: RunnerState.READY }
-    const adapter = new RunnerAdapterV2(repository, jobRows, jobs)
-    await adapter.init(runner as never)
-    const runners = { findOneOrFail: async () => runner, getRunnerApiVersion: async () => '2' }
-    const destroy = new BoxDestroyAction(
-      runners as never,
-      { create: async () => adapter } as never,
-      repository,
-      locks as never,
-    )
-    const manager = new BoxManager(
-      repository,
-      runners as never,
-      {} as never,
-      locks as never,
-      {} as never,
-      {} as never,
-      destroy,
-      {} as never,
-      { get: () => app } as never,
-    )
-    const attempts = jest.spyOn(manager, 'syncInstanceState')
-    await manager.syncStates()
-    await Promise.all(attempts.mock.results.map((r) => r.value))
-    const retry = await jobRows.findOneBy({
-      resourceId: box.box_id,
-      runnerId,
-      type: JobType.DESTROY_BOX,
-      status: JobStatus.PENDING,
-    })
-    expect(retry).not.toBeNull()
-    expect(await journal.used(org)).toBe(1)
-    await jobRows.save(Object.assign(retry!, { status: JobStatus.COMPLETED, completedAt: new Date() }))
-    await handler.handleJobCompletion(retry!)
-    const pool = new WorkerPool(
-      journal,
-      scopeKey(scope()),
-      async () => ({ workers: host, admit: jest.fn(), job: jest.fn(), runners: jest.fn() }),
-      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
-    )
-    try {
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
-      expect(await journal.used(org)).toBe(0)
-      expect(await journal.allocation(lease, row.record.key)).toBeUndefined()
-    } finally {
-      await pool.close()
-    }
-  })
+  it.each(['late failure', 'failure before destroying'])(
+    'returns the slot only after the original runner completes a replacement destroy job: %s',
+    async (scenario) => {
+      const { box, host, row } = await deleting()
+      const repository = new BoxRepository(
+        db,
+        { emit: jest.fn() } as never,
+        { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as never,
+      )
+      const jobRows = db.getRepository(Job)
+      const held = new Map<string, LockCode>()
+      const locks = {
+        lock: async (key: string, _ttl: number, code: LockCode) => {
+          held.set(key, code)
+          return true
+        },
+        isLocked: async (key: string) => held.has(key),
+        getCode: async (key: string) => held.get(key) ?? null,
+        unlock: async (key: string) => held.delete(key),
+      }
+      const handler = new JobStateHandlerService(repository, locks as never, {} as never, {} as never, {} as never)
+      const jobs = new JobService(jobRows, { lpush: jest.fn() } as never, handler)
+      const failed = await jobs.createJob(null, JobType.DESTROY_BOX, runnerId, ResourceType.BOX, box.box_id)
+      await jobRows.save(
+        Object.assign(failed, { status: JobStatus.FAILED, completedAt: new Date(), errorMessage: 'timed out' }),
+      )
+      await handler.handleJobCompletion(failed)
+      const boxes = db.getRepository(Box)
+      expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({
+        state: BoxState.ERROR,
+        desiredState: BoxDesiredState.DESTROYED,
+      })
+      const runner = { id: runnerId, state: RunnerState.READY }
+      const adapter = new RunnerAdapterV2(repository, jobRows, jobs)
+      await adapter.init(runner as never)
+      const runners = { findOneOrFail: async () => runner, getRunnerApiVersion: async () => '2' }
+      const destroy = new BoxDestroyAction(
+        runners as never,
+        { create: async () => adapter } as never,
+        repository,
+        locks as never,
+      )
+      const manager = new BoxManager(
+        repository,
+        runners as never,
+        {} as never,
+        locks as never,
+        {} as never,
+        {} as never,
+        destroy,
+        {} as never,
+        { get: () => app } as never,
+      )
+      const pending = { resourceId: box.box_id, runnerId, type: JobType.DESTROY_BOX, status: JobStatus.PENDING }
+      const otherRunner = new RunnerAdapterV2(repository, jobRows, jobs)
+      await otherRunner.init({ id: randomUUID() } as never)
+      await expect(otherRunner.boxInfo(box.box_id)).resolves.not.toMatchObject({ failedDestroyJob: true })
+      const submit = adapter.destroyBox.bind(adapter)
+      const submissions = jest.spyOn(adapter, 'destroyBox')
+      if (scenario === 'failure before destroying') {
+        submissions.mockImplementationOnce(async (id) => {
+          await submit(id)
+          // A failure can be durable before the manager publishes DESTROYING; its callback can be lost.
+          const fast = await jobRows.findOneByOrFail(pending)
+          await jobRows.save(Object.assign(fast, { status: JobStatus.FAILED, completedAt: new Date() }))
+        })
+      }
+      const attempts = jest.spyOn(manager, 'syncInstanceState')
+      const sync = async () => {
+        await manager.syncStates()
+        await Promise.all(attempts.mock.results.map((attempt) => attempt.value))
+      }
+      await sync()
+      if (scenario === 'failure before destroying') {
+        expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYING })
+        expect(await jobRows.countBy(pending)).toBe(0)
+        await sync()
+      }
+      const retry = await jobRows.findOneBy(pending)
+      expect(retry).not.toBeNull()
+      await sync()
+      expect(await jobRows.countBy(pending)).toBe(1)
+      expect(submissions).toHaveBeenCalledTimes(scenario === 'failure before destroying' ? 2 : 1)
+      expect(await journal.used(org)).toBe(1)
+      await jobRows.save(Object.assign(retry!, { status: JobStatus.COMPLETED, completedAt: new Date() }))
+      await handler.handleJobCompletion(retry!)
+      await handler.handleJobCompletion(failed)
+      expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYED })
+      const pool = new WorkerPool(
+        journal,
+        scopeKey(scope()),
+        async () => ({ workers: host, admit: jest.fn(), job: jest.fn(), runners: jest.fn() }),
+        { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
+      )
+      try {
+        await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+        expect(await journal.used(org)).toBe(0)
+        expect(await journal.allocation(lease, row.record.key)).toBeUndefined()
+      } finally {
+        await pool.close()
+      }
+    },
+  )
   it('recognizes the original destroyed Box after production soft deletion renames it', async () => {
     const { host, config, box } = await deleting()
     const deleted = await platform.findOne(box.box_id, true)

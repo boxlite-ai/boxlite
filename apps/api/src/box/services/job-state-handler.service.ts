@@ -246,6 +246,7 @@ export class JobStateHandlerService {
           updateData.state = BoxState.DESTROYED
           updateData.errorReason = null
         } else if (job.status === JobStatus.FAILED) {
+          if (box.state === BoxState.DESTROYED) return
           this.logger.error(`DESTROY_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
           updateData.state = BoxState.ERROR
           const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
