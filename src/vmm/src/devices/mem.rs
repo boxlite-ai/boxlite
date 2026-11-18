@@ -67,7 +67,8 @@ pub struct MemoryHandle(Arc<dyn MemoryControl>);
 
 impl std::fmt::Debug for MemoryHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("MemoryHandle").field(&self.status()).finish()
+        // No status: formatting must not take the device lock.
+        f.debug_struct("MemoryHandle").finish_non_exhaustive()
     }
 }
 
@@ -122,6 +123,19 @@ pub(crate) struct VirtioMem<H: Vm + ?Sized> {
     requested: u64,
     features: u64,
     context: Option<ActivationContext>,
+}
+
+/// Adds the device on `slot` and returns its host handle.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn add<H: Vm + Send + Sync + 'static>(
+    chipset: &mut crate::chipset::ChipsetBuilder,
+    ctx: &crate::virtio::DeviceContext<'_>,
+    slot: crate::virtio::mmio::Slot,
+    memory: HotplugMemory<H>,
+) -> Result<MemoryHandle> {
+    let device = Arc::new(Mutex::new(VirtioMem::new(memory)));
+    crate::virtio::mmio::add_device(chipset, ctx, SPEC.name, slot, device.clone())?;
+    Ok(MemoryHandle(device))
 }
 
 impl<H: Vm + ?Sized> VirtioMem<H> {

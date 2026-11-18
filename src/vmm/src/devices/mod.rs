@@ -7,10 +7,6 @@ pub(crate) mod balloon;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "VmConfig wiring that adds the device comes next.")
-)]
 pub(crate) mod mem;
 #[cfg(unix)]
 pub(crate) mod net;
@@ -39,14 +35,16 @@ use crate::{
 
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, disks, reporting balloon, and optional filesystem,
-/// vsock, network and console.
+/// vsock, network, console and virtio-mem. Returns the hotplug handle when
+/// the configuration set a hotplug capacity.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn add_all(
+pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
     chipset: &mut ChipsetBuilder,
     ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
-) -> Result<()> {
+    host_vm: &Arc<H>,
+) -> Result<Option<mem::MemoryHandle>> {
     add_legacy_devices(chipset, console.clone())?;
 
     let mut slots = Slots::new();
@@ -91,9 +89,23 @@ pub(crate) fn add_all(
             mmio::add_device(chipset, &ctx, "virtio-console", slot, device)
         })?;
     }
+    let mut memory = None;
+    if config.hotplug_mib != 0 {
+        let hotplug = crate::hotplug::HotplugMemory::new(
+            Arc::clone(host_vm),
+            ctx.memory.clone(),
+            config.hotplug_mib,
+        )
+        .map_err(|_| crate::Error::InvalidHotplugSize(config.hotplug_mib))?;
+        add_slot_device(&mut slots, &mut used, |slot| {
+            memory = Some(mem::add(chipset, &ctx, slot, hotplug)?);
+            Ok(())
+        })?;
+    }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.
-    mmio::announce(&mut config.cmdline, &used)
+    mmio::announce(&mut config.cmdline, &used)?;
+    Ok(memory)
 }
 
 /// Takes the next slot, runs `attach` with it, and records it for

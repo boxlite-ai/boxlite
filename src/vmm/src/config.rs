@@ -68,6 +68,10 @@ pub struct VmConfig {
     pub network: Option<NetConfig>,
     /// Send hvc0 output to the supplied console sink.
     pub virtio_console: bool,
+    /// Hotplug capacity in MiB above `memory_mib`: 0 adds no virtio-mem
+    /// device; otherwise a multiple of 128 whose window fits the host's
+    /// physical address width.
+    pub hotplug_mib: u32,
 }
 
 /// One virtio-fs device exposing the configured host directories.
@@ -131,6 +135,9 @@ impl VmConfig {
         {
             return Err(Error::InvalidCommandLine("not printable ASCII"));
         }
+        if self.hotplug_mib != 0 && !crate::hotplug::capacity_fits(self.hotplug_mib) {
+            return Err(Error::InvalidHotplugSize(self.hotplug_mib));
+        }
         Ok(())
     }
 }
@@ -154,6 +161,7 @@ mod tests {
             vsock: None,
             network: None,
             virtio_console: false,
+            hotplug_mib: 0,
         }
     }
 

@@ -109,9 +109,9 @@ fn run_reporting_guest(init_on_free: bool) -> (Evidence, String) {
         config,
         boxlite_hypervisor::KvmVm::new,
         |ram, config| prepare(ram, config).map(|setup| setup.boot_regs),
-        |chipset, ctx, config| {
+        |chipset, ctx, config, host_vm| {
             sampler_memory = Some(ctx.memory.memory().into_inner());
-            crate::devices::add_all(chipset, ctx, config, writer).map(|_| ())
+            crate::devices::add_all(chipset, ctx, config, writer, host_vm)
         },
     )
     .unwrap();

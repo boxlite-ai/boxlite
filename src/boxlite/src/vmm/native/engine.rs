@@ -158,6 +158,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
             }
         }),
         virtio_console: true,
+        hotplug_mib: 0,
     })
 }
 

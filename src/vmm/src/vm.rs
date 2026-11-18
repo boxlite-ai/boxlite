@@ -11,7 +11,7 @@ use boxlite_hypervisor::Vm as HostVm;
 use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
-    devices::console::ConsoleWorker,
+    devices::{console::ConsoleWorker, mem::MemoryHandle},
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
@@ -80,6 +80,8 @@ pub struct Vm<H: HostVm> {
     boot_regs: BootRegisters,
     vcpu_count: u8,
     state: VmState,
+    /// The hotplug handle when the configuration set a hotplug capacity.
+    memory: Option<MemoryHandle>,
     host_vm: Arc<H>,
     ram: GuestRam,
 }
@@ -113,7 +115,9 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+            |chipset, ctx, config, host_vm| {
+                crate::devices::add_all(chipset, ctx, config, writer, host_vm)
+            },
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)
@@ -133,16 +137,17 @@ impl<H: HostVm> Vm<H> {
     where
         H: 'static,
     {
-        Self::with_devices(config, host_vm, boot, |chipset, ctx, _| {
-            devices(chipset, ctx)
+        Self::with_devices(config, host_vm, boot, |chipset, ctx, _, _| {
+            devices(chipset, ctx).map(|()| None)
         })
     }
 
     /// Validates `config`, allocates the RAM layout, creates the host VM with
     /// `host_vm`, builds the chipset from the devices `devices` adds,
     /// registers every RAM range and writes the boot data with `boot`.
-    /// `devices` also gets the guest memory, the virtio workers and the
-    /// mutable configuration. Invalid configuration fails before `host_vm`
+    /// `devices` also gets the guest memory, the virtio workers, the mutable
+    /// configuration and the host VM, and returns the hotplug handle if it
+    /// added a virtio-mem device. Invalid configuration fails before `host_vm`
     /// runs, and a chipset conflict before any RAM is registered; tests pass
     /// a mock backend and devices.
     #[cfg_attr(
@@ -156,7 +161,12 @@ impl<H: HostVm> Vm<H> {
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
+        devices: impl FnOnce(
+            &mut ChipsetBuilder,
+            DeviceContext<'_>,
+            &mut VmConfig,
+            &Arc<H>,
+        ) -> Result<Option<MemoryHandle>>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -173,13 +183,14 @@ impl<H: HostVm> Vm<H> {
         // early return leaves nothing running.
         let workers = VirtioWorkers::new(sender.clone()).map_err(Error::VirtioWorker)?;
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
-        devices(
+        let memory = devices(
             &mut chipset,
             DeviceContext {
                 memory: ram.memory(),
                 workers: &workers,
             },
             &mut config,
+            &host_vm,
         )?;
         let chipset = chipset.build()?;
         ram.map(&*host_vm)?;
@@ -193,6 +204,7 @@ impl<H: HostVm> Vm<H> {
             boot_regs: BootRegisters::default(),
             vcpu_count: config.vcpu_count,
             state: VmState::Created,
+            memory,
             host_vm,
             ram,
         };
@@ -204,6 +216,12 @@ impl<H: HostVm> Vm<H> {
     /// [`run`](Self::run) starts.
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.sender.clone())
+    }
+
+    /// A handle that grows or shrinks guest RAM from another thread, when the
+    /// configuration set `hotplug_mib`.
+    pub fn memory_handle(&self) -> Option<MemoryHandle> {
+        self.memory.clone()
     }
 }
 
