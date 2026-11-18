@@ -28,11 +28,11 @@ boxlite-vmm
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
-| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; bounds are 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes and at most 8 disks |
+| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
+| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
-| `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
+| `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
@@ -94,10 +94,16 @@ for the scope and interface trade-offs.
 
 ## Guest RAM
 
-`memory::ram_ranges` places one region: at guest address 0 on x86_64, below
-the 32-bit MMIO hole at `0xC000_0000`, and at `0x8000_0000` on arm64. The
-3072 MiB bound keeps every layout inside that region; the region above 4 GiB
-and the arm64 address-space limit are later changes.
+`memory::ram_ranges` fills low RAM in `[0, 3 GiB)` on x86_64 and places any
+remaining RAM starting at 4 GiB. The `[3 GiB, 4 GiB)` MMIO hole does not count
+as RAM. The arm64 layout is a single region starting at 2 GiB.
+
+On Linux x86_64, the exclusive end of each backed region must fit both the
+KVM-supported GPA width and the four-level identity map's `2^47` limit. For
+example, 36 GPA bits give an exclusive limit of 64 GiB and allow at most
+64512 MiB (63 GiB) of x86 RAM; 64513 MiB crosses the limit. At the same GPA
+limit the arm64 layout would fit 63488 MiB (62 GiB); this is a layout example,
+not an arm64 host capability check.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
 vm-memory and registers it with the host VM. Three rules keep the backend's
@@ -105,18 +111,23 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
 
 - Host-side users clone the shared `Arc<GuestMemoryMmap>` and access guest
   memory through vm-memory's volatile API, never through Rust references.
-- `map` registers regions lowest address first and removes the registered
-  prefix when one fails; `unmap` removes them highest first and stops at the
-  first failure, so the count of registered regions stays exact and a later
-  `unmap` retries.
+- `map` registers logical RAM regions from low to high. KVM slices each region
+  into slots of at most `2^31−1` host pages and rolls back installed slices if
+  a registration fails. `GuestRam` also rolls back attempted regions, including
+  any slices the backend could not remove. `unmap` works from high to low and
+  retains failed registrations for retry.
 - The backing is released only after every registration is gone. Dropping a
   `GuestRam` that may still be registered leaks the backing instead.
 
-`Vm::with_devices` runs validate, allocate, create the host VM, compose the
-devices, then map, so every early return drops the host VM before the RAM;
-`Vm`'s `Drop` unmaps as a backstop. `with_backend` is the same constructor
-without the mutable configuration, for tests. The `memory` and `vm` tests and
-that backend live in `tests/` and are included as unit-test modules, which
+`Vm::new` validates the configuration, then opens and checks the KVM system fd
+and reads supported CPUID once. It preflights the RAM addresses and boot leaf
+before spawning the console worker or allocating RAM. `Vm::with_devices`
+allocates RAM first, then creates the VM fd using that system handle, composes
+devices, registers RAM and writes the boot data. This order drops the host VM
+before RAM on early returns; `Vm`'s `Drop` unmaps as a backstop. `with_backend`
+is the same constructor without the mutable configuration, for tests. The
+`memory` and `vm` tests and that backend live in `tests/` and are included
+as unit-test modules, which
 keeps them outside the counted sources and the coverage denominator; `config`
 and `error` keep inline test modules.
 
@@ -171,12 +182,12 @@ shorter than 2048 bytes, the kernel's `COMMAND_LINE_SIZE` with the NUL.
 linux-loader's `Cmdline` refuses the same lines, after trimming surrounding
 whitespace.
 
-`boot::prepare(ram, config)` opens `config.kernel` and runs `load_elf`, then
-`load_initramfs` when `config.initramfs` is set, then `write_boot_params`,
-`write_mptable` and `long_mode_entry`, in that order on fresh RAM, and returns
-a `BootSetup` with the boot vCPU registers. A failure names its step,
-`LoadKernel`, `LoadInitramfs` or `WriteBootData`, and keeps the I/O cause.
-`Vm::new` calls `prepare` once RAM is registered.
+`boot::prepare(ram, config, leaf)` opens `config.kernel` and runs `load_elf`,
+loads the optional initramfs, and plans the boot tables using the checked
+`leaf`. It then writes the boot parameters and MP table and sets up long-mode
+entry on fresh RAM, returning a `BootSetup` with the boot vCPU registers. A
+failure names its step, `LoadKernel`, `LoadInitramfs` or `WriteBootData`, and
+keeps the I/O cause. `Vm::new` calls `prepare` once RAM is registered.
 
 ## MP table
 
@@ -482,23 +493,34 @@ thread, even before `run` starts. A VM runs once: a second `run` fails with
 
 ## Long-mode entry
 
-On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params)`
+On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params, plan)`
 writes the state that the Linux 64-bit boot protocol requires
 (`Documentation/arch/x86/boot.rst`, "64-bit Boot Protocol") and returns the
 boot vCPU registers, which the vCPU 0 worker applies after its CPUID and
 MSRs.
 
 - Guest RAM: the GDT at `0x500` holds flat `__BOOT_CS` (`0x10`) and
-  `__BOOT_DS` (`0x18`). Page tables from `0x9000` identity-map
-  `[0, MMIO_HOLE_START)`, where all RAM lies, with 2 MiB pages, whatever the
-  RAM size, and leave the hole unmapped. Nothing is written unless RAM covers
-  `0x500..0xE000`.
+  `__BOOT_DS` (`0x18`). The four-level boot page tables identity-map only
+  backed RAM, leaving the MMIO hole unmapped. Tables start at `0x9000` if
+  they fit in the fixed boot window without overlaps; otherwise they go in
+  low RAM above the kernel. The default leaf is 2 MiB, with 4 KiB leaves
+  where needed. The internal `BOOT_LEAF` may request 1 GiB leaves only with
+  guest CPUID `pdpe1gb`. There is no automatic selection or public switch.
+  All table pages must fit in the selected window; passing address preflight
+  does not guarantee space for the tables.
 - Registers: 64-bit mode with paging (CR0 PE, ET and PG; CR4 PAE; EFER LME
   and LMA), interrupts off, RIP at `entry`, RSI at `boot_params`, a stack
   below `0x8FF0`, and segments decoded from the GDT entries. There is no IDT,
   so an exception before Linux installs its own resets the guest.
 
 ## CPU features
+
+Memory preflight uses the CPUID KVM supports for guests, not raw host CPUID.
+It takes the width from `0x8000_0008` EAX[7:0] and caps it with EAX[23:16]
+when that guest GPA width is nonzero; EAX[15:8] is the virtual width and is
+not used. These EAX fields are separate from the AMD topology in ECX. Missing
+or invalid width data fails preflight. `pdpe1gb` is `0x8000_0001` EDX bit 26;
+its absence rejects only a request for 1 GiB boot leaves.
 
 `cpu_features::vcpu_cpuid(supported, index, count)` turns KVM's supported
 CPUID into vCPU `index`'s. KVM passes the host's APIC ID through and reports
@@ -1048,14 +1070,15 @@ make fmt:check:rust
 ```
 
 On Linux x86_64 with read/write access to `/dev/kvm`,
-`make test:integration:vmm:kvm` also runs this crate's hardware tests on VMs
-with the largest layout. A flat 32-bit guest reads the last RAM byte and
-reports it on port `0x3f8`. A 64-bit guest entered through
+`make test:integration:vmm:kvm` also runs this crate's hardware tests. Two
+use 3072 MiB to fill the low RAM band. A flat 32-bit guest reads the last
+RAM byte and reports it on port `0x3f8`. A 64-bit guest entered through
 `long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS` applied, reloads its
 segments from the GDT in RAM, reads markers at RSI and at the top of RAM, and
 stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and 0xB, MISC_ENABLE and
-MTRRdefType for the test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
-pages are committed; a host with `vm.overcommit_memory=2` refuses it. The
+MTRRdefType for the test to compare. The RAM backing is a sparse anonymous
+`mmap`: the host needs virtual address space for the full mapping, and
+accessed pages still depend on available memory and host memory pressure. The
 [bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
 modules need 2 MiB: a flat 32-bit guest writes and reads a test device on the
 port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through

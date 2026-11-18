@@ -137,18 +137,23 @@ fn six_gib_maps_both_ram_bands_and_leaves_the_mmio_hole_absent() {
 }
 
 #[test]
-fn gib_leaves_fall_back_to_two_mib_and_then_four_kib() {
+fn checked_gib_leaves_map_both_ram_bands_with_smaller_leaves_at_the_tail() {
     let ranges = X86_LAYOUT.ranges(3075 << 20).unwrap();
-    let plan = plan(&ranges, WINDOW, PageSize::Gib).unwrap();
+    let leaf = PageSize::Gib.checked(true).unwrap();
+    let plan =
+        super::plan_boot_tables(&ranges, (0x10_0000, 0x10_3080), None, leaf.page_size()).unwrap();
     let tables = tables(&plan);
     for (gpa, size) in [
         (0x4000_0000, GIB),
+        (0x7fff_ffff, GIB),
         (0x1_0000_0000, MIB2),
         (0x1_002f_ffff, KIB4),
     ] {
         assert_eq!(translate(&tables, plan.pml4, gpa), Some((gpa, size)));
     }
-    assert_eq!(translate(&tables, plan.pml4, 0x1_0030_0000), None);
+    for gpa in [0xc000_0000, 0xfec0_0000, 0xffff_ffff, 0x1_0030_0000] {
+        assert_eq!(translate(&tables, plan.pml4, gpa), None, "{gpa:#x}");
+    }
 }
 
 #[test]

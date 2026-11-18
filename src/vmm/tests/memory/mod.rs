@@ -9,7 +9,7 @@ use std::{error::Error as _, io, sync::Arc};
 use boxlite_hypervisor::{Error as HypervisorError, Vm};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
 
-use super::{ARM64_LAYOUT, GuestRam, MAX_MEMORY_MIB, RAM_START, X86_LAYOUT, ram_ranges};
+use super::{ARM64_LAYOUT, GuestRam, RAM_START, X86_LAYOUT, check_ram_end, ram_ranges};
 use crate::{
     error::Error,
     mock_vm::{Call, MockVm},
@@ -40,14 +40,7 @@ fn seed_second_registration(ram: &GuestRam, vm: &MockVm) {
 #[test]
 fn ram_ranges_place_one_mib_aligned_region_at_the_architecture_start() {
     assert_eq!(ram_ranges(1), [(GuestAddress(RAM_START), MIB)]);
-    let largest = ram_ranges(MAX_MEMORY_MIB);
-    assert_eq!(largest, [(GuestAddress(RAM_START), 3072 * MIB)]);
-    for (start, size) in largest {
-        assert_eq!(start.0 % MIB as u64, 0);
-        assert_eq!(size % MIB, 0);
-    }
-    #[cfg(target_arch = "x86_64")]
-    assert_eq!(RAM_START + (3072 * MIB) as u64, super::MMIO_HOLE_START);
+    assert_eq!(RAM_START % MIB as u64, 0);
 }
 
 // Each case lists the requested MiB and the expected (start GPA, length in MiB).
@@ -94,6 +87,13 @@ fn x86_ram_layout_splits_at_the_mmio_hole() {
     for &(memory_mib, expected) in X86_LAYOUT_CASES {
         let actual = X86_LAYOUT.ranges(u64::from(memory_mib) << 20).unwrap();
         assert_layout_ranges(memory_mib, &actual, expected);
+        if memory_mib == 3072 {
+            // The low RAM band is full but does not spill into high RAM.
+            let [(start, len)] = actual[..] else {
+                panic!("one low RAM band");
+            };
+            assert_eq!(start.0 + len as u64, super::MMIO_HOLE_START);
+        }
     }
 }
 
@@ -108,6 +108,29 @@ fn arm64_ram_layout_keeps_one_nonempty_range() {
             &expected[..]
         };
         assert_layout_ranges(memory_mib, &actual, expected);
+    }
+}
+
+#[test]
+fn address_limit_uses_end_of_each_actual_ram_band() {
+    for (layout, limit_end, fits, exceeds, rejected_end) in [
+        (X86_LAYOUT, 1 << 36, 64512, 64513, 0x10_0010_0000),
+        (ARM64_LAYOUT, 1 << 36, 63488, 63489, 0x10_0010_0000),
+        (X86_LAYOUT, 1 << 32, 3072, 3073, 0x1_0010_0000),
+    ] {
+        let ranges = |memory_mib| layout.ranges(u64::from(memory_mib) << 20).unwrap();
+        check_ram_end(fits, &ranges(fits), limit_end, "test GPA").unwrap();
+        let error = check_ram_end(exceeds, &ranges(exceeds), limit_end, "test GPA").unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::GuestMemoryAddressLimit {
+                    memory_mib, end, limit_end: actual_limit, limit: "test GPA",
+                } if memory_mib == exceeds && end == rejected_end && actual_limit == limit_end
+            ),
+            "{error:?}"
+        );
+        assert!(error.source().is_none());
     }
 }
 

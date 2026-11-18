@@ -47,7 +47,7 @@ pub use hvf::{HvfVcpu, HvfVcpuHandle, HvfVm};
 mod kvm;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use kvm::{KvmVcpu, KvmVcpuHandle, KvmVm};
+pub use kvm::{KvmVcpu, KvmVcpuHandle, KvmVm, KvmVmProbe};
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whp;

@@ -25,7 +25,7 @@ mod vcpu;
 mod vm;
 
 #[cfg(target_arch = "x86_64")]
-pub use vm::KvmVm;
+pub use vm::{KvmVm, KvmVmProbe};
 
 #[cfg(target_arch = "x86_64")]
 pub use vcpu::KvmVcpu;

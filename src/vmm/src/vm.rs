@@ -96,7 +96,8 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Validates `config`, spawns the console worker, and builds the KVM VM:
+    /// Validates `config` and preflights the RAM layout and boot leaf against
+    /// KVM before spawning the console worker and building the VM.
     /// `devices::add_all` adds the legacy devices and one virtio-blk device
     /// per disk, taking each disk's virtio-mmio slot and naming it on the
     /// command line; `config.cmdline` must leave room for those arguments,
@@ -104,15 +105,17 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// COM1 output goes to `console` through a queue, so a slow sink never
     /// stalls the guest.
     pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::devices::console::DEFAULT_QUEUE_BYTES;
+        use crate::{boot, cpu_features::preflight_x86, devices::console::DEFAULT_QUEUE_BYTES};
 
         config.validate()?;
+        let probe = boxlite_hypervisor::KvmVm::probe()?;
+        let leaf = preflight_x86(config.memory_mib, probe.supported_cpuid(), boot::BOOT_LEAF)?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
         let mut vm = Self::with_devices(
             config,
-            boxlite_hypervisor::KvmVm::new,
-            |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
+            move || probe.create_vm(),
+            move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
             |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
         )?;
         vm.console = Mutex::new(Some(worker));

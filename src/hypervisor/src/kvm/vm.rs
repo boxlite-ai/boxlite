@@ -23,20 +23,17 @@ pub struct KvmVm {
     cpuid: Vec<crate::X86CpuidEntry>,
 }
 
-impl KvmVm {
-    /// Opens `/dev/kvm`, verifies the required API, and creates the empty VM.
-    pub fn new() -> Result<Self> {
-        Self::with_kick_signal(libc::SIGRTMIN() + 1)
-    }
+/// A checked KVM system handle and the supported CPUID for a prospective VM.
+#[derive(Debug)]
+pub struct KvmVmProbe {
+    kvm: Kvm,
+    kick_signal: i32,
+    cpuid: Vec<crate::X86CpuidEntry>,
+}
 
-    /// Selects an application-reserved realtime signal for vCPU workers.
-    /// It must retain its default disposition and be unblocked before creation.
-    pub fn with_kick_signal(signal: i32) -> Result<Self> {
-        super::kick::validate_signal(signal).map_err(Error::CreateVm)?;
-        Self::create(signal).map_err(Error::CreateVm)
-    }
-
-    fn create(kick_signal: i32) -> io::Result<Self> {
+impl KvmVmProbe {
+    fn open(kick_signal: i32) -> io::Result<Self> {
+        super::kick::validate_signal(kick_signal)?;
         let kvm = Kvm::new().map_err(|error| {
             let source = io::Error::from_raw_os_error(error.errno());
             if matches!(source.raw_os_error(), Some(libc::ENOENT | libc::ENODEV)) {
@@ -68,6 +65,30 @@ impl KvmVm {
                 ));
             }
         }
+        let cpuid = super::features::supported_cpuid(&kvm)?;
+        Ok(Self {
+            kvm,
+            kick_signal,
+            cpuid,
+        })
+    }
+
+    /// KVM-supported guest CPUID before the VMM applies guest topology/policy.
+    pub fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+        &self.cpuid
+    }
+
+    /// Creates the VM on the probed system handle and retains its CPUID.
+    pub fn create_vm(self) -> Result<KvmVm> {
+        self.create().map_err(Error::CreateVm)
+    }
+
+    fn create(self) -> io::Result<KvmVm> {
+        let Self {
+            kvm,
+            kick_signal,
+            cpuid,
+        } = self;
         // SAFETY: sysconf has no pointer arguments and does not modify memory.
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
         if page_size <= 0 {
@@ -84,16 +105,37 @@ impl KvmVm {
             ..Default::default()
         })
         .map_err(io::Error::from)?;
-        Ok(Self {
+        Ok(KvmVm {
             fd,
             slots: Mutex::new(MemorySlots::new(kvm.get_nr_memslots(), page_size as usize)),
             run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
             kick_signal,
-            cpuid: super::features::supported_cpuid(&kvm)?,
+            cpuid,
         })
     }
+}
 
-    /// Host-supported CPUID values before the VMM applies guest topology/policy.
+impl KvmVm {
+    /// Opens `/dev/kvm`, verifies the required API, and creates the empty VM.
+    pub fn new() -> Result<Self> {
+        Self::probe()?.create_vm()
+    }
+
+    /// Selects an application-reserved realtime signal for vCPU workers.
+    /// It must retain its default disposition and be unblocked before creation.
+    pub fn with_kick_signal(signal: i32) -> Result<Self> {
+        KvmVmProbe::open(signal)
+            .map_err(Error::CreateVm)?
+            .create_vm()
+    }
+
+    /// Opens `/dev/kvm`, verifies the required API and queries supported CPUID
+    /// without creating a VM. Uses the default vCPU kick signal.
+    pub fn probe() -> Result<KvmVmProbe> {
+        KvmVmProbe::open(libc::SIGRTMIN() + 1).map_err(Error::CreateVm)
+    }
+
+    /// KVM-supported guest CPUID before the VMM applies guest topology/policy.
     pub fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
         &self.cpuid
     }

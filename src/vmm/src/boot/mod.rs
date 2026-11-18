@@ -16,7 +16,7 @@ use crate::{
     config::VmConfig,
     error::{Error, Result},
     memory::{GuestMemoryMmap, GuestRam},
-    x86_boot_layout::{self, PageSize},
+    x86_boot_layout::{self, CheckedBootLeaf, PageSize},
 };
 
 pub(crate) mod elf;
@@ -24,6 +24,9 @@ pub(crate) mod entry;
 pub(crate) mod initramfs;
 pub(crate) mod mptable;
 pub(crate) mod params;
+
+/// Internal leaf-size switch; any selected size must pass host preflight before use.
+pub(crate) const BOOT_LEAF: PageSize = PageSize::Mib;
 
 /// The boot data the vCPU workers apply once [`prepare`] has filled guest RAM.
 #[derive(Debug)]
@@ -39,7 +42,11 @@ pub(crate) struct BootSetup {
 /// `ram` must be fresh and zero-filled. Its backed ranges determine the E820
 /// map, initramfs placement and identity mappings. A failure may have written
 /// RAM; discard it.
-pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
+pub(crate) fn prepare(
+    ram: &GuestRam,
+    config: &VmConfig,
+    leaf: CheckedBootLeaf,
+) -> Result<BootSetup> {
     let memory = ram.memory().as_ref();
     let ranges: Vec<(GuestAddress, usize)> = ram.ranges().collect();
     let load_kernel = |source: io::Error| Error::LoadKernel {
@@ -62,10 +69,13 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
         what: "boot GDT and page tables",
         source,
     };
-    let leaf = PageSize::default();
-    let plan =
-        x86_boot_layout::plan_boot_tables(&ranges, (kernel.start, kernel.end), initramfs, leaf)
-            .map_err(table_error)?;
+    let plan = x86_boot_layout::plan_boot_tables(
+        &ranges,
+        (kernel.start, kernel.end),
+        initramfs,
+        leaf.page_size(),
+    )
+    .map_err(table_error)?;
     let fast = plan.tables().0 == x86_boot_layout::TABLES_BASE;
     let reserved = plan.reserved(fast);
     let zero_page =

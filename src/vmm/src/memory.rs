@@ -27,31 +27,11 @@ const MIB: u64 = 1 << 20;
 /// Alignment of guest RAM ranges, independent of the host page size.
 const GUEST_PAGE_SIZE: u64 = 4 << 10;
 
-/// Guest physical address of the first RAM byte: 0 on x86_64, 2 GiB on arm64,
-/// where the interrupt controller, UART, RTC and device windows sit below RAM.
-#[cfg(target_arch = "x86_64")]
-pub(crate) const RAM_START: u64 = X86_LAYOUT.start;
-#[cfg(target_arch = "aarch64")]
-#[cfg_attr(
-    not(any(test, target_arch = "x86_64")),
-    expect(
-        dead_code,
-        reason = "arm64 production builds read the start from ARM64_LAYOUT"
-    )
-)]
-pub(crate) const RAM_START: u64 = ARM64_LAYOUT.start;
-
 /// Where the x86_64 32-bit MMIO hole begins: the VMM design and Firecracker
 /// both reserve the gigabyte below 4 GiB for devices.
 pub(crate) const MMIO_HOLE_START: u64 = 0xC000_0000;
 /// End of the x86_64 32-bit MMIO hole and starting GPA of high RAM.
 const MMIO_HOLE_END: u64 = 0x1_0000_0000;
-
-/// Largest `memory_mib` accepted by VM configuration on either architecture.
-pub(crate) const MAX_MEMORY_MIB: u32 = 3072;
-
-#[cfg(target_arch = "x86_64")]
-const _: () = assert!(RAM_START + MAX_MEMORY_MIB as u64 * MIB <= MMIO_HOLE_START);
 
 /// Guest RAM starts at `start` and skips the optional half-open MMIO hole.
 #[derive(Debug)]
@@ -107,6 +87,7 @@ pub(crate) const X86_LAYOUT: RamLayout = RamLayout {
     not(any(test, target_arch = "aarch64")),
     expect(dead_code, reason = "Cross-architecture RAM layout test input.")
 )]
+// The interrupt controller, UART, RTC and device windows sit below RAM.
 pub(crate) const ARM64_LAYOUT: RamLayout = RamLayout {
     start: 0x8000_0000,
     hole: None,
@@ -117,6 +98,10 @@ const LAYOUT: RamLayout = X86_LAYOUT;
 #[cfg(target_arch = "aarch64")]
 const LAYOUT: RamLayout = ARM64_LAYOUT;
 
+/// Guest physical address of the first RAM byte, for layout assertions.
+#[cfg(test)]
+pub(crate) const RAM_START: u64 = LAYOUT.start;
+
 /// The guest RAM ranges for `memory_mib` on the target architecture.
 pub(crate) fn ram_ranges(memory_mib: u32) -> Vec<(GuestAddress, usize)> {
     // Every u32 MiB count fits in usize on supported 64-bit hosts, and adding
@@ -124,6 +109,32 @@ pub(crate) fn ram_ranges(memory_mib: u32) -> Vec<(GuestAddress, usize)> {
     LAYOUT
         .ranges(u64::from(memory_mib) * MIB)
         .expect("u32 MiB fits the target RAM layout")
+}
+
+/// Checks each nonempty RAM range against an exclusive GPA limit.
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 preflights the RAM layout yet.")
+)]
+pub(crate) fn check_ram_end(
+    memory_mib: u32,
+    ranges: &[(GuestAddress, usize)],
+    limit_end: u64,
+    limit_name: &'static str,
+) -> Result<()> {
+    for &(start, len) in ranges.iter().filter(|(_, len)| *len != 0) {
+        let end = start.0.checked_add(len as u64);
+        if end.is_none_or(|end| end > limit_end) {
+            return Err(Error::GuestMemoryAddressLimit {
+                memory_mib,
+                // An overflowing end cannot be represented in the error.
+                end: end.unwrap_or(u64::MAX),
+                limit_end,
+                limit: limit_name,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Query once per reporting device; a failed query must not guess granularity.

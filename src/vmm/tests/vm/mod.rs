@@ -12,9 +12,9 @@ use vm_memory::{GuestAddress, GuestMemoryBackend};
 
 use super::{BootRegisters, Vm};
 use crate::{
-    config::{MAX_VCPUS, VmConfig},
+    config::VmConfig,
     error::Error,
-    memory::{MAX_MEMORY_MIB, RAM_START, ram_ranges},
+    memory::{RAM_START, ram_ranges},
     mock_vm::{Call, MockVm},
 };
 
@@ -56,7 +56,6 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
         (config(0, 1), "invalid vCPU count: 0"),
         (config(65, 1), "invalid vCPU count: 65"),
         (config(1, 0), "invalid memory size: 0 MiB"),
-        (config(1, 3073), "invalid memory size: 3073 MiB"),
     ];
     for (config, message) in cases {
         let built = Cell::new(false);
@@ -74,7 +73,6 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
         assert!(error.source().is_none());
         assert!(!built.get(), "the host VM must not exist for {config:?}");
     }
-    config(MAX_VCPUS, MAX_MEMORY_MIB).validate().unwrap();
 }
 
 #[test]
@@ -323,12 +321,15 @@ fn vm_is_send_and_sync() {
 fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
     use std::sync::Arc;
 
-    use boxlite_hypervisor::{VcpuExit, X86BootRegisters, X86Segment};
+    use boxlite_hypervisor::{KvmVm, VcpuExit, X86BootRegisters, X86Segment};
     use vm_memory::{Bytes, GuestAddress};
 
-    use crate::memory::MMIO_HOLE_START;
+    use crate::{boot::BOOT_LEAF, cpu_features::preflight_x86, memory::MMIO_HOLE_START};
 
-    let vm = bare(config(1, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
+    let config = config(1, 3072);
+    let probe = KvmVm::probe().unwrap();
+    preflight_x86(config.memory_mib, probe.supported_cpuid(), BOOT_LEAF).unwrap();
+    let vm = bare(config, move || probe.create_vm()).unwrap();
     let memory = Arc::clone(vm.ram.memory());
     let last = GuestAddress(MMIO_HOLE_START - 1);
     // mov al,[0xBFFFFFFF]; mov dx,0x3f8; out dx,al; hlt
@@ -397,12 +398,12 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
 fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     use std::sync::Arc;
 
-    use boxlite_hypervisor::VcpuExit;
+    use boxlite_hypervisor::{KvmVm, VcpuExit};
     use vm_memory::{Bytes, GuestAddress};
 
     use crate::{
-        boot::entry::long_mode_entry,
-        cpu_features::{BOOT_MSRS, vcpu_cpuid},
+        boot::{BOOT_LEAF, entry::long_mode_entry},
+        cpu_features::{BOOT_MSRS, preflight_x86, vcpu_cpuid},
         memory::MMIO_HOLE_START,
     };
 
@@ -467,7 +468,10 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     ]);
 
     // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
-    let vm = bare(config(2, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
+    let config = config(2, 3072);
+    let probe = KvmVm::probe().unwrap();
+    let leaf = preflight_x86(config.memory_mib, probe.supported_cpuid(), BOOT_LEAF).unwrap();
+    let vm = bare(config, move || probe.create_vm()).unwrap();
     let memory = Arc::clone(vm.ram.memory());
     memory.write_slice(&program, GuestAddress(ENTRY)).unwrap();
     memory
@@ -475,12 +479,11 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         .unwrap();
     memory.write_obj(TOP_MARKER, GuestAddress(top)).unwrap();
     let ranges: Vec<_> = vm.ram.ranges().collect();
-    let leaf = crate::x86_boot_layout::PageSize::Mib;
     let plan = crate::x86_boot_layout::plan_boot_tables(
         &ranges,
         (ENTRY, ENTRY + program.len() as u64),
         None,
-        leaf,
+        leaf.page_size(),
     )
     .unwrap();
     let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS, &plan).unwrap();

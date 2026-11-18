@@ -22,7 +22,7 @@ const MIB_PAGE: u64 = 1 << 21;
 const GIB_PAGE: u64 = 1 << 30;
 const PDPT_SPAN: u64 = 1 << 39;
 /// Four-level identity paging can only use lower-half canonical addresses.
-const IDENTITY_END: u64 = 1 << 47;
+pub(crate) const IDENTITY_END: u64 = 1 << 47;
 const TABLE_SPANS: [u64; 4] = [512 * PDPT_SPAN, PDPT_SPAN, GIB_PAGE, MIB_PAGE];
 const MAX_TABLE_PAGES: u64 = 1 << 18;
 const PRESENT_WRITABLE: u64 = 0b11;
@@ -31,18 +31,33 @@ const LARGE_PAGE: u64 = 1 << 7;
 /// Largest allowed leaf. Partial blocks fall back to smaller leaves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum PageSize {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Boot uses the default leaf for now.")
-    )]
     Gib,
     #[default]
     Mib,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Boot uses the default leaf for now.")
-    )]
+    #[allow(dead_code, reason = "This internal boot leaf may not be selected.")]
     Kib,
+}
+
+/// Boot leaf size checked against the guest's CPU features.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CheckedBootLeaf(PageSize);
+
+impl PageSize {
+    pub(crate) fn checked(self, pdpe1gb: bool) -> io::Result<CheckedBootLeaf> {
+        if self == Self::Gib && !pdpe1gb {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "1 GiB boot pages require CPUID pdpe1gb",
+            ));
+        }
+        Ok(CheckedBootLeaf(self))
+    }
+}
+
+impl CheckedBootLeaf {
+    pub(crate) fn page_size(self) -> PageSize {
+        self.0
+    }
 }
 
 pub(crate) struct TablePage {
