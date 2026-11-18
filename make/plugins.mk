@@ -1,4 +1,4 @@
-# Skills-only BoxLite distribution; no runtime build is required.
+# Cloud MCP and local-runtime plugin distribution; no runtime build is required.
 PLUGIN_COVERAGE_PYTHON ?= $(PLUGIN_PYTHON)
 PLUGIN_COVERAGE = PYTHONDONTWRITEBYTECODE=1 COVERAGE_FILE=target/coverage/plugins/.coverage COVERAGE_RCFILE=scripts/plugins/.coveragerc $(PLUGIN_COVERAGE_PYTHON) -m coverage
 
