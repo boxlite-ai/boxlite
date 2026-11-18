@@ -20,6 +20,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use vm_memory::GuestAddressSpace as _;
 
 use linux_loader::loader::bootparam::boot_params;
 use vm_memory::{Bytes, GuestAddress};
@@ -95,7 +96,7 @@ fn enters_the_loaded_kernel_with_rsi_at_the_zero_page() {
         .boot_regs;
 
     assert_eq!((regs.rip, regs.rsi), (ENTRY, 0x7000));
-    let memory = ram.memory();
+    let memory = ram.memory().memory();
     let mut code = [0; 8];
     memory.read_slice(&mut code, GuestAddress(ENTRY)).unwrap();
     assert_eq!(&code, b"CODE1234", "the kernel is loaded at its entry");
@@ -126,7 +127,7 @@ fn loads_the_initramfs_at_the_top_of_ram_and_records_it() {
 
     let regs = prepare(&ram, &config).unwrap().boot_regs;
 
-    let memory = ram.memory();
+    let memory = ram.memory().memory();
     let params: boot_params = memory.read_obj(GuestAddress(regs.rsi)).unwrap();
     // 2 MiB of RAM minus 3000 bytes, rounded down to a page.
     let hdr = params.hdr;
@@ -362,7 +363,7 @@ fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm 
         |ram, config| {
             let setup = prepare(ram, config)?;
             let address = GuestAddress(setup.boot_regs.rsi);
-            zero_page = Some(ram.memory().read_obj(address).unwrap());
+            zero_page = Some(ram.memory().memory().read_obj(address).unwrap());
             Ok(setup.boot_regs)
         },
         |chipset, _| add_legacy_devices(chipset, writer),

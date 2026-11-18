@@ -236,13 +236,13 @@ impl Harness {
     fn context(&self) -> ActivationContext {
         let wakes = self.wakes.clone();
         ActivationContext {
-            memory: self.memory.clone(),
+            memory: self.memory.clone().into(),
             queues: crate::virtio::queue::VirtQueues::prepare(
                 vec![self.rx.queue(), self.tx.queue(), Driver::new(2).queue()],
                 &[256, 256, 256],
                 false,
                 false,
-                self.memory.clone(),
+                self.memory.clone().into(),
             )
             .unwrap(),
             interrupt: self.interrupt.clone(),
@@ -817,7 +817,7 @@ impl TransportHarness {
             device.clone(),
             interrupt,
             crate::virtio::mmio::MmioResources {
-                memory: memory.clone(),
+                memory: memory.clone().into(),
                 sender: events.sender(),
                 worker,
             },
@@ -1119,7 +1119,7 @@ fn activation_requires_three_ready_queues_and_preserves_the_active_backend() {
             &[256; 3],
             false,
             false,
-            h.memory.clone(),
+            h.memory.clone().into(),
         )
         .unwrap();
         assert!(matches!(
@@ -1134,7 +1134,7 @@ fn activation_requires_three_ready_queues_and_preserves_the_active_backend() {
         &[256; 2],
         false,
         false,
-        h.memory.clone(),
+        h.memory.clone().into(),
     )
     .unwrap();
     assert!(matches!(

@@ -5,6 +5,7 @@
 //! through the mock backend.
 
 use std::{error::Error as _, sync::Arc};
+use vm_memory::GuestAddressSpace as _;
 
 use boxlite_hypervisor::Error as HypervisorError;
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
@@ -25,7 +26,8 @@ fn two_regions() -> GuestRam {
 
 fn expected_calls(ram: &GuestRam) -> Vec<(Call, Call)> {
     ram.regions()
-        .map(|region| (Call::map(&region), Call::unmap(&region)))
+        .iter()
+        .map(|region| (Call::map(region), Call::unmap(region)))
         .collect()
 }
 
@@ -45,11 +47,12 @@ fn ram_ranges_place_one_mib_aligned_region_at_the_architecture_start() {
 #[test]
 fn allocated_ram_is_zeroed_and_mirrors_its_ranges() {
     let ram = GuestRam::new(&ram_ranges(2)).unwrap();
-    let regions: Vec<_> = ram.regions().collect();
+    let regions = ram.regions();
     assert_eq!(regions.len(), 1);
     assert_eq!(regions[0].guest_addr, RAM_START);
     assert_eq!(regions[0].size, 2 * MIB);
     let host = ram
+        .memory()
         .memory()
         .get_host_address(GuestAddress(RAM_START))
         .unwrap();
@@ -57,15 +60,16 @@ fn allocated_ram_is_zeroed_and_mirrors_its_ranges() {
     assert_eq!(host as usize % 4096, 0, "mmap returns page-aligned memory");
 
     let last = GuestAddress(RAM_START + 2 * MIB as u64 - 1);
-    assert_eq!(ram.memory().read_obj::<u8>(last).unwrap(), 0);
-    ram.memory().write_obj(0x4bu8, last).unwrap();
-    assert_eq!(ram.memory().read_obj::<u8>(last).unwrap(), 0x4b);
+    assert_eq!(ram.memory().memory().read_obj::<u8>(last).unwrap(), 0);
+    ram.memory().memory().write_obj(0x4bu8, last).unwrap();
+    assert_eq!(ram.memory().memory().read_obj::<u8>(last).unwrap(), 0x4b);
 }
 
 #[test]
 fn two_regions_are_reported_in_ascending_order() {
     let starts: Vec<u64> = two_regions()
         .regions()
+        .iter()
         .map(|region| region.guest_addr)
         .collect();
     assert_eq!(starts, [0, 1 << 32]);
@@ -111,7 +115,7 @@ fn failed_second_map_unmaps_the_first_and_leaves_ram_remappable() {
 fn failed_rollback_keeps_the_backing_alive() {
     let mut ram = two_regions();
     let vm = MockVm::failing_at(&[1, 2]);
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(&ram.memory().memory().into_inner());
 
     let error = ram.map(&vm).unwrap_err();
     assert!(matches!(
@@ -135,7 +139,7 @@ fn failed_unmap_keeps_state_and_retry_unmaps_only_the_remainder() {
     let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
         panic!("two regions")
     };
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(&ram.memory().memory().into_inner());
     ram.map(&vm).unwrap();
 
     let error = ram.unmap(&vm).unwrap_err();
@@ -159,7 +163,7 @@ fn failed_unmap_keeps_state_and_retry_unmaps_only_the_remainder() {
 #[test]
 fn drop_without_unmap_leaks_the_backing() {
     let mut ram = two_regions();
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(&ram.memory().memory().into_inner());
     ram.map(&MockVm::new()).unwrap();
 
     drop(ram);

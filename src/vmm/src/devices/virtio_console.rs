@@ -70,7 +70,8 @@ impl VirtioConsole {
         let mut descriptors = [Descriptor::default(); QUEUE_SIZE];
         let mut buffer = [0u8; CHUNK_BYTES];
         let writer = &mut self.writer;
-        let memory = &ctx.memory;
+        let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
+        let memory: &GuestMemoryMmap = &snapshot;
         // Defer used publication until drain returns: if a later head is
         // malformed, complete the earlier heads and resolve their notifications
         // anyway. drain's inline Used path loses that decision on an error.

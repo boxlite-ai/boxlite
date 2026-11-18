@@ -6,6 +6,7 @@
 //! 64-bit code with the boot CPU state.
 
 use std::{cell::Cell, error::Error as _, io};
+use vm_memory::GuestAddressSpace as _;
 
 use boxlite_hypervisor::Error as HypervisorError;
 use vm_memory::GuestMemoryBackend;
@@ -85,7 +86,7 @@ fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
         panic!("one region")
     };
     assert_eq!(start.0, RAM_START);
-    let host_addr = vm.ram.memory().get_host_address(start).unwrap() as usize;
+    let host_addr = vm.ram.memory().memory().get_host_address(start).unwrap() as usize;
     let map = Call::Map {
         guest_addr: start.0,
         host_addr,
@@ -111,7 +112,7 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
 
     let mut vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
     let log = vm.host_vm.log();
-    let memory = Arc::downgrade(vm.ram.memory());
+    let memory = Arc::downgrade(&vm.ram.memory().memory().into_inner());
     vm.workers = VirtioWorkers::with_runtime(Arc::new(
         SharedRuntime::new(
             vm.sender.clone(),
@@ -123,7 +124,7 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
         .unwrap(),
     ));
     crate::virtio::fs::worker_tests::with_blocked_vm_read(
-        vm.ram.memory().clone(),
+        vm.ram.memory().memory().into_inner(),
         &vm.workers,
         &vm.events.lock().unwrap(),
         |release| {
@@ -167,7 +168,7 @@ fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
 
     let mut vm = bare(config(1, 1), || Ok(MockVm::new())).unwrap();
     let log = vm.host_vm.log();
-    let memory = vm.ram.memory().clone();
+    let memory = vm.ram.memory().memory().into_inner();
     let backing = Arc::downgrade(&memory);
     let events = EventLoop::new().unwrap();
     let runtime = Arc::new(
@@ -303,7 +304,7 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
     use crate::memory::MMIO_HOLE_START;
 
     let vm = bare(config(1, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
-    let memory = Arc::clone(vm.ram.memory());
+    let memory = vm.ram.memory().memory().into_inner();
     let last = GuestAddress(MMIO_HOLE_START - 1);
     // mov al,[0xBFFFFFFF]; mov dx,0x3f8; out dx,al; hlt
     let program = [
@@ -369,8 +370,6 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
-    use std::sync::Arc;
-
     use boxlite_hypervisor::VcpuExit;
     use vm_memory::{Bytes, GuestAddress};
 
@@ -442,7 +441,7 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
 
     // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
     let vm = bare(config(2, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
-    let memory = Arc::clone(vm.ram.memory());
+    let memory = vm.ram.memory().memory().into_inner();
     memory.write_slice(&program, GuestAddress(ENTRY)).unwrap();
     memory
         .write_obj(PARAMS_MARKER, GuestAddress(BOOT_PARAMS))
@@ -917,7 +916,7 @@ mod lifecycle {
                 || Ok(MockVm::with_scripts(vec![driver()])),
                 |_, _| Ok(BootRegisters::default()),
                 |chipset, ctx| {
-                    memory = Some(Arc::downgrade(ctx.memory));
+                    memory = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
                     add(chipset, ctx, ResetOnKick::shared(Box::new(|| {})))
                 },
             )
@@ -975,6 +974,7 @@ mod lifecycle {
             assert_eq!(
                 vm.ram
                     .memory()
+                    .memory()
                     .read_obj::<u16>(GuestAddress(0x3002))
                     .unwrap(),
                 1u16.to_le()
@@ -987,7 +987,7 @@ mod lifecycle {
                 // A writable TX descriptor is rejected by the final scan.
                 let (vm, sink) = console_vm(2, step);
                 let log = vm.host_vm.log();
-                let memory = Arc::downgrade(vm.ram.memory());
+                let memory = Arc::downgrade(&vm.ram.memory().memory().into_inner());
                 let (exit, vm) = run(vm);
                 let error = exit.unwrap_err();
                 if clean {
@@ -1061,12 +1061,15 @@ mod lifecycle {
                 |_, _| Ok(BootRegisters::default()),
                 |chipset, ctx| {
                     ctx.memory
+                        .memory()
                         .write_slice(b"final", GuestAddress(0x4000))
                         .unwrap();
                     ctx.memory
+                        .memory()
                         .write_obj(Descriptor::new(0x4000, 5, flags, 0), GuestAddress(0x1000))
                         .unwrap();
                     ctx.memory
+                        .memory()
                         .write_obj(1u16.to_le(), GuestAddress(0x2002))
                         .unwrap();
                     add(chipset, ctx, console)
@@ -1247,7 +1250,7 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     let mut vm = Vm::with_backend(
         config(2, 2),
         boxlite_hypervisor::KvmVm::new,
-        |ram, _| Ok(flat_guest::load(ram.memory(), &program)),
+        |ram, _| Ok(flat_guest::load(&ram.memory().memory(), &program)),
         |chipset, _| {
             chipset.add("i8042", |resources| {
                 resources.pio(0x64, 1);

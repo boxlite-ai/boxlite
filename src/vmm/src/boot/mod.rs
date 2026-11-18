@@ -10,7 +10,7 @@
 use std::{fs::File, io, path::Path};
 
 use boxlite_hypervisor::X86BootRegisters;
-use vm_memory::GuestAddress;
+use vm_memory::{GuestAddress, GuestAddressSpace};
 
 use crate::{
     config::VmConfig,
@@ -38,7 +38,8 @@ pub(crate) struct BootSetup {
 /// `ram` must be the fresh zero-filled layout for `config.memory_mib`. A
 /// failure may have written RAM; discard it.
 pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
-    let memory = ram.memory().as_ref();
+    let snapshot = ram.memory().memory();
+    let memory: &GuestMemoryMmap = &snapshot;
     let load_kernel = |source: io::Error| Error::LoadKernel {
         path: config.kernel.clone(),
         source,
