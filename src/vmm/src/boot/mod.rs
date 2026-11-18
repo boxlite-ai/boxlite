@@ -15,7 +15,7 @@ use vm_memory::GuestAddress;
 use crate::{
     config::VmConfig,
     error::{Error, Result},
-    memory::{GuestMemoryMmap, GuestRam, ram_ranges},
+    memory::{GuestMemoryMmap, GuestRam},
 };
 
 pub(crate) mod elf;
@@ -35,10 +35,11 @@ pub(crate) struct BootSetup {
 /// the zero page, its E820 map, the command line and the MP table for
 /// `config.vcpu_count` vCPUs, then sets up the long-mode entry.
 ///
-/// `ram` must be the fresh zero-filled layout for `config.memory_mib`. A
-/// failure may have written RAM; discard it.
+/// `ram` must be fresh and zero-filled. Its backed ranges determine the E820
+/// map and initramfs placement. A failure may have written RAM; discard it.
 pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
     let memory = ram.memory().as_ref();
+    let ranges: Vec<(GuestAddress, usize)> = ram.ranges().collect();
     let load_kernel = |source: io::Error| Error::LoadKernel {
         path: config.kernel.clone(),
         source,
@@ -49,22 +50,17 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
         .initramfs
         .as_ref()
         .map(|path| {
-            load_initramfs_file(memory, path).map_err(|source| Error::LoadInitramfs {
+            load_initramfs_file(memory, &ranges, path).map_err(|source| Error::LoadInitramfs {
                 path: path.clone(),
                 source,
             })
         })
         .transpose()?;
-    let zero_page = params::write_boot_params(
-        memory,
-        &config.cmdline,
-        &ram_ranges(config.memory_mib),
-        initramfs,
-    )
-    .map_err(|source| Error::WriteBootData {
-        what: "boot parameters",
-        source,
-    })?;
+    let zero_page = params::write_boot_params(memory, &config.cmdline, &ranges, initramfs)
+        .map_err(|source| Error::WriteBootData {
+            what: "boot parameters",
+            source,
+        })?;
     mptable::write_mptable(memory, config.vcpu_count).map_err(|source| Error::WriteBootData {
         what: "MP table",
         source,
@@ -80,10 +76,14 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
 
 /// Loads the whole file at `path` as the initramfs and returns its start and
 /// size.
-fn load_initramfs_file(memory: &GuestMemoryMmap, path: &Path) -> io::Result<(GuestAddress, usize)> {
+fn load_initramfs_file(
+    memory: &GuestMemoryMmap,
+    ranges: &[(GuestAddress, usize)],
+    path: &Path,
+) -> io::Result<(GuestAddress, usize)> {
     let mut file = File::open(path)?;
     let size = usize::try_from(file.metadata()?.len()).map_err(io::Error::other)?;
-    let start = initramfs::load_initramfs(memory, &mut file, size)?;
+    let start = initramfs::load_initramfs(memory, ranges, &mut file, size)?;
     Ok((start, size))
 }
 

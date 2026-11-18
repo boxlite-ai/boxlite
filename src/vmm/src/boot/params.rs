@@ -18,14 +18,12 @@ use vm_memory::{GuestAddress, GuestMemoryBackend};
 
 use crate::config::MAX_CMDLINE_BYTES;
 
+pub(super) use crate::x86_boot_layout::LOW_RAM_END;
+
 /// `boot_params` (the zero page), as the design's x86_64 layout places it.
 const ZERO_PAGE_START: u64 = 0x7000;
 /// The NUL-terminated kernel command line, from the same layout.
 const CMDLINE_START: u64 = 0x2_0000;
-/// Usable low RAM ends where the MP table and the legacy BIOS areas begin,
-/// and resumes at 1 MiB.
-pub(super) const LOW_RAM_END: u64 = 0x9_fc00;
-const HIGH_RAM_START: u64 = 0x10_0000;
 
 /// Setup header values, as Firecracker and libkrun write them: no assigned
 /// loader ID, the boot flag and "HdrS" magic, and a 16 MiB alignment.
@@ -102,23 +100,14 @@ pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
 
 /// Usable RAM entries for `ranges`, without [0x9_FC00, 1 MiB).
 fn e820_entries(ranges: &[(GuestAddress, usize)]) -> Vec<boot_e820_entry> {
-    let mut entries = Vec::new();
-    for &(start, size) in ranges {
-        let (start, end) = (start.0, start.0 + size as u64);
-        for (from, to) in [
-            (start, end.min(LOW_RAM_END)),
-            (start.max(HIGH_RAM_START), end),
-        ] {
-            if from < to {
-                entries.push(boot_e820_entry {
-                    addr: from,
-                    size: to - from,
-                    r#type: E820_RAM,
-                });
-            }
-        }
-    }
-    entries
+    crate::x86_boot_layout::e820_ram_ranges(ranges)
+        .into_iter()
+        .map(|(addr, size)| boot_e820_entry {
+            addr,
+            size,
+            r#type: E820_RAM,
+        })
+        .collect()
 }
 
 #[cfg(test)]

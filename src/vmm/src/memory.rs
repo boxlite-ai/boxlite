@@ -281,6 +281,17 @@ impl GuestRam {
         &self.memory
     }
 
+    /// The guest RAM ranges this instance backs, in ascending guest order.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        expect(dead_code, reason = "Only Linux x86_64 prepares boot data yet.")
+    )]
+    pub(crate) fn ranges(&self) -> impl Iterator<Item = (GuestAddress, usize)> + '_ {
+        self.memory
+            .iter()
+            .map(|region| (region.start_addr(), region.len() as usize))
+    }
+
     /// Each RAM range as the hypervisor registers it, in ascending guest order.
     pub(crate) fn regions(&self) -> impl Iterator<Item = MemoryRegion> + '_ {
         self.memory.iter().map(|region| MemoryRegion {
