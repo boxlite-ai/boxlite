@@ -117,6 +117,7 @@ struct AppState {
     /// Recovered exit status, scoped by canonical box ID and retained for the
     /// same grace period as executions whose output this server owns.
     recovered_terminals: RwLock<HashMap<TerminalKey, TerminalSlot>>,
+    agent_turns: tokio::sync::Mutex<HashMap<String, usize>>,
 }
 
 /// Scope of a terminal record: the box a client addresses plus the execution.
@@ -268,6 +269,7 @@ impl AppState {
     pub(in crate::commands::serve) async fn forget_box(&self, box_id: &str) {
         self.lifecycle.write().await.remove(box_id);
         self.last_activity.write().await.remove(box_id);
+        self.agent_turns.lock().await.remove(box_id);
         self.forget_recovered(box_id).await;
     }
 
@@ -987,6 +989,11 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
         ) {
             LifecycleAction::Leave => {}
             LifecycleAction::Stop => {
+                // Coordinate the final busy check and stop with agent admission.
+                let turns = state.agent_turns.lock().await;
+                if turns.contains_key(&box_id) {
+                    continue;
+                }
                 tracing::info!(
                     box_id = %box_id,
                     idle_secs = idle.as_secs(),
@@ -2084,6 +2091,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
+        agent_turns: tokio::sync::Mutex::new(HashMap::new()),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -2466,6 +2474,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -3297,6 +3306,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (control_status, control_error) =
             upload_v3_archive(state.clone(), serde_json::json!({})).await;
@@ -3699,6 +3709,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (url, server) = serve_router(state).await;
         let remote =
@@ -3767,6 +3778,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -3833,6 +3845,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -3891,6 +3904,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -3936,6 +3950,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -3990,6 +4005,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4053,6 +4069,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
         let client = reqwest::Client::new();
@@ -4164,6 +4181,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4210,6 +4228,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4253,6 +4272,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4296,6 +4316,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         // The canned box's `last_updated` is a fixed date in the past, so its
         // time at rest grows as the calendar does. A century-long window
@@ -4347,6 +4368,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -4406,6 +4428,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4454,6 +4477,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4739,6 +4763,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
 
         // The box's main command, and an ordinary exec running beside it.

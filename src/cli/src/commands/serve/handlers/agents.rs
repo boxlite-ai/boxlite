@@ -11,7 +11,7 @@ use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use boxlite::agents::{
     self, AgentControlOptions, AgentCreateOptions, AgentEventsOptions, AgentSendMode,
-    AgentSendOptions,
+    AgentSendOptions, AgentTurnStatus,
 };
 use boxlite::{Agent, BoxliteError};
 use futures::StreamExt;
@@ -19,7 +19,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::super::{AppState, error_from_boxlite, get_or_fetch_box};
+use super::super::{AppState, error_from_boxlite, get_or_resume_box};
 
 fn optional_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -118,7 +118,7 @@ fn key(headers: &HeaderMap) -> Result<Option<String>, BoxliteError> {
 
 #[allow(clippy::result_large_err)]
 async fn open(state: &AppState, box_id: &str, agent_id: &str) -> Result<Agent, Response> {
-    let sandbox = get_or_fetch_box(state, box_id).await?;
+    let sandbox = get_or_resume_box(state, box_id).await?;
     sandbox
         .agents()
         .get(agent_id)
@@ -137,6 +137,39 @@ fn snapshot(agent: &Agent) -> Result<Value, BoxliteError> {
         "config": agents::records::config(&agent.config()?),
         "capabilities": agents::records::capabilities(&agent.capabilities()?)}),
     )
+}
+
+fn release_turn(turns: &mut std::collections::HashMap<String, usize>, box_id: &str) {
+    if let Some(count) = turns.get_mut(box_id) {
+        *count -= 1;
+        if *count == 0 {
+            turns.remove(box_id);
+        }
+    }
+}
+
+fn observe_turn(state: Arc<AppState>, box_id: String, agent: Agent, turn_id: String) {
+    tokio::spawn(async move {
+        loop {
+            if !state.agent_turns.lock().await.contains_key(&box_id) {
+                return;
+            }
+            if let Ok(turn) = agent.get_turn(&turn_id).await
+                && let Ok(snapshot) = turn.state()
+                && matches!(
+                    snapshot.status,
+                    AgentTurnStatus::Completed
+                        | AgentTurnStatus::Cancelled
+                        | AgentTurnStatus::Failed
+                )
+            {
+                let mut turns = state.agent_turns.lock().await;
+                release_turn(&mut turns, &box_id);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    });
 }
 
 fn location(box_id: &str, agent_id: &str, turn_id: Option<&str>) -> String {
@@ -175,7 +208,7 @@ pub(in crate::commands::serve) async fn create(
         },
         None => Default::default(),
     };
-    let sandbox = match get_or_fetch_box(&state, &box_id).await {
+    let sandbox = match get_or_resume_box(&state, &box_id).await {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -262,34 +295,76 @@ pub(in crate::commands::serve) async fn send(
             return error_from_boxlite(&BoxliteError::InvalidArgument("invalid send mode".into()));
         }
     };
-    let agent = match open(&state, &box_id, &agent_id).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
-    match agent
-        .send(
-            &request.text,
-            AgentSendOptions {
-                mode,
-                data: request.options.data,
-                idempotency_key,
-            },
-        )
-        .await
-    {
-        Ok(turn) => match turn.state() {
-            Ok(snapshot) => (
-                StatusCode::CREATED,
-                [(
-                    header::LOCATION,
-                    location(&box_id, &agent_id, Some(&snapshot.id)),
-                )],
-                Json(agents::records::turn_state(&snapshot)),
+    // The task owns admission even if the HTTP client disconnects.
+    match tokio::spawn(async move {
+        let canonical = match state.runtime.get_info(&box_id).await {
+            Ok(Some(info)) => info.id.to_string(),
+            Ok(None) => {
+                return error_from_boxlite(&BoxliteError::NotFound(format!(
+                    "box {box_id} not found"
+                )));
+            }
+            Err(error) => return error_from_boxlite(&error),
+        };
+        {
+            let mut turns = state.agent_turns.lock().await;
+            *turns.entry(canonical.clone()).or_default() += 1;
+        }
+        let agent = match open(&state, &canonical, &agent_id).await {
+            Ok(agent) => agent,
+            Err(response) => {
+                let mut turns = state.agent_turns.lock().await;
+                release_turn(&mut turns, &canonical);
+                return response;
+            }
+        };
+        match agent
+            .send(
+                &request.text,
+                AgentSendOptions {
+                    mode,
+                    data: request.options.data,
+                    idempotency_key,
+                },
             )
-                .into_response(),
-            Err(e) => error_from_boxlite(&e),
-        },
-        Err(e) => error_from_boxlite(&e),
+            .await
+        {
+            Ok(turn) => match turn.state() {
+                Ok(snapshot) => {
+                    observe_turn(Arc::clone(&state), canonical, agent, snapshot.id.clone());
+                    (
+                        StatusCode::CREATED,
+                        [(
+                            header::LOCATION,
+                            location(&box_id, &agent_id, Some(&snapshot.id)),
+                        )],
+                        Json(agents::records::turn_state(&snapshot)),
+                    )
+                        .into_response()
+                }
+                Err(error) => error_from_boxlite(&error),
+            },
+            Err(error) => {
+                if matches!(
+                    error,
+                    BoxliteError::InvalidArgument(_)
+                        | BoxliteError::Unsupported(_)
+                        | BoxliteError::NotFound(_)
+                        | BoxliteError::AlreadyExists(_)
+                ) {
+                    let mut turns = state.agent_turns.lock().await;
+                    release_turn(&mut turns, &canonical);
+                }
+                error_from_boxlite(&error)
+            }
+        }
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => error_from_boxlite(&BoxliteError::Internal(format!(
+            "agent admission task failed: {error}"
+        ))),
     }
 }
 

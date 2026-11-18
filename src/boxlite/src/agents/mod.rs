@@ -349,7 +349,13 @@ impl AgentTurn {
                 if let Some(result) = state.result {
                     return Ok(result);
                 }
-                if state.status == AgentTurnStatus::Unknown {
+                if matches!(
+                    state.status,
+                    AgentTurnStatus::Completed
+                        | AgentTurnStatus::Cancelled
+                        | AgentTurnStatus::Failed
+                        | AgentTurnStatus::Unknown
+                ) {
                     return Err(BoxliteError::InvalidState(format!(
                         "turn {} ended without a recorded outcome",
                         self.state.id

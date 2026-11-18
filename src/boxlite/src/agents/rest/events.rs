@@ -170,9 +170,7 @@ pub(super) async fn open(
                             })
                         })
                 } else {
-                    Err(BoxliteError::Internal(format!(
-                        "unknown agent event type {name}"
-                    )))
+                    Err(BoxliteError::Internal("unknown agent event type".into()))
                 };
                 let failed = result.is_err();
                 if sender.send(result).await.is_err() || failed {
@@ -236,8 +234,12 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0; 2048];
-            let _ = socket.read(&mut request).await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
             let body = concat!(
                 "event: agent\ndata: {\"cursor\":null,\"agent_id\":\"agent-1\",\"turn_id\":null,\"kind\":\"message\",\"data\":{}}\n\n",
                 "event: error\ndata: {\"error\":{\"message\":\"stream unavailable\",\"type\":\"UnsupportedError\",\"code\":\"unsupported\"}}\n\n"
@@ -265,19 +267,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_event_error_is_bounded() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            let body = format!("event: {}\ndata: {{}}\n\n", "x".repeat(4096));
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let client =
+            ApiClient::new(&crate::BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+        let mut stream = open(
+            &client,
+            "/boxes/box-1/agents/agent-1",
+            "agent-1",
+            None,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        let error = stream.next().await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("unknown agent event type"), "{error}");
+        assert!(error.len() < 256, "error contains {} bytes", error.len());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn dropping_stream_closes_the_http_connection() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0; 2048];
-            let _ = socket.read(&mut request).await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
             socket
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
                 .await
                 .unwrap();
-            let mut byte = [0];
             socket.read(&mut byte).await.unwrap()
         });
         let client =

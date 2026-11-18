@@ -175,7 +175,12 @@ These records define SDK data types. The
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
 headers. The REST server exposes these routes, and the Rust REST client forwards
-agent operations to them. Close and interrupt return HTTP 204 without a snapshot;
+agent operations to them. Agent routes respect a stopped Box's AutoResume setting.
+AutoStop keeps the Box running while an admitted turn is active and can stop it
+after the turn ends. If admission fails with an uncertain outcome, the server
+retains the protection until the Box is removed or the server restarts.
+
+Close and interrupt return HTTP 204 without a snapshot;
 read a resource separately when its current state is needed. The remote Rust
 `requests()` method remains unsupported, although turn snapshots can include
 pending requests. The CLI does not provide interactive request handling.

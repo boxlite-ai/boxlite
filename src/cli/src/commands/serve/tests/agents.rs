@@ -5,6 +5,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     http::{StatusCode, header},
+    response::IntoResponse,
     routing::{get, post},
 };
 use boxlite::{
@@ -28,6 +29,335 @@ fn turn() -> Value {
         "result":null,"requests":[],"steering":[]})
 }
 
+#[tokio::test]
+async fn agent_routes_refuse_to_resume_a_stopped_box_when_disabled() {
+    let upstream = Router::new().route(
+        "/v1/boxes/{id}",
+        get(|| async {
+            Json(json!({"box_id":STUB_BOX_ID,"name":null,"status":"stopped",
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+            "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512,"auto_resume":false}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream_task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let mut state = lifecycle_state();
+    state.runtime =
+        BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+    let (url, server) = serve_router(Arc::new(state)).await;
+    let client = reqwest::Client::new();
+    let path = format!("{url}/v1/boxes/{STUB_BOX_ID}/agents");
+    let create = client
+        .post(&path)
+        .json(&json!({"agent":"opencode"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CONFLICT);
+    let get = client.get(format!("{path}/ses_test")).send().await.unwrap();
+    assert_eq!(get.status(), StatusCode::CONFLICT);
+    server.abort();
+    upstream_task.abort();
+}
+
+#[tokio::test]
+async fn remote_wait_reports_terminal_turn_without_a_recorded_result() {
+    let upstream = Router::new()
+        .route(
+            "/v1/boxes/{id}",
+            get(|| async {
+                Json(json!({"box_id":STUB_BOX_ID,"name":null,"status":"running",
+                "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+                "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512}))
+            }),
+        )
+        .route(
+            "/v1/boxes/{id}/agents/{agent}",
+            get(|| async { Json(resource()) }),
+        )
+        .route(
+            "/v1/boxes/{id}/agents/{agent}/turns/{turn}",
+            get(|| async {
+                let mut state = turn();
+                state["status"] = json!("completed");
+                Json(state)
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let runtime = BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+    let sandbox = runtime.get(STUB_BOX_ID).await.unwrap().unwrap();
+    let agent = sandbox.agents().get("ses_test").await.unwrap();
+    let turn = agent.get_turn("msg_test").await.unwrap();
+    let error = turn
+        .wait(boxlite::agents::AgentWaitOptions {
+            timeout: Some(std::time::Duration::from_millis(50)),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("ended without a recorded outcome"),
+        "{error}"
+    );
+    task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn autostop_does_not_interrupt_an_admitted_agent_turn() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let stops = Arc::new(AtomicUsize::new(0));
+    let finished = Arc::new(AtomicBool::new(false));
+    let fail_admission = Arc::new(AtomicBool::new(false));
+    let observations = Arc::new(AtomicUsize::new(0));
+    let admission_started = Arc::new(tokio::sync::Notify::new());
+    let finish_admission = Arc::new(tokio::sync::Notify::new());
+    let box_info = || {
+        json!({"box_id":STUB_BOX_ID,"name":null,"status":"running",
+        "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+        "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512,"auto_resume":true})
+    };
+    let upstream = Router::new()
+        .route(
+            "/v1/boxes",
+            get(move || async move { Json(json!({"boxes":[box_info()]})) }),
+        )
+        .route(
+            "/v1/boxes/{id}",
+            get(move || async move { Json(box_info()) }),
+        )
+        .route(
+            "/v1/boxes/{id}/stop",
+            post({
+                let stops = Arc::clone(&stops);
+                move || {
+                    let stops = Arc::clone(&stops);
+                    async move {
+                        stops.fetch_add(1, Ordering::SeqCst);
+                        Json(box_info())
+                    }
+                }
+            }),
+        )
+        .route(
+            "/v1/boxes/{id}/agents/{agent}",
+            get(|| async { Json(resource()) }),
+        )
+        .route(
+            "/v1/boxes/{id}/agents/{agent}/turns",
+            post({
+                let admission_started = Arc::clone(&admission_started);
+                let finish_admission = Arc::clone(&finish_admission);
+                let fail_admission = Arc::clone(&fail_admission);
+                move || {
+                    let admission_started = Arc::clone(&admission_started);
+                    let finish_admission = Arc::clone(&finish_admission);
+                    let fail_admission = Arc::clone(&fail_admission);
+                    async move {
+                        admission_started.notify_one();
+                        finish_admission.notified().await;
+                        if fail_admission.load(Ordering::SeqCst) {
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":{"message":"uncertain","type":"InternalError","code":"internal"}})))
+                        } else {
+                            (StatusCode::CREATED, Json(turn()))
+                        }
+                    }
+                }
+            }),
+        )
+        .route(
+            "/v1/boxes/{id}/agents/{agent}/turns/{turn}",
+            get({
+                let finished = Arc::clone(&finished);
+                let observations = Arc::clone(&observations);
+                move || {
+                    let finished = Arc::clone(&finished);
+                    let observations = Arc::clone(&observations);
+                    async move {
+                        if observations.fetch_add(1, Ordering::SeqCst) == 0 {
+                            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})))
+                                .into_response();
+                        }
+                        let mut state = turn();
+                        if finished.load(Ordering::SeqCst) {
+                            state["status"] = json!("completed");
+                        }
+                        (StatusCode::OK, Json(state)).into_response()
+                    }
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let mut state = lifecycle_state();
+    state.runtime =
+        BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+    let state = Arc::new(state);
+    state
+        .set_lifecycle(
+            STUB_BOX_ID,
+            super::LifecyclePolicy {
+                auto_stop: 60,
+                auto_delete: 0,
+            },
+        )
+        .await;
+    let (url, server) = serve_router(Arc::clone(&state)).await;
+    let second_url = url.clone();
+    let third_url = url.clone();
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!(
+                "{url}/v1/boxes/{STUB_BOX_ID}/agents/ses_test/turns"
+            ))
+            .json(&json!({"text":"long task"}))
+            .send()
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        admission_started.notified(),
+    )
+    .await
+    .unwrap();
+    let now = std::time::Instant::now();
+    state.last_activity.write().await.insert(
+        STUB_BOX_ID.to_owned(),
+        now - std::time::Duration::from_secs(120),
+    );
+    super::run_lifecycle_once(&state, now).await;
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        0,
+        "AutoStop interrupted an admission"
+    );
+    finish_admission.notify_one();
+    assert_eq!(request.await.unwrap().status(), StatusCode::CREATED);
+    super::run_lifecycle_once(&state, now).await;
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        0,
+        "AutoStop interrupted an admitted turn"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while observations.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    super::run_lifecycle_once(&state, now).await;
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        0,
+        "observation error lost protection"
+    );
+    finished.store(true, Ordering::SeqCst);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while stops.load(Ordering::SeqCst) == 0 {
+            super::run_lifecycle_once(&state, now).await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("completed turn must eventually permit AutoStop");
+    finished.store(false, Ordering::SeqCst);
+    let before = observations.load(Ordering::SeqCst);
+    let disconnected = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!(
+                "{second_url}/v1/boxes/{STUB_BOX_ID}/agents/ses_test/turns"
+            ))
+            .json(&json!({"text":"disconnected task"}))
+            .send()
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        admission_started.notified(),
+    )
+    .await
+    .unwrap();
+    disconnected.abort();
+    finish_admission.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while observations.load(Ordering::SeqCst) == before {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("accepted work must remain observed after disconnect");
+    state.last_activity.write().await.insert(
+        STUB_BOX_ID.to_owned(),
+        now - std::time::Duration::from_secs(120),
+    );
+    super::run_lifecycle_once(&state, now).await;
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        1,
+        "disconnect lost protection"
+    );
+    state.forget_box(STUB_BOX_ID).await;
+    state
+        .set_lifecycle(
+            STUB_BOX_ID,
+            super::LifecyclePolicy {
+                auto_stop: 60,
+                auto_delete: 0,
+            },
+        )
+        .await;
+    state.last_activity.write().await.insert(
+        STUB_BOX_ID.to_owned(),
+        now - std::time::Duration::from_secs(120),
+    );
+    super::run_lifecycle_once(&state, now).await;
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        2,
+        "removal must clear turn protection"
+    );
+    fail_admission.store(true, Ordering::SeqCst);
+    let uncertain = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!(
+                "{third_url}/v1/boxes/{STUB_BOX_ID}/agents/ses_test/turns"
+            ))
+            .json(&json!({"text":"uncertain task"}))
+            .send()
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        admission_started.notified(),
+    )
+    .await
+    .unwrap();
+    finish_admission.notify_one();
+    assert_eq!(
+        uncertain.await.unwrap().status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    state.last_activity.write().await.insert(
+        STUB_BOX_ID.to_owned(),
+        now - std::time::Duration::from_secs(120),
+    );
+    super::run_lifecycle_once(&state, now).await;
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        2,
+        "uncertain admission lost protection"
+    );
+    server.abort();
+    task.abort();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_rest_routes_forward_a_conversation() {
     let upstream = Router::new()
@@ -43,9 +373,10 @@ async fn agent_rest_routes_forward_a_conversation() {
         .route("/v1/boxes/{id}/agents/{agent}", get(|| async { Json(resource()) }))
         .route("/v1/boxes/{id}/agents/{agent}/close", post(|| async { StatusCode::NO_CONTENT }))
         .route("/v1/boxes/{id}/agents/{agent}/turns", post(|Json(body): Json<Value>| async move {
-            assert_eq!(body["text"], "hello");
-            if let Some(options) = body.get("options") {
-                assert_eq!(options.get("data"), Some(&Value::Null));
+            match body["text"].as_str() {
+                Some("hello") => assert!(body.get("options").is_none()),
+                Some("hello-null") => assert_eq!(body.get("options").and_then(|options| options.get("data")), Some(&Value::Null)),
+                _ => panic!("unexpected send request: {body}"),
             }
             (StatusCode::CREATED, Json(turn()))
         }))
@@ -99,7 +430,7 @@ async fn agent_rest_routes_forward_a_conversation() {
     let turn = agent.send("hello", Default::default()).await.unwrap();
     agent
         .send(
-            "hello",
+            "hello-null",
             boxlite::agents::AgentSendOptions {
                 data: Some(Value::Null),
                 ..Default::default()
