@@ -932,6 +932,18 @@ export class BoxService {
     return box
   }
 
+  async findByIdForTiming(
+    boxId: string,
+    organizationId: string,
+  ): Promise<Pick<Box, 'id' | 'runnerId' | 'prevRunnerId'> | null> {
+    if (!organizationId) return null
+    return this.boxRepository.findOne({
+      where: { id: boxId, organizationId },
+      select: ['id', 'runnerId', 'prevRunnerId'],
+      withDeleted: true,
+    })
+  }
+
   async getOrganizationId(boxIdOrName: string, organizationId?: string): Promise<string> {
     const organizationFilter = organizationId ? { organizationId: organizationId } : {}
 

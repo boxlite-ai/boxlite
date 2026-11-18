@@ -8,8 +8,11 @@ package executor
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/internal/timing"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	"github.com/boxlite-ai/runner/pkg/common"
@@ -67,12 +70,22 @@ func (e *Executor) stopBox(ctx context.Context, job *apiclient.Job) (any, error)
 }
 
 func (e *Executor) destroyBox(ctx context.Context, job *apiclient.Job) (any, error) {
+	started := time.Now()
+	ids := timing.IDs{BoxID: job.GetResourceId(), JobID: job.GetId()}
 	if restorer, ok := e.backend.(backend.CheckpointRestorer); ok {
 		if err := restorer.RetireCheckpointTarget(ctx, job.ResourceId); err != nil {
+			timing.Emit("destroy", "destroy.dispatched", timing.Error, started, ids)
+			timing.Emit("destroy", "destroy.runtime", timing.Skipped, time.Now(), ids)
+			timing.Emit("destroy", "destroy.client", timing.Skipped, time.Now(), ids)
 			return nil, err
 		}
 	}
-	err := e.destroyIfPresent(ctx, job.ResourceId)
+	timing.Emit("destroy", "destroy.dispatched", timing.OK, started, ids)
+	err := e.backend.Destroy(ctx, job.ResourceId)
+	if boxlite.IsNotFound(err) {
+		timing.MarkDestroySkipped(ctx)
+		err = nil
+	}
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("destroy", string(common.PrometheusOperationStatusFailure)).Inc()
 		return nil, common.FormatRecoverableError(err)

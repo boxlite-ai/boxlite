@@ -17,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boxlite-ai/runner/internal/timing"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -235,13 +237,14 @@ func readNextDataFrame(t *testing.T, conn *websocket.Conn, deadline time.Duratio
 func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
 	stub := newStubAttachExec()
 	stub.exitCode = 42
-	cleanup := withStubExec(t, "exec-1", stub)
+	execID := uuid.NewString()
+	cleanup := withStubExec(t, execID, stub)
 	defer cleanup()
 
 	srv := newAttachServer(t)
 	defer srv.Close()
 
-	conn, resp, err := dialAttach(t, srv, "exec-1")
+	conn, resp, err := dialAttach(t, srv, execID)
 	if err != nil {
 		t.Fatalf("dial attach: %v (resp=%v)", err, resp)
 	}
@@ -342,6 +345,7 @@ func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
 	if stub.disconnect.Load() == 0 {
 		t.Fatal("expected MarkDisconnected to be called")
 	}
+	checkAttachTiming(t, execID, timing.OK, timing.OK)
 }
 
 func TestBoxliteExecAttach_SingleAttach409(t *testing.T) {
@@ -599,13 +603,14 @@ func TestBoxliteExecAttach_PongTimeoutEvictsDeadClient(t *testing.T) {
 	defer restore()
 
 	stub := newStubAttachExec()
-	cleanup := withStubExec(t, "exec-deadpong", stub)
+	execID := uuid.NewString()
+	cleanup := withStubExec(t, execID, stub)
 	defer cleanup()
 
 	srv := newAttachServer(t)
 	defer srv.Close()
 
-	conn, _, err := dialAttach(t, srv, "exec-deadpong")
+	conn, _, err := dialAttach(t, srv, execID)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -632,7 +637,8 @@ func TestBoxliteExecAttach_PongTimeoutEvictsDeadClient(t *testing.T) {
 	deadline := time.After(1500 * time.Millisecond)
 	for {
 		if stub.disconnect.Load() > 0 {
-			return // success: handler tore down and released the slot
+			checkAttachTiming(t, execID, timing.Skipped, timing.Error)
+			return
 		}
 		select {
 		case <-deadline:
@@ -640,6 +646,20 @@ func TestBoxliteExecAttach_PongTimeoutEvictsDeadClient(t *testing.T) {
 				stub.disconnect.Load(), tryReceive(readErr))
 		case <-time.After(20 * time.Millisecond):
 		}
+	}
+}
+
+func checkAttachTiming(t *testing.T, execID, drainStatus, attachStatus string) {
+	t.Helper()
+	var got []timing.Event
+	for _, event := range timing.Snapshot("box") {
+		if event.ExecID == execID {
+			got = append(got, event)
+		}
+	}
+	if len(got) != 2 || got[0].Stage != "exec.output_drained" || got[0].Status != drainStatus ||
+		got[1].Stage != "exec.attach_done" || got[1].Status != attachStatus {
+		t.Fatalf("attach timings for %s = %+v; want output_drained:%s then attach_done:%s", execID, got, drainStatus, attachStatus)
 	}
 }
 

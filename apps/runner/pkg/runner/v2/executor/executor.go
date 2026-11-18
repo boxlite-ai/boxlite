@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -22,6 +23,7 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/boxlite-ai/runner/internal/metrics"
+	"github.com/boxlite-ai/runner/internal/timing"
 	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	"github.com/boxlite-ai/runner/pkg/storage"
@@ -133,8 +135,30 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 
 	jobLog.InfoContext(ctx, "Executing job")
 
+	var op string
+	switch job.GetType() {
+	case apiclient.JOBTYPE_CREATE_BOX:
+		op = "create"
+	case apiclient.JOBTYPE_DESTROY_BOX:
+		op = "destroy"
+	}
+	ids := timing.IDs{BoxID: job.GetResourceId(), JobID: job.GetId()}
+
 	// Execute the job based on type
-	resultMetadata, err := e.executeJob(ctx, job)
+	jobCtx := ctx
+	var destroySkipped *bool
+	if op == "destroy" {
+		jobCtx, destroySkipped = timing.WithDestroySkipped(ctx)
+	}
+	jobStart := time.Now()
+	resultMetadata, err := e.executeJob(jobCtx, job)
+	if op != "" {
+		status := timing.Status(err)
+		if err == nil && destroySkipped != nil && *destroySkipped {
+			status = timing.Skipped
+		}
+		timing.Emit(op, op+".finished", status, jobStart, ids)
+	}
 
 	// Update job status
 	status := apiclient.JOBSTATUS_COMPLETED
@@ -149,8 +173,13 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 	}
 
 	// Report status to API
-	if err := e.updateJobStatus(ctx, job.GetId(), status, resultMetadata, errorMessage); err != nil {
-		jobLog.ErrorContext(ctx, "Failed to update job status", "error", err)
+	reportStart := time.Now()
+	reportErr := e.updateJobStatus(ctx, job.GetId(), status, resultMetadata, errorMessage)
+	if op != "" {
+		timing.Emit(op, op+".job_status", timing.Status(reportErr), reportStart, ids)
+	}
+	if reportErr != nil {
+		jobLog.ErrorContext(ctx, "Failed to update job status", "error", reportErr)
 	} else {
 		e.acknowledgeCheckpointUpload(ctx, job)
 	}
@@ -158,6 +187,7 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 
 // executeJob dispatches to the appropriate handler based on job type
 func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, error) {
+	dispatchStart := time.Now()
 	if job.ResourceType == "BOX" {
 		unlock := e.lockBox(job.ResourceId)
 		defer unlock()
@@ -186,13 +216,15 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 	var err error
 	switch job.GetType() {
 	case apiclient.JOBTYPE_CREATE_BOX:
-		resultMetadata, err = e.createBox(ctx, job)
+		ids := timing.IDs{BoxID: job.GetResourceId(), JobID: job.GetId()}
+		timing.Emit("create", "create.dispatched", timing.OK, timing.ReceiptOr(ctx, dispatchStart), ids)
+		resultMetadata, err = e.createBox(timing.WithJobID(ctx, ids.JobID), job)
 	case apiclient.JOBTYPE_START_BOX:
 		resultMetadata, err = e.startBox(ctx, job)
 	case apiclient.JOBTYPE_STOP_BOX:
 		resultMetadata, err = e.stopBox(ctx, job)
 	case apiclient.JOBTYPE_DESTROY_BOX:
-		resultMetadata, err = e.destroyBox(ctx, job)
+		resultMetadata, err = e.destroyBox(timing.WithJobID(ctx, job.GetId()), job)
 	case apiclient.JOBTYPE_EXPORT_BOX:
 		resultMetadata, err = e.exportBox(ctx, job)
 	case apiclient.JOBTYPE_IMPORT_BOX:

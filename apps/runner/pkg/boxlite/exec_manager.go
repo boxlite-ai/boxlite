@@ -13,6 +13,7 @@ import (
 	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/internal/timing"
 )
 
 // Reaping policy defaults (Phase 4.1). Operators override via env vars
@@ -397,6 +398,7 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 	// captures into the bounded backlog AND fans out to live subscribers
 	// in one mutex-guarded operation. Subscribers attached before any
 	// Write observe the backlog snapshot on Subscribe.
+	startPhase := time.Now()
 	execution, err := bx.StartExecution(ctx, opts.Command, opts.Args, &boxlite.ExecutionOptions{
 		TTY:        opts.TTY,
 		Stdout:     exec.stdoutBus,
@@ -407,9 +409,12 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 		Timeout:    opts.Timeout,
 	})
 	if err != nil {
+		timing.Emit("exec", "exec.started", timing.Error, startPhase, timing.IDs{BoxID: boxID})
 		return "", fmt.Errorf("failed to start execution: %w", err)
 	}
 	id := execution.ID()
+	ids := timing.IDs{BoxID: boxID, ExecID: id}
+	timing.Emit("exec", "exec.started", timing.OK, startPhase, ids)
 	exec.ID = id
 	handle := sdkExec{inner: execution}
 	exec.execution = handle
@@ -426,7 +431,13 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 			exec.handleMu.Unlock()
 		}()
 
+		waitStart := time.Now()
 		exitCode, err := handle.Wait(context.Background())
+		status := timing.Status(err)
+		if exitCode != 0 {
+			status = timing.Error
+		}
+		timing.Emit("exec", "exec.exited", status, waitStart, ids)
 		exec.ExitCode = exitCode
 		exec.Err = err
 	}()
