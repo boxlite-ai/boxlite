@@ -48,7 +48,7 @@ mod events;
     not(test),
     expect(
         dead_code,
-        reason = "The virtio-mem device that drives hotplug memory comes next."
+        reason = "VmConfig wiring that adds the virtio-mem device comes next."
     )
 )]
 mod hotplug;
@@ -87,6 +87,7 @@ pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };
 pub use control::VmControl;
+pub use devices::mem::{MemoryHandle, MemoryStatus};
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

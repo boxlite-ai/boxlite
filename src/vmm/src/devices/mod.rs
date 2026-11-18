@@ -9,6 +9,11 @@ pub(crate) mod cmos;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "VmConfig wiring that adds the device comes next.")
+)]
+pub(crate) mod mem;
 #[cfg(unix)]
 pub(crate) mod net;
 #[cfg(target_arch = "x86_64")]

@@ -257,6 +257,7 @@ pub(crate) fn map_vmm_error(error: boxlite_vmm::Error) -> BoxliteError {
         Error::InvalidVcpuCount(_)
             | Error::InvalidMemorySize(_)
             | Error::GuestMemoryAddressLimit { .. }
+            | Error::InvalidHotplugSize(_)
             | Error::InvalidCommandLine(_)
             | Error::InvalidDiskCount(_)
     ) {
