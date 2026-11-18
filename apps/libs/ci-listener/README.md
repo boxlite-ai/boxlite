@@ -282,6 +282,10 @@ even if a caller requests a shorter TTL. A takeover candidate rechecks the
 deployment and deadline against database time after obtaining the owner lock.
 The lock is held until the database transaction commits or rolls back.
 
+A failed renewal cancels in-flight work for that Listener session. The
+`listener-renewal` warning identifies that operation before the session drains.
+Hosted database failures include the SQLSTATE code without query text or parameters.
+
 Snapshot checks read the deadline without locking that frequently updated row.
 For example, a snapshot can precede a renewal from 10:00:30 to 10:00:40 and still
 lock the unchanged scheduler identity. An older deadline can cause conservative

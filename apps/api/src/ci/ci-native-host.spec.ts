@@ -679,6 +679,20 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     expect(result.scopes).toEqual([])
     expect(requests).toHaveLength(0)
   })
+  it('reports the SQLSTATE of a failed Listener renewal without SQL or parameters', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    try {
+      await expect(
+        db.query('SELECT 1 / $1::integer', [0]).catch((error) => {
+          host.report(error, 'listener-renewal')
+          throw error
+        }),
+      ).rejects.toThrow('division by zero')
+      expect(warn).toHaveBeenCalledWith({ operation: 'listener-renewal', error: 'QueryFailedError', sqlState: '22012' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
   it.each([0, 137])('writes a real pool exit %s to the API logger with original CI identity', async (exit_code) => {
     const scope = (await discover()).scopes.find(
       (scope) => scope.runners.kind === 'repository' && scope.runners.repository.id === 30,
