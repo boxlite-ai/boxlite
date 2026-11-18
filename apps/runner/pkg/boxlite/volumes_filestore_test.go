@@ -1214,6 +1214,62 @@ func TestCreateReplayRestoresPriorRecordOnFailure(t *testing.T) {
 	}
 }
 
+func TestCreateReplayDoesNotReclaimWhenRecordRollbackFails(t *testing.T) {
+	ctx := context.Background()
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	installFakeFilestoreMounts(c)
+	umountLogPath := installFakeUmount(t)
+	boxID := "abc123def456"
+	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
+	dataDir := filestoreDataDir(root, "vol-ok")
+	if err := c.recordBoxVolumeMounts(ctx, boxID, []volumeMount{
+		{hostPath: dataDir, mountPath: "/a", rootPath: root, backend: volumeBackendFilestore, dataDir: dataDir, filestoreInstance: "ml-scratch"},
+	}); err != nil {
+		t.Fatalf("failed to seed existing record: %v", err)
+	}
+
+	recordPath := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
+	var writes atomic.Int64
+	restoreLost := false
+	var seam func(context.Context, string, boxVolumeMountRecord) error
+	seam = func(ctx context.Context, boxID string, record boxVolumeMountRecord) error {
+		if writes.Add(1) == 2 {
+			if err := os.Remove(recordPath); err != nil {
+				return err
+			}
+			restoreLost = true
+			return errors.New("injected record rollback failure")
+		}
+		c.writeRecordSeam = nil
+		err := c.writeBoxVolumeMountRecord(ctx, boxID, record)
+		c.writeRecordSeam = seam
+		return err
+	}
+	c.writeRecordSeam = seam
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: boxID, OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+			{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("replay returned %v, want volume-id failure", err)
+	}
+	if !restoreLost {
+		t.Fatal("test did not reach the lost prior-record rollback failure")
+	}
+	if got := commandLog(t, umountLogPath); got != nil {
+		t.Errorf("record rollback failure allowed umount of %v while references could not be verified", got)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Errorf("active filestore root was removed after record rollback failure: %v", statErr)
+	}
+}
+
 func TestCreateRollsBackRecordWhenNativeIDResolutionFails(t *testing.T) {
 	ctx := context.Background()
 	useVolumeMountBasePath(t, t.TempDir())

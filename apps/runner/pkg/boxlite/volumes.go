@@ -1141,7 +1141,8 @@ func hasFilestoreRef(volumes []dto.VolumeDTO) bool {
 
 // rollbackVolumeMountRecord removes entries owned by a failed attempt without
 // discarding references that an existing box recorded before a replay began.
-// It then reclaims only the declared Filestore roots that remain unreferenced.
+// After a successful record rollback, it reclaims only the declared Filestore
+// roots that remain unreferenced.
 func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, volumes []dto.VolumeDTO, prior *boxVolumeMountRecord) {
 	var filestoreInstances []string
 	for _, vol := range volumes {
@@ -1167,6 +1168,7 @@ func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, vo
 	})
 	if err != nil {
 		c.logger.WarnContext(ctx, "failed to restore box volume mount record after create failure", "box", boxID, "error", err)
+		return
 	}
 
 	seen := make(map[string]bool)
