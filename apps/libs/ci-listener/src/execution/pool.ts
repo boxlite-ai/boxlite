@@ -16,9 +16,10 @@ import { AllocationChange, AllocationRow, ExecutionJournal } from './journal'
 import { EffectKind, ExecutionScope } from './model'
 import { CapacityPolicy, captureCapacity } from '../capacity'
 import { DemandUncertain, LabelDemand } from '../demand'
+import { WorkQueue } from './work-queue'
 
 export interface RunnerSession {
-  registry: Pick<GitHubRunners, 'create' | 'lookup' | 'remove'> & Partial<Pick<GitHubRunners, 'list'>>
+  registry: Pick<GitHubRunners, 'create' | 'lookup' | 'remove'> & Partial<Pick<GitHubRunners, 'list' | 'retireIdle'>>
   close(): Promise<void>
 }
 /** Hosts enforce authority again at actual Box/GitHub effects, including native onPersist. */
@@ -49,6 +50,9 @@ export interface WorkerEvent {
     | 'ci-worker-recovery-deferred'
     | 'ci-worker-released'
     | 'ci-worker-create-rejected'
+    | 'ci-worker-reserved'
+    | 'ci-worker-execution-started'
+    | 'ci-worker-execution-settled'
   level: 'info' | 'warn'
   scope: string
   binding: string
@@ -67,18 +71,69 @@ export interface WorkerEvent {
   status?: string
   exitCode?: number | null
   errorType?: string
+  queueWaitMs?: number
+  durationMs?: number
 }
 const RUNNER_BOOTSTRAP_SECONDS = 300
-const bootstrap = `set -eu
+const bootstrap = String.raw`set -eu
+export DOCKER_HOST=unix:///var/run/docker.sock
+unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+docker_pid=
+docker_log=/tmp/boxlite-ci-dockerd.log
+docker_deadline=$((SECONDS + 120))
+
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2329
+cleanup_docker() {
+  local bootstrap_status=$?
+  if ((bootstrap_status != 0)) && [[ -f "$docker_log" ]]; then
+    tail -n 60 "$docker_log" >&2 || true
+  fi
+  if [[ -n "$docker_pid" ]]; then
+    kill "$docker_pid" >/dev/null 2>&1 || true
+    wait "$docker_pid" 2>/dev/null || true
+  fi
+}
+trap 'cleanup_docker' EXIT
+
+docker_ready() {
+  local remaining=$((docker_deadline - SECONDS))
+  ((remaining > 0)) || return 1
+  ((remaining <= 5)) || remaining=5
+  timeout "$remaining" setpriv --reuid=runner --regid=docker --init-groups \
+    env HOME=/home/runner USER=runner LOGNAME=runner docker info >/dev/null 2>&1
+}
+
+if ! docker_ready; then
+  if ! command -v iptables >/dev/null 2>&1; then
+    timeout "$((docker_deadline - SECONDS))" /bin/sh -ec '
+      apt-get update -qq
+      apt-get install -y --no-install-recommends iptables
+    '
+  fi
+  dockerd --host="$DOCKER_HOST" --group=docker \
+    --storage-driver=overlay2 --dns-search=. >"$docker_log" 2>&1 &
+  docker_pid=$!
+  until docker_ready; do
+    if ((SECONDS >= docker_deadline)) || ! kill -0 "$docker_pid" 2>/dev/null; then
+      printf 'CI Docker daemon failed to become ready within 120 seconds\n' >&2
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+
 for ((attempt=0; attempt<${RUNNER_BOOTSTRAP_SECONDS}; attempt++)); do
   if [[ -f /home/runner/.boxlite-jitconfig.ready && -r /home/runner/.boxlite-jitconfig ]]; then
     ACTIONS_RUNNER_INPUT_JITCONFIG="$(cat /home/runner/.boxlite-jitconfig)"
     export ACTIONS_RUNNER_INPUT_JITCONFIG
     rm -f /home/runner/.boxlite-jitconfig /home/runner/.boxlite-jitconfig.ready
-    exec /home/runner/run.sh
+    exec setpriv --reuid=runner --regid=docker --init-groups \
+      env HOME=/home/runner USER=runner LOGNAME=runner /home/runner/run.sh
   fi
   sleep 1
 done
+printf 'CI runner JIT configuration timed out\n' >&2
 exit 1`
 
 /** One scope supplies ephemeral runner capacity; a triggering job is not a runner assignment. */
@@ -89,12 +144,16 @@ export class WorkerPool {
   private readonly jit = new Map<string, JitRegistration>()
   private readonly sessions = new Set<RunnerSession>()
   private demandAfter = 0
+  private executionAfter = 0
+  private readonly idleRetryAt = new Map<string, number>()
+  private readonly creationFailures = new Map<string, { attempts: number; retryAt: number }>()
   constructor(
     private readonly journal: ExecutionJournal,
     private readonly scopeKey: string,
     private readonly backend: (scope: ExecutionScope, lease: ExecutionLease) => Promise<PoolBackend>,
     settings: PoolSettings,
     private readonly observe: (event: WorkerEvent) => void = () => {},
+    private readonly execution?: { queue: WorkQueue; wake(): void },
   ) {
     validateWorkerResources(settings)
     if (
@@ -131,7 +190,7 @@ export class WorkerPool {
         }
         return
       }
-      await this.close()
+      if (!this.execution) await this.close()
       const backend = await this.backend(scope.scope, lease)
       const failures: unknown[] = []
       // Only a completed clean round grants a single admission attempt. Starting
@@ -148,7 +207,8 @@ export class WorkerPool {
         for (const row of page.rows) {
           const key = row.record.key
           try {
-            await this.reconcile(lease, row, backend, scope.scope, signal)
+            if (this.execution) this.dispatch(lease, row, backend, scope.scope, signal)
+            else await this.reconcile(lease, row, backend, scope.scope, signal)
           } catch (error) {
             if (
               error instanceof LeaseLost ||
@@ -189,11 +249,18 @@ export class WorkerPool {
         if (current.repository !== demand.repository || current.run !== demand.run || current.job !== demand.job)
           throw new Error('Original job identity changed at admission')
         if (!jobMatches(current, this.settings.labels)) return
+        const selection = selectRunnerLabels(current.labels, this.settings.labels)
+        if (!selection || !this.creationReady(selection.label)) return
         const allocation = await this.journal.reserve(lease, this.scopeKey, demand, {
           ...policy,
           checks: [...(policy.checks ?? []), { key: scope.activity.key, version: this.recovery.version }],
         })
-        if (allocation) await this.reconcile(lease, allocation, backend, scope.scope, signal)
+        if (allocation) {
+          if (this.execution) {
+            this.event(scope.scope, allocation, 'ci-worker-reserved', 'info')
+            this.dispatch(lease, allocation, backend, scope.scope, signal)
+          } else await this.reconcile(lease, allocation, backend, scope.scope, signal)
+        }
       }
     } finally {
       this.busy = false
@@ -213,6 +280,7 @@ export class WorkerPool {
     demands: readonly LabelDemand[],
     signal?: AbortSignal,
     verified = false,
+    queueChecks: readonly StateCheck[] = [],
   ): Promise<void> {
     lease = { ...lease }
     policy = captureCapacity(policy)
@@ -243,10 +311,14 @@ export class WorkerPool {
           signal?.aborted
         )
           throw error
-        await this.reconcileAll(lease, allocations, backend, scope.scope, signal)
+        await this.reconcileAll(lease, allocations, backend, scope.scope, signal, new Set(), false)
         throw error
       }
       const supplied = new Map<string, number>()
+      const idle = new Map<string, AllocationRow[]>()
+      const retiring = new Set<string>()
+      const active = new Set(allocations.map((row) => row.record.key))
+      for (const key of this.idleRetryAt.keys()) if (!active.has(key)) this.idleRetryAt.delete(key)
       const claims = await this.journal.claimedRunners(
         lease,
         scope.scope,
@@ -263,6 +335,15 @@ export class WorkerPool {
         if (!selection) throw new StateCorrupt()
         const runner = row.value.runner.id === null ? undefined : inventory.get(row.value.runner.id)
         if (runner && runner.name !== row.value.name) throw new StateCorrupt()
+        if (row.value.effect?.kind === 'runner-retire') {
+          if (runner?.status === 'online' && !runner.busy) {
+            supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
+            const candidates = idle.get(selection.label) ?? []
+            candidates.push(row)
+            idle.set(selection.label, candidates)
+          }
+          continue
+        }
         if (row.value.runner.phase === 'known' && (!runner || (runner.status === 'offline' && !runner.busy))) {
           if (Date.now() - (row.value.runner.registeredAt ?? row.value.createdAt) >= RUNNER_BOOTSTRAP_SECONDS * 1000) {
             allocations[index] = await this.journal.advance(lease, row.record.key, row.record.version, {
@@ -282,7 +363,19 @@ export class WorkerPool {
         if (runner && !selection.labels.every((label) => runner.labels.includes(label.toLowerCase())))
           throw new StateCorrupt()
         supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
+        if (
+          row.value.box.phase === 'none' ||
+          (runner?.status === 'online' &&
+            (row.value.delivery === 'done' || row.value.delivery === 'requested') &&
+            Date.now() - (row.value.runner.registeredAt ?? row.value.createdAt) >= RUNNER_BOOTSTRAP_SECONDS * 1000 &&
+            (this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now())
+        ) {
+          const candidates = idle.get(selection.label) ?? []
+          candidates.push(row)
+          idle.set(selection.label, candidates)
+        }
       }
+      const totalDemand = new Map<string, number>()
       const requested = new Map<
         string,
         { count: number; demand: LabelDemand; labels: readonly string[]; checks: StateCheck[] }
@@ -297,6 +390,7 @@ export class WorkerPool {
         if (demand.dirty) throw new StateCorrupt()
         const selection = selectRunnerLabels(demand.labels, this.settings.labels)
         if (!selection || !demand.queued) continue
+        totalDemand.set(selection.label, (totalDemand.get(selection.label) ?? 0) + demand.queued)
         const existing = requested.get(selection.label)
         const checks = demand.key && demand.version ? [{ key: demand.key, version: demand.version }] : []
         if ((existing?.checks.length ?? 0) + checks.length > demandBudget) {
@@ -311,18 +405,48 @@ export class WorkerPool {
         })
       }
       this.demandAfter = nextDemand ?? 0
+      const surplus: AllocationRow[] = []
+      for (const [label, candidates] of idle) {
+        let excess = Math.max(0, (supplied.get(label) ?? 0) - (totalDemand.get(label) ?? 0))
+        candidates.sort((a, b) => Number(a.value.box.phase !== 'none') - Number(b.value.box.phase !== 'none'))
+        for (const row of candidates) if (excess-- > 0) surplus.push(row)
+      }
+      const expanding =
+        [...requested].some(([label, target]) => target.count > (supplied.get(label) ?? 0)) &&
+        (await this.journal.hasCapacity(lease, this.scopeKey, policy))
       if (
         !verified &&
-        [...requested].some(([label, target]) => unknownBusy.has(label) && target.count > (supplied.get(label) ?? 0)) &&
-        (await this.journal.hasCapacity(lease, this.scopeKey, policy))
-      )
-        throw new DemandUncertain('Runner claims arrived without matching demand observations')
-      let pending = true
+        (expanding ||
+          surplus.length ||
+          retiring.size ||
+          allocations.some((row) => row.value.box.phase === 'none' && !row.value.closing))
+      ) {
+        await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
+        const missingClaims = [...requested].some(([label]) => unknownBusy.has(label))
+        throw new DemandUncertain(
+          missingClaims
+            ? 'Runner claims arrived without matching demand observations'
+            : 'Authoritative GitHub queue snapshot required before changing worker capacity',
+        )
+      }
+      if (verified)
+        for (const row of surplus) {
+          if (row.value.box.phase === 'none') {
+            allocations[allocations.indexOf(row)] = await this.journal.advance(
+              lease,
+              row.record.key,
+              row.record.version,
+              { closing: true },
+              queueChecks,
+            )
+          } else retiring.add(row.record.key)
+        }
+      let pending = verified
       while (pending) {
         pending = false
         for (const [label, target] of requested) {
           const available = supplied.get(label) ?? 0
-          if (available >= target.count) continue
+          if (available >= target.count || !this.creationReady(label)) continue
           signal?.throwIfAborted()
           await backend.admit(signal)
           const notice = {
@@ -342,14 +466,38 @@ export class WorkerPool {
             break
           }
           allocations.push(row)
+          if (this.execution) {
+            this.event(scope.scope, row, 'ci-worker-reserved', 'info')
+            this.dispatch(lease, row, backend, scope.scope, signal, false, [...(policy.checks ?? []), ...target.checks])
+          }
           supplied.set(label, available + 1)
           pending = true
         }
       }
-      await this.reconcileAll(lease, allocations, backend, scope.scope, signal)
+      const proof = (row: AllocationRow, retire: boolean): readonly StateCheck[] | undefined => {
+        if (retire) return queueChecks.length && queueChecks.length <= 100 ? queueChecks : undefined
+        if (row.value.box.phase !== 'none' || row.value.closing) return []
+        if (!verified || !row.value.supply) return undefined
+        const selection = selectRunnerLabels(row.value.supply.labels, this.settings.labels)
+        const target = selection && requested.get(selection.label)
+        return target ? [...(policy.checks ?? []), ...target.checks] : undefined
+      }
+      await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, true, proof)
     } finally {
       this.busy = false
     }
+  }
+  private creationReady(label: string): boolean {
+    return (this.creationFailures.get(label)?.retryAt ?? 0) <= Date.now()
+  }
+  private creationRejected(label: string): void {
+    const attempts = (this.creationFailures.get(label)?.attempts ?? 0) + 1
+    this.creationFailures.delete(label)
+    this.creationFailures.set(label, {
+      attempts,
+      retryAt: Date.now() + (attempts >= 3 ? 60000 : 1000 * 2 ** (attempts - 1)),
+    })
+    if (this.creationFailures.size > 4096) this.creationFailures.delete(this.creationFailures.keys().next().value!)
   }
   private async reconcileAll(
     lease: ExecutionLease,
@@ -357,12 +505,32 @@ export class WorkerPool {
     backend: PoolBackend,
     scope: ExecutionScope,
     signal?: AbortSignal,
+    retiring: ReadonlySet<string> = new Set(),
+    allowCreate = true,
+    proof?: (row: AllocationRow, retire: boolean) => readonly StateCheck[] | undefined,
   ): Promise<void> {
+    if (this.execution) {
+      for (let offset = 0; offset < allocations.length; offset++) {
+        const index = (this.executionAfter + offset) % allocations.length
+        const row = allocations[index]
+        if (!allowCreate && row.value.box.phase === 'none' && !row.value.closing) continue
+        const retire = retiring.has(row.record.key)
+        const checks = proof?.(row, retire)
+        if (proof && checks === undefined) continue
+        if (!this.dispatch(lease, row, backend, scope, signal, retire, checks)) {
+          this.executionAfter = (index + 1) % allocations.length
+          break
+        }
+        if (offset === allocations.length - 1) this.executionAfter = (index + 1) % allocations.length
+      }
+      return
+    }
     const results = await Promise.allSettled(
       allocations.map(async (row) => {
+        if (!allowCreate && row.value.box.phase === 'none' && !row.value.closing) return
         await backend.retire?.(row.value.name)
         try {
-          await this.reconcile(lease, row, backend, scope, signal)
+          await this.reconcile(lease, row, backend, scope, signal, retiring.has(row.record.key))
         } finally {
           await backend.retire?.(row.value.name)
         }
@@ -380,12 +548,52 @@ export class WorkerPool {
         })
     }
   }
+  private dispatch(
+    lease: ExecutionLease,
+    planned: AllocationRow,
+    backend: PoolBackend,
+    scope: ExecutionScope,
+    signal?: AbortSignal,
+    retireIdle = false,
+    checks: readonly StateCheck[] = [],
+  ): boolean {
+    return this.execution!.queue.enqueue(
+      planned.record.key,
+      planned.record.version + '/' + retireIdle,
+      async (queueWaitMs) => {
+        signal?.throwIfAborted()
+        const current = await this.journal.allocation(lease, planned.record.key)
+        if (!current) return
+        if (retireIdle && current.record.version !== planned.record.version) return
+        const startedAt = Date.now()
+        const timed = current.value.delivery !== 'done' || current.value.closing || retireIdle
+        if (timed) this.event(scope, current, 'ci-worker-execution-started', 'info', { queueWaitMs })
+        try {
+          await backend.retire?.(current.value.name)
+          await this.reconcile(lease, current, backend, scope, signal, retireIdle, checks)
+        } finally {
+          try {
+            await backend.retire?.(current.value.name)
+          } finally {
+            const latest = await this.journal.allocation(lease, planned.record.key)
+            if (latest?.record.version !== current.record.version) this.execution!.wake()
+            if (timed)
+              this.event(scope, latest ?? current, 'ci-worker-execution-settled', 'info', {
+                durationMs: Date.now() - startedAt,
+              })
+          }
+        }
+      },
+    )
+  }
   private async reconcile(
     lease: ExecutionLease,
     initial: AllocationRow,
     backend: PoolBackend,
     scope: ExecutionScope,
     signal?: AbortSignal,
+    retireIdle = false,
+    checks: readonly StateCheck[] = [],
   ): Promise<void> {
     let row = initial
     let selection: ReturnType<typeof selectRunnerLabels> | undefined
@@ -408,8 +616,15 @@ export class WorkerPool {
     const update = async (change: AllocationChange) => {
       row = await this.journal.advance(lease, row.record.key, row.record.version, change)
     }
-    const intent = async (kind: EffectKind, change: AllocationChange = {}) =>
-      update({ ...change, effect: { id: randomUUID(), kind } })
+    const intent = async (kind: EffectKind, change: AllocationChange = {}) => {
+      row = await this.journal.advance(
+        lease,
+        row.record.key,
+        row.record.version,
+        { ...change, effect: { id: randomUUID(), kind } },
+        kind === 'box-create' || kind === 'runner-retire' ? checks : [],
+      )
+    }
     const admit = async () => {
       try {
         await backend.admit(signal)
@@ -418,7 +633,10 @@ export class WorkerPool {
         throw error
       }
     }
-    const registry = async <T>(work: (registry: RunnerSession['registry']) => Promise<T>): Promise<T> => {
+    const registry = async <T>(
+      work: (registry: RunnerSession['registry']) => Promise<T>,
+      idleRetirement = false,
+    ): Promise<T> => {
       const session = await backend.runners(
         async (effect) => {
           if (effect.name !== row.value.name) throw new Error('Original CI runner name changed')
@@ -430,7 +648,18 @@ export class WorkerPool {
           } else {
             if (row.value.runner.phase !== 'known' || row.value.runner.id !== effect.id)
               throw new Error('Known original CI runner required for removal')
-            await intent('runner-remove')
+            if (idleRetirement) {
+              if (row.value.effect?.kind !== 'runner-retire') await intent('runner-retire')
+              else {
+                row = await this.journal.advance(
+                  lease,
+                  row.record.key,
+                  row.record.version,
+                  { effect: row.value.effect },
+                  checks,
+                )
+              }
+            } else await intent('runner-remove')
           }
         },
         signal,
@@ -463,6 +692,7 @@ export class WorkerPool {
           }
           const created = await backend.workers.create(launch)
           await update({ box: { phase: 'known', id: created.box_id } })
+          this.creationFailures.delete(selected.label)
         }
       }
       if (row.value.box.phase === 'requested') {
@@ -474,6 +704,10 @@ export class WorkerPool {
     } catch (error) {
       if (!(error instanceof ConfirmedWorkerCreationRejected)) throw error
       await this.journal.rejectCreation(lease, row.record.key, row.record.version, error.rejectedCreationEffect)
+      this.creationRejected(
+        selectRunnerLabels(row.value.supply?.labels ?? selection?.labels ?? this.settings.labels, this.settings.labels)!
+          .label,
+      )
       this.event(scope, row, 'ci-worker-create-rejected', 'warn')
       return
     }
@@ -506,6 +740,21 @@ export class WorkerPool {
         status,
         ...(exitCode === undefined ? {} : { exitCode }),
       })
+    }
+    if (!row.value.closing && retireIdle && row.value.runner.phase === 'known' && status === 'running') {
+      if ((this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now()) {
+        this.idleRetryAt.set(row.record.key, Date.now() + 60000)
+        const retired = await registry(
+          (client) =>
+            client.retireIdle?.({ id: row.value.runner.id!, name: row.value.name }, signal) ?? Promise.resolve(false),
+          true,
+        )
+        if (retired) {
+          if (row.value.effect?.kind !== 'runner-retire') throw new StateCorrupt()
+          await update({ runner: { phase: 'absent', id: row.value.runner.id }, closing: true })
+          this.idleRetryAt.delete(row.record.key)
+        }
+      }
     }
     if (!row.value.closing && status === 'running' && row.value.runner.phase === 'none') {
       if (selection === undefined) await select()
@@ -561,7 +810,7 @@ export class WorkerPool {
     row: AllocationRow,
     event: WorkerEvent['event'],
     level: WorkerEvent['level'],
-    details: Pick<WorkerEvent, 'status' | 'exitCode' | 'errorType'> = {},
+    details: Pick<WorkerEvent, 'status' | 'exitCode' | 'errorType' | 'queueWaitMs' | 'durationMs'> = {},
   ): void {
     const value = row.value
     this.observe({

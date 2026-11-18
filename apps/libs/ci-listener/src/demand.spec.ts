@@ -63,6 +63,40 @@ describe('CI label demand counters and fallback', () => {
     rmSync(directory, { recursive: true, force: true })
   })
 
+  it('invalidates an older queue fence when an authoritative scan discovers a new label counter', async () => {
+    await send('queued')
+    const [original] = await state.read(['queue-revision/1/21'])
+    await rebuildDemand(
+      state,
+      lease,
+      target,
+      await counters(),
+      [job(56, ['boxlite-4vcpu-8gbmem-20gbdisk'])],
+      await wake(),
+    )
+    const [updated] = await state.read([original.key])
+    expect(updated.version).not.toBe(original.version)
+    await expect(
+      state.commit(
+        lease,
+        [{ key: 'retirement-test', expected: null, payload: true }],
+        [{ key: original.key, version: original.version }],
+      ),
+    ).rejects.toBeInstanceOf(StateConflict)
+    expect(await state.read(['retirement-test'])).toHaveLength(0)
+    expect(
+      (await counters()).map(decodeDemand).find((row) => row.labels[0] === 'boxlite-4vcpu-8gbmem-20gbdisk')?.queued,
+    ).toBe(1)
+  })
+  it('keeps unchanged authoritative snapshots stable so pending consumers are not invalidated by polling', async () => {
+    await send('queued')
+    const prior = await counters(),
+      [revision] = await state.read(['queue-revision/1/21'])
+    await rebuildDemand(state, lease, target, prior, [job()], await wake())
+    await rebuildDemand(state, lease, target, await counters(), [job()], await wake())
+    expect((await counters())[0].version).toBe(prior[0].version)
+    expect((await state.read([revision.key]))[0].version).toBe(revision.version)
+  })
   it('keeps resource profiles separate and canonicalizes equivalent requested labels', async () => {
     await send('queued', 55, ['LINUX', 'BOXLITE'])
     await send('queued', 56, ['boxlite', 'linux'])
@@ -267,6 +301,41 @@ describe('CI label demand counters and fallback', () => {
     ])
     await expect(rebuildDemand(state, lease, target, previous, [job()], captured)).rejects.toBeInstanceOf(StateConflict)
     expect(decodeDemand((await counters())[0]).dirty).toBe(true)
+  })
+  it('rolls back missing fact batches when a counter snapshot has changed', async () => {
+    await send('queued')
+    const previous = await counters(),
+      captured = await wake()
+    await state.commit(lease, [
+      {
+        key: previous[0].key,
+        expected: previous[0].version,
+        payload: { ...(previous[0].payload as object), dirty: true } as Json,
+      },
+    ])
+    await expect(
+      rebuildDemand(
+        state,
+        lease,
+        target,
+        previous,
+        Array.from({ length: 101 }, (_, index) => job(index + 100)),
+        captured,
+      ),
+    ).rejects.toBeInstanceOf(StateConflict)
+    expect(await state.recover(lease, 1000, ['job-fact/'])).toEqual([expect.objectContaining({ key: 'job-fact/1/55' })])
+    expect(decodeDemand((await counters())[0]).dirty).toBe(true)
+  })
+  it.each([0, 100])('preserves duplicate job counting across %s other facts', async (others) => {
+    await rebuildDemand(
+      state,
+      lease,
+      target,
+      [],
+      [job(), ...Array.from({ length: others }, (_, index) => job(index + 100)), job()],
+    )
+    expect((await counters()).map(decodeDemand)).toEqual([expect.objectContaining({ queued: others + 2 })])
+    expect(await state.recover(lease, 1000, ['job-fact/'])).toHaveLength(others + 1)
   })
   it('does not resurrect a terminal job from a stale GitHub scan', async () => {
     await send('queued')

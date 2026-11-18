@@ -187,6 +187,31 @@ client on an attached main session gets 409, same as for an exec.
 | PUT    | `/v1/boxes/{box_id}/files`   | `files::upload_files`  | Upload tar, extract into box      |
 | GET    | `/v1/boxes/{box_id}/files`   | `files::download_files`| Download path as tar              |
 
+Both directions stream tar chunks between HTTP and the box backend, with
+backpressure and no intermediate archive or extraction directory on the server:
+
+```text
+PUT body -> copy_in_stream -> guest extraction
+GET body <- copy_out_stream <- guest packing
+```
+
+The archive's first entry determines upload landing, matching the runner.
+For example, `tree/a.txt` with a leading `tree/` directory entry becomes
+`/dst/a.txt` when `/dst` is missing, or `/dst/tree/a.txt` when `/dst` is a directory.
+A `./` root places the contents directly inside the destination; an empty tar
+does not change existing files or their ownership.
+
+Missing sources and refused paths return an HTTP error before response headers.
+A failure after headers terminates the body, so clients must read to
+EOF and check transport errors even after receiving a valid tar end marker.
+Dropping a transfer releases its source; blocking extraction exits when its
+bounded input channel closes.
+
+Copies are not transactional: files written before a failure remain. Guest
+ownership adjustment happens after successful extraction, so a failed upload
+can leave files owned by root. Payload buffering is bounded by chunks; extraction
+metadata still grows with the number of entries, and older peers may buffer.
+
 Downloads preserve symbolic links as link entries rather than reading their
 targets. A guest chooses the target, so dereferencing it on the host could read
 host files into the response; clients extracting the downloaded tar must apply

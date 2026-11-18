@@ -249,6 +249,42 @@ describe('CI connects panel', () => {
     expect(link?.textContent).toContain('Install app for repos')
     expect(mocks.api.deleteCiConnection).not.toHaveBeenCalled()
   })
+  it.each([
+    { total: 0, selection: 'selected', label: 'Selected repositories' },
+    { total: 126, selection: 'selected', label: 'Selected repositories' },
+    { total: 126, selection: 'all', label: 'All repositories' },
+  ])('summarizes $selection repositories with total $total in Update', async ({ total, selection, label }) => {
+    mocks.api.getCiRepositories.mockResolvedValue({
+      repositories: total ? [{ id: 21, name: 'web', private: false, owner: { id: 7, login: 'alice' } }] : [],
+      total,
+      page: 1,
+      next_page: total ? 2 : null,
+      repository_selection: selection,
+    })
+    await render()
+    await act(async () => button('Update').click())
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="dialog"]')?.textContent).toContain(`${label} · ${total}`),
+      )
+    })
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.querySelector('ul')).toBeNull()
+    expect(dialog.textContent).not.toContain('alice/web')
+    expect(dialog.querySelector('[aria-label="Next"]')).toBeNull()
+    expect(dialog.querySelector('[aria-label="Previous"]')).toBeNull()
+    expect(dialog.textContent).not.toContain('Page 1')
+    expect(button('Update connection').disabled).toBe(false)
+    await act(async () => button('Cancel').click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Repositories for alice"]')!.click())
+    await act(async () => {
+      await vi.waitFor(() => expect(document.querySelector('tbody ul')).not.toBeNull())
+    })
+    if (total) {
+      expect(document.querySelector('tbody')?.textContent).toContain('alice/web')
+      expect(document.querySelector('tbody [aria-label="Next"]')).not.toBeNull()
+    }
+  })
   it('clears completed connection guidance only after deletion succeeds', async () => {
     const id = pendingAttempt()
     mocks.selection.selectedOrganization.id = '12345678-1234-4234-8234-123456789def'

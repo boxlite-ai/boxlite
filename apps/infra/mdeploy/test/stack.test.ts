@@ -81,7 +81,22 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   runnerEnvironment: {},
   runnerSecrets: {},
   clickHouseRetentionHours: null,
+  filestoreProjects: [],
   ...overrides,
+})
+
+test('filestore projects become the final API capability', () => {
+  const { providers, seen } = bundle()
+  deployStack({
+    providers,
+    config,
+    inputs: inputs({ filestoreProjects: ['zeta-project', 'alpha-project'] }),
+  })
+
+  assert.deepEqual(seen.api.request.capabilities.at(-1), {
+    kind: 'read-filestore-instances',
+    projects: ['zeta-project', 'alpha-project'],
+  })
 })
 
 test('retention is resolved once, and only a self-hosted ClickHouse accepts one', () => {
@@ -106,7 +121,7 @@ test('retention is resolved once, and only a self-hosted ClickHouse accepts one'
 })
 
 /**
- * A fleet of the given control-plane names, shaped as `fleetFrom` shapes one.
+ * A fleet of the given control-plane names, shaped as `runnerFleetFrom` shapes one.
  *
  * The first slot keeps the resource name `Runner`; every later one is numbered.
  * Copied in that detail on purpose — a test that invented its own naming would

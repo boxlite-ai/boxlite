@@ -33,6 +33,7 @@ import type { Scope } from 'mstage/scope'
 import { windowFor } from './credential-window.ts'
 import { PULUMI_GROUP, TEARDOWN_GROUPS, rolloutGroups } from './env.ts'
 import type { DeployRequest, DeployTarget, Intent } from './deploy.ts'
+import { componentTargets, deploymentComponents, type Components, type DeployedResource } from './components.ts'
 
 /** What each intent is called while it runs, and which engine call performs it. */
 const NARRATION: Record<Intent, string> = {
@@ -41,7 +42,8 @@ const NARRATION: Record<Intent, string> = {
   remove: 'removing',
   refresh: 'reconciling the state of',
 }
-const ACT: Record<Intent, (stack: PulumiStack, options: { onOutput: (output: string) => void }) => Promise<unknown>> = {
+type OperationOptions = { onOutput?: (output: string) => void; target?: string[]; targetDependents?: boolean }
+const ACT: Record<Intent, (stack: PulumiStack, options: OperationOptions) => Promise<unknown>> = {
   deploy: (stack, options) => stack.up(options),
   diff: (stack, options) => stack.preview(options),
   remove: (stack, options) => stack.destroy(options),
@@ -99,10 +101,11 @@ const AUTOMATION = '@pulumi/pulumi/automation'
 /** The part of the Automation API this uses, in the shape it already has. */
 export type PulumiStack = {
   setAllConfig: (config: Record<string, { value: string; secret?: boolean }>) => Promise<void>
-  up: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
-  preview: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
+  up: (options: OperationOptions) => Promise<unknown>
+  preview: (options: OperationOptions) => Promise<unknown>
   destroy: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
   refresh: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
+  exportStack: () => Promise<{ deployment?: { resources?: DeployedResource[] } }>
 }
 
 export type StackFactory = (input: {
@@ -113,6 +116,7 @@ export type StackFactory = (input: {
   envVars: Record<string, string>
   /** `gs://<bucket>` — the same bucket mstage keeps this stage's store in. */
   backendUrl: string
+  selectOnly?: boolean
 }) => Promise<PulumiStack>
 
 /**
@@ -122,7 +126,7 @@ export type StackFactory = (input: {
  * lazily (`mstage/src/home.ts:44-49`): an AWS-only repository should not have to
  * carry the packages, and a test should be able to drive this without them.
  */
-const createStack: StackFactory = async ({ projectName, stackName, program, envVars, backendUrl }) => {
+const createStack: StackFactory = async ({ projectName, stackName, program, envVars, backendUrl, selectOnly }) => {
   let automation: any
   try {
     // A constant rather than a literal: see the note in `pulumi/program.ts`.
@@ -134,17 +138,19 @@ const createStack: StackFactory = async ({ projectName, stackName, program, envV
         `Install both, or pass a factory to pulumiDeploy. (${(error as Error).message})`,
     )
   }
-  return automation.LocalWorkspace.createOrSelectStack(
-    { stackName, projectName, program },
-    {
-      envVars,
-      projectSettings: { name: projectName, runtime: 'nodejs', backend: { url: backendUrl } },
-    },
-  )
+  const stack = { stackName, projectName, program }
+  const workspace = {
+    envVars,
+    projectSettings: { name: projectName, runtime: 'nodejs', backend: { url: backendUrl } },
+  }
+  return selectOnly
+    ? automation.LocalWorkspace.selectStack(stack, workspace)
+    : automation.LocalWorkspace.createOrSelectStack(stack, workspace)
 }
 
 export type PulumiDeployInput = {
   intent?: Intent
+  components?: Components
   config: Pick<MstageConfig, 'root'>
   scope: Scope
   /**
@@ -175,6 +181,7 @@ const definedOnly = (environment: NodeJS.ProcessEnv): Record<string, string> =>
 
 export const pulumiDeploy = async ({
   intent = 'deploy',
+  components = 'api+runner',
   config,
   scope,
   identity,
@@ -184,6 +191,7 @@ export const pulumiDeploy = async ({
   createStackWith = createStack,
   lookupAuthorizations,
 }: PulumiDeployInput): Promise<number> => {
+  deploymentComponents({ value: components, home: 'gcp', intent })
   /*
    * The project the stage declares, which is also what the Pulumi provider has
    * to be pointed at. Read from the one declaration rather than asked of the
@@ -219,7 +227,7 @@ export const pulumiDeploy = async ({
   const app = scope.app as string
   const stage = scope.stage as string
   log(
-    `${NARRATION[intent]} every component of ${app} stage ${stage} ` +
+    `${NARRATION[intent]} ${components === 'api+runner' ? 'every component' : components + ' only'} of ${app} stage ${stage} ` +
       `${intent === 'remove' ? 'from' : 'into'} ${project} (${scope.region}) with pulumi`,
   )
 
@@ -234,7 +242,7 @@ export const pulumiDeploy = async ({
    * for that same reason, in its own words.
    */
   const domain = environment.STACK_DOMAIN
-  if (intent === 'deploy' && domain) {
+  if (intent === 'deploy' && domain && components === 'api+runner') {
     assertAuthorizationsConverge({
       app,
       stage,
@@ -260,7 +268,21 @@ export const pulumiDeploy = async ({
      */
     envVars: environment,
     backendUrl: `gs://${state.bucket}`,
+    ...(components === 'api+runner' ? {} : { selectOnly: true }),
   })
+
+  // Exported state can contain secrets: inspect identities/labels only and never log the payload.
+  const targets =
+    components === 'api+runner'
+      ? undefined
+      : componentTargets({
+          components,
+          app,
+          stage,
+          environment,
+          resources: (await stack.exportStack()).deployment?.resources ?? [],
+        })
+  if (targets) log(`pulumi targets: ${targets.join(', ')}`)
 
   // The provider's coordinates as stack configuration rather than as
   // environment: an inline program is not a subprocess, so what the engine is
@@ -280,7 +302,7 @@ export const pulumiDeploy = async ({
     }
   }
   try {
-    await ACT[intent](stack, { onOutput })
+    await ACT[intent](stack, { onOutput, ...(targets ? { target: targets, targetDependents: false } : {}) })
     return 0
   } catch (error) {
     // The engine already printed what failed; this says which stage it was, so
@@ -329,9 +351,10 @@ export const gcpTarget = ({
     PULUMI_GROUP,
   ],
 
-  async run({ intent, stageEnvironment, log }: DeployRequest): Promise<number> {
+  async run({ intent, components, stageEnvironment, log }: DeployRequest): Promise<number> {
     return pulumiDeploy({
       intent,
+      components,
       config,
       scope,
       identity,

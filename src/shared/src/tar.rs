@@ -781,7 +781,10 @@ where
     F: Fn(&Path) -> BoxliteResult<()> + Send + Sync + 'static,
 {
     let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(COPY_CHUNKS_IN_FLIGHT);
-    let forward = tokio::spawn(async move {
+    // Dropping the unpack future must close the source and the reader channel,
+    // including when the source is idle and never wakes the forwarding task.
+    let mut forward = tokio::task::JoinSet::new();
+    forward.spawn(async move {
         while let Some(item) = stream.next().await {
             if tx.send(item).await.is_err() {
                 break;
@@ -797,12 +800,14 @@ where
     let result = unpack.await;
     // Abort the forwarder before mapping the join result, so a panicked
     // unpack task can't leak a forwarder that keeps draining the stream.
-    forward.abort();
+    forward.abort_all();
     result.map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?
 }
 
 #[cfg(test)]
 mod tests {
+    mod streaming;
+
     use super::*;
     use tempfile::TempDir;
 
