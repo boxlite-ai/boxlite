@@ -233,6 +233,21 @@ including any region split across multiple KVM slots.
 A device reset keeps plugged blocks: a reprobing Linux driver sends
 UNPLUG_ALL first. The `mem` and `hotplug` tests use the recording backend.
 
+With a hotplug capacity, `add_all` also appends `memhp_default_state=online
+memory_hotplug.online_policy=auto-movable` to the guest command line. New
+blocks come online at once. As many as the default 301% ratio allows land in
+ZONE_MOVABLE, where the guest can empty them again for unplug.
+
+`boot::tests::hotplug` runs this on KVM with the pinned kernel. It boots
+512 MiB with 1024 MiB capacity, grows by 1024 MiB and writes 640 MiB, then
+shrinks the target to 256 MiB:
+
+| Step | Guest `totalram` | Host `status()` |
+| --- | --- | --- |
+| Boot | base, about 489 MiB | target 0 |
+| `request(1024)` | base + 1024 MiB | plugged 1024 |
+| `request(256)` | base + 256 MiB | plugged 256, mapped 256 |
+
 ## Kernel loading
 
 On Linux x86_64, `boot::elf::load_elf(ram, kernel)` delegates ELF parsing and

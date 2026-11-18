@@ -34,6 +34,12 @@ use crate::{
     },
 };
 
+/// Guest parameters for hotplug memory: online new blocks at once, with the
+/// zone policy that keeps most of them removable.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const HOTPLUG_CMDLINE: &str =
+    " memhp_default_state=online memory_hotplug.online_policy=auto-movable";
+
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, disks, reporting balloon, and optional filesystem,
 /// vsock, network, console and virtio-mem. Returns the hotplug handle when
@@ -98,6 +104,9 @@ pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
             memory = Some(mem::add(chipset, &ctx, slot, hotplug)?);
             Ok(())
         })?;
+        // Online hotplugged blocks at once, as ZONE_MOVABLE where the ratio
+        // allows, so the guest can later empty them for unplug.
+        config.cmdline.push_str(HOTPLUG_CMDLINE);
     }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.

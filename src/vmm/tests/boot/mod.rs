@@ -41,6 +41,7 @@ use crate::{
 };
 
 mod balloon;
+mod hotplug;
 #[cfg(target_os = "linux")]
 #[path = "virtio_blk.rs"]
 mod virtio_blk;

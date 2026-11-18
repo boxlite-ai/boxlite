@@ -323,9 +323,14 @@ export VMM_BALLOON_INIT
 VMM_DISK_GROW_INIT ?= $(CURDIR)/target/vmm/boot/disk-grow-init
 export VMM_DISK_GROW_INIT
 
+# Freestanding virtio-mem grow and shrink scenario.
+VMM_HOTPLUG_INIT ?= $(CURDIR)/target/vmm/boot/hotplug-init
+export VMM_HOTPLUG_INIT
+
 $(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
 $(VMM_DISK_GROW_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/disk_grow_init.c
-$(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT):
+$(VMM_HOTPLUG_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/hotplug_init.c
+$(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) $(VMM_HOTPLUG_INIT):
 	@mkdir -p "$(@D)"
 	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
 
@@ -346,7 +351,7 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT)
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) $(VMM_HOTPLUG_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
 
