@@ -81,8 +81,8 @@ type SSHUsageBatch struct {
 // A failed or canceled drain may lose evidence. REST runtimes and older guests
 // return ErrUnsupported; a stopped or configured local box returns an empty batch.
 func (s *SSH) TakeUsage(ctx context.Context) (*SSHUsageBatch, error) {
-	if s == nil || s.box == nil || s.box.handle == nil {
-		return nil, &Error{Code: ErrInvalidState, Message: "box is closed"}
+	if s == nil || s.box == nil || s.box.runtime == nil {
+		return nil, errBoxClosed
 	}
 	rt := s.box.runtime
 	select {
@@ -94,10 +94,15 @@ func (s *SSH) TakeUsage(ctx context.Context) (*SSHUsageBatch, error) {
 		return nil, err
 	}
 	rt.ensureDrainRunning()
+	boxHandle, unlock, err := s.box.acquire()
+	if err != nil {
+		return nil, err
+	}
 	result := make(chan handleResult[*C.char], 1)
 	handle := registerHandleForDispatch(cgo.NewHandle(result))
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_ssh_take_usage(s.box.handle, C.cbSSHUsage(), handleToPtr(handle), &cerr)
+	code := C.boxlite_box_ssh_take_usage(boxHandle, C.cbSSHUsage(), handleToPtr(handle), &cerr)
+	unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
 		return nil, freeError(&cerr)

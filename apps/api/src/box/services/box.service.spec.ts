@@ -1166,6 +1166,7 @@ describe('BoxService inbound defaults', () => {
       { name: 'assigned-box', inboundEnabled: requested },
       { id: 'org-1' },
       {},
+      {},
     )
 
     expect(update).toHaveBeenCalledWith(

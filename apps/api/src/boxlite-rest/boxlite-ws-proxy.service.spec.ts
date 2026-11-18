@@ -160,7 +160,7 @@ describe('BoxliteWsProxyService', () => {
     )
 
     expect(autoResume.ensureReady).toHaveBeenCalledWith(
-      'box-uuid',
+      expect.objectContaining({ id: 'box-uuid' }),
       expect.objectContaining({ id: 'org-1' }),
       undefined,
       {

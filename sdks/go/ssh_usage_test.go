@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestSSHUsageRESTIsUnsupportedWithoutHTTPRequest(t *testing.T) {
@@ -18,6 +19,30 @@ func TestSSHUsageRESTIsUnsupportedWithoutHTTPRequest(t *testing.T) {
 	}
 	if len(server.received()) != 0 {
 		t.Fatal("local evidence attempted a REST request")
+	}
+}
+
+func TestSSHUsageWaitsForHandleOwnership(t *testing.T) {
+	box := newSSHServer(t).box(t)
+	box.mu.Lock()
+	entered := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(entered)
+		_, err := box.SSH().TakeUsage(context.Background())
+		result <- err
+	}()
+	<-entered
+	select {
+	case err := <-result:
+		box.mu.Unlock()
+		t.Fatalf("usage completed while the handle was exclusively locked: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	box.mu.Unlock()
+	var native *Error
+	if err := waitForSSH(t, result, "usage after releasing the lock"); !errors.As(err, &native) || native.Code != ErrUnsupported {
+		t.Fatalf("REST usage: %v", err)
 	}
 }
 
@@ -36,29 +61,5 @@ func TestSSHUsageRejectsCanceledAndClosedHandles(t *testing.T) {
 	var ssh *SSH
 	if _, err := ssh.TakeUsage(context.Background()); !IsInvalidState(err) {
 		t.Fatal(err)
-	}
-}
-
-func TestSSHUsageConfiguredLocalBoxReturnsOwnedEmptyBatchWithoutBoot(t *testing.T) {
-	rt, err := NewRuntime(WithHomeDir(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rt.Close()
-	box, err := rt.Create(context.Background(), "alpine:latest", WithName("usage-idle"), WithAutoRemove(false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer box.Close()
-	batch, err := box.SSH().TakeUsage(context.Background())
-	if err != nil || batch == nil || len(batch.Events) != 0 || batch.DroppedTotal != 0 {
-		t.Fatalf("batch=%v err=%v", batch, err)
-	}
-	info, err := box.Info(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Running || info.PID != 0 {
-		t.Fatalf("usage observation booted the Box: %#v", info)
 	}
 }

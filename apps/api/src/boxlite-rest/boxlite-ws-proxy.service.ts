@@ -156,7 +156,7 @@ export class BoxliteWsProxyService {
         return
       }
       if (box.autoResume) {
-        await this.autoResume.ensureReady(box.id, auth.organization, undefined, timing)
+        await this.autoResume.ensureReady(box, auth.organization, undefined, timing)
       }
       // Opening a WS attach is user activity,
       // so the autostop cron does not reap a session that's still connected.

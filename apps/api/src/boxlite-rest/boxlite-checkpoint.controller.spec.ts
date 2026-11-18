@@ -260,7 +260,7 @@ describe('Checkpoint REST authentication and request admission', () => {
     expect(recovery.createBox.mock.calls).toEqual(
       Array.from({ length: 3 }, () => [{ id: organizationId }, 'base', 'new-target', 2]),
     )
-    expect(waiter.waitForStarted).toHaveBeenCalledWith('target-id', organizationId, 30)
+    expect(waiter.waitForStarted).toHaveBeenCalledWith('target-id', organizationId, 30, expect.any(Function))
     expect(boxes.create).not.toHaveBeenCalled()
   })
 

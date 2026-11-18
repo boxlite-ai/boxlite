@@ -147,6 +147,36 @@ describe('Cloud readiness metrics at actual REST routes', () => {
     expect(observed.map((event) => event['event.outcome'])).toEqual(['requested', 'success'])
   })
 
+  it.each(['already started', 'waiter'])('excludes response enrichment after %s confirms readiness', async (path) => {
+    let now = 100
+    const clock = jest.spyOn(performance, 'now').mockImplementation(() => now)
+    try {
+      boxService.findOneByIdOrName.mockResolvedValue(started)
+      boxService.start.mockImplementation(async () => {
+        now += 25
+        return started
+      })
+      boxService.toBoxDto.mockImplementation(async (box) => {
+        now += 800
+        return box
+      })
+      if (path === 'waiter') {
+        boxService.create.mockImplementation(async () => {
+          now += 25
+          return { ...started, state: BoxState.CREATING }
+        })
+        const service = new BoxStateWaiterService(boxService as never, {} as never)
+        waiter.waitForStarted.mockImplementation(service.waitForStarted.bind(service))
+      }
+      const response = await post(path === 'waiter' ? '/api/v1/boxes' : '/api/v1/boxes/box-1/start')
+      expect(response.status).toBe(201)
+      expect((await response.json()).status).toBe('running')
+      expect(Number(observed[1]['operation.duration_ms'])).toBe(25)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it('records separate attempts for concurrent starts of the same Box', async () => {
     const responses = await Promise.all([post('/api/v1/boxes/box-1/start'), post('/api/v1/boxes/box-1/start')])
     expect(responses.map((response) => response.status)).toEqual([201, 201])
