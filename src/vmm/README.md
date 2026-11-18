@@ -32,6 +32,7 @@ boxlite-vmm
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
+| `hotplug` | `HotplugMemory`: the window above 4 GiB that virtio-mem plugs in 2 MiB blocks and the VMM maps in 128 MiB slots |
 | `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
@@ -170,6 +171,32 @@ The `memory` and `vm` tests and the mock backend live in `tests/` and are includ
 as unit-test modules, which
 keeps them outside the counted sources and the coverage denominator; `config`
 and `error` keep inline test modules.
+
+`GuestRam` registers and releases only the boot regions it allocated. The
+shared view can gain hotplug regions, so `GuestRam` keeps its own boot map
+instead of reading registrations back from the view.
+
+## Hotplug memory
+
+`HotplugMemory` owns the window that grows and shrinks guest RAM at runtime.
+Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
+
+- The window starts at 4 GiB, above the 32-bit MMIO hole, and is absent from
+  E820. Its capacity is a positive multiple of 128 MiB.
+- The guest plugs 2 MiB blocks. A 128 MiB slot gets its own private anonymous
+  mapping and KVM registration when its first block is plugged.
+- Unplugging the last block of a slot removes its KVM registration, publishes
+  a view without it, then drops the mapping. A held snapshot keeps the mapping
+  alive until it drops.
+- Unplugging blocks in a slot that stays mapped discards them with
+  `MADV_DONTNEED`, so the host bound is the mapped slots, not the plugged
+  blocks.
+- A failed slot map unregisters the slots that plug added and leaves every
+  block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
+  leaks a slot whose unmap fails.
+
+The virtio-mem device and host control handle that drive it arrive next; the
+`hotplug` tests use the recording backend.
 
 ## Kernel loading
 

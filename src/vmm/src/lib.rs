@@ -47,6 +47,14 @@ mod events;
     not(test),
     expect(
         dead_code,
+        reason = "The virtio-mem device that drives hotplug memory comes next."
+    )
+)]
+mod hotplug;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         reason = "Only tests use part of this API, and only Linux x86_64 adds devices yet."
     )
 )]
