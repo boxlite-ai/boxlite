@@ -2,7 +2,7 @@
 import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
-import { DataSource } from 'typeorm'
+import { DataSource, QueryFailedError } from 'typeorm'
 import { Logger } from '@nestjs/common'
 import {
   WorkerPool,
@@ -689,6 +689,22 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
         }),
       ).rejects.toThrow('division by zero')
       expect(warn).toHaveBeenCalledWith({ operation: 'listener-renewal', error: 'QueryFailedError', sqlState: '22012' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+  it('omits private error details when renewal has no valid SQLSTATE', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    try {
+      const error = new Error('private error details')
+      for (const cause of [error, Object.assign(new Error(), { code: 'private-driver-message' })]) {
+        host.report(new QueryFailedError('private query', [], cause), 'listener-renewal')
+        expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'QueryFailedError' })
+      }
+      host.report(error, 'listener-renewal')
+      expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'Error' })
+      host.report('private rejection', 'listener-renewal')
+      expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'Unknown' })
     } finally {
       warn.mockRestore()
     }
