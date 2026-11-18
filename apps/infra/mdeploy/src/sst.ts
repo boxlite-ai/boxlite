@@ -25,6 +25,7 @@ import type { Scope } from 'mstage/scope'
 import { windowFor } from './credential-window.ts'
 import { TEARDOWN_GROUPS, rolloutGroups } from './env.ts'
 import type { DeployRequest, DeployTarget, Intent } from './deploy.ts'
+import { deploymentComponents } from './components.ts'
 
 /** What each intent is called while it runs. */
 const NARRATION: Record<Intent, string> = {
@@ -75,7 +76,8 @@ export const awsTarget = ({
   // a passphrase, so there is no engine group here to add.
   environmentGroups: (intent, declaration) => (intent === 'remove' ? TEARDOWN_GROUPS : rolloutGroups(declaration)),
 
-  async run({ intent = 'deploy', stageEnvironment = {}, log }: DeployRequest): Promise<number> {
+  async run({ intent = 'deploy', components, stageEnvironment = {}, log }: DeployRequest): Promise<number> {
+    deploymentComponents({ value: components, home: 'aws', intent })
     await identity.assertUsableFor(windowFor(intent))
 
     const { env: credentials, expiresAt } = await childEnvironment({ scope, identity })

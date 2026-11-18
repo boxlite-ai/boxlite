@@ -11,6 +11,27 @@ vi.mock("../lib/native.js", () => ({
 }));
 
 describe("SimpleBox", () => {
+  test("agent namespace creates the box lazily and forwards operations", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const createAgent = vi.fn().mockResolvedValue({ id: "agent" });
+    const getAgent = vi.fn().mockResolvedValue({ id: "agent" });
+    const createBox = vi.fn().mockResolvedValue({
+      agents: { create: createAgent, get: getAgent },
+    });
+    const box = new SimpleBox({
+      image: "alpine",
+      runtime: { create: createBox } as never,
+    });
+    const agents = box.agents;
+    expect(createBox).not.toHaveBeenCalled();
+    const options = { cwd: "/work" };
+    expect(await agents.create("opencode", options)).toEqual({ id: "agent" });
+    expect(await agents.get("agent")).toEqual({ id: "agent" });
+    expect(createBox).toHaveBeenCalledOnce();
+    expect(createAgent).toHaveBeenCalledWith("opencode", options);
+    expect(getAgent).toHaveBeenCalledWith("agent");
+  });
+
   test("private tunnel passes its access policy and exposes the issued metadata", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
     const nativeTunnel = {

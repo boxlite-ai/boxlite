@@ -8,40 +8,28 @@
  * the commit being staged, its submodules have to be there, and on GCP the
  * upload goes through a CLI nothing else here installs. A release rollout
  * compiles nothing — `stack/runner-binary.ts` downloads the tarball the GitHub
- * Release already carries — so the whole job is skipped.
+ * Release already carries — so the staging steps are skipped.
  */
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
 import { load } from 'js-yaml'
+import { actionSource, workflowSource } from './workflow-source.js'
 
-const source = readFileSync(
-  fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)),
-  'utf8',
-)
-
-const workflow = load(source) as any
-
-/** The job that compiles and stages one, with its commentary removed. */
-const staging = (() => {
-  const start = source.indexOf('\n  build-runner:')
-  assert.notEqual(start, -1, 'mdeploy-all no longer stages a runner binary')
-  const rest = source.slice(start + 1)
-  const end = rest.search(/\n {2}[a-z-]+:\n/)
-  return rest
-    .slice(0, end === -1 ? undefined : end)
-    .split('\n')
-    .filter((line) => !/^\s*#/.test(line))
-    .join('\n')
-})()
+const raw = readFileSync(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url), 'utf8')
+const source = workflowSource('mdeploy-all.yml')
+const workflow = load(raw) as any
+const staging = actionSource('build-staged-runner')
+  .split('\n')
+  .filter((line) => !/^\s*#/.test(line))
+  .join('\n')
 
 test('it stages the commit it was given, with the submodules that commit names', () => {
   // `inspectCheckout` refuses a tree whose submodules are missing or ahead: a
   // commit-keyed object that held anything else would claim bytes that commit
   // does not produce, and nothing downstream could tell.
-  const moved = staging.indexOf('ref: ${{ needs.resolve.outputs.sha }}')
+  const moved = staging.indexOf('ref: ${{ inputs.sha }}')
   assert.notEqual(moved, -1, 'nothing checks out the commit being staged')
   assert.match(staging.slice(moved, moved + 200), /submodules: recursive/)
   assert.ok(moved < staging.indexOf('runner:build'), 'the build must come from that commit')
@@ -78,8 +66,8 @@ test('a release rollout compiles no runner at all', () => {
    * an mtime into the tarball.
    */
   assert.match(
-    String(workflow.jobs['build-runner'].if),
-    /needs\.plan\.outputs\.runner == 'build'/,
+    String(workflow.jobs.plan.steps.find((step: any) => step.uses === './.github/actions/build-staged-runner').if),
+    /steps\.plan\.outputs\.runner == 'build'/,
     'the staging job runs on something other than the plan saying build',
   )
   const plan = source.slice(source.indexOf('- name: Decide'))
@@ -149,19 +137,12 @@ test('a release is refused unless the tarball it will install is already attache
   assert.match(gate, /boxlite-runner-\$\{VERSION\}-linux-amd64\.tar\.gz/)
   assert.match(gate, /"\$\{tarball\}\.sha256"/, 'the checksum is not required')
 
-  /*
-   * And asked for every release rollout, not only one whose components name
-   * the runner. A version pins the whole stage: the apply exports `VERSION`
-   * whatever `components` said, `selectRunnerBinary` prefers it over the
-   * workspace version, and the fleet's boot URL becomes this release's
-   * tarball. Skipping the check for `components: api` left exactly that
-   * address unguarded.
-   */
-  assert.doesNotMatch(gate, /\$COMPONENTS/, 'the asset check is conditioned on components again')
+  // API-only updates leave Runner policies unchanged; every path installing a Runner still checks its assets.
+  assert.match(gate, /if \[ "\$COMPONENTS" = 'api' \]; then exit 0; fi/)
   const addressing = source.slice(source.indexOf('- name: Address what this deploy installs'))
   assert.match(
     addressing.slice(0, addressing.indexOf('GITHUB_ENV')),
     /elif \[ -n "\$VERSION" \]; then\n\s*(?:#[^\n]*\n\s*)*printf 'VERSION=%s/,
-    'the apply no longer exports the version the gate was widened for',
+    'the inline program still needs its explicit release version',
   )
 })

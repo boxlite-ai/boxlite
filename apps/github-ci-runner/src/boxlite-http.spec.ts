@@ -71,4 +71,87 @@ describe('standalone BoxLite HTTP authority and bounded responses', () => {
       ).rejects.toMatchObject({ status: 200, uncertain: scenario === 'upload-unacknowledged' })
     },
   )
+  describe('boxlite-http timeout-ID recovery', () => {
+    it.each([false, true])(
+      'retains only the original ID from a complete chunked 408 body (progress=%s)',
+      async (progress) => {
+        const client = await BoxLiteHttp.connect('https://box.test', 'private-key')
+        const body = JSON.stringify({
+          boxId: 'original-box',
+          message: 'private upstream content',
+          ...(progress ? { progress: { phase: 'pulling', secret: 'private progress' } } : {}),
+        })
+        global.fetch = jest.fn(
+          async () =>
+            new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(Buffer.from(body.slice(0, 16)))
+                  controller.enqueue(Buffer.from(body.slice(16)))
+                  controller.close()
+                },
+              }),
+              { status: 408 },
+            ),
+        ) as typeof fetch
+        const error = await client.request('POST', '/boxes', {}).catch((error: unknown) => error)
+        expect(error).toMatchObject({ status: 408, uncertain: true, boxId: 'original-box' })
+        expect(JSON.stringify(error)).not.toContain('private')
+        expect(String(error)).toBe('Error: BoxLite request failed')
+      },
+    )
+    it.each([
+      ['missing', null],
+      ['no ID', '{}'],
+      ['malformed', '{"boxId":'],
+      ['truncated', '{"boxId":"original-box"'],
+      ['wrong type', '{"boxId":42}'],
+      ['unsafe ID', '{"boxId":"../foreign"}'],
+      ['empty ID', '{"boxId":""}'],
+      ['long ID', JSON.stringify({ boxId: 'x'.repeat(129) })],
+      ['oversized', JSON.stringify({ boxId: 'original-box', padding: 'x'.repeat(4194304) })],
+      ['array', '[{"boxId":"original-box"}]'],
+    ])('keeps an unusable timeout body uncertain: %s', async (_scenario, body) => {
+      const client = await BoxLiteHttp.connect('https://box.test', 'private-key')
+      global.fetch = jest.fn(async () => new Response(body, { status: 408 })) as typeof fetch
+      const error = await client.request('POST', '/boxes', {}).catch((error: unknown) => error)
+      expect(error).toMatchObject({ status: 408, uncertain: true })
+      expect(error).not.toHaveProperty('boxId', expect.any(String))
+    })
+    it('rejects a stream failure after an otherwise complete-looking ID', async () => {
+      const client = await BoxLiteHttp.connect('https://box.test', 'private-key')
+      global.fetch = jest.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(Buffer.from('{"boxId":"original-box"}'))
+              },
+              pull(controller) {
+                controller.error(new Error('Private upstream stream failure'))
+              },
+            }),
+            { status: 408 },
+          ),
+      ) as typeof fetch
+      const error = await client.request('POST', '/boxes', {}).catch((error: unknown) => error)
+      expect(error).toMatchObject({ status: 408, uncertain: true })
+      expect(error).not.toHaveProperty('boxId', expect.any(String))
+      expect(String(error)).not.toContain('Private')
+    })
+    it.each([
+      ['GET', '/boxes', 408, true],
+      ['POST', '/boxes/original-box/start', 408, true],
+      ['POST', '/boxes', 503, true],
+      ['POST', '/boxes', 408, false],
+    ] as const)(
+      'ignores IDs outside the scoped create timeout: %s %s %s scoped=%s',
+      async (method, route, status, scoped) => {
+        const client = await BoxLiteHttp.connect('https://box.test', 'private-key')
+        global.fetch = jest.fn(async () => new Response('{"boxId":"foreign-box"}', { status })) as typeof fetch
+        const error = await client.request(method, route, {}, undefined, scoped).catch((error: unknown) => error)
+        expect(error).not.toHaveProperty('boxId', expect.any(String))
+      },
+    )
+  })
 })

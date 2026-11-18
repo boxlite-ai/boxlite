@@ -46,6 +46,12 @@ pub(crate) struct RestBox {
     name: Option<String>,
 }
 
+/// Retain the transport error class across tar extraction's I/O error mapping.
+struct TarDownload {
+    stream: boxlite_shared::BoxByteStream,
+    transport_fault: Arc<Mutex<Option<BoxliteError>>>,
+}
+
 impl RestBox {
     pub(crate) fn agent_client(&self) -> &ApiClient {
         &self.client
@@ -71,6 +77,82 @@ impl RestBox {
             )));
         }
         Ok(info)
+    }
+
+    fn validate_upload(opts: &CopyOptions) -> BoxliteResult<()> {
+        // The HTTP protocol cannot request per-entry skip-if-exists. Refuse
+        // before consuming input so existing guest files cannot be clobbered.
+        if !opts.overwrite {
+            return Err(BoxliteError::Unsupported(
+                "copy_into with overwrite=false is not supported over the REST backend; \
+                 the current upload protocol cannot express per-entry skip-if-exists. \
+                 Use the FFI backend or pre-check the destination before calling."
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn upload_stream(
+        &self,
+        stream: boxlite_shared::BoxByteStream,
+        container_dst: &str,
+    ) -> BoxliteResult<()> {
+        let body = reqwest::Body::wrap_stream(stream.map(|r| r.map(bytes::Bytes::from)));
+        let encoded_dst = urlencoding::encode(container_dst);
+        let path = format!("/boxes/{}/files?path={}", self.box_id_str(), encoded_dst);
+        let resp = self
+            .client
+            .authorized_request(Method::PUT, &path)
+            .await?
+            .header("Content-Type", "application/x-tar")
+            .body(body)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(map_http_body(status, &text));
+        }
+        Ok(())
+    }
+
+    async fn download_stream(&self, container_src: &str) -> BoxliteResult<TarDownload> {
+        let encoded_src = urlencoding::encode(container_src);
+        let path = format!("/boxes/{}/files?path={}", self.box_id_str(), encoded_src);
+        let resp = self
+            .client
+            .authorized_request(Method::GET, &path)
+            .await?
+            .header("Accept", "application/x-tar")
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(map_http_body(status, &text));
+        }
+
+        // Extraction converts I/O failures to Storage. Keep the original
+        // transport classification in a slot independent of task drop timing.
+        let transport_fault = Arc::new(Mutex::new(None));
+        let fault_slot = Arc::clone(&transport_fault);
+        let stream = Box::pin(resp.bytes_stream().map(move |r| {
+            r.map(|b| b.to_vec()).map_err(|e| {
+                let classified = transport_error(e);
+                let message = classified.to_string();
+                if let Ok(mut slot) = fault_slot.lock() {
+                    *slot = Some(classified);
+                }
+                io::Error::other(message)
+            })
+        }));
+        Ok(TarDownload {
+            stream,
+            transport_fault,
+        })
     }
 
     /// Wire an already-open attach WebSocket into an `Execution`.
@@ -457,26 +539,7 @@ impl BoxBackend for RestBox {
         container_dst: &str,
         opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
-
-        // Honor overwrite=false at the REST boundary. The runner's
-        // upload handler always extracts the tar over whatever's at
-        // container_dst (the test in apps/e2e/cases/test_files_io.py::
-        // test_copy_in_overwrite_false_rejects_conflict was catching
-        // 'overwrite=False replaced guest content'). The test contract
-        // explicitly accepts a raised exception OR a no-op — the
-        // invariant is "guest content must be unchanged". We can't
-        // express the per-entry "skip if dst exists" semantics over
-        // the current single-tar upload protocol, so refuse the call
-        // outright instead of silently clobbering.
-        if !opts.overwrite {
-            return Err(BoxliteError::Unsupported(
-                "copy_into with overwrite=false is not supported over the REST backend; \
-                 the current upload protocol cannot express per-entry skip-if-exists. \
-                 Use the FFI backend or pre-check the destination before calling."
-                    .into(),
-            ));
-        }
+        Self::validate_upload(&opts)?;
 
         // Stream a tar of the host source straight into the request body.
         let tar = boxlite_shared::tar::pack_stream(
@@ -488,26 +551,7 @@ impl BoxBackend for RestBox {
         )
         .await?;
 
-        let body = reqwest::Body::wrap_stream(tar.map(|r| r.map(bytes::Bytes::from)));
-
-        // Upload tar to server; its first entry tells the guest how it lands.
-        let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
-        let builder = self
-            .client
-            .authorized_request(Method::PUT, &path)
-            .await?
-            .header("Content-Type", "application/x-tar")
-            .body(body);
-
-        let resp = builder.send().await.map_err(transport_error)?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(map_http_body(status, &text));
-        }
-        Ok(())
+        self.upload_stream(tar, container_dst).await
     }
 
     async fn copy_out(
@@ -516,44 +560,10 @@ impl BoxBackend for RestBox {
         host_dst: &Path,
         _opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
-
-        // Download tar from server
-        let encoded_src = urlencoding::encode(container_src);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_src);
-        let builder = self
-            .client
-            .authorized_request(Method::GET, &path)
-            .await?
-            .header("Accept", "application/x-tar");
-
-        let resp = builder.send().await.map_err(transport_error)?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(map_http_body(status, &text));
-        }
-
-        // A severed body must stay classified as a transport fault so callers
-        // retry instead of filing a bug. `unpack_stream` flattens the byte
-        // stream's `io::Error` into its own storage message, so park the
-        // classified error in a shared slot and prefer it if the unpack then
-        // fails. A `Mutex` (not `OnceLock` + `Arc::try_unwrap`) because the
-        // forwarding task inside `unpack_stream` may still hold a clone of the
-        // slot when we read it back — we must not depend on Arc drop timing.
-        let transport_fault: Arc<Mutex<Option<BoxliteError>>> = Arc::new(Mutex::new(None));
-        let fault_slot = Arc::clone(&transport_fault);
-        let stream: boxlite_shared::BoxByteStream = Box::pin(resp.bytes_stream().map(move |r| {
-            r.map(|b| b.to_vec()).map_err(|e| {
-                let classified = transport_error(e);
-                let message = classified.to_string();
-                if let Ok(mut slot) = fault_slot.lock() {
-                    *slot = Some(classified);
-                }
-                io::Error::other(message)
-            })
-        }));
+        let TarDownload {
+            stream,
+            transport_fault,
+        } = self.download_stream(container_src).await?;
 
         let unpacked = boxlite_shared::tar::unpack_stream(
             stream,
@@ -575,6 +585,24 @@ impl BoxBackend for RestBox {
                 Err(fault.unwrap_or(unpack_err))
             }
         }
+    }
+
+    async fn copy_in_stream(
+        self: Arc<Self>,
+        stream: boxlite_shared::BoxByteStream,
+        container_dst: String,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        Self::validate_upload(&opts)?;
+        self.upload_stream(stream, &container_dst).await
+    }
+
+    async fn copy_out_stream(
+        self: Arc<Self>,
+        container_src: String,
+        _opts: CopyOptions,
+    ) -> BoxliteResult<boxlite_shared::BoxByteStream> {
+        Ok(self.download_stream(&container_src).await?.stream)
     }
 
     async fn clone_box(

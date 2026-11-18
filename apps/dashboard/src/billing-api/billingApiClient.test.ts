@@ -54,6 +54,13 @@ describe('getOrganizationPlan', () => {
         includedQuotaCents: 25000,
         quotaConsumedCents: 6250,
         quotaRemainingCents: 18750,
+        trial: {
+          startedAt: '2026-08-05T00:00:00.000Z',
+          endsAt: '2026-08-12T00:00:00.000Z',
+          conversionAmountCents: 14900,
+          currency: 'USD',
+          conversionState: 'not_attempted',
+        },
       },
     })
     const plan = await api.getOrganizationPlan('org-1')
@@ -64,6 +71,13 @@ describe('getOrganizationPlan', () => {
       includedQuotaCents: 25000,
       quotaConsumedCents: 6250,
       quotaRemainingCents: 18750,
+    })
+    expect(plan?.trial).toEqual({
+      startedAt: new Date('2026-08-05T00:00:00.000Z'),
+      endsAt: new Date('2026-08-12T00:00:00.000Z'),
+      conversionAmountCents: 14900,
+      currency: 'USD',
+      conversionState: 'not_attempted',
     })
   })
 

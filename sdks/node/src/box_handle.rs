@@ -28,7 +28,7 @@ impl JsBox {
     /// Get the agent namespace without starting the Box.
     #[napi(getter)]
     pub fn agents(&self) -> crate::agents::JsAgents {
-        crate::agents::JsAgents::new()
+        crate::agents::JsAgents::from_core(self.handle.agents())
     }
 
     /// Get the box's unique identifier (ULID).

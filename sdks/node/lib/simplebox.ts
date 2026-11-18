@@ -11,7 +11,7 @@ import type { SocketAddress as NativeSocketAddress } from "node:net";
 
 import type { CopyOptions } from "./copy.js";
 import type { ExecResult } from "./exec.js";
-import { getJsBoxlite, getNativeModule } from "./native.js";
+import { getJsBoxlite } from "./native.js";
 import type { Agents } from "./agents.js";
 import type {
   JsBox,
@@ -614,7 +614,11 @@ export class BoxTunnel {
 export class SimpleBox {
   /** Get the agent namespace without starting the Box. */
   get agents(): Agents {
-    return new (getNativeModule().Agents)();
+    return {
+      create: async (agent, options) =>
+        (await this._ensureBox()).agents.create(agent, options),
+      get: async (id) => (await this._ensureBox()).agents.get(id),
+    };
   }
 
   protected _runtime: BoxRuntime;

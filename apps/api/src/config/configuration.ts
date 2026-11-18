@@ -5,6 +5,7 @@
  */
 
 import { turnstileConfig } from './turnstile-config'
+import { parseFilestoreInstances } from './filestore-instances'
 import { checkpointConfig } from './checkpoint-config'
 import { customDomainConfig } from './custom-domain-config'
 
@@ -30,6 +31,13 @@ function requiredCount(value: string | undefined, fallback: number, name: string
     throw new Error(`${name} must be a whole number of at least 1, got "${value}"`)
   }
   return parsed
+}
+
+function databaseAcquisitionTimeout(): number {
+  const name = 'DB_POOL_CONNECTION_TIMEOUT_MS'
+  const timeout = requiredCount(process.env[name], 5000, name)
+  if (timeout > 2_147_483_647) throw new Error(`${name} exceeds the Node.js timer limit`)
+  return timeout
 }
 
 function organizationInvitationTtlSeconds(): number {
@@ -633,8 +641,7 @@ const configuration = {
       max: process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10),
       min: process.env.DB_POOL_MIN && parseInt(process.env.DB_POOL_MIN, 10),
       idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS && parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10),
-      connectionTimeoutMillis:
-        process.env.DB_POOL_CONNECTION_TIMEOUT_MS && parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 10),
+      connectionTimeoutMillis: databaseAcquisitionTimeout(),
     },
   },
   redis: {
@@ -704,6 +711,13 @@ const configuration = {
     // Which object store backs volume buckets. Must match the runner's
     // VOLUME_STORAGE_BACKEND: the API creates the bucket the runner mounts.
     storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
+    // Filestore is a GCP deployment feature. The deployment turns it off on
+    // other clouds; local APIs default to enabled so an explicit instance list
+    // keeps working without hosted deployment metadata.
+    filestoreSupported: process.env.FILESTORE_SUPPORTED !== 'false',
+    // The Filestore instances a create may select or dispatch may resolve;
+    // invalid configuration refuses to start the API.
+    filestoreInstances: parseFilestoreInstances(),
   },
   gcs: {
     // Credentials come from Application Default Credentials, never a key file,

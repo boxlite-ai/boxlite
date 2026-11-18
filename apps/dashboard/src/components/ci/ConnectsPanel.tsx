@@ -328,6 +328,7 @@ export function ConnectsPanel() {
               {editing && (
                 <CiRepositoryDetails
                   key={editing.binding_id}
+                  variant="summary"
                   api={api}
                   organization={organization}
                   context={{ kind: 'binding', id: editing.binding_id }}

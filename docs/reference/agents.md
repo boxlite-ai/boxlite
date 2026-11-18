@@ -32,9 +32,10 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Rust, the CLI and C calls on a local runtime run the operations listed in
+Rust, Python, Node.js, the CLI and C calls on a local runtime run the operations listed in
 [OpenCode on a local runtime](#opencode-on-a-local-runtime). Rust can also use
-these operations over the Box REST API. Other SDKs return unsupported errors.
+these operations over the Box REST API. Go returns unsupported errors before
+agent execution.
 
 | SDK | Error behavior |
 |---|---|
@@ -45,22 +46,23 @@ these operations over the Box REST API. Other SDKs return unsupported errors.
 | C | Invalid arguments return `InvalidArgument` synchronously without a callback; accepted async calls return `Ok` and deliver core errors through the drain callback; getters return core errors synchronously |
 | CLI | `boxlite agent …` reports the error on stderr and exits with code 1 |
 
-An unsupported event opening returns an error. Python/Node fail when `events()`
-is called; Rust fails when its future is awaited; Go returns a nil stream with
-an error. C delivers an open failure through `on_open` with a null handle.
+An unsupported event opening returns an error. Python and Node.js report it from
+`opened()` and the first read. Rust fails when its
+future is awaited; Go returns a nil stream with an error. C delivers an open
+failure through `on_open` with a null handle.
 
 Unsupported calls do not return an agent or turn. C getters clear output pointers
 on failure.
 
 ### OpenCode on a local runtime
 
-Rust, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
+Rust, Python, Node.js, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
-answers, or with `Execution` when it lacks the `opencode service` commands. Other
-SDKs return `Unsupported`. `agent.id()` returns the `ses_…`
+answers, or with `Execution` when it lacks the `opencode service` commands. Go
+returns `Unsupported`. `agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
 
 ```text
@@ -74,6 +76,26 @@ agent.send(text)          ──tunnel─► POST …/prompt, delivery queue  �
 turn.wait()               ──tunnel─► inbox, history, pending requests
 agent.events()            ──tunnel─► GET /api/event, live only
 ```
+
+Python opens events before submitting work, so the live stream can receive the
+turn's first event:
+
+```python
+agent = await box.agents.create("opencode")
+events = agent.events()
+await events.opened()
+turn = await agent.send("Summarize this project")
+result = await turn.wait()
+await events.aclose()
+```
+
+Cancelling a Python event read preserves the pending event for the next read.
+Close the stream to release it without stopping the agent or the turn. OpenCode
+does not support turn event streams and rejects non-null `data` on send.
+
+In Node.js, `agent.events()` also exposes `opened()` and `return()`. Use
+`read({ signal })` to cancel one pending read without losing its event; the next
+read receives it. Plain `next()` has no per-read cancellation.
 
 | Operation | Behavior |
 |---|---|

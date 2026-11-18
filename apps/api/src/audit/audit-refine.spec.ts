@@ -175,8 +175,9 @@ describe('audit refinement contracts', () => {
       )
       expect(audit.createLog).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'delete', targetId: 'volume-id', organizationId: 'org' }),
+        expect.any(Number),
       )
-      expect(audit.updateLog).toHaveBeenCalledWith('audit-1', expect.objectContaining({ statusCode: 204 }))
+      expect(audit.updateLog).toHaveBeenCalledWith('audit-1', expect.objectContaining({ statusCode: 204 }), 5000)
     },
   )
 
@@ -190,6 +191,7 @@ describe('audit refinement contracts', () => {
       expect(audit.updateLog).toHaveBeenCalledWith(
         'audit-1',
         expect.objectContaining({ targetId: 'volume-id', statusCode: 408 }),
+        5000,
       )
     },
   )
@@ -205,10 +207,14 @@ describe('audit refinement contracts', () => {
       expect(res.status).toBe(204)
       expect(await res.text()).toBe('')
       expect(query).toHaveBeenCalledWith(expect.stringContaining('UPDATE "domain"'), ['hello.example.test', 'org'])
-      expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'update', targetType: 'domain' }))
+      expect(audit.createLog).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'update', targetType: 'domain' }),
+        expect.any(Number),
+      )
       expect(audit.updateLog).toHaveBeenCalledWith(
         'audit-1',
         expect.objectContaining({ targetId: 'hello.example.test', statusCode: 204 }),
+        5000,
       )
     },
   )
@@ -243,8 +249,8 @@ describe('audit refinement contracts', () => {
     })
     expect(res.status).toBe(statusCode)
     await res.text()
-    expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ targetType }))
-    expect(audit.updateLog).toHaveBeenCalledWith('audit-1', expect.objectContaining({ targetId, statusCode }))
+    expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ targetType }), expect.any(Number))
+    expect(audit.updateLog).toHaveBeenCalledWith('audit-1', expect.objectContaining({ targetId, statusCode }), 5000)
     expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain('private-tunnel-secret')
   })
 

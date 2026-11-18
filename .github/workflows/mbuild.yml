@@ -1,39 +1,6 @@
-# Builds and publishes BoxLite's container images, through mbuild.
-#
-# Every decision this workflow makes is declared rather than written here: which
-# artifacts exist comes from the committed mstage.env.json, and where a stage
-# publishes comes from that stage's own declaration — which is not in the
-# checkout either, so setup-infra reads it out of the Environment this job runs
-# in. The workflow's own job is to federate an identity for the cloud that stage
-# publishes to, and to run mbuild once. Nothing about ECR, Artifact Registry or
-# a repository name is written below.
-#
-# Separate from build-apps-api-image.yml on purpose. That one still publishes
-# the API image on its own trigger and is the path in use; this is the
-# replacement being built beside it, dispatched by hand until it takes over —
-# and unlike it, this one publishes every artifact mbuild.config.json declares
-# (the API, the proxy, the collector and the registry proxy) from one commit, so
-# a deploy names one SHA rather than a selector per image.
-#
-# Every step retries, because everything here that fails transiently is a
-# registry or a token endpoint. The retries are safe rather than hopeful: mbuild
-# skips an artifact that is already published, so a second attempt resumes a
-# half-finished run instead of failing on an immutable tag it wrote itself.
+# Reusable image workflow; mdeploy-all also uses the shared steps inside its approved plan job.
 name: mbuild
 
-# Callee only.
-#
-# Nobody publishes a commit by hand any more: `mdeploy-all.yml` is the one
-# rollout path, and this is its development leg — the images a dev deploy needs
-# for a commit that no release names. A release goes through
-# `mbuild-release.yml` instead, which publishes to GHCR independently of a stage.
-#
-# That removes the reason the inputs below were an allowlist. The rule they
-# enforced — a free-text stage is a dispatcher reaching an Environment nobody
-# granted them — has no dispatcher left to guard against; the only caller is a
-# workflow in this repository whose own `stage` is a choice.
-# `apps/infra/deployment/release-safety.test.ts` checks that a workflow with no
-# dispatch is reachable only this way.
 on:
   workflow_call:
     inputs:
@@ -94,228 +61,25 @@ jobs:
 
   mbuild:
     name: ${{ inputs.command }} to ${{ inputs.stage || inputs.to }}
-    # Waits for that job only when there is one — a publish reads one stage.
     needs: [declaration]
     if: >-
       ${{ !cancelled() && !failure()
       && (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev' || (inputs.stage || inputs.to) == 'stage') }}
-    # Dev and stage permit candidate branches; other stages run from main.
-    # `!failure()` rather than a bare
-    # `needs`, because the job above is skipped for a publish and a skipped
-    # dependency would otherwise skip this one too.
     environment: ${{ inputs.stage || inputs.to }}
     runs-on: ubuntu-latest
-    env:
-      # The stage whose registry receives the image. For a promotion that is the
-      # destination; the source is reached with the same identity, which is why
-      # both stages have to live in one account.
-      TARGET_STAGE: ${{ inputs.stage || inputs.to }}
-      IMAGE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-          # This workflow's own actions, and nothing else: the tree the images
-          # are built from is checked out below, at the commit the caller named.
-          fetch-depth: 1
-
-      # The caller resolved this and proved where it came from — `mdeploy-all`'s
-      # `resolve` job turns a tag, a commit or a pull request into one SHA and
-      # refuses each shape for its own reasons. Re-resolving here would be a
-      # second answer to "which commit", and it could not reach the same one: a
-      # pull request's merge commit sits on no branch, so the branch check this
-      # step used to make would refuse exactly the ref the caller just proved.
-      # The shape is re-checked rather than trusted, the way
-      # `build-apps-api-image.yml` re-checks its own.
-      - name: Address the commit the caller resolved
-        shell: bash
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error title=tag::a caller passes one full lowercase commit SHA, already resolved (got '$TAG')"
-            exit 1
-          fi
-          printf 'IMAGE_TAG=%s\n' "$TAG" >> "$GITHUB_ENV"
-
-      # The tree the images are built from, which is the whole point of naming a
-      # commit. `mbuild publish` passes the tag to docker as a build argument
-      # and builds whatever is on disk, so a job that stayed on this workflow's
-      # own ref would tag main's bytes with somebody else's commit — and an
-      # immutable tag makes that permanent.
-      #
-      # Switching the workspace rather than checking out beside it: the build
-      # context, the lockfiles and the tooling then all come from the commit
-      # being published. What that costs is this file's own actions — a commit
-      # older than `.github/actions/setup-infra` fails on a missing action
-      # rather than on anything about the image.
-      #
-      # A publish only. A promotion builds nothing — it copies a manifest
-      # between registries — so the commit's tree buys it nothing, and moving
-      # onto a commit that predates this tooling would leave it with no mbuild
-      # to run.
-      - if: inputs.command == 'publish'
-        uses: actions/checkout@v5
+      - uses: ./.github/actions/mbuild
         with:
-          persist-credentials: false
-          ref: ${{ inputs.tag }}
-
-      # apps/infra is not one of the root workspaces and carries its own
-      # lockfile, so a root install leaves mstage, mbuild and sst unresolved and
-      # every step below fails on a missing script. The action installs there,
-      # from cache when the lockfile has not moved.
-      - uses: ./.github/actions/setup-infra
-        with:
-          # A promotion restores the source declaration as well as the
-          # destination's, because it composes both addresses.
-          stages: ${{ inputs.command == 'promote' && format('{0} {1}', inputs.from, inputs.to) || inputs.stage }}
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
+          command: ${{ inputs.command }}
+          tag: ${{ inputs.tag }}
+          stage: ${{ inputs.stage }}
+          from: ${{ inputs.from }}
+          to: ${{ inputs.to }}
           stage-config-from: ${{ needs.declaration.outputs.config }}
-
-      # docker writes the registry token to disk in cleartext, so it is written
-      # outside HOME, where a cache key or an artifact upload that globs the
-      # home directory cannot reach it and where the runner empties it when the
-      # job ends. It stays readable to every later step in the job, which is
-      # what GITHUB_ENV is for; RUNNER_TEMP is a default runner variable rather
-      # than the `runner` context, which GitHub offers to a step but not to an
-      # `env` block. The directory is created rather than left to whichever
-      # tool writes first, and only its owner may list it.
-      - name: Keep registry credentials out of HOME
-        run: |
-          set -Eeuo pipefail
-          mkdir -p -m 700 "$RUNNER_TEMP/docker"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
-
-      # --------------------------------------------------------------- 1/5
-      # Which cloud this stage publishes to. Nothing after this point knows the
-      # answer in advance, which is the point: adding a stage on another cloud
-      # is an edit to mbuild.config.json, not to this file.
-      - name: Read mbuild.config.json
-        id: config
-        working-directory: apps/infra
-        run: |
-          set -Eeuo pipefail
-          if ! output="$(npm run --silent mbuild inspect -- --stage "$TARGET_STAGE" 2>&1)"; then
-            echo "::error title=mbuild config::$output"
-            exit 1
-          fi
-          echo "$output"
-          echo "$output" >> "$GITHUB_OUTPUT"
-
-      # --------------------------------------------------------------- 2/5
-      # An identity for that cloud. GitHub's OIDC token is the only thing this
-      # runner can prove, so federation happens through the provider's own
-      # action; mstage cannot mint a session it holds no token for.
-      - name: Federate an AWS identity
-        if: steps.config.outputs.kind == 'ecr'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          # Composed from the stage's AWS_ACCOUNT_ID, not a stored role ARN: the
-          # role name is fixed per stage (bootstrap/environment.ts's
-          # githubDeployRoleName, the same name bootstrap/aws.ts creates the role
-          # under), so only the account id has to be configured. Every other
-          # deploy workflow in this repository composes it the same way.
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage || inputs.to }}-github-deploy
-          aws-region: ${{ steps.config.outputs.region }}
-          role-session-name: mbuild-${{ github.run_id }}
-
-      - name: Federate a GCP identity
-        if: steps.config.outputs.kind == 'artifact-registry'
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_IMAGE_PUBLISHER }}
-
-      # --------------------------------------------------------------- 3/5
-      # mstage is asked whether that identity is usable before anything long
-      # starts. A build that runs ten minutes and then cannot push has wasted
-      # the ten minutes and reports the wrong failure.
-      - name: Verify the session through mstage
-        working-directory: apps/infra
-        env:
-          # gh is installed on a runner but not signed in, and mstage declares
-          # github a required provider — without a token the check fails before
-          # anything else is tried.
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -Eeuo pipefail
-          for attempt in 1 2 3; do
-            if npm run --silent mstage login; then exit 0; fi
-            echo "mstage reports no usable session (attempt $attempt/3); retrying in $((attempt * 5))s"
-            sleep $((attempt * 5))
-          done
-          echo "::error title=mstage::No usable session for ${{ steps.config.outputs.kind }} after 3 attempts"
-          exit 1
-
-      # --------------------------------------------------------------- 4/5
-      # Build and push, or pull from one stage and push to the other. mbuild
-      # decides which artifacts exist, refuses a promotion whose source is
-      # missing an artifact, and blocks on scan findings.
-      #
-      # The registry login is mbuild's, not this workflow's. It logs in before
-      # it builds anything, and a promotion logs into both registries, which a
-      # step here could not do knowing only the target stage. Logging in here
-      # as well would write the same token to the same file twice.
-      - name: Build and upload
-        if: inputs.command == 'publish'
-        working-directory: apps/infra
-        run: |
-          set -Eeuo pipefail
-          # Audit failures (65) and image scan refusals (78) stop immediately.
-          # Other publication failures retain retries for transient errors.
-          for attempt in 1 2 3; do
-            npm run --silent mbuild publish -- --tag "$IMAGE_TAG" --stage "$TARGET_STAGE" && exit 0
-            status=$?
-            if [ "$status" -eq 65 ]; then
-              echo "::error title=publish::$IMAGE_TAG failed the dependency audit; details are above"
-              exit 1
-            fi
-            if [ "$status" -eq 78 ]; then
-              echo "::error title=publish::$IMAGE_TAG was refused by the image scan gate; findings are above"
-              exit 1
-            fi
-            echo "Publish failed (attempt $attempt/3, exit $status); retrying in $((attempt * 15))s"
-            sleep $((attempt * 15))
-          done
-          echo "::error title=publish::Could not publish $IMAGE_TAG to $TARGET_STAGE after 3 attempts"
-          exit 1
-
-      - name: Download and upload
-        if: inputs.command == 'promote'
-        working-directory: apps/infra
-        env:
-          FROM_STAGE: ${{ inputs.from }}
-        run: |
-          set -Eeuo pipefail
-          if [ -z "$FROM_STAGE" ] || [ -z "$TARGET_STAGE" ]; then
-            echo "::error title=promote::promote needs both from and to"
-            exit 1
-          fi
-          for attempt in 1 2 3; do
-            if npm run --silent mbuild promote -- --tag "$IMAGE_TAG" --from "$FROM_STAGE" --to "$TARGET_STAGE"; then
-              exit 0
-            fi
-            echo "Promotion failed (attempt $attempt/3); retrying in $((attempt * 15))s"
-            sleep $((attempt * 15))
-          done
-          echo "::error title=promote::Could not promote $IMAGE_TAG from $FROM_STAGE to $TARGET_STAGE after 3 attempts"
-          exit 1
-
-      # --------------------------------------------------------------- 5/5
-      # What was published, so a deploy can be dispatched against exactly these
-      # bytes without reading the log above.
-      - name: Report what was published
-        run: |
-          set -Eeuo pipefail
-          {
-            echo "### mbuild ${{ inputs.command }}"
-            echo
-            echo "| | |"
-            echo "|---|---|"
-            echo "| commit | \`$IMAGE_TAG\` |"
-            echo "| stage | \`$TARGET_STAGE\` |"
-            echo "| registry | \`${{ steps.config.outputs.kind }}\` in \`${{ steps.config.outputs.region }}\` |"
-            echo "| repository | \`${{ steps.config.outputs.repository }}\` |"
-            echo "| artifacts | \`${{ steps.config.outputs.artifacts }}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
