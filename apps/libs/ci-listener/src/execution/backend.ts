@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { CredentialSource, ListenerCredentials } from '../credentials'
+import { randomUUID } from 'node:crypto'
 import { JobNotice, WorkflowJob } from '../jobs'
 import { readRepositoryJobs } from '../job-reader'
 import { GitHubRunners, RunnerEffect, RunnerObservation } from '../runners'
@@ -152,6 +153,42 @@ export class GitHubExecutionBackend implements PoolBackend {
       (jobs) => jobs.queued(signal),
       signal,
     )
+  }
+  pending(notices: readonly JobNotice[], signal?: AbortSignal): Promise<WorkflowJob[]> {
+    return readRepositoryJobs(
+      this.scope,
+      this.credentials,
+      (signal) => this.check('admission', signal),
+      notices[0]?.repository,
+      (jobs) => jobs.pending(notices, signal),
+      signal,
+    )
+  }
+  /** The caller drains reads and owns this independent credential session's cleanup. */
+  reader() {
+    this.assertOpen()
+    const credentials = this.credentials.fork(scopeKey(this.scope) + '/snapshot/' + randomUUID())
+    return {
+      pending: (notices: readonly JobNotice[], signal?: AbortSignal) =>
+        readRepositoryJobs(
+          this.scope,
+          credentials,
+          (signal) => this.check('admission', signal),
+          notices[0]?.repository,
+          (jobs) => jobs.pending(notices, signal),
+          signal,
+        ),
+      queued: (repository: number, signal?: AbortSignal) =>
+        readRepositoryJobs(
+          this.scope,
+          credentials,
+          (signal) => this.check('admission', signal),
+          repository,
+          (jobs) => jobs.queued(signal),
+          signal,
+        ),
+      close: () => credentials.close(),
+    }
   }
   async runners(
     beforeMutation: (effect: RunnerEffect) => Promise<void>,

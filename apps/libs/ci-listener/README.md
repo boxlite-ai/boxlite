@@ -264,7 +264,13 @@ The identity and its UUID record version remain stable throughout
 a scheduler's tenure. Renewal extends only the deadline; takeover increments the
 epoch and changes both records atomically.
 
-Execution checks, renewal and acquisition lock `@owner` before reading `@lease`.
+Execution checks hold a shared `FOR SHARE` lock on `@owner` before reading
+`@lease`, so unrelated readers and allocation transactions can overlap.
+Activation, acquisition, bootstrap and renewal take the owner lock exclusively.
+An identity change therefore waits for guarded transactions to finish; renewal
+serializes deadline updates without upgrading a shared lock.
+Adapters without shared point reads fall back to the exclusive lock; SQLite
+serializes transactions at the file boundary.
 Renewal rejects an expired or replaced owner and never shortens its deadline,
 even if a caller requests a shorter TTL. A contender checks the committed deadline
 after obtaining the owner lock, so it cannot take over a live renewed lease.
@@ -428,9 +434,9 @@ R is busy -> A remains queued -> provision matching capacity for A
 Busy and closing resources retain quota until original Box absence is confirmed,
 but do not count as available supply. Unknown creation outcomes retain their
 reservation and never repeat create POST. Pending registrations count
-conservatively as starting supply. Counter versions fence reservations against
-newer observations; short quota updates serialize without holding a lock over
-GitHub or Box network calls.
+conservatively as starting supply. Repository revisions and proof deadlines fence reservations against newer
+observations; short quota updates serialize without holding a lock over GitHub
+or Box network calls.
 
 The Listener schedules scope planning and allocation execution independently.
 Each reservation enters execution as soon as it commits; neither the remaining
@@ -441,8 +447,10 @@ allocation, with original effect ordering and lease checks.
 
 ### Asynchronous allocation queue
 
-`Listener` assembles two keyed `WorkQueue` indexes. Scope keys coalesce capacity
-planning; allocation keys coalesce resource execution. One key has at most one
+`Listener` assembles four keyed `WorkQueue` indexes. Scope keys coalesce capacity
+planning, allocation keys coalesce resource execution, scope/repository/run keys
+coalesce job verification across eight lanes, and scope/repository keys coalesce
+complete queue reconciliation across two background lanes. One key has at most one
 active consumer, and changed work received during execution runs once afterward
 with its latest revision. Hosted uses the PostgreSQL journal; standalone uses the
 same protocol in SQLite. These are logical queues within the existing state
@@ -454,8 +462,10 @@ count against quota as starting supply. The queue reads each allocation again
 when execution starts, and each effect retains its lease and version checks.
 
 Queue errors back off for one and then two seconds; a third failure yields to
-periodic recovery for 60 seconds. Version conflicts reload without consuming
-that remote-failure budget. A retry reconciles the original intent: it does not
+periodic recovery for 60 seconds. Version conflicts reload without consuming that remote-failure budget. A newer
+revision received during a conflicting operation remains queued; allocation work
+revisions include their admission/retirement proof, so refreshed guards replace
+stale pending work. A retry reconciles the original intent: it does not
 repeat an uncertain create, runner registration or JIT delivery.
 
 A confirmed creation refusal returns quota immediately and delays replacement
@@ -471,10 +481,12 @@ fence. Webhook observations and changed authoritative snapshots advance it in
 the same transaction as their facts/counters. Unchanged snapshots retain their
 versions, so polling cannot continually invalidate waiting consumers. A scan
 captures the revision before HTTP and verifies it on commit, including when a
-wake was acknowledged during the request. Undispatched cancellation and queued
-idle retirement check the captured repository revisions in the same transaction
-as their closing update or original intent; a stale task
-cannot use an older queue snapshot to authorize deletion. Pending retirement
+wake was acknowledged during the request. Queued idle retirement checks captured repository revisions and proof deadlines
+in the same transaction as its original intent. The deadline is checked against
+the database clock after possible lock waits; asynchronous execution cannot reuse
+an expired snapshot. An undispatched reservation with no Box, runner, delivery
+or effect intent can return quota through allocation CAS without external cleanup.
+Issued or uncertain creation is never released on that basis. Pending retirement
 intents are reconsidered against current demand after restart.
 
 Stop or lease loss rejects new queue work and cancels cooperative requests.
@@ -492,21 +504,99 @@ older binaries do not advance the repository observation fence. This is a writer
 compatibility requirement, not a database migration or permission to clear CI
 state. Admission and cleanup continue to enforce current host authority.
 
-Before a possible expansion, cancellation of an undispatched reservation, or idle
-retirement, the controller rebuilds the current GitHub queue for every repository
-in the original runner scope. Fresh webhook counters cannot bypass this check.
-Dirty/missing counts, compensation notices and positive counts older than 30
-seconds also request repair. Newer webhook versions fence reservations and prevent
-an older rebuild from overwriting them. If any repository refresh fails or repeatedly
-races ingress, the incomplete scope snapshot cannot authorize capacity changes.
-For example, a replay says one job queued but GitHub returns no queued jobs:
-the controller creates no Box and cancels any still-undispatched reservation.
-Job queries support recovery instead of ordinary per-allocation admission.
-Custom backends without supply inventory retain job-driven fallback.
+### Notification admission and background correction
 
-Reused runner IDs do not reject job observations. Ambiguous assignment observations
-force an authoritative queue rebuild. A repository whose refresh repeatedly races
-new webhooks defers capacity changes for that runner scope; other scopes continue.
+A current notification identifies its repository, run and job. The owner pump
+fairly submits at most 32 notices at a time, grouped by scope, repository and run,
+to an independent verification queue. It does not await a submitted batch. Different
+runs in the same scope can verify concurrently, and each completion wakes planning.
+A pending run lookup does not block another run from reserving and creating workers.
+Verification tracks each notice version separately. For a run with 64 notices,
+verifying the second group of 32 preserves the first group's remaining lifetime.
+Scope planning reads accumulated evidence without awaiting job-query HTTP. Each
+planning pass uses a fixed starting cursor so it visits each scope at most once.
+Jobs in one run share its first jobs page; notified jobs missing from that page
+use direct job requests. Each repository batch owns one credential borrow and
+retains repository identity/visibility checks. Compatible backends without batch
+reads use point-job reads. Runner inventory is read after fresh verification,
+without an initial unverified inventory pass.
+
+Verified queued jobs accumulate across turns in the owner's memory, with a
+30-second lifetime starting before HTTP and a total budget of 4096 jobs. For example, 64 one-job runs
+can contribute 32 verified jobs in each of two turns; the second turn deducts
+existing starting/idle supply from the combined demand. Each repository ingress
+transaction revalidates accumulated `job-fact` versions and accepts new HTTP
+observations through the same monotonic state rules as webhooks. Recorded progress
+or completion cannot be replaced by a stale queued response. Reservations and
+create intents check the resulting repository revision and earliest proof deadline.
+An owner restart rebuilds this evidence; persisted counters remain hints.
+
+For each label, the pool subtracts workers already starting or available from
+verified demand before choosing which unissued reservations may create a Box.
+With one queued job, two unissued reservations and no started workers, only one
+reservation may create. The other waits for new demand or a complete surplus check.
+If the execution queue rejects the first reservation during retry backoff, the
+next eligible reservation for that label can use the same grant.
+
+Queued notices remain pending while their jobs are eligible. GitHub-confirmed
+non-queued jobs or complete background snapshots settle captured notice versions.
+A duplicate webhook does not add another counted job or reservation. Custom
+backends without supply inventory retain the job-driven fallback.
+
+Two background lanes coordinate complete scope scans, with at most four repository
+reads per scope and isolated credential providers. The queued status is sampled
+before the other four active statuses overlap, preserving queued-to-running transitions; a failure
+aborts and drains sibling requests before credential retirement. Each status keeps
+its pagination and completeness checks. Failed credential cleanup remains owned
+and must succeed before a replacement reader opens.
+
+Background scans retain the five-minute cadence. New dirty counter versions can
+request immediate correction; uncertain surplus requests are bounded separately.
+The existing compensation scanner continues publishing missed-job notices on
+replicas. A complete scan rebuilds persisted counts behind captured wake and
+repository revisions. Snapshot correction and admission reads share a repository
+lock while invalidating cached demand and committing the corrected counts. GitHub
+requests run outside that lock. Planning uses database time to check whether
+every repository's 30-second proof remains live. Early completions retain their
+original deadlines.
+For example, three 35-second reads start together rather than requiring a second wave.
+When scan skew exceeds the freshness window, or a scope exceeds 100 proof checks,
+`surplus-retirement-deferred` reports the reason and retries at the periodic cadence.
+New dirty versions can request correction sooner. Admission and stopped-resource
+recovery continue while physical surplus retirement waits. If both targeted
+verification and the background scan fail, the pool can still clean up stopped Boxes.
+If expansion would replace a newly busy runner without an assignment record,
+planning drops the cached snapshot and requests fresh job verification.
+Invalidated reads cannot repopulate evidence or publish a verification timestamp. This covers missed assignment notifications
+without treating an older queued observation as a new capacity grant.
+
+Each run verifier owns its credential handles. If token issuance has an unknown
+outcome, replacement readers share a 60-second retry delay for that repository
+and purpose. Many small runs increase issuance and retirement traffic. Deployment
+latency and shared GitHub rate limits still need workload measurements.
+
+Every repository in a scope must have a matching proof before physical surplus
+retirement, including cancellation of an unissued reservation. Partial positive
+evidence can add capacity but cannot establish surplus. More than 100 retirement checks defer retirement before the point lookup while bounded
+admission and stopped-resource recovery continue.
+
+```mermaid
+flowchart LR
+  W[Webhook / compensation notices] --> D[(State journal)]
+  D --> J[Job / run verification: 8 lanes]
+  J --> C[Versioned positive evidence]
+  C --> P[Scope planning: 8 lanes]
+  P --> I[Runner inventory and slot reservation]
+  I --> E[Allocation execution: 32 lanes]
+  E --> B[Create / JIT / original-resource cleanup]
+  R[Complete reconciliation: 2 lanes] --> G[Repository queue enumeration]
+  G --> D
+  D --> F[Complete revision proof]
+  F --> P
+```
+
+Reused runner IDs do not reject job observations. Ambiguous assignment observations request background queue correction. A repository whose complete scan races new observations cannot authorize physical
+retirement; independently verified positive jobs can still add capacity.
 Queue and inventory failures still allow known stopped/absent resource cleanup,
 but cannot dispatch an existing unsent reservation. A known
 runner missing from inventory or offline retains starting supply during the existing
@@ -597,9 +687,9 @@ Upgrade all readers sharing a namespace. Before rolling back, drain or explicitl
 recover pending retirement records; do not erase the journal or rewrite an
 uncertain retirement as ordinary cleanup.
 
-Only current counted scopes settle their repository notices. Retired scopes may
-recover existing resources but leave notices pending, so a replacement scope can
-admit the work even if its backend uses the job-driven fallback.
+Only current counted scopes verify and settle repository notices. Queued notices
+remain pending for future capacity releases. Retired scopes recover existing
+resources while leaving admission to the current scope.
 
 A fallback replaces or removes a malformed aggregate only after a version-fenced
 queue snapshot. Terminal job observations prevent stale scans from recreating
@@ -1037,6 +1127,7 @@ sequenceDiagram
   participant Ingress as Host webhook endpoint
   participant State as PostgreSQL or SQLite
   participant Listener as Shared Listener
+  participant Verifier as Run verification queue
   participant Boxes as Native BoxService or BoxLite REST API
   participant Runner as Official runner in CI Box
   GitHub->>GitHub: Commit, PR or release queues a matching workflow job
@@ -1052,9 +1143,12 @@ sequenceDiagram
     Listener->>GitHub: Refresh the installation catalog in the background
     Listener->>State: Publish successful scopes and settle only captured wake versions
   end
-  Listener->>Listener: Select tenant and GitHub account fairly and check capacity
-  Listener->>GitHub: Fetch actual job with scoped Actions-read credential
-  GitHub-->>Listener: Original IDs, status, assignment and complete labels
+  Listener-->>Verifier: Fairly enqueue by scope, repository and run; continue pumping
+  Verifier->>GitHub: Fetch actual jobs with scoped Actions-read credential
+  GitHub-->>Verifier: Original IDs, status, assignment and complete labels
+  Verifier->>State: Merge effective facts and retain versioned positive evidence
+  Verifier-->>Listener: Wake capacity planning as each run completes
+  Listener->>GitHub: Read current compatible runner supply
   Listener->>State: Reserve quota and journal Box-create intent
   Listener->>Boxes: Create worker with official runner image and waiting bootstrap
   Boxes-->>Listener: Original Box ID
