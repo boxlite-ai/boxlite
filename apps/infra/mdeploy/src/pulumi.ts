@@ -1,3 +1,4 @@
+import { deployedReleases } from './deployed-releases.ts'
 /** Pulumi drives both clouds; configuration and deployment state share the stage's own cloud. */
 
 import { isDeepStrictEqual } from 'node:util'
@@ -265,21 +266,27 @@ export const pulumiDeploy = async ({
     })
   }
 
+  let resources: DeployedResource[] = []
   const stack = await createStackWith({
     projectName: app,
     stackName: stage,
-    program:
-      scope.home === 'aws'
-        ? awsProgram({ app, stage, region: scope.region, protectedStage: scope.protect, environment, cwd: config.root })
-        : gcpProgram({
-            app,
-            stage,
-            region: scope.region,
-            project: project!,
-            zone: scope.zone,
-            environment,
-            cwd: config.root,
-          }),
+    program: async () => {
+      const retained =
+        components === 'api+runner'
+          ? undefined
+          : deployedReleases({ components, home: scope.home, app, stage, resources })
+      const common = {
+        app,
+        stage,
+        region: scope.region,
+        environment: { ...environment, ...retained?.releaseEnvironment },
+        cwd: config.root,
+        retainedImages: retained?.retainedImages,
+      }
+      return scope.home === 'aws'
+        ? awsProgram({ ...common, protectedStage: scope.protect })()
+        : gcpProgram({ ...common, project: project!, zone: scope.zone })()
+    },
     /*
      * The whole stage environment, not only the credentials and the passphrase.
      * The engine spawns a provider plugin per provider, and those are the
@@ -291,7 +298,8 @@ export const pulumiDeploy = async ({
     ...(components === 'api+runner' ? {} : { selectOnly: true }),
   })
 
-  // Exported state can contain secrets: inspect identities/labels only and never log the payload.
+  // Keep exported inputs in memory for the inline program. They can contain secrets.
+  if (components !== 'api+runner') resources = (await stack.exportStack()).deployment?.resources ?? []
   const targets =
     components === 'api+runner'
       ? undefined
@@ -301,7 +309,7 @@ export const pulumiDeploy = async ({
           app,
           stage,
           environment,
-          resources: (await stack.exportStack()).deployment?.resources ?? [],
+          resources,
         })
   if (targets) log(`pulumi targets: ${targets.join(', ')}`)
 

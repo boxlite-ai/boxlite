@@ -127,6 +127,7 @@ export type RunnerRequest = {
    * read on restore. Null on a cloud that keeps none (see `CheckpointArchives`).
    */
   checkpointBucket: $util.Output<string> | null
+  migrationArchivePrefix?: $util.Input<string>
   /** Values every host reads. */
   environment: Record<string, $util.Input<string>>
   /** Names it reads by reference: its own registration key, and the admin key. */

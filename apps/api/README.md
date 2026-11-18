@@ -1502,7 +1502,7 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 | `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                              |
 | `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
 | `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
-| `CI_SCHEDULER_GENERATION`                                        | Positive deployment generation; mdeploy uses `GITHUB_RUN_ID` or an explicit per-deploy override, never process startup time    |
+| `CI_SCHEDULER_GENERATION`                                        | API deployment generation from `GITHUB_RUN_ID` or an explicit override. Runner-only releases keep the deployed value.           |
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. Use the
 `boxlite` workflow label for configured defaults, or

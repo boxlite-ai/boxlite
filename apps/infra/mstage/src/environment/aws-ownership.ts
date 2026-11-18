@@ -1,3 +1,4 @@
+import { pulumiCheckpointKey } from './pulumi-state.ts'
 import { randomUUID, createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
@@ -10,6 +11,7 @@ export type AwsOwner = {
   phase: 'legacy' | 'adopting' | 'native'
   sourceDigests: Record<string, string>
   nativeUpdateStarted: boolean
+  nativeCheckpointDigest?: string | null
 }
 type Scope = { app: string; stage: string }
 export type OwnershipAction = 'native' | 'legacy' | 'migration'
@@ -39,6 +41,8 @@ const parseOwner = (value: any): AwsOwner => {
     !['legacy', 'adopting', 'native'].includes(value.phase) ||
     typeof value.app !== 'string' ||
     typeof value.nativeUpdateStarted !== 'boolean' ||
+    (value.nativeCheckpointDigest != null &&
+      (typeof value.nativeCheckpointDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.nativeCheckpointDigest))) ||
     !value.sourceDigests ||
     typeof value.sourceDigests !== 'object' ||
     Array.isArray(value.sourceDigests) ||
@@ -123,6 +127,53 @@ export const awsOwnership = ({
     if (!response.ETag) throw new Error('S3 ownership read returned no ETag')
     const raw = await response.Body.transformToString()
     return { value: JSON.parse(raw), raw, etag: response.ETag as string }
+  }
+  const digestOf = (raw: string) => createHash('sha256').update(raw).digest('hex')
+  const snapshotKey = (stage: string, digest: string) => `migration/aws/${stage}/native-checkpoints/${digest}.json`
+  const saveCheckpoint = async (Bucket: string, scope: Scope) => {
+    const checkpoint = await read(Bucket, pulumiCheckpointKey(scope.app, scope.stage))
+    if (!checkpoint) return null
+    const digest = digestOf(checkpoint.raw)
+    const Key = snapshotKey(scope.stage, digest)
+    try {
+      await s3.send(
+        new PutObjectCommand({ Bucket, Key, Body: checkpoint.raw, ContentType: 'application/json', IfNoneMatch: '*' }),
+      )
+    } catch (error: any) {
+      if (error?.name !== 'PreconditionFailed' || (await read(Bucket, Key))?.raw !== checkpoint.raw) throw error
+    }
+    return digest
+  }
+  const restoreCheckpoint = async (
+    Bucket: string,
+    scope: Scope,
+    digest: string | null | undefined,
+    signal: AbortSignal,
+  ) => {
+    if (digest === undefined)
+      throw new Error(
+        'Adoption has no pre-import checkpoint record; reconcile the saved backup before returning ownership',
+      )
+    const Key = pulumiCheckpointKey(scope.app, scope.stage)
+    const current = await read(Bucket, Key)
+    if (digest === null) {
+      signal.throwIfAborted()
+      if (current) await s3.send(new DeleteObjectCommand({ Bucket, Key, IfMatch: current.etag }))
+      return
+    }
+    if (current && digestOf(current.raw) === digest) return
+    const saved = await read(Bucket, snapshotKey(scope.stage, digest))
+    if (!saved || digestOf(saved.raw) !== digest) throw new Error('Pre-import checkpoint backup is missing or changed')
+    signal.throwIfAborted()
+    await s3.send(
+      new PutObjectCommand({
+        Bucket,
+        Key,
+        Body: saved.raw,
+        ContentType: 'application/json',
+        ...(current ? { IfMatch: current.etag } : { IfNoneMatch: '*' }),
+      }),
+    )
   }
   const writeOwner = async (Bucket: string, Key: string, owner: AwsOwner, etag?: string) => {
     const result = await s3.send(
@@ -279,6 +330,8 @@ export const awsOwnership = ({
             throw new Error('A fresh native stage has no legacy migration to roll back')
           if (current.nativeUpdateStarted)
             throw new Error('Native update has started; use forward repair instead of legacy rollback')
+          await restoreCheckpoint(bucket, scope, current.nativeCheckpointDigest, signal)
+          signal.throwIfAborted()
           await writeOwner(bucket, ownerKey, { ...current, phase: 'legacy' }, record!.etag)
           return
         }
@@ -295,6 +348,8 @@ export const awsOwnership = ({
             nativeUpdateStarted: false,
           })
           if (!Object.keys(sourceDigests).length) throw new Error('Adoption requires frozen legacy checkpoint digests')
+          owner.nativeCheckpointDigest = await saveCheckpoint(bucket, scope)
+          signal.throwIfAborted()
           await writeOwner(bucket, ownerKey, owner, record?.etag)
           return
         }

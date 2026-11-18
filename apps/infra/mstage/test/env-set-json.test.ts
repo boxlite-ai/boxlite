@@ -73,7 +73,7 @@ const harness = ({
                 return {}
               }
               if (command.input.Key !== 'secret/a/dev.json') throw notFound('NoSuchKey')
-              return { Body: { transformToByteArray: async () => sealed(stored) } }
+              return { ETag: '"fixture"', Body: { transformToByteArray: async () => sealed(stored) } }
             },
           },
           ssm: {

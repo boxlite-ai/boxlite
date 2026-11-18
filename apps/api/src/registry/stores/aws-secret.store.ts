@@ -88,7 +88,6 @@ export class AwsSecretManagerStore implements SecretStore {
         new DeleteSecretCommand({
           SecretId: arn,
           RecoveryWindowInDays: 7,
-          ForceDeleteWithoutRecovery: false,
         }),
       )
     } catch (error) {

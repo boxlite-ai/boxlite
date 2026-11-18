@@ -91,3 +91,124 @@ test('migration refuses invalid actions and unconfirmed mutations before resolvi
     await assert.rejects(migrateAws({ argv: ['--action', action], cwd: '/missing' }), /require --confirm/)
   }
 })
+
+test('migration CLI snapshots private bytes and routes state-only operations through the ownership guard', async (t) => {
+  const { mkdtemp, readFile, stat, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const { writeStage } = await import('mstage/env')
+  const directory = await mkdtemp(join(tmpdir(), 'aws-adoption-test-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const legacy = Buffer.from(JSON.stringify({ checkpoint: { latest: { resources: [] } } }))
+  const digest = createHash('sha256').update(legacy).digest('hex')
+  const signal = new AbortController().signal
+  const events: string[] = []
+  let sealed: Buffer | null = null
+  let native: Buffer | null = null
+  let phase = 'legacy'
+  const backend = {
+    home: 'aws',
+    passphrase: async () => Buffer.alloc(32, 1),
+    read: async () => sealed,
+    write: async (input: { sealed: Buffer }) => {
+      sealed = input.sealed
+    },
+    state: {
+      readLegacyCheckpoint: async (scope: { app: string }) => (scope.app === 'boxlite' ? legacy : null),
+      readCheckpoint: async () => native,
+    },
+    ownership: {
+      inspect: async () => ({ phase, sourceDigests: { boxlite: digest } }),
+      transition: async (request: any) => {
+        await request.validate?.(signal)
+        events.push(request.action)
+        phase =
+          ({ begin: 'adopting', cutover: 'native', rollback: 'legacy' } as Record<string, string>)[request.action] ??
+          phase
+      },
+      run: async (scope: any, work: any) => {
+        assert.equal(scope.action, 'migration')
+        await work({ signal })
+      },
+    },
+  }
+  await writeStage({
+    app,
+    stage,
+    clients: backend as any,
+    values: {
+      PULUMI_CONFIG_PASSPHRASE: 'fixture',
+      AWS_PULUMI_MIGRATION: JSON.stringify({ boxlite: digest }),
+      AWS_DATABASE_PASSWORD_SECRET_ARN: 'fixture-db',
+      AWS_CACHE_PASSWORD_SECRET_ARN: 'fixture-cache',
+      AWS_VOLUME_ACCESS_ROLE_NAME: 'fixture-volume',
+    },
+  })
+  const environment = { MSTAGE_CONFIG: fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url)) }
+  const cwd = fileURLToPath(new URL('../../', import.meta.url))
+  const run = (action: string, ...args: string[]) =>
+    migrateAws({
+      cwd,
+      argv: ['--stage', stage, '--action', action, ...args],
+      environment,
+      log: () => {},
+      resolveHomeWith: async () =>
+        ({
+          backend,
+          stateBucket: async () => 'stage-fixture',
+          identity: { assertUsableFor: async () => {}, childEnvironment: async () => ({ env: {} }) },
+        }) as any,
+      createStackWith: async (options) => {
+        assert.equal(options.backendUrl, 's3://stage-fixture')
+        return {
+          setAllConfig: async (config: any) => assert.ok(config['aws:region'].value),
+          importStack: async (document: any) => {
+            assert.equal(options.selectOnly, false)
+            native = Buffer.from(JSON.stringify({ checkpoint: { latest: document.deployment } }))
+            events.push('import')
+          },
+          refresh: async () => {
+            events.push('refresh')
+          },
+          preview: async ({ onEvent }: any) => {
+            events.push('preview')
+            onEvent({ summaryEvent: {} })
+          },
+        } as any
+      },
+    })
+  assert.equal(await run('status'), 0)
+  await assert.rejects(run('begin', '--confirm'), /writers-settled/)
+  await assert.rejects(run('unlock', '--confirm'), /writers-settled/)
+  await assert.rejects(run('snapshot'), /requires --file/)
+  const file = join(directory, 'backup.json')
+  await run('snapshot', '--file', file)
+  assert.equal((await stat(file)).mode & 0o777, 0o600)
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).legacy.boxlite, legacy.toString('base64'))
+  await assert.rejects(run('snapshot', '--file', file), /EEXIST/)
+  await run('begin', '--writers-settled', '--confirm')
+  await assert.rejects(run('import', '--confirm'), /requires --file/)
+  const document = {
+    version: 3,
+    deployment: {
+      resources: [
+        {
+          type: 'aws:rds/instance:Instance',
+          urn: prefix + 'aws:rds/instance:Instance::Database',
+          id: 'db-imported',
+          custom: true,
+        },
+      ],
+    },
+  }
+  const imported = join(directory, 'import.json')
+  await writeFile(imported, JSON.stringify(document))
+  await run('import', '--confirm', '--file', imported)
+  await run('refresh', '--confirm')
+  await run('preview')
+  await run('cutover', '--confirm')
+  await run('rollback', '--confirm')
+  await run('unlock', '--writers-settled', '--confirm')
+  assert.deepEqual(events, ['begin', 'import', 'refresh', 'preview', 'preview', 'cutover', 'rollback', 'unlock'])
+})

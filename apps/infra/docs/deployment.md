@@ -84,6 +84,9 @@ gh workflow run mdeploy-all.yml --ref main -f stage=dev -f ref='<full-main-sha>'
 ```
 
 For environment changes alone, reuse the deployed component's ref; its existing env group remains the configuration source.
+
+On AWS and GCP, an API release changes the API image and retains the deployed Runner binary and other images. A Runner release retains all deployed container images. A scoped release requires an existing stack whose deployed versions can be read from its checkpoint.
+
 The internal CLI receives `--components` from the workflow; no separate public deployment workflow is introduced.
 
 Image releases are published to GHCR through [mbuild-release](../../../.github/workflows/mbuild-release.yml).

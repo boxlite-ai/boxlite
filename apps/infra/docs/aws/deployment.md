@@ -47,7 +47,9 @@ Historical workflows must be fenced through IAM as well as the checked-in owners
 | `api+runner` | Full infrastructure graph |
 
 Scoped deployments require existing workloads and an unchanged fleet identity and attachment inventory.
-They first refresh and preview the complete graph, rejecting shared changes before applying selected targets.
+An API-only release keeps the deployed proxy, collector, registry proxy and Runner versions. A Runner-only release keeps all four deployed container images.
+
+Both scopes refresh and preview the complete graph before applying selected targets. A missing deployed version or a shared resource change requires a full deployment.
 
 Use shared [CI](../deployment.md#deploy-through-github-actions) or [local commands](../deployment.md#deploy-an-existing-stack).
 Native workflows assume the stage's `AWS_PULUMI_DEPLOY_ROLE_ARN`.
@@ -73,6 +75,6 @@ Disk expansion defaults to enabled; set `RUNNER_DISK_EXPANSION_ENABLED=false` to
 AWS customer-owned domains remain deferred; platform wildcard domains are available.
 
 CloudWatch extracts disk failure and critical-pressure metrics from API JSON logs into an app/stage namespace.
-The inherited unreachable-event producer needs separate follow-up; see [security](security.md).
+The Runner reachability filter consumes API health-check events. See [security](security.md).
 
 Sources: [native entrypoint](../../mdeploy/pulumi/aws-program.ts), [bootstrap](../../bootstrap/aws/README.md), [migration guards](../../mdeploy/src/aws-adoption.ts).

@@ -73,7 +73,7 @@ const CONTAINER_ROLES = ['api', 'proxy', 'otel-collector'] as const
  * publish rather than an address this file could invent.
  */
 const imageFor = (
-  images: Images,
+  images: Record<string, $util.Input<string>>,
   component: 'api' | 'proxy' | 'otel-collector' | 'registry-proxy',
 ): $util.Input<string> => {
   const address = images[component]
@@ -86,8 +86,9 @@ export type StackInputs = {
   /** `CLICKHOUSE_RETENTION_HOURS` from the stage, or null when it set none. */
   clickHouseRetentionHours: number | null
   stage: string
-  /** The commit being deployed. Every container runs the same one. */
+  /** The requested image tag and the deployed addresses retained for unselected workloads. */
   tag: string
+  retainedImages?: Record<string, string>
   /** The stage's own domain. The control plane answers at `api.<domain>`. */
   domain: string
   /** The zone `*.<proxyDomain>` is written into. Every box is a name under it. */
@@ -273,7 +274,7 @@ export const deployStack = ({
   config: DeployConfig
   inputs: StackInputs
 }): StackOutputs => {
-  const images = providers.images({ tag: inputs.tag })
+  const images = { ...providers.images({ tag: inputs.tag }), ...inputs.retainedImages }
 
   const network = providers.network({ internetEgress: inputs.internetEgress })
   const storage: Storage = providers.storage(config.storage)
@@ -605,6 +606,7 @@ export const deployStack = ({
     otlpUrl: collector.otlpUrl,
     registryProxyHost,
     checkpointBucket: storage.checkpoints.active ? storage.checkpoints.bucket : null,
+    migrationArchivePrefix: inputs.apiEnvironment.BOX_MIGRATION_ARCHIVE_PREFIX,
     environment: runnerEnvironment,
     secrets: inputs.runnerSecrets,
   })
