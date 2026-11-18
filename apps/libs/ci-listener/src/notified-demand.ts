@@ -158,10 +158,21 @@ export class NotifiedDemand {
     return result
   }
   async invalidate(installation: number, repository: number): Promise<void>
-  async invalidate<T>(installation: number, repository: number, correction: () => Promise<T>): Promise<T>
-  async invalidate<T>(installation: number, repository: number, correction?: () => Promise<T>): Promise<T | void> {
+  async invalidate<T>(
+    installation: number,
+    repository: number,
+    correction: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>
+  async invalidate<T>(
+    installation: number,
+    repository: number,
+    correction?: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T | void> {
     const key = `${installation}/${repository}`
     return this.serialize(key, async () => {
+      signal?.throwIfAborted()
       const generation = this.generations.get(key)
       if (generation) generation.epoch++
       this.jobs.delete(key)

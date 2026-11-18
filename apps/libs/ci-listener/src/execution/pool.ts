@@ -145,6 +145,7 @@ export class WorkerPool {
   private readonly sessions = new Set<RunnerSession>()
   private demandAfter = 0
   private executionAfter = 0
+  private readonly acceptedCreates = new Set<string>()
   private readonly idleRetryAt = new Map<string, number>()
   // Invalidate cached demand once for each newly unclaimed busy runner.
   private readonly busyRefreshes = new Set<number>()
@@ -291,6 +292,10 @@ export class WorkerPool {
     this.busy = true
     try {
       signal?.throwIfAborted()
+      // An accepted create may commit and leave the queue while journal pages are being read.
+      // Count its pre-read grant if the page still shows an unissued reservation.
+      for (const key of this.acceptedCreates) if (!this.execution?.queue.revision(key)) this.acceptedCreates.delete(key)
+      const outstanding = new Set(this.acceptedCreates)
       const scope = await this.journal.scope(lease, this.scopeKey)
       if (!scope.active && demands.every((demand) => demand.queued === 0 && !demand.dirty)) return
       const backend = await this.backend(scope.scope, lease)
@@ -502,10 +507,16 @@ export class WorkerPool {
       const creationBudget = new Map<string, number>()
       for (const [label, target] of requested)
         creationBudget.set(label, Math.max(0, target.count - ((supplied.get(label) ?? 0) - (unissued.get(label) ?? 0))))
-      // Only accepted work consumes a grant; both dispatch passes reuse that selection.
       const creationChecks = new Map<string, StateCheck[]>()
-      if (verified)
-        for (const row of allocations) {
+      if (verified) {
+        // Reuse outstanding grants first, even when an earlier reservation's backoff just expired.
+        const candidates = outstanding.size
+          ? [
+              ...allocations.filter((row) => outstanding.has(row.record.key)),
+              ...allocations.filter((row) => !outstanding.has(row.record.key)),
+            ]
+          : allocations
+        for (const row of candidates) {
           if (row.value.box.phase !== 'none' || row.value.closing || (this.execution && !row.value.supply)) continue
           const label = unissuedLabels.get(row.record.key)
           if (!label) continue
@@ -513,10 +524,11 @@ export class WorkerPool {
           const remaining = creationBudget.get(label) ?? 0
           if (!target || remaining <= 0) continue
           const checks = [...(policy.checks ?? []), ...target.checks]
-          if (this.execution && !this.dispatch(lease, row, backend, scope.scope, signal, false, checks)) continue
-          creationChecks.set(row.record.key, checks)
-          creationBudget.set(label, remaining - 1)
+          const accepted = !this.execution || this.dispatch(lease, row, backend, scope.scope, signal, false, checks)
+          if (accepted) creationChecks.set(row.record.key, checks)
+          if (accepted || outstanding.has(row.record.key)) creationBudget.set(label, remaining - 1)
         }
+      }
       const proof = (row: AllocationRow, retire: boolean): readonly StateCheck[] | undefined => {
         if (retire)
           return queueChecks.length <= 100 && (queueChecks.length || !this.execution) ? queueChecks : undefined
@@ -558,7 +570,17 @@ export class WorkerPool {
           pending = true
         }
       }
-      await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, true, proof)
+      await this.reconcileAll(
+        lease,
+        allocations,
+        backend,
+        scope.scope,
+        signal,
+        retiring,
+        true,
+        proof,
+        verified === true && queueChecks.length > 0 && queueChecks.length <= 100,
+      )
     } finally {
       this.busy = false
     }
@@ -584,6 +606,7 @@ export class WorkerPool {
     retiring: ReadonlySet<string> = new Set(),
     allowCreate = true,
     proof?: (row: AllocationRow, retire: boolean) => readonly StateCheck[] | undefined,
+    completePlan = false,
   ): Promise<void> {
     if (this.execution) {
       for (let offset = 0; offset < allocations.length; offset++) {
@@ -593,7 +616,7 @@ export class WorkerPool {
         const retire = retiring.has(row.record.key)
         const checks = proof?.(row, retire)
         if (proof && checks === undefined) continue
-        if (!this.dispatch(lease, row, backend, scope, signal, retire, checks)) {
+        if (!this.dispatch(lease, row, backend, scope, signal, retire, checks, completePlan)) {
           this.executionAfter = (index + 1) % allocations.length
           break
         }
@@ -635,10 +658,15 @@ export class WorkerPool {
     signal?: AbortSignal,
     retireIdle = false,
     checks: readonly StateCheck[] = [],
+    completePlan = false,
   ): boolean {
-    return this.execution!.queue.enqueue(
-      planned.record.key,
-      planned.record.version + '/' + retireIdle + '/' + JSON.stringify(checks),
+    const queue = this.execution!.queue
+    const key = planned.record.key
+    const retirement = planned.record.version + '/retire/'
+    if (!completePlan && !retireIdle && queue.revision(key)?.startsWith(retirement)) return true
+    const accepted = queue.enqueue(
+      key,
+      (retireIdle ? retirement : planned.record.version + '/recover/') + JSON.stringify(checks),
       async (queueWaitMs) => {
         signal?.throwIfAborted()
         const current = await this.journal.allocation(lease, planned.record.key)
@@ -664,6 +692,15 @@ export class WorkerPool {
         }
       },
     )
+    if (
+      accepted &&
+      backend.inventory &&
+      planned.value.supply &&
+      planned.value.box.phase === 'none' &&
+      !planned.value.closing
+    )
+      this.acceptedCreates.add(key)
+    return accepted
   }
   private async reconcile(
     lease: ExecutionLease,

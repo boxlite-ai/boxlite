@@ -8,6 +8,8 @@ import { join } from 'node:path'
 import { ExecutionJournal } from './execution/journal'
 import { ExecutionScope, decodeScope, scopeKey } from './execution/model'
 import { Listener, ListenerBackend, ListenerHost } from './listener'
+import { NotifiedDemand } from './notified-demand'
+import * as demandState from './demand'
 import { JitRegistration } from './runners'
 import { WorkerPool } from './execution/pool'
 import { WorkQueue } from './execution/work-queue'
@@ -43,14 +45,14 @@ describe('CI shared Listener orchestration', () => {
     abort: AbortController,
     publishScan: jest.Mock<Promise<void>, [ScanClaim, readonly WorkflowJob[]]>
   const settings = { image: 'runner-test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] }
-  const notification = (job = 55, installation = 1, account = 7, repository = 21, run = 33) => {
+  const notification = (job = 55, installation = 1, account = 7, repository = 21, run = 33, labels = ['boxlite']) => {
     const secret = Buffer.alloc(32, 1),
       raw = Buffer.from(
         JSON.stringify({
           action: 'queued',
           installation: { id: installation },
           repository: { id: repository, owner: { id: account } },
-          workflow_job: { id: job, run_id: run, status: 'queued', labels: ['boxlite'] },
+          workflow_job: { id: job, run_id: run, status: 'queued', labels },
         }),
       )
     return verifyWebhook(
@@ -542,6 +544,194 @@ describe('CI shared Listener orchestration', () => {
     expect(requests).toHaveLength(2)
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
+  it('discards a delayed scope scan after observing a newly busy runner', async () => {
+    const journal = new ExecutionJournal(state)
+    await journal.initialize()
+    const owner = (await state.acquire('initial-owner', 300000))!
+    const key = await journal.define(owner, scope)
+    const pool = new WorkerPool(journal, key, async () => backend, settings)
+    const notice = { repository: 21, run: 33, job: 55 }
+    await pool.tick(owner, testCapacity({ account: 2, tenant: 2 }), notice)
+    await pool.close()
+    const [worker] = (await journal.workers(owner, key)).rows
+    await db.transaction(namespace, async (tx) => {
+      const expiry = (await tx.get('@lease', true))!
+      await tx.put({ ...expiry, version: randomUUID(), payload: { until: 0 } }, expiry.version)
+    })
+    const invalidation = deferred(),
+      settled = deferred()
+    const job: WorkflowJob = { ...notice, status: 'queued', runner: null, labels: ['boxlite'] }
+    let captured = false,
+      busy = false,
+      pumps = 0
+    const corrections = jest.spyOn(demandState, 'rebuildQueueSnapshot')
+    const previous = NotifiedDemand.prototype.invalidate
+    const invalidate = jest.spyOn(NotifiedDemand.prototype, 'invalidate').mockImplementation(async function (
+      this: NotifiedDemand,
+      ...args: Parameters<typeof previous>
+    ) {
+      const value = await previous.apply(this, args)
+      if (!args[2] && captured) {
+        busy = true
+        invalidation.resolve()
+      }
+      return value
+    })
+    Object.assign(backend, {
+      inventory: async () => [
+        { id: 91, name: worker.value.name, status: 'online', busy: captured, labels: ['boxlite'] },
+      ],
+    })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.job).mockImplementation(async () => {
+      if (busy) throw new Error('Assignment details unavailable')
+      return job
+    })
+    jest.mocked(backend.queued).mockImplementation(async (_repository, signal) => {
+      if (captured) return []
+      captured = true
+      signal?.addEventListener('abort', invalidation.resolve, { once: true })
+      await invalidation.promise
+      signal?.removeEventListener('abort', invalidation.resolve)
+      signal?.throwIfAborted()
+      return [job]
+    })
+    const recover = state.recover.bind(state)
+    jest.spyOn(state, 'recover').mockImplementation(async (...args) => {
+      const result = await recover(...args)
+      if (args[2]?.includes('notice/') && busy && ++pumps >= 10) settled.resolve()
+      return result
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
+      timing: { tickMs: 2, leaseMs: 3000 },
+    })
+    try {
+      await listener.receive(notification())
+      await state.ingress('1/21', async (tx) => {
+        const [wake] = await tx.read(['wake/1/21'])
+        await tx.write([{ key: wake.key, expected: wake.version }])
+      })
+      await runUntil(settled.promise)
+      expect(busy).toBe(true)
+      const stale = corrections.mock.calls.flatMap((args, index) =>
+        args[4].some((observed) => observed.job === job.job) ? [corrections.mock.results[index].value] : [],
+      )
+      const results = await Promise.allSettled(stale)
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(0)
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    } finally {
+      invalidation.resolve()
+      invalidate.mockRestore()
+      corrections.mockRestore()
+    }
+  })
+  it.each(['dirty', 'mismatch'])('plans from targeted job verification during a failed scan: %s', async (mode) => {
+    const held = deferred(),
+      pumped = deferred()
+    const labels = mode === 'dirty' ? ['boxlite'] : ['boxlite', 'gpu']
+    Object.assign(backend, { inventory: async () => [] })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockRejectedValue(new Error('Full scan unavailable'))
+    jest.mocked(backend.job).mockImplementation(async (notice) => {
+      await held.promise
+      return { ...notice, status: 'queued', runner: null, labels }
+    })
+    await listener.receive(notification(55, 1, 7, 21, 33, labels))
+    await state.ingress('1/21', async (tx) => {
+      const [wake] = await tx.read(['wake/1/21'])
+      await tx.write([{ key: wake.key, expected: wake.version }])
+    })
+    if (mode === 'dirty') {
+      await db.transaction(namespace, async (tx) => {
+        const [counter] = await tx.page('', 1, 'demand/')
+        await tx.put(
+          { ...counter, version: randomUUID(), payload: { ...(counter.payload as object), dirty: true } },
+          counter.version,
+        )
+      })
+    }
+    const recover = state.recover.bind(state)
+    let rounds = 0
+    jest.spyOn(state, 'recover').mockImplementation(async (...args) => {
+      const rows = await recover(...args)
+      if (args[2]?.includes('notice/')) {
+        if (++rounds === 4) held.resolve()
+        if (rounds === 15) pumped.resolve()
+      }
+      return rows
+    })
+    try {
+      await runUntil(pumped.promise)
+      expect(backend.workers.create).toHaveBeenCalledTimes(mode === 'dirty' ? 1 : 0)
+      expect(backend.job).toHaveBeenCalledTimes(1)
+    } finally {
+      held.resolve()
+    }
+  })
+  it.each(['expiry', 'notice version', 'scope'])(
+    'rechecks a cached label mismatch after a change of %s',
+    async (change) => {
+      const checked = deferred(),
+        stable = deferred()
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now())
+      const labels = ['boxlite', 'gpu']
+      let changed = false,
+        rounds = 0,
+        readsBefore = 0
+      Object.assign(backend, { inventory: async () => [] })
+      jest
+        .mocked(host.scan)
+        .mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+      jest.mocked(backend.queued).mockRejectedValue(new Error('Full scan unavailable'))
+      jest.mocked(backend.job).mockImplementation(async (notice) => {
+        if (changed) checked.resolve()
+        return { ...notice, status: 'queued', runner: null, labels }
+      })
+      listener = new Listener({
+        state,
+        host: withScanCatalog(host),
+        worker: settings,
+        capacity: { resolve: async () => testCapacity({ account: 1, tenant: 1 }) },
+        timing: { tickMs: 1, discoveryMs: 1, leaseMs: 300000 },
+      })
+      const recover = state.recover.bind(state)
+      jest.spyOn(state, 'recover').mockImplementation(async (...args) => {
+        const result = await recover(...args)
+        if (args[2]?.includes('notice/') && ++rounds === 12) {
+          readsBefore = jest.mocked(backend.job).mock.calls.length
+          stable.resolve()
+        }
+        return result
+      })
+      try {
+        await listener.receive(notification(55, 1, 7, 21, 33, labels))
+        const changeSelection = async () => {
+          await stable.promise
+          changed = true
+          if (change === 'expiry') clock.mockReturnValue(Date.now() + 30001)
+          else if (change === 'notice version') {
+            const [notice] = await state.read(['notice/1/55'])
+            await state.commit(lease, [{ key: notice.key, expected: notice.version, payload: notice.payload }])
+          } else {
+            scope = { ...scope, generation: scope.generation + 1 }
+            clock.mockReturnValue(Date.now() + 2)
+          }
+          await checked.promise
+        }
+        await runUntil(changeSelection())
+        expect(readsBefore).toBe(1)
+        expect(backend.job).toHaveBeenCalledTimes(2)
+        expect(backend.workers.create).not.toHaveBeenCalled()
+        expect(await state.read(['notice/1/55'])).toHaveLength(1)
+      } finally {
+        clock.mockRestore()
+      }
+    },
+  )
   it('does not grant positive capacity from stale queued HTTP data after recorded completion', async () => {
     const checked = deferred()
     Object.assign(backend, { inventory: jest.fn(async () => []) })
