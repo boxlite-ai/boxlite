@@ -114,6 +114,30 @@ describe('PostHog business events', () => {
     expect(mockCapture.mock.calls[0][0].properties).not.toHaveProperty('user.id')
   })
 
+  it('keeps Cloud operation metrics out of Activity totals', () => {
+    recordBusinessEvent({
+      name: 'cloud.box.create',
+      outcome: 'requested',
+      correlationId: 'operation-1',
+      organizationId: 'org-1',
+    })
+    const capture = mockCapture.mock.calls[0][0]
+    expect(capture.properties.cloud_metrics_schema).toBe('1')
+    expect(capture.properties).not.toHaveProperty('activity_schema')
+    expect(capture.groups).toEqual({ organization: 'org-1' })
+  })
+
+  it('uses the same occurrence UUID and timestamp as the operational log', () => {
+    recordBusinessEvent({ name: 'box.start', outcome: 'success', correlationId: 'box-1' })
+    const attributes = jest
+      .mocked(Logger.prototype.log)
+      .mock.calls.find(([message]) => message === 'box.start success')?.[1] as Record<string, string>
+    const capture = mockCapture.mock.calls[0][0]
+    expect(capture.uuid).toEqual(expect.any(String))
+    expect(capture.uuid).toBe(attributes['event.id'])
+    expect(capture.timestamp.toISOString()).toBe(attributes['event.timestamp'])
+  })
+
   it('preserves business results when capture throws', async () => {
     mockCapture.mockImplementation(() => {
       throw new Error('transport secret')

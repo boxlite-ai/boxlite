@@ -40,6 +40,7 @@ import { TunnelService } from '../services/tunnel.service'
 import { DomainService } from '../services/domain.service'
 import { ProxyGuard } from '../guards/proxy.guard'
 import { OrganizationService } from '../../organization/services/organization.service'
+import { requestTiming } from '../../common/utils/request-timing.util'
 import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../services/box-auto-resume.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -152,7 +153,8 @@ export class PreviewController {
   @ApiExcludeEndpoint()
   @UseGuards(CombinedAuthGuard, ProxyGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
-  async ensureReady(@Param('boxId') boxId: string): Promise<void> {
+  async ensureReady(@Param('boxId') boxId: string, @Req() request?: object): Promise<void> {
+    const timing = requestTiming(request)
     const box = await this.boxService.findOne(boxId)
     const organization = await this.organizationService.findOne(box.organizationId)
     if (!organization) {
@@ -174,7 +176,7 @@ export class PreviewController {
     await this.boxService
       .updateLastActivityAt(box.id, new Date())
       .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
-    await this.autoResume.ensureReady(box.id, organization)
+    await this.autoResume.ensureReady(box, organization, undefined, timing)
   }
 
   @Get(':boxId/inbound')

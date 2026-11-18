@@ -93,8 +93,21 @@ describe('JobService.updateJobStatus transaction boundary', () => {
     ).resolves.toBe(completedJob)
 
     expect(entityManager.save).toHaveBeenCalledWith(Job, completedJob)
-    expect(completedJob.completedAt).not.toBe(originalCompletedAt)
+    expect(completedJob.completedAt).toEqual(originalCompletedAt)
     expect(completedJob.resultMetadata).toBe('{"daemonVersion":"new"}')
     expect(jobStateHandlerService.handleJobCompletion).toHaveBeenCalledWith(completedJob)
+  })
+
+  it('preserves the first failure time when a runner repeats a terminal report', async () => {
+    const failedJob = makeJob(JobStatus.FAILED)
+    failedJob.completedAt = new Date('2026-07-29T04:05:00.000Z')
+    const originalCompletedAt = failedJob.completedAt
+    const { service, jobStateHandlerService } = makeService(failedJob)
+
+    await service.updateJobStatus(failedJob.id, JobStatus.FAILED, 'runner failed')
+    await service.updateJobStatus(failedJob.id, JobStatus.FAILED, 'runner failed again')
+
+    expect(failedJob.completedAt).toEqual(originalCompletedAt)
+    expect(jobStateHandlerService.handleJobCompletion).toHaveBeenCalledTimes(2)
   })
 })

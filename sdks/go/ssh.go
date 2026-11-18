@@ -63,6 +63,75 @@ type SSHStatus struct {
 	HostKeyFingerprint string
 }
 
+// SSHUsageEvent is one accepted authentication, without keys or login names.
+type SSHUsageEvent struct {
+	ID           string `json:"id"`
+	OccurredAtMS uint64 `json:"occurred_at_ms"`
+}
+
+// SSHUsageBatch drains the guest's bounded, volatile evidence buffer.
+// DroppedTotal counts buffer overflow or contention since guest startup.
+type SSHUsageBatch struct {
+	Events       []SSHUsageEvent `json:"events"`
+	DroppedTotal uint64          `json:"dropped_total"`
+}
+
+// TakeUsage reads and removes local guest evidence without starting the box.
+// Only an explicit caller reads it; the SDK never sends it to an analytics service.
+// A failed or canceled drain may lose evidence. REST runtimes and older guests
+// return ErrUnsupported; a stopped or configured local box returns an empty batch.
+func (s *SSH) TakeUsage(ctx context.Context) (*SSHUsageBatch, error) {
+	if s == nil || s.box == nil || s.box.runtime == nil {
+		return nil, errBoxClosed
+	}
+	rt := s.box.runtime
+	select {
+	case <-rt.closing:
+		return nil, ErrRuntimeClosed
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rt.ensureDrainRunning()
+	boxHandle, unlock, err := s.box.acquire()
+	if err != nil {
+		return nil, err
+	}
+	result := make(chan handleResult[*C.char], 1)
+	handle := registerHandleForDispatch(cgo.NewHandle(result))
+	var cerr C.CBoxliteError
+	code := C.boxlite_box_ssh_take_usage(boxHandle, C.cbSSHUsage(), handleToPtr(handle), &cerr)
+	unlock()
+	if code != C.Ok {
+		deleteHandleForDispatch(handle)
+		return nil, freeError(&cerr)
+	}
+	dispose := func(value *C.char) {
+		if value != nil {
+			freeBoxliteString(value)
+		}
+	}
+	select {
+	case completed := <-result:
+		defer dispose(completed.value)
+		if completed.err != nil {
+			return nil, completed.err
+		}
+		var batch SSHUsageBatch
+		if err := json.Unmarshal([]byte(cString(completed.value)), &batch); err != nil {
+			return nil, &Error{Code: ErrInternal, Message: "invalid SSH usage response"}
+		}
+		return &batch, nil
+	case <-ctx.Done():
+		abandonOwnedResult(result, handle, dispose)
+		return nil, ctx.Err()
+	case <-rt.closing:
+		abandonOwnedResult(result, handle, dispose)
+		return nil, ErrRuntimeClosed
+	}
+}
+
 func (c SSHConfig) String() string {
 	return fmt.Sprintf("SSHConfig{ListenAddress:%q HostPrivateKey:[redacted] Accounts:%v}",
 		c.ListenAddress, c.Accounts)

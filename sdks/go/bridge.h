@@ -58,5 +58,6 @@ extern CBoxSshConfigureCb cbSSHConfigure(void);
 extern CBoxSshStatusCb cbSSHStatus(void);
 extern CBoxSshDisableCb cbSSHDisable(void);
 extern CBoxSshEnableCb cbSSHEnable(void);
+extern CBoxSshUsageCb cbSSHUsage(void);
 
 #endif // BOXLITE_GO_BRIDGE_H

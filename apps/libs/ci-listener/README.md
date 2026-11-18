@@ -1144,3 +1144,16 @@ Scopes carry explicit Public and Private decisions. Standalone configuration kee
 its Public switch and always permits Private, while hosted policy always permits
 Public and requires explicit Private consent. Existing scope hashes are incompatible:
 finish cleanup with the old Listener and start a fresh journal before upgrading.
+
+## Observed CI execution
+
+An optional host `observeExecution` callback receives a signed GitHub running/completed observation’s
+valid `started_at` after its Runner ID is matched to a busy existing allocation and inventory name.
+The event identifies the actual assigned job, which can differ from the job that triggered capacity creation.
+Worker boot, queued demand, external Runners, ambiguous claims and missing timestamps do not establish execution.
+
+The existing reconciliation reads Runner claims; it performs no extra GitHub request for telemetry.
+Callback failures cannot interrupt reconciliation. Observation is deduplicated per active allocation in memory;
+a host restart may observe the same execution again. Hosts must retain source identity/time for deduplication.
+Standalone hosts have no analytics callback by default; the hosted API maps these facts to Cloud events.
+A fast job whose source observation arrives after worker retirement can be missed.

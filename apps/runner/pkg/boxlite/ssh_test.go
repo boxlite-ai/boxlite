@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,32 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 )
+
+func TestSSHUsageBorrowsAnIndependentHandle(t *testing.T) {
+	client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/boxes/native" {
+			_, _ = io.WriteString(w, checkpointWireBox("native", "CloudBox1234", "Running", "alpine"))
+			return
+		}
+		http.NotFound(w, r)
+	})
+	cached, err := client.GetBox(t.Context(), "native")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.TakeSSHUsage(t.Context(), "native")
+	var sdkErr *boxlite.Error
+	if !errors.As(err, &sdkErr) || sdkErr.Code != boxlite.ErrUnsupported {
+		t.Fatalf("native-only drain on REST: %v", err)
+	}
+	if _, err := cached.Info(t.Context()); err != nil {
+		t.Fatalf("usage drain invalidated the business handle: %v", err)
+	}
+	if _, err := client.TakeSSHUsage(t.Context(), "missing"); !boxlite.IsNotFound(err) {
+		t.Fatalf("missing native box: %v", err)
+	}
+}
 
 const sshGuestPort = 2222
 

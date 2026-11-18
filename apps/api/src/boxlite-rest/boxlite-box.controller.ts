@@ -53,6 +53,7 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
+import { ObserveBoxReadiness, ON_BOX_STARTED } from '../box/interceptors/box-readiness.interceptor'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -90,6 +91,7 @@ export class BoxliteBoxController {
   ) {}
 
   @Post()
+  @ObserveBoxReadiness('create')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(201)
   @ApiResponse({
@@ -149,10 +151,13 @@ export class BoxliteBoxController {
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
-    let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
+    let box = await this.boxService.create(createBoxDto, organization, ctx, {
+      maxCreatedBoxes,
+      onStarted: request?.[ON_BOX_STARTED],
+    })
     if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30, request?.[ON_BOX_STARTED])
     }
     return boxToBoxResponse(box)
   }
@@ -189,7 +194,9 @@ export class BoxliteBoxController {
     recordBoxRequested('box.create', box, ctx)
     if (request) request[AUDIT_TARGET_ID] = box.id
     try {
-      return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))
+      return boxToBoxResponse(
+        await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30, request?.[ON_BOX_STARTED]),
+      )
     } catch (error) {
       // Admission already created this identity. Clients must query it after
       // any wait failure instead of submitting another anonymous Box.
@@ -309,6 +316,7 @@ export class BoxliteBoxController {
     targetIdFromRequest: (req) => req.params.boxId,
     targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
   })
+  @ObserveBoxReadiness('start')
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -319,14 +327,20 @@ export class BoxliteBoxController {
     if (request) request[AUDIT_TARGET_ID] = box.id
 
     if (this.isStartAlreadyInProgress(box)) {
-      const dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
+      const dto = await this.boxStateWaiter.waitForStarted(
+        box.id,
+        authContext.organizationId,
+        30,
+        request?.[ON_BOX_STARTED],
+      )
       return boxToBoxResponse(dto)
     }
 
     box = await this.boxService.start(box.id, authContext.organization, ctx, { idOnly: true })
+    if (box.state === BoxState.STARTED) request?.[ON_BOX_STARTED]?.()
     let dto = await this.boxService.toBoxDto(box)
     if (dto.state !== BoxState.STARTED) {
-      dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
+      dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30, request?.[ON_BOX_STARTED])
     }
     return boxToBoxResponse(dto)
   }

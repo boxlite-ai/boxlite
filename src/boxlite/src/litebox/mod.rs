@@ -36,7 +36,9 @@ pub use network::{
     TunnelOptions,
 };
 pub use snapshot::SnapshotHandle;
-pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
+pub use ssh::{
+    SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus, SshUsageBatch, SshUsageEvent,
+};
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;

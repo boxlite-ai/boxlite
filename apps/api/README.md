@@ -782,6 +782,190 @@ id for box and tunnel events (volume ID or an API-key attempt UUID for those mut
 can be counted from the log alone. `user.login` has none, since a login spans organizations, and a
 registration carries its default organization on success only.
 
+### Occurrence identity and job timing
+
+Every business-event occurrence has an `event.id` UUID, created once before logging and analytics fan-out.
+PostHog receives it through the capture `uuid` option; both sinks receive the same `event.timestamp`.
+That field records source occurrence time when supplied, otherwise observation time.
+
+Native OTLP log time remains observation time. Replaying yesterday's completed job produces
+a log today with yesterday's `event.timestamp`. Operational occurrence-time queries must use that attribute.
+
+| Field                                                  | Source and meaning                                                   |
+| ------------------------------------------------------ | -------------------------------------------------------------------- |
+| `event.id`                                             | Occurrence UUID, separate from resource identity                     |
+| `job.id`                                               | Existing runner Job ID                                               |
+| `job.created_at`, `job.started_at`, `job.completed_at` | Valid timestamps from the persisted Job                              |
+| `job.duration_ms`                                      | Milliseconds from Job creation to completion, serialized as a string |
+
+Finished job outcomes derive occurrence identity from Job ID, event name and logical outcome.
+Repeated observations retain their UUID, completion time and duration; different jobs on one Box remain distinct.
+`JobService` preserves the first terminal timestamp while allowing result metadata refresh and completion callbacks.
+
+| Available source timing                | Emitted evidence                                                                 |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| Job ID and valid completion time       | Stable replay identity and source occurrence time                                |
+| Valid, ordered creation and completion | `job.duration_ms`, including zero                                                |
+| Valid start time                       | `job.started_at`, independently of duration eligibility                          |
+| Missing or invalid completion          | Ordinary occurrence identity; unsupported completion fields and duration omitted |
+
+Job timing excludes the customer's request before job creation and does not establish guest application readiness.
+Checkpoint-import outcomes use the accepted business receipt; an invalid receipt remains an exception even if its transport job completed.
+Source payloads and raw runner errors are excluded.
+
+### Cloud readiness metrics
+
+`cloud.box.create`, `cloud.box.start` and `cloud.box.resume` record server-side attempts through the shared PostHog/operational-log recorder.
+They carry `cloud_metrics_schema = '1'` in PostHog and have no `activity_schema`.
+Existing Activity operation totals exclude this event family.
+
+REST create/start observations cover canonical and prefixed v1 routes whose handlers wait for `STARTED`.
+Resume observations cover API proxy requests, WebSocket attaches and preview `ensure-ready`.
+Each caller that observes a pending start records one resume attempt, including when the Box reaches `STARTED` during lifecycle lock acquisition. Already-ready traffic emits no resume attempt. A stop-then-start wait counts as one attempt.
+
+HTTP ingress time is captured before body parsing and authentication, then only admitted operations are recorded.
+WebSocket timing starts at upgrade dispatch. A successful duration ends when the API observes `STARTED`, before dashboard notification enrichment and response metadata reads such as last activity. Client networking and guest application readiness are outside this measurement.
+
+| Attribute                | Contract                                                           |
+| ------------------------ | ------------------------------------------------------------------ |
+| `operation.id`           | UUID per invocation, shared by requested and terminal occurrences  |
+| `operation.requested_at` | Original initiation time, retained on the terminal event           |
+| `operation.scope`        | `rest_api` or `proxy_api`                                          |
+| `operation.boundary`     | `cloud_api_to_started`                                             |
+| `operation.duration_ms`  | Nonnegative monotonic elapsed milliseconds, serialized as a string |
+| `operation.result`       | `success`, `service_error`, `timeout`, `user_error` or `cancelled` |
+| `box.id`                 | Resolved resource ID when known; raw request names excluded        |
+
+For this event family, `correlation.id` identifies the operation; use `box.id` for the resource.
+Requested and terminal occurrences have different `event.id` values. A terminal observation is recorded once per invocation.
+
+Runtime transition failures count as `service_error` while preserving their existing HTTP 400 response.
+HTTP 408/504 count as `timeout`; other 4xx responses count as `user_error`.
+Unexpected errors and 5xx responses count as `service_error`; observable cancellation is separate.
+
+Guard refusals precede these observations. Resume policy checks before `ensureReady` and asynchronous dashboard admission routes remain outside this request cohort.
+Direct service invocation uses invocation time when an ingress timestamp is unavailable.
+
+`traffic.kind` is `unknown`: source headers do not prove probe or external customer identity.
+Use authoritative organization classification before presenting separate customer/probe rates.
+
+Delivery remains best effort. A process exit can leave a requested occurrence without its terminal observation;
+report that sample as unobserved, rather than inventing a timeout.
+
+Recorded timeouts remain failures if the Box later becomes ready.
+Count distinct `operation.id` values and assign results to their initiation window.
+Success rate is successes divided by successes plus service failures and timeouts; show user errors, cancellations and unobserved attempts separately.
+
+Compute P50/P95 from successful `operation.duration_ms` values, with sample size and failure counts alongside.
+For example, this HogQL query groups terminal duplicates before calculating successful readiness timing:
+
+```sql
+SELECT event, count() AS samples,
+       quantile(0.50)(duration_ms) / 1000 AS p50_seconds,
+       quantile(0.95)(duration_ms) / 1000 AS p95_seconds
+FROM (
+  SELECT event, properties['operation.id'] AS operation_id,
+         min(toFloat(properties['operation.duration_ms'])) AS duration_ms
+  FROM events
+  WHERE properties.cloud_metrics_schema = '1'
+    AND properties.environment = '<producer-environment>'
+    AND properties['operation.result'] = 'success'
+    AND properties['operation.boundary'] = 'cloud_api_to_started'
+    AND properties['operation.requested_at'] >= '2026-11-01T00:00:00.000Z'
+    AND properties['operation.requested_at'] < '2026-11-08T00:00:00.000Z'
+    AND timestamp >= toDateTime('2026-11-01 00:00:00')
+    AND timestamp < toDateTime('2026-11-08 00:05:00')
+  GROUP BY event, operation_id
+)
+GROUP BY event
+```
+
+This example has not run against a live PostHog project.
+Initiation timestamps are canonical UTC ISO strings; the five-minute completion grace is illustrative.
+Choose and disclose an observation cutoff, and check ingestion loss, source clocks and organization classification separately.
+
+See PostHog's [aggregations](https://posthog.com/docs/sql/aggregations) and
+[type conversions](https://posthog.com/docs/sql/expressions) for the supported query functions.
+
+### Cloud feature-use evidence
+
+`cloud.feature.use` reports accepted SSH authentication, successful preview forwarding,
+established tunnels, execution on a managed CI runner and successful starts with tenant-owned images.
+It uses `cloud_metrics_schema='1'` and the same occurrence UUID/time in PostHog and OTLP logs.
+
+| Feature      | Evidence boundary                                                                                                           | Excluded evidence                                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| SSH          | Accepted signed key or certificate, once per authenticated connection                                                       | Key probes, denied logins, SSH configuration                                |
+| Tunnel       | Accepted CONNECT with a Runner connection, HTTP 101, or guest HTTP 2xx/3xx                                                  | Tunnel preparation, authorization failures, failed upstream requests        |
+| CI           | Signed GitHub running/completed observation with `started_at`, matched to a busy allocated Runner ID and its inventory name | Worker creation, queued jobs, external runners, ambiguous assignments       |
+| Custom image | Successful create/start job with stored `imageIsOrgOwned=true`                                                              | Admission alone, failed jobs, curated images, unknown historical provenance |
+
+Feature attributes are `feature.name`, `feature.evidence` and `feature.source`.
+`correlation.id` is the Box ID; no login, key, command, URL, repository name or workflow name is emitted.
+Source evidence does not identify customer versus internal/probe traffic; use an authoritative organization cohort.
+
+`POST /api/telemetry/feature-usage` accepts at most 100 observations using existing Runner/Proxy authentication.
+Customer credentials are refused. The API resolves organization from the stored Box and checks Runner ownership;
+producers cannot choose a tenant. Only SSH evidence is accepted from Runners, and only tunnel evidence from Proxies.
+Unknown/deleted Boxes, warm stock, incompatible producers and timestamps outside seven days old/five minutes future are excluded.
+The response's `accepted` count measures local capture calls, not delivery to either analytics sink.
+
+```mermaid
+flowchart LR
+    SSH[Guest accepted SSH auth] --> Buffer[Local buffer: 128]
+    Buffer --> Collector[Runner background polling]
+    Proxy[Proxy forwarding] --> Queue[Nonblocking queue: 1024]
+    Collector --> Queue
+    Queue --> Batch[Background batches: 100]
+    Batch --> Ingest[API ownership validation]
+    CI[Managed CI execution] --> Event[Business event]
+    Image[Started tenant image] --> Event
+    Ingest --> Event
+    Event --> PH[PostHog]
+    Event --> OTLP[OTLP / HyperDX]
+```
+
+Guest producers use a try-lock; a full or contended buffer drops evidence.
+Runners poll every five seconds, with four concurrent one-second reads and at most 64 Boxes per round, rotating across larger inventories.
+Reads never boot a VM. The native/Go SDK exposes an explicit local drain; it does not send analytics.
+Older Guests return Unsupported. Run API ingestion before enabling reporting binaries, and ship the updated Guest with the native library to collect SSH.
+
+The Cloud reporter uses a dedicated HTTP transport, a one-second flush timer and a two-second request deadline, without retries or redirects.
+Forwarding and SSH authentication never await uploads; shutdown cancels uploads instead of flushing them synchronously.
+Overflow and collection failures have diagnostics, and failed uploads count observations as delivery-unconfirmed.
+API rejection counts are logged separately. Memory queues are volatile; process/Guest exits, failed drains and resource deletion can lose evidence.
+CI execution can be missed if no valid source timestamp arrives before its worker retires.
+CI observers run during existing reconciliation and cannot propagate telemetry errors into worker control.
+
+Count distinct `event.id`, because job/CI recovery can observe the same occurrence again.
+Adoption is the intersection of feature-using organizations with an explicitly eligible, active organization cohort.
+Do not label all organizations eligible, or an absent event as confirmed non-use.
+These events do not supply a capability/entitlement snapshot or a customer/probe organization registry.
+Keep that eligibility cohort authoritative and report telemetry coverage separately.
+
+This illustrative HogQL query returns per-organization usage and distinct UTC usage days for a chosen week;
+it does not prescribe an eligibility denominator or a repeat-use threshold:
+
+```sql
+SELECT properties['organization.id'] AS organization_id,
+       properties['feature.name'] AS feature,
+       uniq(properties['event.id']) AS observations,
+       uniq(toDate(toTimeZone(timestamp, 'UTC'))) AS usage_days
+FROM events
+WHERE event = 'cloud.feature.use'
+  AND properties.cloud_metrics_schema = '1'
+  AND properties.environment = '<producer-environment>'
+  AND properties['event.outcome'] = 'success'
+  AND timestamp >= toDateTime('2026-11-01 00:00:00', 'UTC')
+  AND timestamp < toDateTime('2026-11-08 00:00:00', 'UTC')
+GROUP BY organization_id, feature
+```
+
+The query has not run against a live PostHog project. Supply the eligible cohort before computing adoption or repeat-use percentages.
+For time-aligned operation success, join requested and terminal `cloud.box.*` occurrences on `operation.id`,
+filter `operation.requested_at` into the reporting window, and disclose the terminal observation cutoff.
+A timeout stays a timeout; a missing terminal remains unobserved.
+
 ### Querying Activity in PostHog
 
 The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
@@ -820,7 +1004,7 @@ The example documents the contract; it has not been executed against a live Post
 
 | Activity field       | PostHog value                                                                            |
 | -------------------- | ---------------------------------------------------------------------------------------- |
-| Event/time           | `event`, `timestamp` (the original event emission time)                                  |
+| Event/time           | `event`, `timestamp` (source occurrence time, otherwise emission time)                   |
 | Outcome/entity       | `properties['event.outcome']`, `properties['correlation.id']`                            |
 | Organization/person  | `properties['organization.id']`, optional `properties['user.id']`                        |
 | Actor/reason/failure | `properties['actor.kind']`, `properties['event.reason']`, `properties['exception.type']` |
@@ -1710,15 +1894,15 @@ promised. Deployment and dev data reset remain operator actions.
 
 The removal release deletes these operations (paths relative to the hosted API base):
 
-| Removed operation | Supported path or behavior |
-| --- | --- |
-| `POST /users/{id}/regenerate-key-pair` | SSH gateway keys have no consumer; account creation no longer generates them |
-| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics` | Dashboard queries the independent Analytics API |
-| `GET /object-storage/push-access` | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning |
-| `GET /box` | Use `/box/paginated` or portable `/v1` listing |
-| `PUT /box/{id}/labels` | No replacement mutation; stored labels and label filters remain |
+| Removed operation                                                            | Supported path or behavior                                                                                  |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `POST /users/{id}/regenerate-key-pair`                                       | SSH gateway keys have no consumer; account creation no longer generates them                                |
+| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics`      | Dashboard queries the independent Analytics API                                                             |
+| `GET /object-storage/push-access`                                            | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning            |
+| `GET /box`                                                                   | Use `/box/paginated` or portable `/v1` listing                                                              |
+| `PUT /box/{id}/labels`                                                       | No replacement mutation; stored labels and label filters remain                                             |
 | `POST /box/{id}/autostop/{interval}`, `POST /box/{id}/autodelete/{interval}` | Set `auto_stop` and `auto_delete` in seconds when creating a Box through `/v1`; dynamic updates are retired |
-| `GET /volumes/by-name/{name}` | Look up volumes by ID; managed-volume selectors still accept names |
+| `GET /volumes/by-name/{name}`                                                | Look up volumes by ID; managed-volume selectors still accept names                                          |
 
 Removed operations return 404 and are absent from regenerated TypeScript and Go cloud clients.
 External consumers must stop calling them before this release; absence of repository callers does not establish absence of external use.

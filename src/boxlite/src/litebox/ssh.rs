@@ -10,6 +10,20 @@ use crate::runtime::backend::BoxBackend;
 
 // Allow guest cleanup plus communication and scheduling overhead after startup.
 const SSH_TIMEOUT: Duration = Duration::from_secs(DRAIN_TIMEOUT.as_secs() + 5);
+// Background collection must yield quickly to lifecycle changes.
+const SSH_USAGE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshUsageBatch {
+    pub events: Vec<SshUsageEvent>,
+    pub dropped_total: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshUsageEvent {
+    pub id: String,
+    pub occurred_at_ms: u64,
+}
 
 enum StartupPolicy {
     AllowStart,
@@ -131,6 +145,12 @@ impl fmt::Debug for SshHandle {
 }
 
 impl SshHandle {
+    /// Drain bounded local authentication evidence without starting a Box.
+    /// No network reporting is initiated; a Cloud collector owns delivery.
+    pub async fn take_usage(&self) -> BoxliteResult<SshUsageBatch> {
+        self.backend.ssh_take_usage().await
+    }
+
     /// Retain the backend without starting it; the backend decides SSH support.
     pub(super) fn new(backend: Arc<dyn BoxBackend>) -> Self {
         Self { backend }
@@ -162,6 +182,40 @@ impl SshHandle {
 
 /// Local SSH control policy; `BoxBackend` forwards to these verbatim.
 impl BoxImpl {
+    pub(crate) async fn ssh_take_usage(&self) -> BoxliteResult<SshUsageBatch> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "SSH usage: runtime is shutting down".into(),
+            ));
+        }
+        let Some(session) = self.existing_ssh_session()? else {
+            return Ok(SshUsageBatch::default());
+        };
+        tokio::select! {
+            biased;
+            _ = self.shutdown_token.cancelled() => Err(BoxliteError::Stopped("SSH usage: runtime is shutting down".into())),
+            result = tokio::time::timeout(SSH_USAGE_TIMEOUT, async {
+                let response = session.ssh().await?.take_usage().await.map_err(|status| {
+                    if status.code() == tonic::Code::Unimplemented {
+                        BoxliteError::Unsupported("SSH usage is unavailable on this guest".into())
+                    } else {
+                        map_tonic_err("usage", *status)
+                    }
+                })?;
+                if response.events.len() > proto::ssh_usage::SSH_USAGE_CAPACITY ||
+                    response.events.iter().any(|event| event.id.len() != 36 || uuid::Uuid::parse_str(&event.id).is_err() || event.occurred_at_ms > i64::MAX as u64) {
+                    return Err(BoxliteError::Rpc("SSH usage: invalid observation batch".into()));
+                }
+                Ok(SshUsageBatch {
+                    events: response.events.into_iter().map(|event| SshUsageEvent {
+                        id: event.id, occurred_at_ms: event.occurred_at_ms,
+                    }).collect(),
+                    dropped_total: response.dropped_total,
+                })
+            }) => result.unwrap_or_else(|_| Err(BoxliteError::Rpc("SSH usage collection timed out".into()))),
+        }
+    }
+
     pub(crate) async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         self.run_ssh(
             "configure",

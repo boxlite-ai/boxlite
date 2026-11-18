@@ -22,6 +22,22 @@ const signed = (value: unknown = payload(), delivery: string = randomUUID(), eve
   return { raw, signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'), delivery, event }
 }
 describe('CI shared webhook verification', () => {
+  it.each(['2026-11-01T00:00:00Z', null, 'invalid', 123])(
+    'retains only valid signed execution time %j',
+    (started_at) => {
+      const notification = verifyWebhook(
+        signed({
+          ...payload(),
+          action: 'in_progress',
+          workflow_job: { ...payload().workflow_job, status: 'in_progress', runner_id: 91, started_at },
+        }),
+        secret,
+      )!
+      expect(notification.observation?.startedAt).toBe(
+        started_at === '2026-11-01T00:00:00Z' ? '2026-11-01T00:00:00.000Z' : undefined,
+      )
+    },
+  )
   it.each([-1, 1.5, '91'])('rejects a signed invalid runner identity %j', (runner_id) => {
     expect(() =>
       verifyWebhook(

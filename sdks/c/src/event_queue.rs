@@ -107,6 +107,10 @@ pub(crate) type CBoxGetOrCreateBoxFn =
 
 /// Box export completion.
 pub type CBoxExportCb = Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
+/// Owns the usage JSON on success; release it with `boxlite_free_string`.
+pub type CBoxSshUsageCb =
+    Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSshUsageFn = extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
 pub(crate) type CBoxExportFn = extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
 
 /// Runtime import completion.
@@ -439,6 +443,11 @@ pub enum RuntimeEvent {
     },
     BoxExport {
         cb: CBoxExportFn,
+        user_data: usize,
+        result: Result<CString, BoxliteError>,
+    },
+    SshUsage {
+        cb: CBoxSshUsageFn,
         user_data: usize,
         result: Result<CString, BoxliteError>,
     },

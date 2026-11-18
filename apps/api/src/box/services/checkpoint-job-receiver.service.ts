@@ -205,10 +205,10 @@ export class CheckpointJobReceiver {
       }
       await manager.save(Box, box)
       await manager.save(CheckpointOperation, operation)
-      return { box, previousState, outcome: accepted ? JobStatus.COMPLETED : JobStatus.FAILED }
+      return { box, previousState, outcome: accepted ? JobStatus.COMPLETED : JobStatus.FAILED, job }
     })
     if (changed) {
-      recordBoxJobOutcome('box.create', changed.outcome, changed.box)
+      recordBoxJobOutcome('box.create', changed.outcome, changed.box, changed.job)
       this.cache.invalidate(changed.box)
       if (changed.previousState !== changed.box.state)
         this.events?.emit(

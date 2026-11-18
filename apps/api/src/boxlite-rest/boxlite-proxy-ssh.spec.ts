@@ -15,6 +15,7 @@ import { OrganizationResourceActionGuard } from '../organization/guards/organiza
 import { OrganizationService } from '../organization/services/organization.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { BoxService } from '../box/services/box.service'
+import { subscribeBusinessEvents } from '../common/utils/business-event.util'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
@@ -70,12 +71,41 @@ describe('BoxliteProxyController SSH routes', () => {
       expect(proxiedPath()).toBe('/v1/boxes/box-uuid/ssh')
     })
 
+    it('records a start which finishes between admission and the lifecycle lock', async () => {
+      const { call, boxService, autoResume, proxyHandler } = makeHarness({ state: 'starting', desiredState: 'started' })
+      const lifecycle = { ensureStartedForProxy: jest.fn().mockResolvedValue({ id: 'box-uuid', ...running }) }
+      const lock = { lock: jest.fn().mockResolvedValue(true), unlock: jest.fn().mockResolvedValue(undefined) }
+      const resume = new BoxAutoResumeService(lifecycle as never, {} as never, lock as never)
+      autoResume.ensureReady.mockImplementation(resume.ensureReady.bind(resume))
+      const outcomes: string[] = []
+      const dispose = subscribeBusinessEvents((event) => {
+        if (event['event.name'] === 'cloud.box.resume') outcomes.push(event['event.outcome'])
+      })
+      try {
+        await call('configureSsh')
+        expect(boxService.findOneByIdOrName).toHaveBeenCalledTimes(1)
+        expect(lifecycle.ensureStartedForProxy).toHaveBeenCalledTimes(1)
+        expect(proxyHandler).toHaveBeenCalledTimes(1)
+        expect(outcomes).toEqual(['requested', 'success'])
+      } finally {
+        dispose()
+      }
+    })
+
     it('resumes a stopped box that runs its image default command', async () => {
       const { call, autoResume, proxyHandler } = makeHarness({ state: 'stopped', desiredState: 'stopped' })
 
       await call('configureSsh')
 
-      expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', expect.anything(), expect.any(Function))
+      expect(autoResume.ensureReady).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'box-uuid', state: 'stopped' }),
+        expect.anything(),
+        expect.any(Function),
+        {
+          requestedAt: expect.any(Date),
+          monotonicStart: expect.any(Number),
+        },
+      )
       expect(proxyHandler).toHaveBeenCalledTimes(1)
     })
 
@@ -110,7 +140,7 @@ describe('BoxliteProxyController SSH routes', () => {
         try {
           await Promise.race([waiting, request])
           await new Promise<void>((resolve) => setImmediate(resolve))
-          expect(waitForStarted).toHaveBeenCalledWith('box-uuid', 'org-1', 30)
+          expect(waitForStarted).toHaveBeenCalledWith('box-uuid', 'org-1', 30, expect.any(Function))
           expect(waitForStarted).toHaveBeenCalledTimes(1)
           expect(boxService.findOneByIdOrName).toHaveBeenCalledTimes(2)
           expect(createProxyMiddleware).not.toHaveBeenCalled()

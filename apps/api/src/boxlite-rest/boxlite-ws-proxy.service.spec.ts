@@ -159,7 +159,15 @@ describe('BoxliteWsProxyService', () => {
       Buffer.alloc(0),
     )
 
-    expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', expect.objectContaining({ id: 'org-1' }))
+    expect(autoResume.ensureReady).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'box-uuid' }),
+      expect.objectContaining({ id: 'org-1' }),
+      undefined,
+      {
+        requestedAt: expect.any(Date),
+        monotonicStart: expect.any(Number),
+      },
+    )
     expect(proxyHandler.upgrade).not.toHaveBeenCalled()
     expect(socket.destroy).toHaveBeenCalled()
   })

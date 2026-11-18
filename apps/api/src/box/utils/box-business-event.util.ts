@@ -4,8 +4,10 @@
  */
 
 import { Context } from '../../common/context/context'
-import { recordBusinessEvent } from '../../common/utils/business-event.util'
+import { BusinessEventJobTiming, recordBusinessEvent } from '../../common/utils/business-event.util'
 import { JobStatus } from '../enums/job-status.enum'
+import { JobType } from '../enums/job-type.enum'
+import { v5 } from 'uuid'
 
 // Box events record their request where it is accepted (BoxService, the
 // auto-stop and auto-delete crons) and their outcome where the runner reports
@@ -13,7 +15,7 @@ import { JobStatus } from '../enums/job-status.enum'
 type BoxEventName = 'box.create' | 'box.start' | 'box.stop' | 'box.delete'
 
 /** The box an event is about; its organization travels with every record of it. */
-export type BoxRef = { id: string; organizationId: string }
+export type BoxRef = { id: string; organizationId: string; imageIsOrgOwned?: boolean | null }
 
 export function recordBoxRequested(name: BoxEventName, box: BoxRef, ctx: Context): void {
   recordBusinessEvent({ name, outcome: 'requested', correlationId: box.id, organizationId: box.organizationId, ctx })
@@ -35,10 +37,52 @@ export function recordWarmPoolClaim(box: BoxRef, ctx: Context): void {
  * Records the outcome of a finished box job. Call it only after the box row
  * reflecting that outcome has been written, and only for COMPLETED or FAILED jobs.
  */
-export function recordBoxJobOutcome(name: BoxEventName, jobStatus: JobStatus, box: BoxRef): void {
-  const event = { name, correlationId: box.id, organizationId: box.organizationId }
+export function recordBoxJobOutcome(
+  name: BoxEventName,
+  jobStatus: JobStatus,
+  box: BoxRef,
+  job?: Readonly<BusinessEventJobTiming & { type?: JobType }>,
+): void {
+  // Copy only timing fields: Job payloads and runner errors may contain secrets.
+  const timing = job && {
+    id: job.id,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+  }
+  const outcome = jobStatus === JobStatus.COMPLETED ? 'success' : 'exception'
+  const completedAt = timing?.completedAt
+  const occurrence =
+    timing?.id && completedAt instanceof Date && Number.isFinite(completedAt.getTime())
+      ? {
+          eventId: v5(`boxlite:job-outcome:${timing.id}:${name}:${outcome}`, v5.URL),
+          occurredAt: completedAt,
+        }
+      : {}
+  const event = {
+    name,
+    correlationId: box.id,
+    organizationId: box.organizationId,
+    ...(timing ? { job: timing } : {}),
+    ...occurrence,
+  }
   if (jobStatus === JobStatus.COMPLETED) {
     recordBusinessEvent({ ...event, outcome: 'success' })
+    // Persisted provenance is authoritative; older unclassified boxes stay unknown.
+    const startedImage =
+      (name === 'box.create' && job?.type === JobType.CREATE_BOX) ||
+      (name === 'box.start' && job?.type === JobType.START_BOX)
+    if (startedImage && box.imageIsOrgOwned === true && occurrence.eventId) {
+      recordBusinessEvent({
+        name: 'cloud.feature.use',
+        outcome: 'success',
+        organizationId: box.organizationId,
+        correlationId: box.id,
+        occurredAt: completedAt,
+        eventId: v5('boxlite:custom-image-start:' + occurrence.eventId, v5.URL),
+        feature: { name: 'custom_image', evidence: 'started_image', source: 'api' },
+      })
+    }
     return
   }
   recordBusinessEvent({ ...event, outcome: 'exception', exceptionType: 'runner_job_failed' })

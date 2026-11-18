@@ -217,6 +217,7 @@ Formatting-only jobs disable module caching. Go test jobs initialize
 submodules before Rust cache setup and retain build state for both the root Cargo
 workspace and vendored libkrun. They retain workspace compilation outputs, while
 still invoking `make coverage:go` to rebuild changed code and current Git metadata.
+On Linux x64, a second Go coverage pass enables KVM and exercises nested runtime metadata and the local SSH usage drain. The drain must return an empty batch for a configured Box and leave its PID at zero. Both Go coverage passes contribute to the patch report.
 Finished native libraries are not reused without Cargo's freshness checks.
 The Go lint job retains formatting checks. SDK and API test filters exclude Markdown and select
 the Make recipes they execute; the changes job still parses every Make include with `make -n help`.

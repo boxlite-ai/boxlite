@@ -352,3 +352,12 @@ runs the proxy on port 4000 with the rest of the local stack.
 - [`../libs/common-go/pkg/proxy/`](../libs/common-go/pkg/proxy/): shared reverse proxy and stream relay
 - Runner side: [`network_tunnel.go`](../runner/pkg/api/controllers/network_tunnel.go) and
   [`guest_port_tunnel.go`](../runner/pkg/boxlite/guest_port_tunnel.go)
+
+## Cloud feature usage
+
+After successful guest HTTP forwarding (2xx/3xx or 101), or an accepted CONNECT with a Runner connection,
+Proxy attempts a nonblocking local enqueue. A separate background worker batches observations using the
+existing API URL and Proxy token; no analytics request is awaited by forwarding. A full queue drops evidence.
+The reporter has its own HTTP transport, a two-second upload deadline and no retries or redirects.
+Invalid reporter configuration disables collection without stopping Proxy.
+See [collection and loss boundaries](../api/README.md#cloud-feature-use-evidence).

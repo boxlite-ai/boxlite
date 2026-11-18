@@ -12,6 +12,10 @@ import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { Organization } from '../../organization/entities/organization.entity'
+import { Context } from '../../common/context/context'
+import { PlatformReason } from '../../common/context/platform-reason.enum'
+import { beginBoxOperation } from '../utils/box-operation.util'
+import { RequestTiming, requestTiming } from '../../common/utils/request-timing.util'
 
 export const AUTO_RESUME_TIMEOUT_SECONDS = 30
 
@@ -29,6 +33,12 @@ export const AUTO_RESUMABLE_STATES: readonly BoxState[] = [
   BoxState.RESTORING,
 ]
 
+type ResumeBox = Pick<Box, 'id' | 'state' | 'desiredState'>
+
+function isReady(box: ResumeBox): boolean {
+  return box.state === BoxState.STARTED && box.desiredState !== BoxDesiredState.STOPPED
+}
+
 @Injectable()
 export class BoxAutoResumeService {
   constructor(
@@ -38,23 +48,55 @@ export class BoxAutoResumeService {
   ) {}
 
   /** Submit or join Start and return only after the Box is actually STARTED. */
-  async ensureReady(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<void> {
-    let box = await this.submitOrJoinStart(boxId, organization, admit)
-
-    const stopping =
-      box.state === BoxState.STOPPING ||
-      (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STOPPED)
-    if (stopping) {
-      await this.boxStateWaiter.waitForStopped(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
-      box = await this.submitOrJoinStart(box.id, organization, admit)
+  async ensureReady(
+    admittedBox: ResumeBox,
+    organization: Organization,
+    admit?: ProxyAdmission,
+    timing: RequestTiming = requestTiming(),
+  ): Promise<void> {
+    const boxId = admittedBox.id
+    let confirmedAt: number | undefined
+    const onStarted = () => {
+      confirmedAt = performance.now()
     }
-
-    if (box.state !== BoxState.STARTED) {
-      await this.boxStateWaiter.waitForStarted(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
+    const begin = () =>
+      beginBoxOperation({
+        kind: 'resume',
+        organizationId: organization.id,
+        ctx: Context.platform(PlatformReason.AUTO_RESUME),
+        scope: 'proxy_api',
+        boxId,
+        timing,
+      })
+    let finish = isReady(admittedBox) ? undefined : begin()
+    try {
+      let box = await this.submitOrJoinStart(boxId, organization, admit, onStarted)
+      const stopping =
+        box.state === BoxState.STOPPING ||
+        (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STOPPED)
+      if (isReady(box) && !finish) return
+      finish ??= begin()
+      if (stopping) {
+        await this.boxStateWaiter.waitForStopped(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
+        box = await this.submitOrJoinStart(box.id, organization, admit, onStarted)
+      }
+      if (box.state !== BoxState.STARTED) {
+        await this.boxStateWaiter.waitForStarted(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS, onStarted)
+      }
+      finish({ outcome: 'success', boxId: box.id, confirmedAt })
+    } catch (error) {
+      finish ??= begin()
+      finish({ outcome: 'exception', error })
+      throw error
     }
   }
 
-  private async submitOrJoinStart(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<Box> {
+  private async submitOrJoinStart(
+    boxId: string,
+    organization: Organization,
+    admit: ProxyAdmission | undefined,
+    onStarted: () => void,
+  ): Promise<Box> {
     const lockKey = getStateChangeLockKey(boxId)
     const deadline = Date.now() + AUTO_RESUME_TIMEOUT_SECONDS * 1000
     while (!(await this.redisLockProvider.lock(lockKey, AUTO_RESUME_TIMEOUT_SECONDS))) {
@@ -65,7 +107,9 @@ export class BoxAutoResumeService {
     }
 
     try {
-      return await this.boxService.ensureStartedForProxy(boxId, organization, admit)
+      const box = await this.boxService.ensureStartedForProxy(boxId, organization, admit)
+      if (isReady(box)) onStarted()
+      return box
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }

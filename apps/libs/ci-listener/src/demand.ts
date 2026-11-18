@@ -11,6 +11,7 @@ export interface JobObservation {
   status: 'queued' | 'in_progress' | 'completed'
   labels: string[]
   runner: number | null
+  startedAt?: string
 }
 export interface LabelDemand {
   /** Snapshot fences are transport metadata and are never persisted in the counter payload. */
@@ -25,6 +26,13 @@ export interface LabelDemand {
   updatedAt: number
   job: { id: number; runId: number }
 }
+export const executionStartedAt = (value: unknown): string | undefined =>
+  typeof value === 'string' &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value) &&
+  Number.isFinite(Date.parse(value))
+    ? new Date(value).toISOString()
+    : undefined
+
 const rank = { queued: 0, in_progress: 1, completed: 2 }
 export class DemandUncertain extends Error {}
 export class DemandIdentityConflict extends Error {}
@@ -96,7 +104,12 @@ export async function observeDemand(
     supplied.labels.length > 100
   )
     throw new StateCorrupt()
-  const observation = { ...supplied, labels: labelsFor(supplied.labels) }
+  const observation: JobObservation = {
+    status: supplied.status,
+    runner: supplied.runner,
+    labels: labelsFor(supplied.labels),
+    ...(executionStartedAt(supplied.startedAt) ? { startedAt: executionStartedAt(supplied.startedAt) } : {}),
+  }
   if (observation.runner !== null && !positive(observation.runner)) throw new StateCorrupt()
   const factKey = `job-fact/${hint.installationId}/${hint.job.id}`
   const [prior] = await tx.read([factKey])
@@ -124,8 +137,10 @@ export async function observeDemand(
       status: value.status as JobObservation['status'],
       labels: value.labels as string[],
       runner: value.runner as number | null,
+      startedAt: executionStartedAt(value.startedAt),
     }
     if (rank[observation.status] <= rank[previous.status]) return []
+    if (!observation.startedAt && previous.startedAt) observation.startedAt = previous.startedAt
     if (!observation.labels.length) observation.labels = [...previous.labels]
   }
   const deltas = new Map<string, { labels: string[]; delta: number }>()
@@ -186,6 +201,7 @@ export async function observeDemand(
           run: hint.job.runId,
           job: hint.job.id,
           status: observation.status,
+          ...(observation.startedAt ? { startedAt: observation.startedAt } : {}),
           ...(!sameJob || priorClaim?.ambiguous ? { ambiguous: true } : {}),
         },
       })

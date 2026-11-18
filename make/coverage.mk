@@ -88,11 +88,13 @@ coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) vmm\:gue
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
+GO_SDK_COVERAGE_TAGS ?= boxlite_dev
+
 # Go's reports include every package, including packages with no tests.
 coverage\:go: dev\:go
 	@mkdir -p target/coverage
 	@rc=0; \
-	(cd sdks/go && go test -tags boxlite_dev -covermode=atomic -coverpkg=./... \
+	(cd sdks/go && go test -tags $(GO_SDK_COVERAGE_TAGS) -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-sdk.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd src/deps/libgvproxy-sys/gvproxy-bridge && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/gvproxy.out" $(GOTEST_FILTER) ./...) || rc=$$?; \

@@ -278,6 +278,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
             'event.name': 'box.create',
             'event.outcome': outcome === 'success' ? 'success' : 'exception',
             'correlation.id': admitted.id,
+            'job.id': job.id,
+            'job.completed_at': job.completedAt!.toISOString(),
+            'event.timestamp': job.completedAt!.toISOString(),
+            'event.id': expect.any(String),
           }),
         ])
         expect(await boxes.findOneByOrFail({ id: admitted.id })).toMatchObject({

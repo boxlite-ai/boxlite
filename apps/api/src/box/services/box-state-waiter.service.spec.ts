@@ -8,8 +8,11 @@ import { HttpStatus, RequestTimeoutException } from '@nestjs/common'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
+import { BoxReadinessError } from '../errors/box-readiness.error'
 import { BoxStateWaiterService } from './box-state-waiter.service'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
+import { NotificationService } from '../../notification/services/notification.service'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 
 function makeWaiter(initialState = BoxState.STARTING, toBoxDto?: (box: any) => Promise<any>) {
   const subscriber = new EventEmitter() as any
@@ -24,6 +27,18 @@ function makeWaiter(initialState = BoxState.STARTING, toBoxDto?: (box: any) => P
 }
 
 describe('BoxStateWaiterService', () => {
+  it('identifies a runtime transition failure while preserving the existing HTTP response', async () => {
+    const { waiter, boxService } = makeWaiter(BoxState.ERROR)
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-1',
+      state: BoxState.ERROR,
+      errorReason: 'runtime failed',
+    })
+    const error = await waiter.waitForStarted('box-1', 'org-1', 1).catch((error) => error)
+    expect(error).toBeInstanceOf(BoxReadinessError)
+    expect(error.getStatus()).toBe(400)
+    expect(error.getResponse()).toBe('Box state transition failed: runtime failed')
+  })
   it('resolves concurrent waiters for the same box from one state event', async () => {
     const { waiter, subscriber } = makeWaiter()
     const first = waiter.waitForStarted('box-1', 'org-1', 5)
@@ -36,6 +51,49 @@ describe('BoxStateWaiterService', () => {
       { id: 'box-1', state: BoxState.STARTED },
       { id: 'box-1', state: BoxState.STARTED },
     ])
+  })
+
+  it.each(['state', 'desired state'])('observes the %s notification before dashboard enrichment', async (kind) => {
+    const { waiter, subscriber } = makeWaiter()
+    const onStarted = jest.fn()
+    const pending = waiter.waitForStarted('box-1', 'org-1', 5, onStarted)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    let release!: () => void
+    const metadata = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const box = { id: 'box-1', state: BoxState.STARTED } as never
+    const emitter = { emitBoxStateUpdated: jest.fn(), emitBoxDesiredStateUpdated: jest.fn() }
+    const notifications = new NotificationService(
+      emitter as never,
+      {} as never,
+      {
+        toBoxDto: async () => {
+          await metadata
+          return { lastActivityAt: 'enriched' }
+        },
+      } as never,
+      { publish: async (channel: string, message: string) => subscriber.emit('message', channel, message) } as never,
+    )
+    const dispatch =
+      kind === 'state'
+        ? notifications.handleBoxStateUpdated({ box, oldState: BoxState.STARTING, newState: BoxState.STARTED })
+        : notifications.handleBoxDesiredStateUpdated({
+            box,
+            oldDesiredState: BoxDesiredState.STOPPED,
+            newDesiredState: BoxDesiredState.STARTED,
+          })
+    const notify = kind === 'state' ? emitter.emitBoxStateUpdated : emitter.emitBoxDesiredStateUpdated
+    try {
+      expect(onStarted).toHaveBeenCalledTimes(1)
+      expect(notify).not.toHaveBeenCalled()
+    } finally {
+      release()
+      await dispatch
+      await pending
+    }
+    expect(notify.mock.calls[0][0]).toEqual({ lastActivityAt: 'enriched' })
   })
 
   it('rejects instead of returning a non-target state on timeout', async () => {

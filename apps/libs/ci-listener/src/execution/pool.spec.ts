@@ -920,6 +920,74 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.stop).not.toHaveBeenCalled()
     expect((await rows()).allocations.size).toBe(2)
   })
+  it.each([true, false])(
+    'observes actual execution only for a timestamped managed runner claim %s',
+    async (timestamped) => {
+      const execution = jest.fn()
+      pool = new WorkerPool(journal, key, async () => backend, settings, observe, undefined, execution)
+      const busy = new Set<string>()
+      supplyInventory(busy)
+      await pool.balance(lease, limits, countedDemand(), undefined, true)
+      const row = await allocation()
+      expect(execution).not.toHaveBeenCalled()
+      busy.add(row.value.name)
+      const startedAt = '2026-11-01T00:00:00.000Z'
+      await state.ingress('1/21', async (tx) =>
+        tx.write(
+          await observeDemand(
+            tx,
+            { installationId: 1, accountId: 7, repositoryId: 21, job: { id: 777, runId: 888 } },
+            {
+              status: 'in_progress',
+              labels: ['boxlite'],
+              runner: row.value.runner.id,
+              ...(timestamped ? { startedAt } : {}),
+            },
+          ),
+        ),
+      )
+      await pool.balance(lease, limits, countedDemand(0))
+      await pool.balance(lease, limits, countedDemand(0))
+      if (timestamped) {
+        expect(execution).toHaveBeenCalledTimes(1)
+        expect(execution).toHaveBeenCalledWith({
+          organization: definition.organization,
+          installation: 1,
+          boxId: row.value.box.id,
+          job: { repository: 21, run: 888, job: 777 },
+          startedAt,
+        })
+      } else expect(execution).not.toHaveBeenCalled()
+    },
+  )
+
+  it('isolates a failing execution observer from worker reconciliation', async () => {
+    const execution = jest.fn(() => {
+      throw new Error('collector offline')
+    })
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, undefined, execution)
+    const busy = new Set<string>()
+    supplyInventory(busy)
+    await pool.balance(lease, limits, countedDemand(), undefined, true)
+    const row = await allocation()
+    busy.add(row.value.name)
+    await state.ingress('1/21', async (tx) =>
+      tx.write(
+        await observeDemand(
+          tx,
+          { installationId: 1, accountId: 7, repositoryId: 21, job: { id: 777, runId: 888 } },
+          {
+            status: 'in_progress',
+            labels: ['boxlite'],
+            runner: row.value.runner.id,
+            startedAt: '2026-11-01T00:00:00Z',
+          },
+        ),
+      ),
+    )
+    await expect(pool.balance(lease, limits, countedDemand(0))).resolves.toBeUndefined()
+    expect(execution).toHaveBeenCalledTimes(1)
+  })
   it('requires queue fallback before replacing busy supply without a running observation', async () => {
     const busy = new Set<string>()
     supplyInventory(busy)
