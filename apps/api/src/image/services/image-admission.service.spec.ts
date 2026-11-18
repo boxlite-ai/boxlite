@@ -14,7 +14,7 @@ import { ImageCountLimitReachedError } from '../errors/image-admission.error'
 import { ImageAdmissionService } from './image-admission.service'
 import { ResolvedImage } from './image-resolver.service'
 
-type RedisMock = { incr: jest.Mock; expire: jest.Mock; ttl: jest.Mock }
+type RedisMock = { incr: jest.Mock; expire: jest.Mock; ttl: jest.Mock; eval: jest.Mock }
 type ImageRepositoryMock = { exists: jest.Mock; count: jest.Mock }
 
 /** What the resolver answers for a ref the catalog has never seen. */
@@ -41,6 +41,7 @@ describe('ImageAdmissionService', () => {
       incr: jest.fn().mockResolvedValue(1),
       expire: jest.fn().mockResolvedValue(1),
       ttl: jest.fn().mockResolvedValue(60),
+      eval: jest.fn().mockResolvedValue(0),
     }
     images = {
       exists: jest.fn().mockResolvedValue(false),
@@ -197,6 +198,25 @@ describe('ImageAdmissionService', () => {
       expect(error.status).toBe(HttpStatus.TOO_MANY_REQUESTS)
       expect(Number.isSafeInteger(error.retryAfterSeconds)).toBe(true)
       expect(error.retryAfterSeconds).toBe(42)
+    })
+
+    it('hands the spent unit back for a create the box limit refused', async () => {
+      await service.refundColdPullBudget(organization, CATALOG_MISS)
+
+      const [script, keyCount, key] = redis.eval.mock.calls[0]
+      expect(script).toContain("redis.call('EXISTS', KEYS[1]) == 1")
+      expect(script).toContain("redis.call('DECR', KEYS[1])")
+      expect(keyCount).toBe(1)
+      expect(key).toBe('image:coldpull:org-1')
+    })
+
+    it('spends nothing to refund a ref the catalog answered', async () => {
+      await service.refundColdPullBudget(organization, {
+        ref: `quay.io/acme/app@sha256:${'a'.repeat(64)}`,
+        isOrgOwned: true,
+        imageId: 'image-1',
+      })
+      expect(redis.eval).not.toHaveBeenCalled()
     })
 
     /**

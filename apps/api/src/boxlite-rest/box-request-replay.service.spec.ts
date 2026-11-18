@@ -96,6 +96,28 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     await cleanup(keyOf('createBox', key))
   })
 
+  // A caller whose ready phase outran the deadline already received "not
+  // dispatched"; a reservation landing afterwards would fence the key for
+  // its full TTL with nobody to complete it. The losing claim must release
+  // what it created, so the same key stays immediately usable.
+  it('releases the key when the reservation lands after its deadline', async () => {
+    const key = randomUUID()
+    const slow: BoxRequestReplayService = Object.assign(new BoxRequestReplayService(redis), {
+      ready: async (): Promise<Redis> => {
+        await new Promise((resolve) => setTimeout(resolve, 1100))
+        return redis
+      },
+    })
+
+    await expect(slow.session(org, 'u', 'capacity', key, 'fp-slow')).rejects.toMatchObject({ status: 503 })
+    await slow.onModuleDestroy()
+
+    const next = await service.session(org, 'u', 'capacity', key, 'fp-next')
+    expect(next.isOwner).toBe(true)
+    await next.complete({ status: 201, body: '{"id":"recovered"}' })
+    await cleanup(keyOf('capacity', key))
+  })
+
   // A corrupt stored body is unusable: replaying it would send garbage, and
   // deleting it would re-dispatch, so the conservative unknown applies.
   it('treats a corrupt stored response as unknown', async () => {

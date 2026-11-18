@@ -147,6 +147,28 @@ export class ImageAdmissionService {
   }
 
   /**
+   * Hand one spent cold pull back, for a create whose only effect was that
+   * spend: the box limit settles inside the insert, after the budget, and the
+   * replay layer treats that rejection as retryable — without the refund,
+   * automatic retries would drain the organization's window without a box to
+   * show for it.
+   *
+   * The refund never resurrects an expired window: a key that has already
+   * expired stays gone, and a live window is only counted down by the one
+   * unit this create spent.
+   */
+  async refundColdPullBudget(organization: Organization, resolved: ResolvedImage): Promise<void> {
+    if (!resolved.isOrgOwned || resolved.imageId) {
+      return
+    }
+    await this.redis.eval(
+      `if redis.call('EXISTS', KEYS[1]) == 1 then return redis.call('DECR', KEYS[1]) end return 0`,
+      1,
+      `image:coldpull:${organization.id}`,
+    )
+  }
+
+  /**
    * Refuse a new image once the organization holds its limit.
    *
    * It counts only images already recorded, so first pulls still in flight can

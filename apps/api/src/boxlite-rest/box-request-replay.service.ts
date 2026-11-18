@@ -125,6 +125,12 @@ else
 end
 return 1
 `
+const RELEASE_IF_OWNER_SCRIPT = `
+if redis.call('HGET', KEYS[1], 'owner') == ARGV[1] and redis.call('HEXISTS', KEYS[1], 'response') == 0 then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+`
 
 function recordKey(organizationId: string, subjectId: string, operation: string, requestId: string): string {
   return `replay:${organizationId}:${subjectId}:${operation}:${createHash('sha256').update(requestId).digest('hex')}`
@@ -249,19 +255,33 @@ export class BoxRequestReplayService implements OnModuleDestroy {
     mode: string,
   ): Promise<{ result: string[]; connection: Redis }> {
     let timer: NodeJS.Timeout | undefined
+    let abandoned = false
     const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('Replay reservation deadline exceeded')), REPLAY_COMMAND_TIMEOUT_MS)
+      timer = setTimeout(() => {
+        abandoned = true
+        reject(new Error('Replay reservation deadline exceeded'))
+      }, REPLAY_COMMAND_TIMEOUT_MS)
     })
     const claim = async () => {
       const connection = await this.ready()
       const result = await connection.eval(RESERVE_SCRIPT, 1, key, fingerprint, owner, RECORD_TTL_SECONDS, mode)
+      // The caller has already been told the request was not dispatched, so a
+      // reservation landing here would fence the key for its whole TTL with no
+      // owner session to complete it. Release it while still owned: a caller
+      // that reclaimed the key in between keeps its record untouched.
+      if (abandoned) {
+        await connection.eval(RELEASE_IF_OWNER_SCRIPT, 1, key, owner)
+        throw new Error('Replay reservation deadline exceeded')
+      }
       if (!Array.isArray(result) || result.some((item) => typeof item !== 'string'))
         throw new Error('Invalid replay storage result')
       return { result: result as string[], connection }
     }
+    const claimed = claim()
     try {
-      return await Promise.race([claim(), deadline])
+      return await Promise.race([claimed, deadline])
     } catch (error) {
+      void claimed.catch(() => undefined)
       throw this.unavailable(error)
     } finally {
       clearTimeout(timer)
