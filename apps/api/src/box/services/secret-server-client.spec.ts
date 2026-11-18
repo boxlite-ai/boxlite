@@ -108,6 +108,26 @@ describe('SecretServerClient HTTP boundary', () => {
     expect(requests).toHaveLength(0)
   })
 
+  it('rejects conflicting input names before acquiring an identity', async () => {
+    const identity = jest.spyOn(GoogleAuth.prototype, 'getIdTokenClient')
+    const conflicting = secrets.map((secret) => ({ ...secret, name: 'same' }))
+    await expect(
+      client(url, { 'secretServer.devToken': undefined }).storeBoxSecrets('id', 'org', 'user', conflicting),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(identity).not.toHaveBeenCalled()
+    expect(requests).toHaveLength(0)
+  })
+
+  it('normalizes only ASCII letters and preserves distinct raw names in the transfer', async () => {
+    const distinct = secrets.map((secret, i) => ({ ...secret, name: ['ß', 'ss'][i] }))
+    const result = await client(url).storeBoxSecrets('id', 'org', 'user', distinct)
+    expect(requests[0].body.secrets.map(({ name }) => name)).toEqual(['ß', 'ss'])
+    expect(result.map(({ name, secretId }) => ({ name, secretId }))).toEqual([
+      { name: 'ß', secretId: ids[0] },
+      { name: 'ss', secretId: ids[1] },
+    ])
+  })
+
   it.each([401, 503, 307, 204])(
     'fails status %s without retrying, redirecting, or exposing upstream detail',
     async (status) => {

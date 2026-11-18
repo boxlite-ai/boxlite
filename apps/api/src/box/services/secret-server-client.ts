@@ -4,6 +4,7 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { GoogleAuth } from 'google-auth-library'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BoxSecret } from '../dto/box.dto'
+import { BadRequestError } from '../../exceptions/bad-request.exception'
 
 const TRANSFER_TIMEOUT_MS = 6000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -22,6 +23,14 @@ export class SecretServerClient {
     secrets: BoxSecret[],
   ): Promise<BoxSecret[]> {
     if (!this.config.get('secretServer.enabled') || secrets.length === 0) return secrets
+
+    // Match the write contract's ASCII name normalization before any remote side effect.
+    const names = new Set<string>()
+    for (const { name } of secrets) {
+      const normalized = name.replace(/[a-z]/g, (letter) => letter.toUpperCase()).replace(/[^A-Z0-9_]/gu, '_')
+      if (names.has(normalized)) throw new BadRequestError('Secret names must be unique after normalization')
+      names.add(normalized)
+    }
 
     const started = Date.now()
     const controller = new AbortController()

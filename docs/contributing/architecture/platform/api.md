@@ -553,6 +553,12 @@ before inserting the box. The API generates the box ID in memory and sends
 the authenticated caller's `created_by`, and the secret values and access policy.
 Omitted placeholders become `<BOXLITE_SECRET:{name}>` before transfer.
 
+Enabled forwarding rejects conflicting secret names with HTTP 400 before
+Secret Server authentication or transfer, even when their hosts and headers differ. Names use
+the write contract's normalization: ASCII lowercase becomes uppercase, and each
+other character outside `[A-Z0-9_]` becomes `_`. For example, `open-ai` conflicts
+with `OPEN_AI`. Disabled forwarding preserves the existing name behavior.
+
 Only a complete 200/201 name-to-ID mapping permits insertion. UUID uniqueness is
 case-insensitive: differently cased spellings of the same ID are rejected.
 The box's `secrets`
