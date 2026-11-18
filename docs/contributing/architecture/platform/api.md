@@ -570,7 +570,8 @@ There are no automatic transfer retries or redirects. Transfer, authentication,
 timeout, and invalid-response failures return HTTP 503 with
 `code: secret_store_unavailable` before any box insertion; plaintext fallback is
 never attempted. Logs contain box ID, count, result, and latency, without bodies
-or upstream errors. A later insert failure can leave encrypted orphan secrets.
+or upstream errors. A later insert failure can leave encrypted orphan secrets;
+bounded cleanup requires the separate [lifecycle contract tracked in #2865](https://github.com/boxlite-ai/boxlite/issues/2865).
 
 Enable only on staging after the BUI-1385 credential handoff is deployed in an
 all-v2 environment. Flipping this flag does not migrate existing inline boxes or
@@ -601,9 +602,12 @@ the credential. A second valid request is inactive and logs the credential ID
 as a replay warning. Deleting the Box cascades to its credentials.
 
 The route has no caller authentication in this MVP and is excluded from OpenAPI.
-GCP's external backend denies decoded internal paths using Cloud Armor; only the
+GCP's external backend denies decoded internal namespace paths using Cloud Armor; only the
 private backend passes the exact root route without adding `/api`.
 AWS's public ALB denies internal paths with WAF, including dashboard origin traffic.
+Both policies match decoded, lowercase `^(?:/api)?/internal(?:/|$)` paths, preserving
+public Box routes such as `/api/v1/boxes/internal/start`. Reconcile the AWS bootstrap
+deploy policy before rollout so it can manage the stage's credential ingress ACL.
 Local deployments must keep the listener on a private or loopback network.
 These policies must deploy before enabling Secret Server.
 

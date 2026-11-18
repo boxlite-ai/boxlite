@@ -1,6 +1,7 @@
 /** Public API and dashboard origin traffic must not reach unauthenticated internal routes. */
 export function denyPublicInternalRoutes(albArn: $util.Input<string>): void {
   const acl = new aws.wafv2.WebAcl('ApiInternalRoutePolicy', {
+    name: `boxlite-${$app.stage}-internal-routes`,
     scope: 'REGIONAL',
     defaultAction: { allow: {} },
     visibilityConfig: {
@@ -14,10 +15,9 @@ export function denyPublicInternalRoutes(albArn: $util.Input<string>): void {
         priority: 0,
         action: { block: {} },
         statement: {
-          byteMatchStatement: {
+          regexMatchStatement: {
             fieldToMatch: { uriPath: {} },
-            positionalConstraint: 'CONTAINS',
-            searchString: '/internal/',
+            regexString: '^(?:/api)?/internal(?:/|$)',
             textTransformations: [
               { priority: 0, type: 'URL_DECODE' },
               { priority: 1, type: 'LOWERCASE' },

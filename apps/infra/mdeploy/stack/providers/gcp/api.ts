@@ -635,7 +635,7 @@ export const gcpApiProvider =
           priority: 100,
           action: 'deny(403)',
           match: {
-            expr: { expression: "request.path.urlDecode().lower().contains('/internal/')" },
+            expr: { expression: "request.path.urlDecode().lower().matches('^(?:/api)?/internal(?:/|$)')" },
           },
         },
         {

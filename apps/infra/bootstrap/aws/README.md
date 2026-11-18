@@ -59,6 +59,15 @@ SSM instance targets and SES identity management. [Security](../../docs/aws/secu
 records those limits. `cloudfront-keyvaluestore:*` is separate from `cloudfront:*`; the latter's
 wildcard does not cover another service prefix.
 
+Credential ingress uses the regional ACL `boxlite-<stage>-internal-routes`.
+The deploy policy scopes WAF creation, lifecycle, tagging and association to that
+ACL in the stage account and region. Disassociation uses the AWS-required wildcard
+resource with a requested-region condition; existing ELB permissions cover the
+load-balancer side. See [AWS association permissions](https://docs.aws.amazon.com/waf/latest/developerguide/security_iam_service-with-iam.html).
+
+Reconcile bootstrap and read back its inline deploy policy before previewing or
+applying either AWS deployment path. Updating the repository does not update a live role.
+
 ## Artifact retention and changes
 
 Bootstrap creates missing ECR/artifact stores but does not delete or replace them. Its bucket

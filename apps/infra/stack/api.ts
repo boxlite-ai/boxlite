@@ -439,4 +439,4 @@ export async function buildApi(input: ApiInputs) {
   return { api }
 }
 
-export type ApiResources = ReturnType<typeof buildApi>
+export type ApiResources = Awaited<ReturnType<typeof buildApi>>
