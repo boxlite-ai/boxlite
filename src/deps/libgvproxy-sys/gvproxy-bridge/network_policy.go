@@ -19,6 +19,12 @@ import (
 type outboundPolicy struct {
 	Mode     string   `json:"mode"`
 	AllowNet []string `json:"allow_net"`
+	tcp      *trustedTCPRules
+}
+
+type trustedTCPRules struct {
+	allow, deny []string
+	cloud       bool
 }
 
 type nicOperations interface {
@@ -36,6 +42,8 @@ type outboundPolicyController struct {
 	stack   *stack.Stack
 	nic     tcpip.NICID
 	nicOps  nicOperations
+
+	tcpInspectionSlots chan struct{}
 }
 
 func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, initialRevision string) (*outboundPolicyController, error) {
@@ -47,7 +55,10 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 	if len(nics) != 1 {
 		return nil, fmt.Errorf("policy updates require one guest NIC, got %d", len(nics))
 	}
-	p := &outboundPolicyController{config: config, guestIP: guestIP, stack: s, nicOps: s}
+	p := &outboundPolicyController{
+		config: config, guestIP: guestIP, stack: s, nicOps: s,
+		tcpInspectionSlots: make(chan struct{}, 10),
+	}
 	for id := range nics {
 		p.nic = id
 	}
@@ -65,7 +76,7 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 		return nil, err
 	}
 	p.publish(snapshot, "pending")
-	if err := installOutboundHandlers(p.stack, config, config.Ec2MetadataAccess, p.active.Load, ca, secrets); err != nil {
+	if err := installOutboundHandlers(p.stack, config, config.Ec2MetadataAccess, p.active.Load, p.tcpInspectionSlots, ca, secrets); err != nil {
 		return nil, err
 	}
 	if initial.Mode == "disabled" {
@@ -82,10 +93,30 @@ func (p *outboundPolicyController) apply(policy outboundPolicy, revision string)
 	if err != nil {
 		return err
 	}
+	return p.applySnapshot(candidate)
+}
+
+func (p *outboundPolicyController) replaceTrustedTCP(mode string, rules trustedTCPRules, expected, revision string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	current := p.active.Load()
+	if current.revision != expected || revision == expected || revision == "initial" || !validOutboundRevision(revision) {
+		return fmt.Errorf("invalid outbound TCP replacement revision")
+	}
+	candidate := *current
+	if err := candidate.setTCPPolicy(mode, rules); err != nil {
+		return err
+	}
+	candidate.revision = revision
+	return p.applySnapshot(&candidate)
+}
+
+// The caller holds the controller mutex across candidate preparation and publication.
+func (p *outboundPolicyController) applySnapshot(candidate *outboundSnapshot) error {
 	previous := p.active.Load()
 	transition := previous
 	var nicErr tcpip.Error
-	if policy.Mode == "disabled" {
+	if candidate.policy.Mode == "disabled" {
 		transition = candidate
 		p.publish(transition, "pending")
 		nicErr = p.nicOps.DisableNIC(p.nic)
@@ -131,6 +162,7 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	case http.MethodPut:
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		current := p.active.Load()
 		var policy outboundPolicy
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 		decoder.DisallowUnknownFields()
@@ -146,9 +178,13 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		revision, status, err := revisionForOutboundUpdate(r, p.active.Load().revision)
+		revision, status, err := revisionForOutboundUpdate(r, current.revision)
 		if err != nil {
 			http.Error(w, err.Error(), status)
+			return
+		}
+		if current.tcpPolicy != nil {
+			http.Error(w, "extended TCP policy requires a complete trusted replacement", http.StatusConflict)
 			return
 		}
 		if err := p.apply(policy, revision); err != nil {
