@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
+import targets from '../auth0/targets.json' with { type: 'json' }
 
 type JsonObject = Record<string, any>
 type JsonBody = JsonObject | JsonObject[]
@@ -131,6 +132,7 @@ export interface Auth0LoginPolicyOptions {
    * token for it, whatever the client or database connection.
    */
   apiAudience?: string
+  internalAccessAllowedEmailDomains?: string[]
   apply: boolean
   allowTestEmailProvider: boolean
   /** Overwrite a login policy Action this tool cannot show it generated. */
@@ -212,6 +214,13 @@ export function parseAuth0LoginPolicyOptions(
     clientId,
     connectionName,
     apiAudience,
+    ...(environment.OIDC_INTERNAL_ACCESS_ALLOWED_EMAIL_DOMAINS === undefined
+      ? {}
+      : {
+          internalAccessAllowedEmailDomains: parseInternalAccessAllowedEmailDomains(
+            environment.OIDC_INTERNAL_ACCESS_ALLOWED_EMAIL_DOMAINS,
+          ),
+        }),
     apply: values.apply ?? false,
     allowTestEmailProvider: values['allow-test-email-provider'] ?? false,
     replaceAction: values['replace-action'] ?? false,
@@ -221,6 +230,17 @@ export function parseAuth0LoginPolicyOptions(
     ...mcpResourceOption(values['mcp-resource-url']),
     disableMcpLogin: values['disable-mcp-login'] ?? false,
   }
+}
+
+export function parseInternalAccessAllowedEmailDomains(value: string): string[] {
+  if (!value.trim()) return []
+  const domains = [...new Set(value.split(',').map((domain) => domain.trim().toLowerCase()))]
+  const label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+  const pattern = new RegExp(`^${label}(?:\\.${label})+$`)
+  if (domains.some((domain) => domain.length > 253 || !pattern.test(domain))) {
+    throw new Error('OIDC_INTERNAL_ACCESS_ALLOWED_EMAIL_DOMAINS must contain comma-separated exact DNS domains')
+  }
+  return domains
 }
 
 /** `--mcp-resource-url`: the exact `https` URL the MCP endpoint publishes as its resource. */
@@ -451,6 +471,7 @@ export function hydrateLoginPolicyAction(
     mcpResourceUrl?: string
     // The BoxLite API's audience; any token for it needs a verified database user.
     apiAudience?: string
+    internalAccessAllowedEmailDomains?: string[]
   },
 ): string {
   const replacements: Record<string, string> = {
@@ -462,9 +483,16 @@ export function hydrateLoginPolicyAction(
     __AUTH0_DOMAIN_JSON__: JSON.stringify(values.tenant ?? ''),
     __MCP_RESOURCE_URL_JSON__: JSON.stringify(values.mcpResourceUrl ?? ''),
     __API_AUDIENCE_JSON__: JSON.stringify(values.apiAudience ?? ''),
+    __INTERNAL_ACCESS_ALLOWED_EMAIL_DOMAINS_JSON__: JSON.stringify(
+      (values.internalAccessAllowedEmailDomains ?? []).join(','),
+    ),
+    __INTERNAL_ACCESS_ENVIRONMENT_JSON__: JSON.stringify(
+      values.tenant === targets.dev.auth0TenantDomain ? 'dev' :
+        values.tenant === targets.stage.auth0TenantDomain ? 'stage' : '',
+    ),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL|API_AUDIENCE)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL|API_AUDIENCE|INTERNAL_ACCESS_ENVIRONMENT|INTERNAL_ACCESS_ALLOWED_EMAIL_DOMAINS)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -1473,6 +1501,7 @@ export class Auth0LoginPolicyConfigurator {
         tenant: this.options.tenant,
         mcpResourceUrl: this.options.mcpResourceUrl,
         apiAudience: this.options.apiAudience,
+        internalAccessAllowedEmailDomains: this.options.internalAccessAllowedEmailDomains,
       }),
       runtime: 'node22',
     }

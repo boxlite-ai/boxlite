@@ -45,8 +45,7 @@ const flag = (environment: Environment, key: string): boolean => {
 /**
  * A feature switched on by holding a credential, not by a second setting.
  *
- * Three of the API's features work this way — usage export, the status sync,
- * and the Auth0 management client — and each refuses to boot when its flag is
+ * Usage export and the status sync work this way; each refuses to boot when its flag is
  * on and its credential is missing. Deriving the flag from the credential is
  * what stops a stage that was pointed at a service but never given the secret
  * from crash-looping instead of simply staying dark.
@@ -165,13 +164,12 @@ const dashboardFrom = (environment: Environment, hosts: PublicHosts): Record<str
  * The OIDC settings, and the management client the deploy may not be able to
  * configure.
  *
- * `OIDC_MANAGEMENT_API_ENABLED` is the one flag that is *not* derived from its
- * credential, and the asymmetry is deliberate: the audience it needs is a
- * setting rather than a secret, and a stage that turned the feature on without
- * one would have the API fail at its first account-link rather than at boot.
- * Refusing here names the missing key.
+ * Management is explicitly enabled rather than inferred from credentials.
+ * Dev/stage require it for external-access administration, including its
+ * audience and client credentials delivered through the API group. Reject
+ * incomplete configuration before producing a rollout environment.
  */
-const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, string> => {
+const oidcFrom = (environment: Environment, hosts: PublicHosts, stage: string, delivered: Record<string, string>): Record<string, string> => {
   const issuer = optional(environment, 'OIDC_ISSUER_BASE_URL')
   if (!issuer) {
     throw new ApiEnvironmentError(
@@ -179,15 +177,25 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
         'would let the stack become healthy while nobody can sign in',
     )
   }
+  const internalAccess = stage === 'dev' || stage === 'stage'
   const management = flag(environment, 'OIDC_MANAGEMENT_API_ENABLED')
+  if (internalAccess && !management) {
+    throw new ApiEnvironmentError('OIDC_MANAGEMENT_API_ENABLED=true is required for dev/stage external access')
+  }
   const audience = optional(environment, 'OIDC_MANAGEMENT_API_AUDIENCE')
   if (management && !audience) {
     throw new ApiEnvironmentError('OIDC_MANAGEMENT_API_AUDIENCE is required when OIDC_MANAGEMENT_API_ENABLED=true')
+  }
+  if (internalAccess) {
+    for (const key of ['OIDC_MANAGEMENT_API_CLIENT_ID', 'OIDC_MANAGEMENT_API_CLIENT_SECRET']) {
+      if (!held(delivered, key)) throw new ApiEnvironmentError(`${key} must be delivered through the API group for dev/stage external access`)
+    }
   }
   const passthrough = (key: string) =>
     optional(environment, key) ? { [key]: optional(environment, key) as string } : {}
   return {
     OIDC_ISSUER_BASE_URL: issuer,
+    OIDC_INTERNAL_ACCESS_ENVIRONMENT: internalAccess ? stage : '',
     OIDC_AUDIENCE: optional(environment, 'OIDC_AUDIENCE') ?? 'boxlite',
     // Safe to set unconditionally: the API probes the issuer's discovery
     // document at boot and only offers this fallback to the dashboard when the
@@ -434,7 +442,7 @@ export const apiEnvironmentFrom = ({
       // shell ran the deploy, since no group can fetch it.
       OTEL_ENABLED: 'true',
       ...dashboardFrom(environment, hosts),
-      ...oidcFrom(environment, hosts),
+      ...oidcFrom(environment, hosts, stage, delivered),
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),

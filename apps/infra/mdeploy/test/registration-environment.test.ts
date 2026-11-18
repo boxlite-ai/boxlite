@@ -31,6 +31,10 @@ const fixture = (home: Cloud): Record<string, string> => ({
   ),
   STACK_DOMAIN: 'example.com',
   OIDC_ISSUER_BASE_URL: 'https://auth.example.com',
+  OIDC_MANAGEMENT_API_ENABLED: 'true',
+  OIDC_MANAGEMENT_API_AUDIENCE: 'https://auth.example.com/api/v2/',
+  OIDC_MANAGEMENT_API_CLIENT_ID: 'fixture-client',
+  OIDC_MANAGEMENT_API_CLIENT_SECRET: 'fixture-secret',
   ...turnstile,
   TURNSTILE_SECRET_KEY: JSON.stringify({ address: references[home] }),
 })

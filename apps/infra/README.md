@@ -59,3 +59,19 @@ recording cloud-resource doubles and real Pulumi secret Outputs. They verify opt
 settings, timeout defaults and enabled stage-secret delivery without contacting cloud providers.
 For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.
+
+### Auth0 Action coverage
+
+The Action tests execute hydrated deployment code in an isolated VM. During
+`make coverage:infra`, the shared test harness writes each hydration with a
+source map under `target/coverage/infra/actions/`. Distinct filenames keep V8
+ranges from different configurations separate; source maps attribute executed
+lines to `bootstrap/auth0/login-policy.js`. TypeScript is already a tooling
+dependency and supplies the maps. Coverage filters apply after remapping, keeping
+test helpers and generated artifacts outside the production coverage report.
+
+Preserve the mapped harness when adding Action tests. An anonymous VM execution
+can pass assertions while contributing no template coverage. Ordinary test runs
+execute the hydrated source directly and write no coverage artifacts. Admission
+tests cover both the final linked primary identity's grant and an explicit denial,
+including a secondary identity whose grant must not override the primary.

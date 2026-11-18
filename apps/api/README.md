@@ -1727,3 +1727,58 @@ Dashboard owns its normalized telemetry display types, independently of the remo
 
 The nullable physical `user.keyPair` column remains for older API instances and rollback; the current entity no longer maps it.
 No user-key data migration runs in this release. `User.publicKeys` and historical audit action identifiers remain unchanged.
+
+## External test access
+
+`OIDC_INTERNAL_ACCESS_ENVIRONMENT=dev|stage` enables the internal System Admin
+`GET /api/admin/external-access?email=...` and `PUT /api/admin/external-access`
+management routes. It requires the existing enabled OIDC Management client,
+its ID/secret/audience, and provider scopes `read:users` / `update:users_app_metadata`.
+`mdeploy` supplies the setting only for dev/stage. Local/standalone and prod leave
+it unset. These routes are consumed by Backoffice and excluded from the customer
+Swagger surface; they do not add business-request authentication checks.
+
+`GET /api/admin/external-access/grants?page=0&search=tester` lists explicit grants for this
+environment in 50-record pages. Pages are zero-based, from 0 through 19; omitted
+`page` defaults to 0. Optional `search` is a literal email or Auth0 identity prefix,
+trimmed and limited to 320 characters without control characters. Email matching
+ignores case; identity matching is case-sensitive. Query operators are escaped;
+callers cannot supply a provider query or select another environment. The server
+owns the Auth0 metadata query, validates each grant against its current email,
+and returns cleanup previews, `hasNextPage` and `limitReached`. Search is eventually
+consistent and bounded by Auth0's 1,000-result window; reaching that window marks
+the listing as potentially incomplete. Exact-email lookup and updates use the
+immediately consistent provider endpoints. Pagination is not a snapshot: concurrent
+updates can shift page boundaries. Refine the prefix when the result limit is
+reached. This list is not a login decision. See Auth0's
+[user search guidance](https://auth0.com/docs/manage-users/user-search/user-search-best-practices).
+
+Lookup requires an exact existing Auth0 email. Update requires `userId`, `email`
+and boolean `allowed`. A grant is stored in `app_metadata.boxlite_dev_access` or
+`boxlite_stage_access` with normalized email, allowed, updatedAt and updatedBy;
+other metadata is preserved. A matching explicit false blocks subsequent login
+and refresh, including corporate-domain default admission. The login Action
+checks verification and only the final primary identity's metadata after linking.
+
+Management responses report explicit grants and revocations in Auth0 metadata.
+They do not infer effective sign-in access or evaluate default-domain rules;
+those belong to the deployed [Auth0 login policy](../infra/docs/identity-and-mail.md#devstage-test-access).
+
+Revoking also removes all API keys created by the identity across organizations,
+then exits invited memberships through existing deletion transactions. The
+personal organization is suspended only when its membership is the user's default,
+its role is Owner, and the organization creator matches. That Owner membership is
+retained, shared invited organizations are not suspended, and running personal
+Boxes receive normal stop intents. Active suspension timestamps are not reset on
+repeat. Default-membership and last-Owner checks still apply. Key and membership
+paging is deletion-safe; cleanup stops at its bounds and reports partial results.
+After deleting a key batch, revocation finishes invalidating every key in that
+batch before checking its time budget again. Deleted rows cannot be rediscovered
+by a retry; cache failures remain explicit partial results.
+
+Read `cleanup.complete`, key cleanup, organization outcomes, Box outcomes and
+`errorCode`. A successful metadata write can precede failed local cleanup. No
+write retries automatically; an operator can inspect and repeat revoke. Regrant
+restores login only, never memberships, keys or organization state. Existing JWTs
+expire naturally, existing cache TTLs still apply, and open streams are not forcibly
+closed. There is no per-request Auth0 lookup or Redis revocation registry.

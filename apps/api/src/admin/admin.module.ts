@@ -27,9 +27,14 @@ import { AdminOrganizationActivationService } from './services/organization-acti
 import { AdminUsageController } from './controllers/usage.controller'
 import { AdminUsageService } from './services/usage.service'
 import { AdminOrganizationNestedVirtualizationController } from './controllers/organization-nested-virtualization.controller'
+import { ApiKeyModule } from '../api-key/api-key.module'
+import { AdminEnvironmentAccessController } from './controllers/environment-access.controller'
+import { EnvironmentAccessService } from './services/environment-access.service'
+import { EnvironmentAccessCleanupService } from './services/environment-access-cleanup.service'
 
 @Module({
   imports: [
+    ApiKeyModule,
     BoxModule,
     RegionModule,
     OrganizationModule,
@@ -51,6 +56,7 @@ import { AdminOrganizationNestedVirtualizationController } from './controllers/o
     ]),
   ],
   controllers: [
+    AdminEnvironmentAccessController,
     AdminRunnerController,
     AdminBoxController,
     AdminProviderController,
@@ -58,6 +64,8 @@ import { AdminOrganizationNestedVirtualizationController } from './controllers/o
     AdminOrganizationNestedVirtualizationController,
   ],
   providers: [
+    EnvironmentAccessService,
+    EnvironmentAccessCleanupService,
     AdminOrganizationOverviewService,
     AdminPlatformOverviewService,
     AdminOrganizationActivationService,

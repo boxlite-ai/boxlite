@@ -8,11 +8,11 @@ import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom
 import type { GroupDeclaration } from '../src/env.ts'
 
 const groups = (api: string[], secret?: string[]): GroupDeclaration => ({
-  groups: { deploy: [], api, ...(secret ? { secret } : {}) },
+  groups: { deploy: [], api: [...new Set(['OIDC_MANAGEMENT_API_CLIENT_ID', 'OIDC_MANAGEMENT_API_CLIENT_SECRET', ...api])], ...(secret ? { secret } : {}) },
   where: '/repo/mstage.config.json',
 })
 
-const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://auth.dev.boxlite.ai' }
+const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://auth.dev.boxlite.ai', OIDC_MANAGEMENT_API_ENABLED: 'true', OIDC_MANAGEMENT_API_AUDIENCE: 'https://auth.dev.boxlite.ai/api/v2/', OIDC_MANAGEMENT_API_CLIENT_ID: 'fixture-client', OIDC_MANAGEMENT_API_CLIENT_SECRET: 'fixture-secret' }
 
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
@@ -550,7 +550,7 @@ test('a dashboard host that is the control plane’s own is refused at the bound
 })
 
 test('an issuer is required, because a placeholder would let the stack look healthy', () => {
-  assert.throws(() => assemble({ STACK_DOMAIN: 'dev.boxlite.ai' }), /OIDC_ISSUER_BASE_URL is required/)
+  assert.throws(() => assemble({ ...base, OIDC_ISSUER_BASE_URL: undefined }), /OIDC_ISSUER_BASE_URL is required/)
   assert.throws(() => assemble({ OIDC_ISSUER_BASE_URL: 'https://auth' }), /STACK_DOMAIN is required/)
 })
 
@@ -559,7 +559,7 @@ test('the management client is refused without the audience it needs', () => {
   // setting rather than a secret, so a stage that turned the feature on without
   // one would fail at its first account-link instead of at boot.
   assert.throws(
-    () => assemble({ ...base, OIDC_MANAGEMENT_API_ENABLED: 'true' }),
+    () => assemble({ ...base, OIDC_MANAGEMENT_API_ENABLED: 'true', OIDC_MANAGEMENT_API_AUDIENCE: undefined }),
     /OIDC_MANAGEMENT_API_AUDIENCE is required/,
   )
   const { environment } = assemble({
@@ -906,3 +906,56 @@ test('a disk-expansion switch that is neither true nor false is refused at the d
   // Refused here, where the stage can still be told.
   assert.throws(() => assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'True' }), /must be true or false/)
 })
+
+for (const stage of ['dev', 'stage', 'prod', 'preview']) {
+  test(`internal access management is scoped explicitly for ${stage}`, () => {
+    const { environment } = apiEnvironmentFrom({
+      environment: base, declaration: groups([]), region: 'ap-southeast-1', stage, home: 'aws',
+    })
+    assert.equal(environment.OIDC_INTERNAL_ACCESS_ENVIRONMENT, stage === 'dev' || stage === 'stage' ? stage : '')
+  })
+}
+
+for (const stage of ['dev', 'stage']) {
+  for (const home of ['aws', 'gcp'] as const) {
+    const credentials = ['OIDC_MANAGEMENT_API_CLIENT_ID', 'OIDC_MANAGEMENT_API_CLIENT_SECRET']
+    const required = {
+      ...base, OIDC_MANAGEMENT_API_ENABLED: 'true', OIDC_MANAGEMENT_API_AUDIENCE: 'https://auth.example.test/api/v2/',
+      OIDC_MANAGEMENT_API_CLIENT_ID: 'fixture-client', OIDC_MANAGEMENT_API_CLIENT_SECRET: 'fixture-secret',
+    }
+    for (const key of ['OIDC_MANAGEMENT_API_ENABLED', 'OIDC_MANAGEMENT_API_AUDIENCE', ...credentials]) {
+      test(`${home} ${stage} refuses missing ${key} before producing a rollout environment`, () => {
+        const environment: Record<string, string | undefined> = { ...required, [key]: undefined }
+        assert.throws(() => apiEnvironmentFrom({
+          environment, declaration: { ...groups(credentials), optional: { api: credentials } }, region: 'test-region', stage, home,
+        }), new RegExp(key))
+      })
+    }
+    for (const key of credentials) {
+      test(`${home} ${stage} refuses ${key} excluded from API delivery`, () => {
+        assert.throws(() => apiEnvironmentFrom({
+          environment: required, declaration: { groups: { deploy: [], api: credentials.filter(name => name !== key) }, where: '/repo/mstage.config.json' }, region: 'test-region', stage, home,
+        }), new RegExp(key))
+      })
+    }
+  }
+}
+
+for (const home of ['aws', 'gcp'] as const) {
+  test(`${home} dev accepts Management credentials delivered as secret references`, () => {
+    const credentials = ['OIDC_MANAGEMENT_API_CLIENT_ID', 'OIDC_MANAGEMENT_API_CLIENT_SECRET']
+    const addresses = Object.fromEntries(credentials.map((key, index) => [key, home === 'aws'
+      ? `arn:aws:secretsmanager:us-east-1:123456789012:secret:management-${index}`
+      : `projects/test-project/secrets/management-${index}/versions/1`]))
+    const result = apiEnvironmentFrom({
+      environment: { ...base, ...Object.fromEntries(Object.entries(addresses).map(([key, address]) => [key, JSON.stringify({ address })])) },
+      declaration: groups(credentials, credentials), region: 'test-region', stage: 'dev', home,
+    })
+    assert.equal(result.environment.OIDC_INTERNAL_ACCESS_ENVIRONMENT, 'dev')
+    assert.equal(result.environment.OIDC_MANAGEMENT_API_ENABLED, 'true')
+    for (const key of credentials) {
+      assert.equal(result.secrets[key], addresses[key])
+      assert.equal(result.environment[key], undefined)
+    }
+  })
+}
