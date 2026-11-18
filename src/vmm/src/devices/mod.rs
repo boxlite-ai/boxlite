@@ -104,8 +104,6 @@ pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
             memory = Some(mem::add(chipset, &ctx, slot, hotplug)?);
             Ok(())
         })?;
-        // Online hotplugged blocks at once, as ZONE_MOVABLE where the ratio
-        // allows, so the guest can later empty them for unplug.
         config.cmdline.push_str(HOTPLUG_CMDLINE);
     }
     // The next device is one more `add_slot_device` line here. A device that

@@ -72,8 +72,8 @@ fn virtio_mem_grows_and_shrinks_a_real_guest() {
     }
     assert_eq!(after_shrink.requested_mib, 256);
     assert_eq!(after_shrink.plugged_mib, 256, "the guest returned the rest");
-    assert!(
-        after_shrink.mapped_mib < 1024,
-        "emptied slots must leave KVM and the host mapping: {after_shrink:?}"
+    assert_eq!(
+        after_shrink.mapped_mib, 256,
+        "emptied slots must leave KVM and the host mapping"
     );
 }
