@@ -2639,9 +2639,10 @@ components:
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
         - `paused`: The VM is temporarily frozen by guest freeze and SIGSTOP
-          for a disk-consistency operation (snapshot, clone, or export).
-        - `parked`: The checkpoint control interface has confirmed the pause.
-          The VM remains paused until resumed.
+          for a disk-only consistency operation (snapshot, clone, or disk export).
+        - `parked`: The memory-snapshot checkpoint control interface has confirmed
+          the pause (preserving live VM memory and device state). The VM remains
+          paused until resumed.
         - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
 

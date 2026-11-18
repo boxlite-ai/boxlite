@@ -1110,8 +1110,8 @@ conflict.
 See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for retention semantics.
 
-`parked` means a pause confirmed by the checkpoint control interface;
-`paused` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
+`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
 Neither state allows exec or an implicit cold start.
 
 ### `ExecResult` (wrapper)

@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 /// ```text
 /// create()  → Configured (persisted to DB, no VM)
 /// start()   → Running (VM initialized)
-/// SIGSTOP   → Paused (VM frozen for disk consistency)
+/// SIGSTOP   → Paused (VM frozen for disk-only consistency)
 /// SIGCONT   → Running (VM resumed from Paused)
-/// checkpoint pause confirmed → Parked
+/// memory-snapshot checkpoint pause confirmed → Parked
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
 /// ```
@@ -43,10 +43,10 @@ pub enum BoxStatus {
     /// Rootfs is preserved, box can be restarted.
     Stopped,
 
-    /// Box VM pause confirmed by the checkpoint control interface.
+    /// Box VM pause confirmed by the memory-snapshot checkpoint control interface.
     Parked,
 
-    /// Brief guest freeze + SIGSTOP state during disk-consistency operations.
+    /// Brief guest freeze + SIGSTOP state during disk-only consistency operations.
     Paused,
 
     /// Init pipeline failed (e.g., guest_connect timeout, vmm_spawn error).
@@ -76,7 +76,7 @@ impl BoxStatus {
         matches!(self, BoxStatus::Stopped)
     }
 
-    /// Whether the VM is paused for a disk-consistency operation.
+    /// Whether the VM is paused for a disk-only consistency operation.
     pub fn is_paused(&self) -> bool {
         matches!(self, BoxStatus::Paused)
     }
@@ -145,7 +145,7 @@ impl BoxStatus {
             (Configured, Stopped) |
             (Configured, Failed) |
             (Configured, Unknown) |
-            // Running → Stopping, Stopped, Parked (checkpoint), Paused (disk operation), or Failed
+            // Running → Stopping, Stopped, Parked (memory-snapshot checkpoint), Paused (disk-only operation), or Failed
             (Running, Stopping) |
             (Running, Stopped) |
             (Running, Parked) |
@@ -721,7 +721,7 @@ mod tests {
         assert!(state.transition_to(BoxStatus::Running).is_ok());
         assert_eq!(state.status, BoxStatus::Running);
 
-        // Disk operations use Paused, not checkpoint Parked.
+        // Disk-only operations use Paused, not memory-snapshot checkpoint Parked.
         assert!(state.transition_to(BoxStatus::Paused).is_ok());
         assert_eq!(state.status, BoxStatus::Paused);
 

@@ -123,8 +123,8 @@ Completed executions disappear. Listing never boots the box; a stopped or
 not-yet-started box returns an empty slice, and a paused or parked box returns an
 invalid-state error.
 
-`parked` means a pause confirmed by the checkpoint control interface;
-`paused` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
+`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
 Neither state allows exec or an implicit cold start.
 
 `box.Executions().Get(ctx, id)` recovers a control-only `*Execution`: `ID()`,

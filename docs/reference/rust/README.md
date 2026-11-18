@@ -408,8 +408,8 @@ invalid-state error instead of claiming its sessions disappeared.
 `ExecutionInfo` carries the canonical guest execution ID, argv, Unix-millisecond
 spawn time, PTY flag, and `is_main_session`.
 
-`parked` means a pause confirmed by the checkpoint control interface;
-`paused` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
+`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
 Neither state allows exec or an implicit cold start.
 
 `executions().get(id)` returns a control-only handle (no stdin/stdout/stderr).
@@ -531,8 +531,9 @@ live binding data yet, so `info()`, `get_info()`, or `list_info()` may report
 Lifecycle status of a box.
 
 `Paused` (`"paused"`) is the temporary guest-freeze + SIGSTOP state used by
-snapshot, clone, and export operations for disk consistency. `Parked`
-(`"parked"`) is a pause confirmed by the checkpoint control interface.
+snapshot, clone, and disk export operations for disk-only consistency. `Parked`
+(`"parked"`) is a pause confirmed by the memory-snapshot checkpoint control
+interface (preserving live VM memory and device state).
 Both count as active and can be stopped; neither permits exec or an implicit
 cold start. They cannot transition directly into each other.
 
@@ -560,10 +561,10 @@ pub enum BoxStatus {
     /// Not running, can be restarted
     Stopped,
 
-    /// Brief guest freeze + SIGSTOP during disk-consistency operations
+    /// Brief guest freeze + SIGSTOP during disk-only consistency operations
     Paused,
 
-    /// Pause confirmed by the checkpoint control interface
+    /// Pause confirmed by the memory-snapshot checkpoint control interface
     Parked,
 
     /// Init failed; record and rootfs preserved for retry or removal

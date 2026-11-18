@@ -776,7 +776,7 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 	case boxlite.StateRunning:
 		return enums.BoxStateStarted
 	case boxlite.StateParked, boxlite.StatePaused:
-		// Checkpoint pause or temporary disk-consistency freeze. The VM is up,
+		// Memory-snapshot checkpoint pause or temporary disk-only consistency freeze. The VM is up,
 		// so the control plane should keep seeing the box as started.
 		return enums.BoxStateStarted
 	case boxlite.StateStopping:

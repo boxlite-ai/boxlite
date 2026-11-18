@@ -21,8 +21,8 @@ const (
 	StateRunning    State = "running"
 	StateStopping   State = "stopping"
 	StateStopped    State = "stopped"
-	StatePaused     State = "paused" // Guest freeze + SIGSTOP during disk operations.
-	StateParked     State = "parked" // Pause confirmed by the checkpoint control interface.
+	StatePaused     State = "paused" // Guest freeze + SIGSTOP during disk-only operations.
+	StateParked     State = "parked" // Pause confirmed by the memory-snapshot checkpoint control interface.
 	StateFailed     State = "failed"
 )
 
