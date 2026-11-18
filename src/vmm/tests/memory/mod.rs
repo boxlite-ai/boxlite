@@ -9,7 +9,7 @@ use std::{error::Error as _, sync::Arc};
 use boxlite_hypervisor::Error as HypervisorError;
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
 
-use super::{GuestRam, MAX_MEMORY_MIB, RAM_START, ram_ranges};
+use super::{ARM64_LAYOUT, GuestRam, MAX_MEMORY_MIB, RAM_START, X86_LAYOUT, ram_ranges};
 use crate::{
     error::Error,
     mock_vm::{Call, MockVm},
@@ -40,6 +40,74 @@ fn ram_ranges_place_one_mib_aligned_region_at_the_architecture_start() {
     }
     #[cfg(target_arch = "x86_64")]
     assert_eq!(RAM_START + (3072 * MIB) as u64, super::MMIO_HOLE_START);
+}
+
+// Each case lists the requested MiB and the expected (start GPA, length in MiB).
+const X86_LAYOUT_CASES: &[(u32, &[(u64, u32)])] = &[
+    (0, &[]),
+    (1, &[(0, 1)]),
+    (3072, &[(0, 3072)]),
+    (3073, &[(0, 3072), (0x1_0000_0000, 1)]),
+    (4096, &[(0, 3072), (0x1_0000_0000, 1024)]),
+    (4097, &[(0, 3072), (0x1_0000_0000, 1025)]),
+    (6144, &[(0, 3072), (0x1_0000_0000, 3072)]),
+    (u32::MAX, &[(0, 3072), (0x1_0000_0000, u32::MAX - 3072)]),
+];
+
+fn assert_layout_ranges(
+    memory_mib: u32,
+    actual: &[(GuestAddress, usize)],
+    expected: &[(u64, u32)],
+) {
+    assert_eq!(actual.len(), expected.len(), "memory_mib={memory_mib}");
+    let mut total = 0;
+    for (&(start, len), &(expected_start, expected_len_mib)) in actual.iter().zip(expected) {
+        let len = u64::try_from(len).unwrap();
+        assert_eq!(start.0, expected_start, "memory_mib={memory_mib}");
+        assert_eq!(
+            len,
+            u64::from(expected_len_mib) << 20,
+            "memory_mib={memory_mib}"
+        );
+        assert_ne!(len, 0, "memory_mib={memory_mib}");
+        assert_eq!(start.0 % 4096, 0, "memory_mib={memory_mib}");
+        assert_eq!(len % 4096, 0, "memory_mib={memory_mib}");
+        total += len;
+    }
+    assert_eq!(
+        total,
+        u64::from(memory_mib) << 20,
+        "memory_mib={memory_mib}"
+    );
+}
+
+#[test]
+fn x86_ram_layout_splits_at_the_mmio_hole() {
+    for &(memory_mib, expected) in X86_LAYOUT_CASES {
+        let actual = X86_LAYOUT.ranges(u64::from(memory_mib) << 20).unwrap();
+        assert_layout_ranges(memory_mib, &actual, expected);
+    }
+}
+
+#[test]
+fn arm64_ram_layout_keeps_one_nonempty_range() {
+    for &(memory_mib, _) in X86_LAYOUT_CASES {
+        let actual = ARM64_LAYOUT.ranges(u64::from(memory_mib) << 20).unwrap();
+        let expected = [(0x8000_0000, memory_mib)];
+        let expected = if memory_mib == 0 {
+            &[][..]
+        } else {
+            &expected[..]
+        };
+        assert_layout_ranges(memory_mib, &actual, expected);
+    }
+}
+
+#[test]
+fn ram_layout_rejects_end_gpa_overflow() {
+    let size = u64::MAX - 4095;
+    assert!(X86_LAYOUT.ranges(size).is_err());
+    assert!(ARM64_LAYOUT.ranges(size).is_err());
 }
 
 #[test]
