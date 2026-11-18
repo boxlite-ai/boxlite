@@ -64,6 +64,7 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         vsock: None,
         network: None,
         virtio_console: false,
+        hotplug_mib: 0,
     }
 }
 
@@ -307,7 +308,7 @@ fn with_fresh_backend<H: HostVm + 'static>(
         true,
         VirtioWorkers::new,
         boot,
-        |chipset, ctx, _| devices(chipset, ctx),
+        |chipset, ctx, _, _| devices(chipset, ctx).map(|()| None),
     )
 }
 
@@ -687,9 +688,9 @@ fn failed_boot_keeps_registration_and_backing_when_workers_fail_to_join() {
             true,
             |_| Ok(VirtioWorkers::with_runtime(runtime.clone())),
             failed_boot,
-            |_, ctx, _| {
+            |_, ctx, _, _| {
                 backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
-                Ok(())
+                Ok(None)
             },
         )
     });
@@ -1831,7 +1832,9 @@ fn rtc_coexists_with_max_disks_balloon_and_aggregate_filesystem() {
         configuration,
         || Ok(MockVm::new()),
         |ram, config| crate::boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
-        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+        |chipset, ctx, config, host_vm| {
+            crate::devices::add_all(chipset, ctx, config, writer, host_vm, None)
+        },
     )
     .expect("real RTC and all configured virtio devices must compose without conflicts");
 
@@ -1923,7 +1926,9 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
             );
             Ok(BootRegisters::default())
         },
-        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer).map(|_| ()),
+        |chipset, ctx, config, host_vm| {
+            crate::devices::add_all(chipset, ctx, config, writer, host_vm, None)
+        },
     )
     .unwrap();
     let mut id = [0; 4];
@@ -1942,4 +1947,83 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
     drop(vm);
     console.finish();
     std::fs::remove_dir(path).unwrap();
+}
+
+#[test]
+fn an_invalid_hotplug_capacity_fails_before_the_host_vm_exists() {
+    for capacity in [64, 129, u32::MAX] {
+        let mut configuration = config(1, 2);
+        configuration.hotplug_mib = capacity;
+        let built = Cell::new(false);
+        let error = bare(configuration, || {
+            built.set(true);
+            Ok(MockVm::new())
+        })
+        .expect_err("invalid hotplug capacity");
+        assert!(matches!(error, Error::InvalidHotplugSize(mib) if mib == capacity));
+        assert!(!built.get());
+    }
+    let mut configuration = config(1, 2);
+    configuration.hotplug_mib = 128;
+    configuration.validate().unwrap();
+}
+
+#[test]
+fn a_hotplug_capacity_adds_virtio_mem_and_returns_its_handle() {
+    use crate::devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES};
+    use boxlite_hypervisor::VcpuExit;
+    for (capacity, present) in [(0, false), (256, true)] {
+        let mut configuration = config(1, 2);
+        configuration.hotplug_mib = capacity;
+        let window = present.then(|| {
+            crate::hotplug::HotplugWindow::plan(
+                &ram_ranges(configuration.memory_mib),
+                capacity,
+                1 << 36,
+                2,
+            )
+            .unwrap()
+        });
+        let (writer, mut console) =
+            ConsoleWorker::spawn(Box::new(io::sink()), DEFAULT_QUEUE_BYTES).unwrap();
+        let vm = Vm::with_devices(
+            configuration,
+            || Ok(MockVm::new()),
+            |_, config| {
+                // The balloon keeps slot 0; virtio-mem takes the next slot.
+                assert_eq!(config.cmdline.contains("@0xd0001000:6"), present);
+                Ok(BootRegisters::default())
+            },
+            |chipset, ctx, config, host_vm| {
+                crate::devices::add_all(chipset, ctx, config, writer, host_vm, window)
+            },
+        )
+        .unwrap();
+        let handle = vm.memory_handle();
+        assert_eq!(handle.is_some(), present);
+        if let Some(handle) = handle {
+            let mut id = [0; 4];
+            vm.chipset.as_ref().unwrap().dispatch(VcpuExit::MmioRead {
+                guest_addr: 0xd000_1008,
+                bytes: &mut id,
+            });
+            assert_eq!(u32::from_le_bytes(id), 24);
+            assert!(matches!(
+                handle.request(64),
+                Err(Error::InvalidHotplugSize(64))
+            ));
+            handle.request(128).unwrap();
+            let status = handle.status();
+            assert_eq!(
+                (
+                    status.capacity_mib,
+                    status.requested_mib,
+                    status.plugged_mib
+                ),
+                (256, 128, 0)
+            );
+        }
+        drop(vm);
+        console.finish();
+    }
 }

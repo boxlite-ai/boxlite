@@ -15,7 +15,7 @@ use kvm_ioctls::{Cap, Kvm, VmFd};
 
 use super::KvmVcpu;
 use super::features::{build_snapshot_msr_indices, kvm_msr_index_list};
-use super::memory::{MAX_PAGES_PER_SLOT, MemorySlots};
+use super::memory::{MAX_PAGES_PER_SLOT, MemorySlots, slot_bytes};
 use super::vcpu::{CachedIoError, VcpuSnapshotShared};
 use crate::{Error, MemoryRegion, Result};
 
@@ -63,6 +63,8 @@ pub struct PreparedKvm {
     kvm: Kvm,
     kick_signal: i32,
     cpuid: Vec<crate::X86CpuidEntry>,
+    page_size: usize,
+    memory_slots: usize,
 }
 
 impl PreparedKvm {
@@ -100,10 +102,18 @@ impl PreparedKvm {
             }
         }
         let cpuid = super::features::supported_cpuid(&kvm)?;
+        // SAFETY: sysconf has no pointer arguments and does not modify memory.
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if page_size <= 0 {
+            return Err(io::Error::other("cannot determine the host page size"));
+        }
+        let memory_slots = kvm.get_nr_memslots();
         Ok(Self {
             kvm,
             kick_signal,
             cpuid,
+            page_size: page_size as usize,
+            memory_slots,
         })
     }
 
@@ -112,17 +122,24 @@ impl PreparedKvm {
         &self.cpuid
     }
 
+    /// Slots left after registering the supplied page-aligned RAM regions.
+    pub fn memory_slots_after(&self, region_sizes: impl IntoIterator<Item = usize>) -> usize {
+        let bytes_per_slot = slot_bytes(self.page_size, MAX_PAGES_PER_SLOT);
+        region_sizes
+            .into_iter()
+            .fold(self.memory_slots, |free, size| {
+                free.saturating_sub(size.div_ceil(bytes_per_slot))
+            })
+    }
+
     fn create(self) -> io::Result<KvmVm> {
         let Self {
             kvm,
             kick_signal,
             cpuid,
+            page_size,
+            memory_slots,
         } = self;
-        // SAFETY: sysconf has no pointer arguments and does not modify memory.
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if page_size <= 0 {
-            return Err(io::Error::other("cannot determine the host page size"));
-        }
         let fd = kvm.create_vm().map_err(io::Error::from)?;
         // Intel KVM reserves three pages below 4 GiB for real-mode emulation.
         // Keep them in the architecture's MMIO hole, clear of RAM and devices.
@@ -141,7 +158,7 @@ impl PreparedKvm {
         let vcpu_snapshot = Arc::new(VcpuSnapshotShared::new(Arc::clone(&fd), msr_indices));
         Ok(KvmVm {
             fd,
-            slots: Mutex::new(MemorySlots::new(kvm.get_nr_memslots(), page_size as usize)),
+            slots: Mutex::new(MemorySlots::new(memory_slots, page_size)),
             run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
             kick_signal,
             cpuid,

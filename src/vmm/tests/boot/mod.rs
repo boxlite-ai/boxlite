@@ -81,6 +81,7 @@ fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
         vsock: None,
         network: None,
         virtio_console: false,
+        hotplug_mib: 0,
     }
 }
 
@@ -221,6 +222,7 @@ fn linux_config(vcpu_count: u8, cmdline: &str, initramfs: Option<PathBuf>) -> Vm
         vsock: None,
         network: None,
         virtio_console: false,
+        hotplug_mib: 0,
     };
     config.validate().unwrap();
     config

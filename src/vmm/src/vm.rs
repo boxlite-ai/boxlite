@@ -12,7 +12,7 @@ use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
     control::{ControlRegistry, VmControl},
-    devices::console::ConsoleWorker,
+    devices::{console::ConsoleWorker, mem::MemoryHandle},
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
@@ -81,6 +81,8 @@ pub struct Vm<H: HostVm> {
     vcpu_count: u8,
     state: VmState,
     fresh_vm: bool,
+    /// The hotplug handle when the configuration set a hotplug capacity.
+    memory: Option<MemoryHandle>,
     host_vm: Option<Arc<H>>,
     ram: GuestRam,
 }
@@ -106,7 +108,12 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// COM1 output goes to `console` through a queue, so a slow sink never
     /// stalls the guest.
     pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::{boot, cpu_features::preflight_x86, devices::console::DEFAULT_QUEUE_BYTES};
+        use crate::{
+            boot,
+            cpu_features::{X86MemoryCaps, preflight_x86},
+            devices::console::DEFAULT_QUEUE_BYTES,
+            hotplug::HotplugWindow,
+        };
 
         config.validate()?;
         let prepared = boxlite_hypervisor::KvmVm::prepare()?;
@@ -115,6 +122,26 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             prepared.supported_cpuid(),
             boot::BOOT_LEAF,
         )?;
+        let hotplug_window = if config.hotplug_mib == 0 {
+            None
+        } else {
+            let ranges = ram_ranges(config.memory_mib);
+            let caps = X86MemoryCaps::from_cpuid(prepared.supported_cpuid())
+                .map_err(Error::HostMemoryCapability)?;
+            let available_slots = prepared.memory_slots_after(ranges.iter().map(|&(_, size)| size));
+            Some(
+                HotplugWindow::plan(
+                    &ranges,
+                    config.hotplug_mib,
+                    caps.physical_end,
+                    available_slots,
+                )
+                .map_err(|source| Error::PlanHotplugMemory {
+                    capacity_mib: config.hotplug_mib,
+                    source,
+                })?,
+            )
+        };
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
         let mut vm = Self::build(
@@ -123,7 +150,9 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             true,
             VirtioWorkers::new,
             move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
-            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+            |chipset, ctx, config, host_vm| {
+                crate::devices::add_all(chipset, ctx, config, writer, host_vm, hotplug_window)
+            },
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)
@@ -143,8 +172,8 @@ impl<H: HostVm> Vm<H> {
     where
         H: 'static,
     {
-        Self::with_devices(config, host_vm, boot, |chipset, ctx, _| {
-            devices(chipset, ctx)
+        Self::with_devices(config, host_vm, boot, |chipset, ctx, _, _| {
+            devices(chipset, ctx).map(|()| None)
         })
     }
 
@@ -153,7 +182,12 @@ impl<H: HostVm> Vm<H> {
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
+        devices: impl FnOnce(
+            &mut ChipsetBuilder,
+            DeviceContext<'_>,
+            &mut VmConfig,
+            &Arc<H>,
+        ) -> Result<Option<MemoryHandle>>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -164,8 +198,9 @@ impl<H: HostVm> Vm<H> {
     /// Validates `config`, allocates the RAM layout, creates the host VM with
     /// `host_vm`, builds the chipset from the devices `devices` adds,
     /// registers every RAM range and writes the boot data with `boot`.
-    /// `devices` also gets the guest memory, the virtio workers and the
-    /// mutable configuration. Invalid configuration fails before `host_vm`
+    /// `devices` also gets the guest memory, the virtio workers, the mutable
+    /// configuration and the host VM, and returns the hotplug handle if it
+    /// added a virtio-mem device. Invalid configuration fails before `host_vm`
     /// runs, and a chipset conflict before any RAM is registered.
     /// `fresh_vm` requires a newly created VM with no independent vCPUs.
     #[cfg_attr(
@@ -181,7 +216,12 @@ impl<H: HostVm> Vm<H> {
         fresh_vm: bool,
         create_workers: impl FnOnce(EventSender) -> std::io::Result<VirtioWorkers>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
+        devices: impl FnOnce(
+            &mut ChipsetBuilder,
+            DeviceContext<'_>,
+            &mut VmConfig,
+            &Arc<H>,
+        ) -> Result<Option<MemoryHandle>>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -199,7 +239,7 @@ impl<H: HostVm> Vm<H> {
         let workers = create_workers(sender.clone()).map_err(Error::VirtioWorker)?;
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
         let mut controls = ControlRegistry::default();
-        devices(
+        let memory = devices(
             &mut chipset,
             DeviceContext {
                 memory: ram.memory(),
@@ -207,9 +247,11 @@ impl<H: HostVm> Vm<H> {
                 controls: &mut controls,
             },
             &mut config,
+            &host_vm,
         )?;
         let chipset = chipset.build()?;
         if let Err(error) = ram.map(&*host_vm) {
+            drop(memory);
             drop(chipset);
             drop(workers);
             if fresh_vm && let Some(host_vm) = Arc::into_inner(host_vm) {
@@ -232,6 +274,7 @@ impl<H: HostVm> Vm<H> {
             vcpu_count: config.vcpu_count,
             state: VmState::Created,
             fresh_vm,
+            memory,
             host_vm: Some(host_vm),
             ram,
         };
@@ -248,6 +291,12 @@ impl<H: HostVm> Vm<H> {
     /// Controls the VM from another thread, addressing disks by their configured IDs.
     pub fn control(&self) -> VmControl {
         self.control.clone()
+    }
+
+    /// A handle that grows or shrinks guest RAM from another thread, when the
+    /// configuration set `hotplug_mib`.
+    pub fn memory_handle(&self) -> Option<MemoryHandle> {
+        self.memory.clone()
     }
 }
 
@@ -371,6 +420,7 @@ impl<H: HostVm> Drop for Vm<H> {
             );
         }
         if self.fresh_vm && self.state == VmState::Created {
+            drop(self.memory.take());
             drop(self.chipset.take());
             drop(self.workers.take());
             let host_vm = self.host_vm.take().expect("live VM has a host VM");

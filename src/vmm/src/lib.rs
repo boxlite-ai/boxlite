@@ -45,11 +45,8 @@ mod error;
 )]
 mod events;
 #[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "VmConfig wiring that adds the virtio-mem device comes next."
-    )
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds devices yet.")
 )]
 mod hotplug;
 #[cfg_attr(
