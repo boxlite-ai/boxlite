@@ -66,6 +66,20 @@ func installFakeMountpoint(t *testing.T, exitCode int) string {
 	return logPath
 }
 
+func installFakeUmount(t *testing.T) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "umounts.log")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$1\" >> \"%s\"\n", logPath)
+	if err := os.WriteFile(filepath.Join(binDir, "umount"), []byte(script), 0755); err != nil {
+		t.Fatalf("failed to write fake umount: %v", err)
+	}
+
+	t.Setenv("PATH", binDir)
+	return logPath
+}
+
 // probeLog reads the fake mountpoint's log as the ordered list of paths it
 // was asked about. A missing log means the probe never ran.
 func probeLog(t *testing.T, logPath string) []string {
@@ -814,6 +828,35 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 	}
 }
 
+func TestCreateRollbackReclaimsFilestoreMountWithCleanupDryRun(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	c := filestoreTestClient(t)
+	c.volumeCleanup.dryRun = true
+	installFakeFilestoreMounts(c)
+	umountLogPath := installFakeUmount(t)
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id:              "abc123def456",
+		OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+			{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("Create returned %v, want the second volume's id failure", err)
+	}
+
+	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
+	if got, want := probeLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("failed create did not actually unmount the orphaned NFS mount: umount calls = %v, want %v", got, want)
+	}
+}
+
 // A Start's metadata replay re-prepares the box's volumes while the box's
 // record from its create is already on disk. The filestore volume writes its
 // entry inside the instance critical section BEFORE the rest of the volume
@@ -1133,6 +1176,7 @@ func TestCreateReplayRestoresPriorRecordOnFailure(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
 	installFakeFilestoreMounts(c)
+	umountLogPath := installFakeUmount(t)
 	boxID := "abc123def456"
 	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
 	dataDir := filestoreDataDir(root, "vol-ok")
@@ -1171,6 +1215,9 @@ func TestCreateReplayRestoresPriorRecordOnFailure(t *testing.T) {
 	}
 	if !haveFilestore || !haveS3 {
 		t.Fatalf("restored record = %#v, want both previous references", record.Entries)
+	}
+	if got := probeLog(t, umountLogPath); got != nil {
+		t.Fatalf("failed replay unmounted active Filestore paths %v", got)
 	}
 }
 

@@ -471,8 +471,8 @@ func (c *Client) getNfsMountCmd(ctx context.Context, ref *dto.FilestoreRef, path
 // from treating that process as finished before Wait returns.
 func (c *Client) runMount(ctx context.Context, mountKey string, cmd *exec.Cmd) (bool, error) {
 	return c.runBoundedVolumeOperation(ctx, mountKey, func() error {
-	if c.testMountRunner != nil {
-		return c.testMountRunner(cmd)
+		if c.testMountRunner != nil {
+			return c.testMountRunner(cmd)
 		}
 		return cmd.Run()
 	})
@@ -1141,6 +1141,8 @@ func hasFilestoreRef(volumes []dto.VolumeDTO) bool {
 
 // rollbackVolumeMountRecord removes entries owned by a failed attempt without
 // discarding references that an existing box recorded before a replay began.
+// Once the record is consistent, it reclaims mounts left unreferenced by the
+// failed attempt through the same locked rescan as periodic cleanup.
 func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, volumes []dto.VolumeDTO, prior *boxVolumeMountRecord) {
 	var filestoreInstances []string
 	for _, vol := range volumes {
@@ -1166,6 +1168,20 @@ func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, vo
 	})
 	if err != nil {
 		c.logger.WarnContext(ctx, "failed to restore box volume mount record after create failure", "box", boxID, "error", err)
+		return
+	}
+
+	// No box will be destroyed after a failed Create, so this is the point that
+	// must release its newly orphaned NFS mounts. The periodic cleanup's
+	// dry-run, interval and exclusion settings do not apply to this rollback.
+	seen := make(map[string]bool, len(filestoreInstances))
+	for _, instance := range filestoreInstances {
+		if seen[instance] {
+			continue
+		}
+		seen[instance] = true
+		root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+instance)
+		c.reclaimFilestoreMount(ctx, root)
 	}
 }
 
