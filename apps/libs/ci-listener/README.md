@@ -400,8 +400,7 @@ Each effect records an operation UUID first. Resource IDs are immutable, and an
 unknown create cannot be reset, retried or settled through a missing-resource result.
 
 `WorkerPool` drives boot, JIT registration/delivery and cleanup through host-bound
-capabilities. It keeps JIT configuration in memory and never republishes an uncertain
-delivery. A triggering job supplies demand rather than an exclusive assignment:
+capabilities. JIT configuration stays in memory and is sent at most once. A triggering job supplies demand rather than an exclusive assignment:
 the Box may execute another authorized matching job. A completed notification alone
 does not stop it. An elapsed timeout or runner absence alone does not prove
 that its Box is idle. Delivered workers remain until actual exit or confirmed
@@ -472,7 +471,7 @@ periodic recovery for 60 seconds. Version conflicts reload without consuming tha
 revision received during a conflicting operation remains queued; allocation work
 revisions include their admission/retirement proof, so refreshed guards replace
 stale pending work. A retry reconciles the original intent: it does not
-repeat an uncertain create, runner registration or JIT delivery.
+repeat an uncertain create, runner registration or JIT configuration upload.
 
 A confirmed creation refusal returns quota immediately and delays replacement
 admission at the stable scope/resource-label boundary: one second, then two,
@@ -655,10 +654,20 @@ candidate only after 300 seconds from registration. This is a startup grace, not
 evidence of continuous idle time. Busy workers and capacity still needed by the
 queue remain.
 
-A lost JIT upload acknowledgement can leave an online runner at `requested`,
-including after restart. That delivery state remains unchanged: the scheduler
-neither fabricates an acknowledgement nor repeats JIT delivery. Confirmed surplus
-can enter the same retirement protocol below.
+A lost JIT upload acknowledgement can leave a runner at `requested`. A Hosted
+Box with a recoverable delivery uses its original allocation, Box and platform
+runner identities. A recorded job claim or a matching online or busy runner
+proves startup. Otherwise the native record determines the next action.
+
+| Native JIT record | Recovery |
+| --- | --- |
+| Delivery unclaimed or configuration upload in progress | Seal the operation with a versioned write, then close the original allocation. A delayed upload cannot authorize ready after the seal. |
+| Configuration acknowledged and ready authorized | Recheck current authority and original Box placement, then write only the fixed ready marker. |
+| Historical single-attempt marker | Keep observing the runner through its startup grace. |
+
+The guest consumes the configuration once and removes both files before running
+the job. Repeating the ready marker can never supply another configuration.
+The scheduler checks current queued demand when it replaces a closed allocation.
 
 Before unregistering, the scheduler persists a distinct `runner-retire` intent
 under the original allocation, identity and execution lease. `retireIdle()` reads

@@ -1,6 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { randomUUID } from 'node:crypto'
 import { EntityManager } from 'typeorm'
 import {
   ConfirmedWorkerAbsent,
@@ -138,8 +137,8 @@ export class CiNativeWorkers {
         rejected: payload?.box === null ? payload.rejectedCreationEffect : undefined,
       }
     }
-    const owned = async (name: string, effect?: Effect) => {
-      const value = await this.store.transaction((tx, state) => inspect(tx, state, name, effect))
+    const owned = async (name: string, effect?: Effect, inspected?: Awaited<ReturnType<typeof inspect>>) => {
+      const value = inspected ?? (await this.store.transaction((tx, state) => inspect(tx, state, name, effect)))
       if (value.rejected) throw new ConfirmedWorkerCreationRejected(value.rejected)
       if (!value.box) {
         if (
@@ -206,6 +205,61 @@ export class CiNativeWorkers {
       )
         throw new ConflictException('Original CI Box must be running for JIT delivery')
       return box
+    }
+    const jitRecord = async (tx: EntityManager, state: ListenerState, name: string, effect?: string) => {
+      const value = await inspect(tx, state, name, 'jit-deliver')
+      const record = value.record
+      if (
+        value.allocation.delivery !== 'requested' ||
+        !value.box ||
+        !record ||
+        !record.payload ||
+        typeof record.payload !== 'object' ||
+        Array.isArray(record.payload) ||
+        (effect !== undefined && value.allocation.effect?.id !== effect)
+      )
+        throw new ConflictException('Original requested CI JIT delivery required')
+      return { key: value.key, record, payload: record.payload, effect: value.allocation.effect!.id, box: value.box }
+    }
+    const upload = async (
+      name: string,
+      effect: string,
+      box: string,
+      runnerId: string,
+      step: 'config' | 'authorize-ready' | 'retry-ready',
+      content: string,
+      signal?: AbortSignal,
+    ) => {
+      signal?.throwIfAborted()
+      const runner = await this.runners.findOneUncachedOrFail(runnerId)
+      const current = await running(name)
+      if (current.id !== box || current.runnerId !== runnerId)
+        throw new ForbiddenException('Original CI runner assignment changed')
+      await this.store.transaction(async (tx, state) => {
+        const value = await jitRecord(tx, state, name, effect)
+        const expectedPhase = step === 'retry-ready' ? 'ready' : 'config'
+        if (
+          value.box !== box ||
+          value.payload.delivery !== effect ||
+          value.payload.deliveryRunner !== runnerId ||
+          value.payload.deliveryPhase !== expectedPhase
+        )
+          throw new ConflictException('Original CI JIT upload is no longer authorized')
+        // This CAS competes with recovery sealing the config phase. Only its winner may publish ready.
+        if (step === 'authorize-ready')
+          await state.commit(lease, [
+            { key: value.key, expected: value.record.version, payload: { ...value.payload, deliveryPhase: 'ready' } },
+          ])
+      })
+      signal?.throwIfAborted()
+      await uploadJitFile(
+        runner.apiUrl || runner.proxyUrl,
+        runner.apiKey,
+        box,
+        step === 'config' ? '.boxlite-jitconfig' : '.boxlite-jitconfig.ready',
+        content,
+        signal,
+      )
     }
     return {
       rejectUndispatchedCreate,
@@ -284,9 +338,22 @@ export class CiNativeWorkers {
         return boxToBoxResponse(created)
       },
       get: async (name) => {
-        const box = await owned(name)
+        const facts = await this.store.transaction((tx, state) => inspect(tx, state, name))
+        const box = await owned(name, undefined, facts)
         const response = boxToBoxResponse(await this.boxes.toBoxDtoWithExitCode(box))
         if (box.state === BoxState.ERROR) response.status = 'error'
+        const payload = facts.record?.payload
+        if (
+          facts.allocation.delivery === 'requested' &&
+          facts.allocation.effect?.kind === 'jit-deliver' &&
+          payload &&
+          typeof payload === 'object' &&
+          !Array.isArray(payload) &&
+          (payload.delivery === undefined ||
+            (payload.delivery === facts.allocation.effect.id &&
+              ['config', 'ready', 'abandoned'].includes(String(payload.deliveryPhase))))
+        )
+          return { ...response, recoverableJit: true }
         return response
       },
       stop: async (name) => {
@@ -313,40 +380,48 @@ export class CiNativeWorkers {
           throw new ForbiddenException('Bounded base64 JIT configuration required')
         signal?.throwIfAborted()
         const original = await running(name)
-        await this.store.transaction(async (tx, state) => {
-          const value = await inspect(tx, state, name, 'jit-deliver')
-          if (
-            value.allocation.delivery !== 'requested' ||
-            !value.record ||
-            typeof value.record.payload !== 'object' ||
-            value.record.payload === null ||
-            Array.isArray(value.record.payload) ||
-            value.record.payload.delivery !== undefined
-          )
-            throw new ConflictException('CI JIT delivery was already attempted')
+        const effect = await this.store.transaction(async (tx, state) => {
+          const value = await jitRecord(tx, state, name)
+          if (value.payload.delivery !== undefined) throw new ConflictException('CI JIT delivery was already attempted')
           await state.commit(lease, [
             {
               key: value.key,
               expected: value.record.version,
-              payload: { ...value.record.payload, delivery: randomUUID() },
+              payload: {
+                ...value.payload,
+                delivery: value.effect,
+                deliveryPhase: 'config',
+                deliveryRunner: original.runnerId!,
+              },
             },
           ])
+          return value.effect
         })
-        for (const [file, content] of [
-          ['.boxlite-jitconfig', jit],
-          ['.boxlite-jitconfig.ready', 'ready'],
-        ] as const) {
-          signal?.throwIfAborted()
-          const runner = await this.runners.findOneUncachedOrFail(original.runnerId!)
-          const current = await running(name)
-          if (current.id !== original.id || current.runnerId !== original.runnerId)
-            throw new ForbiddenException('Original CI runner assignment changed')
-          // The resource lookup can wait across revocation or lease takeover.
-          // Fence again after it returns, immediately before the HTTP effect.
-          await this.store.transaction((tx, state) => inspect(tx, state, name, 'jit-deliver'))
-          signal?.throwIfAborted()
-          await uploadJitFile(runner.apiUrl || runner.proxyUrl, runner.apiKey, original.id, file, content, signal)
-        }
+        await upload(name, effect, original.id, original.runnerId!, 'config', jit, signal)
+        await upload(name, effect, original.id, original.runnerId!, 'authorize-ready', 'ready', signal)
+      },
+      recoverJit: async (name, effect, signal) => {
+        signal?.throwIfAborted()
+        const recovery = await this.store.transaction(async (tx, state) => {
+          const value = await jitRecord(tx, state, name, effect)
+          const { delivery, deliveryPhase, deliveryRunner } = value.payload
+          if (delivery === effect && deliveryPhase === 'ready' && typeof deliveryRunner === 'string')
+            return { box: value.box, runnerId: deliveryRunner }
+          if (delivery === effect && deliveryPhase === 'abandoned') return 'replace' as const
+          if (delivery !== undefined && (delivery !== effect || deliveryPhase !== 'config')) return 'unknown' as const
+          // Seal against both old single-claim writers and a delayed config acknowledgment.
+          await state.commit(lease, [
+            {
+              key: value.key,
+              expected: value.record.version,
+              payload: { ...value.payload, delivery: effect, deliveryPhase: 'abandoned' },
+            },
+          ])
+          return 'replace' as const
+        })
+        if (typeof recovery === 'string') return recovery
+        await upload(name, effect, recovery.box, recovery.runnerId, 'retry-ready', 'ready', signal)
+        return 'delivered'
       },
     }
   }
