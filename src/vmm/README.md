@@ -100,7 +100,7 @@ the 32-bit MMIO hole at `0xC000_0000`, and at `0x8000_0000` on arm64. The
 and the arm64 address-space limit are later changes.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
-vm-memory and registers it with the host VM. Three rules keep the backend's
+vm-memory and registers it with the host VM. These rules keep the backend's
 `map_memory` contract:
 
 - Host-side users clone the shared `GuestMemoryView`, vm-memory's
