@@ -34,7 +34,7 @@ concurrency:
 jobs:
   build:
     name: Build affected box images (no publish)
-    runs-on: ubuntu-latest
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
 
     steps:
       - name: Checkout code

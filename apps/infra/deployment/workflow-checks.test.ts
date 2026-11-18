@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
+import { data, Evaluator, Lexer, Parser } from '@actions/expressions'
 import { load as loadYaml } from 'js-yaml'
 import { parse as parseToml } from 'smol-toml'
 
@@ -18,6 +19,51 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const picomatch = createRequire(import.meta.url)('picomatch') as (pattern: string, options: { dot: boolean }) => (path: string) => boolean
 const workflow = (name: string): any => loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows', name), 'utf8'))
 const matches = (pattern: string, path: string) => picomatch(pattern, { dot: true })(path)
+
+function matrixRunner(selection: string, os: string, linuxX64Only = false) {
+  const osEntry = { key: 'os', value: new data.StringData(os) }
+  const context = new data.Dictionary(
+    { key: 'matrix', value: new data.Dictionary(osEntry, { key: 'platform', value: new data.Dictionary(osEntry) }) },
+    { key: 'inputs', value: new data.Dictionary({ key: 'linux_x64_only', value: new data.BooleanData(linuxX64Only) }) },
+  )
+  const expression = selection.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+  const ast = new Parser(new Lexer(expression).lex().tokens, ['matrix', 'inputs'], []).parse()
+  return new Evaluator(ast, context).evaluate().coerceString()
+}
+
+test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native platform routing', () => {
+  const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
+  const jobs = [
+    ['lint.yml', 'clippy', 64],
+    ['test.yml', 'rust', 64],
+    ['test.yml', 'go', 64],
+    ['test.yml', 'guest_artifacts', 64],
+    ['test.yml', 'python', 30],
+    ['test.yml', 'node', 30],
+    ['build-c.yml', 'build', 64],
+    ['build-go.yml', 'test', 30],
+    ['build-node.yml', 'build', 64],
+    ['build-node.yml', 'test', 30],
+    ['build-runtime.yml', 'build', 64],
+    ['build-wheels.yml', 'build_wheels', 64],
+  ] as const
+
+  for (const [name, job, disk] of jobs) {
+    const selection = workflow(name).jobs[job]['runs-on']
+    for (const { os, target } of platforms) {
+      const expected = target === 'linux-x64-gnu' ? `boxlite-4vcpu-16gbmem-${disk}gbdisk` : os
+      assert.equal(matrixRunner(selection, os), expected, `${name} ${job} on ${os}`)
+    }
+  }
+})
+
+test('deployment callers can build the x64 C archive without a BoxLite worker', () => {
+  const selection = workflow('build-c.yml').jobs.build['runs-on']
+  for (const caller of ['deploy-infra.yml', 'build-runner-binary.yml']) {
+    const inputs = workflow(caller).jobs['build-c'].with
+    assert.equal(matrixRunner(selection, 'ubuntu-latest', inputs.linux_x64_only), 'ubuntu-latest', caller)
+  }
+})
 
 function testSuites(paths: string[]) {
   const filter = workflow('test.yml').jobs.changes.steps.find((step: any) => step.uses?.startsWith('dorny/paths-filter'))
