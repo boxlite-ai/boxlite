@@ -587,9 +587,13 @@ resolved target the dispatch carries.
 
 - One mount per instance, shared by every box referencing it; created on
   demand (`mount -t nfs -o vers=4.1,hard ...`), and reclaimed when no box
-  record references it anymore. A failed Create restores any prior record and
-  immediately reclaims newly orphaned mounts; the periodic cleanup's dry-run
-  setting does not defer that rollback.
+  record references it anymore. After a failed Create successfully rolls back
+  its records, it immediately reclaims newly orphaned mounts; the periodic
+  cleanup's dry-run setting does not defer that rollback. A record rollback
+  failure skips reclaim because references cannot be verified. New mounts
+  create the empty record directory after readiness and before data-directory
+  preparation, making pre-record failures reclaimable without weakening
+  protection for existing mounts with no records.
 - The box binds to the volume's data directory inside the export
   (`/mnt/boxlite-filestore-<instance>/<volume_id>`), `chmod 0777` — NFS
   permissions are real, unlike the FUSE backends' faked ones. The directory

@@ -787,6 +787,41 @@ func TestFilestoreVolumeRejectsSubpath(t *testing.T) {
 	}
 }
 
+func TestCreateReclaimsNewMountWhenPreparationFailsBeforeFirstRecord(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(c)
+	umountLogPath := installFakeUmount(t)
+	c.prepareRunner = func(string) error { return errors.New("injected prepare failure") }
+	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
+	recordDir := getVolumeMountRecordDir()
+	if _, err := os.Stat(recordDir); !os.IsNotExist(err) {
+		t.Fatalf("record directory existed before the first mount: %v", err)
+	}
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: "abc123def456", OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{{
+			VolumeId: "vol-ok", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected prepare failure") {
+		t.Fatalf("Create returned %v, want prepare failure", err)
+	}
+	if got := fake.mounts.Load(); got != 1 {
+		t.Fatalf("mount command ran %d times, want one ready mount before preparation", got)
+	}
+	if got, want := probeLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		t.Errorf("umount log = %v, want %v; preparation failed before the first record and stranded the new mount", got, want)
+	}
+	if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+		t.Errorf("new filestore root survived preparation failure: %v", statErr)
+	}
+}
+
 // A create that fails partway through its volume list must not leave the
 // partial record behind. Filestore volumes write their record entries inside
 // the instance critical section, so a failure at a later volume leaves an
@@ -854,6 +889,43 @@ func TestCreateRollbackReclaimsFilestoreMountWithCleanupDryRun(t *testing.T) {
 	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
 	if got, want := probeLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("failed create did not actually unmount the orphaned NFS mount: umount calls = %v, want %v", got, want)
+	}
+}
+
+func TestCreateRollbackRejectsMalformedFilestoreInstance(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(c)
+	umountLogPath := installFakeUmount(t)
+	root := filepath.Join(base, filestoreMountPrefix+"target")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("failed to create active mount root: %v", err)
+	}
+	if err := os.MkdirAll(getVolumeMountRecordDir(), 0755); err != nil {
+		t.Fatalf("failed to create mount record directory: %v", err)
+	}
+	fake.mu.Lock()
+	fake.mounted[root] = true
+	fake.mu.Unlock()
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: "abc123def456", OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{{
+			VolumeId: "vol-ok", MountPath: "/data",
+			Filestore: &dto.FilestoreRef{Instance: "/../boxlite-filestore-target", Server: "10.0.0.7", Export: "/vol1"},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid filestore instance") {
+		t.Fatalf("Create returned %v, want instance validation failure", err)
+	}
+	if got := probeLog(t, umountLogPath); got != nil {
+		t.Errorf("malformed instance escaped validation during rollback and umounted %v", got)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Errorf("mount root derived from a malformed instance was removed: %v", statErr)
 	}
 }
 
@@ -1218,6 +1290,62 @@ func TestCreateReplayRestoresPriorRecordOnFailure(t *testing.T) {
 	}
 	if got := probeLog(t, umountLogPath); got != nil {
 		t.Fatalf("failed replay unmounted active Filestore paths %v", got)
+	}
+}
+
+func TestCreateReplayDoesNotReclaimWhenRecordRollbackFails(t *testing.T) {
+	ctx := context.Background()
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	installFakeFilestoreMounts(c)
+	umountLogPath := installFakeUmount(t)
+	boxID := "abc123def456"
+	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
+	dataDir := filestoreDataDir(root, "vol-ok")
+	if err := c.recordBoxVolumeMounts(ctx, boxID, []volumeMount{
+		{hostPath: dataDir, mountPath: "/a", rootPath: root, backend: volumeBackendFilestore, dataDir: dataDir, filestoreInstance: "ml-scratch"},
+	}); err != nil {
+		t.Fatalf("failed to seed existing record: %v", err)
+	}
+
+	recordPath := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
+	var writes atomic.Int64
+	restoreLost := false
+	var seam func(context.Context, string, boxVolumeMountRecord) error
+	seam = func(ctx context.Context, boxID string, record boxVolumeMountRecord) error {
+		if writes.Add(1) == 2 {
+			if err := os.Remove(recordPath); err != nil {
+				return err
+			}
+			restoreLost = true
+			return errors.New("injected record rollback failure")
+		}
+		c.writeRecordSeam = nil
+		err := c.writeBoxVolumeMountRecord(ctx, boxID, record)
+		c.writeRecordSeam = seam
+		return err
+	}
+	c.writeRecordSeam = seam
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: boxID, OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+			{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("replay returned %v, want volume-id failure", err)
+	}
+	if !restoreLost {
+		t.Fatal("test did not reach the lost prior-record rollback failure")
+	}
+	if got := probeLog(t, umountLogPath); got != nil {
+		t.Errorf("record rollback failure allowed umount of %v while references could not be verified", got)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Errorf("active filestore root was removed after record rollback failure: %v", statErr)
 	}
 }
 
