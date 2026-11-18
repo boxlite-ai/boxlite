@@ -611,3 +611,25 @@ fn reporting_rejects_shared_and_non_owned_backing() {
     .unwrap();
     assert!(super::ReclaimRange::new(&raw, GuestAddress(0), page, page).is_err());
 }
+
+#[test]
+fn registrations_cover_only_the_boot_regions_a_view_update_leaves_alone() {
+    let mut ram = GuestRam::new(&ram_ranges(2)).unwrap();
+    let extra = Arc::new(
+        vm_memory::GuestRegionMmap::from_range(GuestAddress(1 << 32), 4096, None).unwrap(),
+    );
+    let grown = ram.memory().memory().insert_region(extra).unwrap();
+    ram.memory().lock().unwrap().replace(grown);
+    let vm = MockVm::new();
+
+    ram.map(&vm).unwrap();
+    ram.unmap(&vm).unwrap();
+
+    let [boot] = ram.regions().collect::<Vec<_>>().try_into().unwrap();
+    assert_eq!(boot.guest_addr, RAM_START);
+    assert_eq!(
+        vm.calls(),
+        [Call::map(&boot), Call::unmap(&boot)],
+        "the published hotplug region is never registered by GuestRam"
+    );
+}
