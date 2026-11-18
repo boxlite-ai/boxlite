@@ -27,7 +27,9 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
-use boxlite::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
+use boxlite::runtime::options::{
+    InboundNetworkConfig, MountSpec, NetworkMode, OutboundNetworkConfig, VolumeSpec,
+};
 use boxlite::{
     BoxCommand, BoxInfo, BoxOptions, BoxStatus, BoxliteRuntime, ExecStdin, Execution, LiteBox,
     NetworkSpec, RootfsSpec,
@@ -1220,15 +1222,93 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
 }
 
 fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types::VolumeResponse {
+    let created_at = info.created_at.to_rfc3339();
     types::VolumeResponse {
         id: info.id.clone(),
         name: info.name.clone(),
-        created_at: info.created_at.to_rfc3339(),
+        state: "ready".to_string(),
+        created_at: created_at.clone(),
+        updated_at: created_at,
         size_bytes: info.size_bytes,
     }
 }
 
+fn mount_requests_to_options(
+    legacy: Option<&[types::VolumeSpecRequest]>,
+    typed: Option<&[types::MountSpecRequest]>,
+) -> Result<(Vec<VolumeSpec>, Vec<MountSpec>), boxlite::BoxliteError> {
+    use boxlite::BoxliteError;
+
+    let legacy = legacy.unwrap_or_default();
+    let typed = typed.unwrap_or_default();
+    if !legacy.is_empty() && !typed.is_empty() {
+        return Err(BoxliteError::InvalidArgument(
+            "volumes and mounts must not both be non-empty; use typed mounts for new requests"
+                .to_string(),
+        ));
+    }
+
+    let mut volumes = Vec::with_capacity(legacy.len());
+    for volume in legacy {
+        match (&volume.managed_volume, &volume.host_path) {
+            (Some(managed_volume), None) => {
+                volumes.push(VolumeSpec::managed_volume(
+                    managed_volume,
+                    &volume.guest_path,
+                ));
+                volumes.last_mut().expect("just pushed").read_only = volume.read_only;
+            }
+            (None, Some(_)) => {
+                return Err(BoxliteError::Unsupported(
+                    "host bind mounts are only supported by the local runtime; create a volume \
+                     and mount it by id or name instead"
+                        .to_string(),
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "volume mount {:?} sets both managed_volume and host_path; use exactly one",
+                    volume.guest_path
+                )));
+            }
+            (None, None) => {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "volume mount {:?} needs managed_volume or host_path",
+                    volume.guest_path
+                )));
+            }
+        }
+    }
+
+    let mut mounts = Vec::with_capacity(typed.len());
+    for mount in typed {
+        let mount = MountSpec {
+            mount_type: match mount.mount_type {
+                types::MountTypeRequest::Bind => boxlite::runtime::options::MountType::Bind,
+                types::MountTypeRequest::Volume => boxlite::runtime::options::MountType::Volume,
+            },
+            source: Some(mount.source.clone()),
+            target: mount.target.clone(),
+            read_only: mount.read_only,
+            sub_path: mount.sub_path.clone(),
+        };
+        mount.validate()?;
+        if mount.mount_type == boxlite::runtime::options::MountType::Bind {
+            return Err(BoxliteError::Unsupported(
+                "host bind mounts are only supported by the local runtime; create a volume \
+                 and mount it by id or name instead"
+                    .to_string(),
+            ));
+        }
+        mounts.push(mount);
+    }
+
+    Ok((volumes, mounts))
+}
+
 fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::BoxliteError> {
+    let (volumes, mounts) =
+        mount_requests_to_options(req.volumes.as_deref(), req.mounts.as_deref())?;
     let rootfs = if let Some(ref path) = req.rootfs_path {
         RootfsSpec::RootfsPath(path.clone())
     } else {
@@ -1292,14 +1372,6 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // uniformly. Operators who want a different policy run the
     // server with a different default; clients cannot relax it.
 
-    if let Some(volumes) = &req.volumes
-        && !volumes.is_empty()
-    {
-        return Err(boxlite::BoxliteError::InvalidArgument(
-            "managed volumes are not supported by boxlite serve".into(),
-        ));
-    }
-
     // An empty name or value can never substitute anything. Reject at the
     // boundary so this server agrees with the Cloud API's IsNotEmpty and the
     // runner's per-element `dive` required validation on what a secret is.
@@ -1345,6 +1417,8 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
         env,
+        volumes,
+        mounts,
         secrets,
         network,
         inbound_network,
@@ -2405,17 +2479,103 @@ mod tests {
     }
 
     #[test]
-    fn build_box_options_rejects_nonempty_volumes() {
-        let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{"image":"alpine:latest","volumes":[{"managed_volume":"v1","guest_path":"/data"}]}"#,
-        )
-        .expect("body with volumes must deserialize (accepted, then rejected)");
+    fn build_box_options_carries_typed_volume_mount() {
+        let req: super::types::CreateBoxRequest = serde_json::from_value(serde_json::json!({
+            "image": "alpine:latest",
+            "mounts": [{
+                "type": "volume",
+                "source": "workspace",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "team/backend"
+            }]
+        }))
+        .expect("typed volume mount must deserialize");
 
-        let err = build_box_options(&req).expect_err("non-empty volumes must be rejected");
-        assert!(
-            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("managed volumes")),
-            "unexpected error: {err}"
+        let opts = build_box_options(&req).expect("typed volume mount must build");
+        assert_eq!(opts.mounts.len(), 1);
+        let mount = &opts.mounts[0];
+        assert_eq!(
+            mount.mount_type,
+            boxlite::runtime::options::MountType::Volume
         );
+        assert_eq!(mount.source.as_deref(), Some("workspace"));
+        assert_eq!(mount.target, "/workspace");
+        assert!(mount.read_only);
+        assert_eq!(mount.sub_path.as_deref(), Some("team/backend"));
+    }
+
+    #[test]
+    fn build_box_options_carries_legacy_managed_volume() {
+        for read_only in [false, true] {
+            let req: super::types::CreateBoxRequest = serde_json::from_value(serde_json::json!({
+                "image": "alpine:latest",
+                "volumes": [{
+                    "managed_volume": "workspace",
+                    "guest_path": "/workspace",
+                    "read_only": read_only
+                }]
+            }))
+            .expect("legacy managed volume must deserialize");
+
+            let opts = build_box_options(&req).expect("legacy managed volume must build");
+            assert!(opts.mounts.is_empty());
+            assert_eq!(opts.volumes.len(), 1);
+            assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("workspace"));
+            assert_eq!(opts.volumes[0].guest_path, "/workspace");
+            assert_eq!(opts.volumes[0].read_only, read_only);
+        }
+    }
+
+    #[test]
+    fn build_box_options_rejects_serve_host_binds() {
+        let legacy: super::types::CreateBoxRequest = serde_json::from_value(serde_json::json!({
+            "image": "alpine:latest",
+            "volumes": [{"host_path": "/tmp/secrets", "guest_path": "/mnt"}]
+        }))
+        .expect("legacy bind shape must deserialize so the policy can reject it");
+        let typed: super::types::CreateBoxRequest = serde_json::from_value(serde_json::json!({
+            "image": "alpine:latest",
+            "mounts": [{"type": "bind", "source": "/tmp/secrets", "target": "/mnt"}]
+        }))
+        .expect("typed bind must deserialize so the policy can reject it");
+
+        for req in [legacy, typed] {
+            let error = build_box_options(&req)
+                .expect_err("a server-side host path must not be mounted over REST");
+            assert!(
+                matches!(error, boxlite::BoxliteError::Unsupported(ref message)
+                if message.contains("host bind mounts")),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_box_options_rejects_mixed_mount_lists() {
+        let req: super::types::CreateBoxRequest = serde_json::from_value(serde_json::json!({
+            "image": "alpine:latest",
+            "volumes": [{"managed_volume": "old", "guest_path": "/old"}],
+            "mounts": [{"type": "volume", "source": "new", "target": "/new"}]
+        }))
+        .expect("mixed lists must deserialize so their combination can be rejected");
+
+        let error = build_box_options(&req)
+            .expect_err("legacy and typed mount lists are mutually exclusive");
+        assert!(
+            matches!(error, boxlite::BoxliteError::InvalidArgument(ref message)
+            if message.contains("volumes and mounts")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn create_volume_request_rejects_unknown_fields() {
+        let error = serde_json::from_str::<super::types::CreateVolumeRequest>(
+            r#"{"name":"workspace","host_path":"/tmp/data"}"#,
+        )
+        .expect_err("volume create has no host_path field");
+        assert!(error.to_string().contains("host_path"), "{error}");
     }
 
     #[test]
