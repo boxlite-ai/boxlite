@@ -2,6 +2,9 @@
 
 C bindings for the BoxLite runtime, providing a stable C API for integrating BoxLite into C/C++ applications.
 
+Streaming uploads can use `boxlite_copy_in_start_with_overwrite` to preserve existing files by passing `false`.
+The original `boxlite_copy_in_start` keeps its signature and overwrite-enabled behavior; both entry points share callback, stream and error ownership.
+
 The [agent API](../../docs/reference/agents.md#c-api-and-ownership) covers
 Box-owned sessions, turns, callbacks and handle ownership.
 The CLI and C agent API share the core JSON mapping documented there. Open an
