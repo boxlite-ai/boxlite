@@ -142,34 +142,20 @@ requiring maximum security should use Linux.
 | Resource | Limit Type | Purpose |
 |----------|------------|---------|
 | Open files | RLIMIT_NOFILE | Prevent FD exhaustion |
-| File size | RLIMIT_FSIZE | Cap individual file growth |
+| File size | Inherited RLIMIT_FSIZE | Cap growth of individual host files |
 | Processes | RLIMIT_NPROC | Prevent fork bombs |
 | Memory | RLIMIT_AS | Prevent OOM |
 | CPU time | RLIMIT_CPU | Prevent CPU monopolization |
 
-`ResourceLimits.max_file_size` supplies the startup file-size requirement,
-normally twice the initial disk capacity. Both engines start with
-`soft = hard = min(max(2 TiB, max_file_size), inherited hard)`.
-Startup fails if inherited hard cannot cover the startup requirement.
+The shim inherits the host launcher's `RLIMIT_FSIZE` soft and hard limits.
+Native online disk growth can exceed a limit derived from the initial disk,
+so the jailer leaves both inherited values in place. The VMM checks guest
+block I/O against the current virtual capacity.
 
-[`common::rlimit`](common/rlimit.rs) owns file-size setup and budget checks:
-
-| Stage | Entry point | Contract |
-|-------|-------------|----------|
-| Child before exec | `apply_limits_raw` | Set equal soft and hard without allocation or logging |
-| Control request entry | `check_disk_size_limit` | Read soft and reject targets whose twofold file-size budget exceeds it |
-
-The BoxLite control entry checks the budget before calling the engine handler.
-Overflow and unreadable limits fail before dispatch. The native adapter submits
-the grow to `VmControl`, whose registry validates the disk ID.
-
-A 10 GiB disk starts with soft and hard at 2 TiB when inherited hard permits it.
-Growing to 50 GiB leaves both unchanged. With inherited hard at 64 GiB, the
-twofold budget permits targets up to 32 GiB and rejects 50 GiB before growth.
-
-This is a per-file backstop, while the virtual disk capacity determines the
-guest's available space. An unprivileged shim cannot raise hard beyond its
-startup value. libkrun shares the file-size policy but has no online disk grow.
+The host kernel enforces the inherited soft limit on individual files. A
+sparse image can grow in virtual capacity before writes need to extend the
+host file. A finite host limit can therefore cause later I/O to fail.
+`ResourceLimits.max_file_size` is accepted for configuration compatibility.
 
 ### Layer 4: Environment Sanitization
 

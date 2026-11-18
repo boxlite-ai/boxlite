@@ -183,9 +183,8 @@ pub struct ResourceLimits {
     #[serde(default)]
     pub max_open_files: Option<u64>,
 
-    /// Startup file-size requirement in bytes (RLIMIT_FSIZE).
-    /// The jailer sets soft = hard = min(max(2 TiB, requirement), inherited hard).
-    /// An inherited hard limit below this requirement prevents startup.
+    /// Legacy file-size setting kept for configuration compatibility.
+    /// The shim inherits its host file-size limit.
     #[serde(default)]
     pub max_file_size: Option<u64>,
 
@@ -234,7 +233,7 @@ impl Default for SecurityOptions {
             env_allowlist: vec!["RUST_LOG".to_string()],
             resource_limits: ResourceLimits {
                 max_open_files: Some(1024),
-                max_file_size: Some(1024 * 1024 * 1024), // 1GB
+                max_file_size: None,
                 // Per-box cgroup `pids.max` — the fork-bomb cap for the box's
                 // host-side process tree (bwrap + shim + libkrun/gvproxy
                 // threads), which sits well under this. Deliberately does NOT
@@ -374,7 +373,6 @@ impl SecurityOptions {
 ///
 /// let security = SecurityOptionsBuilder::enabled()
 ///     .max_open_files(2048)
-///     .max_file_size_bytes(1024 * 1024 * 512) // 512 MiB
 ///     .build();
 /// ```
 #[derive(Debug, Clone)]
@@ -511,7 +509,7 @@ impl SecurityOptionsBuilder {
         self
     }
 
-    /// Set the startup file-size requirement; see [`ResourceLimits::max_file_size`].
+    /// Store the legacy file-size setting for configuration compatibility.
     pub fn max_file_size_bytes(&mut self, bytes: u64) -> &mut Self {
         self.inner.resource_limits.max_file_size = Some(bytes);
         self

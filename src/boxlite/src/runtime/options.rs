@@ -9,10 +9,8 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
 use crate::runtime::constants::vm_defaults::MAX_CPUS;
-use crate::runtime::types::Bytes;
 use std::fmt;
 
 // ============================================================================
@@ -972,19 +970,6 @@ impl BoxOptions {
             kernel.sanitize()?;
         }
 
-        // Derive the shim's startup file-size requirement from this box's disk.
-        // The jailer sets soft and hard to a fixed growth budget covering this
-        // requirement, within inherited hard. The multiplier is a loose file
-        // growth backstop; guest capacity comes from the qcow2 virtual size.
-        self.advanced.security.resource_limits.max_file_size = Some(
-            Bytes::from_gib(
-                self.disk_size_gb
-                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
-                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
-            )
-            .as_bytes(),
-        );
-
         Ok(())
     }
 
@@ -1693,7 +1678,6 @@ mod tests {
     use crate::runtime::advanced_options::{
         ContainerCapabilities, NetworkRateLimit, SecurityOptions, SecurityOptionsBuilder,
     };
-    use crate::runtime::types::Bytes;
 
     /// The type decides whose storage `source` names, so only the two exact
     /// spellings parse; a near miss is an error naming what is accepted.
@@ -3339,35 +3323,6 @@ mod tests {
         // Only opts2 should have max_processes
         assert!(opts1.resource_limits.max_processes.is_none());
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
-    }
-
-    /// Startup requirements follow the box's disk before the jailer adds its budget.
-    #[test]
-    fn sanitize_scales_fsize_with_the_requested_disk() {
-        let mut options = BoxOptions {
-            disk_size_gb: Some(20),
-            ..BoxOptions::default()
-        };
-        options.sanitize().unwrap();
-
-        assert_eq!(
-            options.advanced.security.resource_limits.max_file_size,
-            Some(Bytes::from_gib(40).as_bytes()),
-            "a 20 GiB box requires a 40 GiB startup file-size budget"
-        );
-    }
-
-    /// The startup requirement uses `DEFAULT_DISK_SIZE_GB` without an explicit size.
-    #[test]
-    fn sanitize_falls_back_to_the_default_disk_size() {
-        let mut options = BoxOptions::default();
-        options.sanitize().unwrap();
-
-        assert_eq!(
-            options.advanced.security.resource_limits.max_file_size,
-            Some(Bytes::from_gib(20).as_bytes()),
-            "the default 10 GiB disk requires a 20 GiB startup file-size budget"
-        );
     }
 
     #[test]

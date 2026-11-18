@@ -23,16 +23,6 @@ pub mod qcow2 {
     /// Default disk size in GB (sparse, grows as needed)
     pub const DEFAULT_DISK_SIZE_GB: u64 = 10;
 
-    /// File-size margin used for startup requirements and disk-growth checks.
-    /// This is a loose runaway-write backstop, not a qcow2 format bound or a
-    /// capacity policy. Guest capacity comes from the image's virtual size.
-    pub const FSIZE_DISK_MULTIPLIER: u64 = 2;
-
-    /// Default online growth budget, in GiB. Both engines start with equal soft
-    /// and hard limits covering this budget or their larger startup requirement,
-    /// capped at the inherited hard limit.
-    pub const ONLINE_GROW_MAX_GB: u64 = 1024;
-
     /// QCOW2 cluster size in bits (64KB = 2^16)
     pub const CLUSTER_BITS: usize = 16;
 

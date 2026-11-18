@@ -3,8 +3,8 @@
 //! Applies rlimits to restrict resource usage of the jailed process.
 //! Works on both Linux and macOS.
 //!
-//! `apply_limits_raw()` initializes limits in the `pre_exec` hook.
-//! `check_disk_size_limit()` validates runtime requests without changing limits.
+//! Only the async-signal-safe `apply_limits_raw()` is used,
+//! called from the `pre_exec` hook before exec().
 
 use crate::runtime::advanced_options::ResourceLimits;
 use std::io;
@@ -33,28 +33,6 @@ pub fn get_rlimit(resource: RlimitResource) -> Result<(u64, u64), io::Error> {
     Ok((rlim.rlim_cur as u64, rlim.rlim_max as u64))
 }
 
-/// Checks that the disk and its file-size margin fit this process's soft limit.
-/// Neither limit changes. Call after exec, since errors may allocate.
-#[cfg(any(feature = "native", test))]
-pub(crate) fn check_disk_size_limit(bytes: u64) -> io::Result<()> {
-    use crate::disk::constants::qcow2::FSIZE_DISK_MULTIPLIER;
-
-    let required = bytes.checked_mul(FSIZE_DISK_MULTIPLIER).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "disk size overflows the file-size budget",
-        )
-    })?;
-    let (soft, _) = get_rlimit(libc::RLIMIT_FSIZE)?;
-    if soft != libc::RLIM_INFINITY && required > soft {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("disk requires {required} bytes, exceeding the file-size limit of {soft}"),
-        ));
-    }
-    Ok(())
-}
-
 /// Apply resource limits - async-signal-safe version for pre_exec.
 ///
 /// This function is designed to be called from a `pre_exec` hook, which runs
@@ -63,7 +41,7 @@ pub(crate) fn check_disk_size_limit(bytes: u64) -> io::Result<()> {
 ///
 /// # Safety
 ///
-/// This function only uses async-signal-safe syscalls (getrlimit and setrlimit).
+/// This function only uses async-signal-safe syscalls (setrlimit).
 /// Do NOT add:
 /// - Logging (tracing, println)
 /// - Memory allocation (Box, Vec, String)
@@ -80,9 +58,12 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
         set_rlimit_raw(libc::RLIMIT_NOFILE, max_files)?;
     }
 
-    if let Some(max_fsize) = limits.max_file_size {
-        set_file_size_raw(max_fsize)?;
-    }
+    // Online disk growth can exceed a file limit derived from the initial disk.
+    // The VMM checks guest I/O against the current virtual disk capacity.
+    // The host kernel enforces the shim's inherited file-size limit.
+    // if let Some(max_fsize) = limits.max_file_size {
+    //     set_rlimit_raw(libc::RLIMIT_FSIZE, max_fsize)?;
+    // }
 
     // NOTE: `max_processes` is deliberately NOT applied as RLIMIT_NPROC.
     // RLIMIT_NPROC is enforced per *real UID across the whole host*, and it is
@@ -111,37 +92,6 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
         set_rlimit_raw(libc::RLIMIT_CPU, max_cpu)?;
     }
 
-    Ok(())
-}
-
-/// Set soft and hard to a fixed disk-growth budget for both engines.
-/// The inherited hard limit must cover the startup requirement and caps the budget.
-/// Async-signal-safe: only arithmetic, getrlimit and setrlimit run after fork.
-fn set_file_size_raw(required: u64) -> Result<(), i32> {
-    use crate::disk::constants::qcow2::{FSIZE_DISK_MULTIPLIER, ONLINE_GROW_MAX_GB};
-    use crate::runtime::types::Bytes;
-
-    let growth_budget = Bytes::from_gib(ONLINE_GROW_MAX_GB)
-        .as_bytes()
-        .saturating_mul(FSIZE_DISK_MULTIPLIER);
-    let mut inherited = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut inherited) } != 0 {
-        return Err(super::get_errno());
-    }
-    if required as libc::rlim_t > inherited.rlim_max {
-        return Err(libc::EPERM);
-    }
-    let limit = (required.max(growth_budget) as libc::rlim_t).min(inherited.rlim_max);
-    let rlim = libc::rlimit {
-        rlim_cur: limit,
-        rlim_max: limit,
-    };
-    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &rlim) } != 0 {
-        return Err(super::get_errno());
-    }
     Ok(())
 }
 

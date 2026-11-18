@@ -105,8 +105,8 @@ pub struct PySecurityOptions {
     #[pyo3(get, set)]
     pub max_open_files: Option<u64>,
 
-    /// Startup file-size requirement in bytes. Local boxes derive it from disk
-    /// capacity; the jailer applies a fixed growth budget within inherited hard.
+    /// Legacy file-size setting kept for configuration compatibility.
+    /// The shim inherits its host file-size limit.
     #[pyo3(get, set)]
     pub max_file_size: Option<u64>,
 
@@ -216,7 +216,7 @@ impl PySecurityOptions {
             jailer_enabled: true,
             seccomp_enabled: cfg!(target_os = "linux"),
             max_open_files: Some(1024),
-            max_file_size: Some(1024 * 1024 * 1024), // 1 GiB
+            max_file_size: None,
             max_processes: Some(100),
             max_memory: None,   // Let VM config handle this
             max_cpu_time: None, // Let VM config handle this

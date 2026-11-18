@@ -76,8 +76,8 @@ export interface SecurityOptions {
   maxOpenFiles?: number;
 
   /**
-   * Startup file-size requirement in bytes. Local boxes derive it from disk
-   * capacity; the jailer applies a fixed growth budget within inherited hard.
+   * Legacy file-size setting kept for configuration compatibility.
+   * The shim inherits its host file-size limit.
    */
   maxFileSize?: number;
 

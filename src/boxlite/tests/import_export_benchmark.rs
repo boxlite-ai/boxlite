@@ -24,7 +24,6 @@ use tracing_subscriber::fmt::writer::TestWriter;
 const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
 const GIB: u64 = 1024 * 1024 * 1024;
 const PAYLOAD_BYTES: u64 = GIB;
-const MAX_FILE_SIZE_BYTES: u64 = 2 * GIB;
 const DISK_SIZE_GB: u64 = 4;
 const WARMUP_RUNS: usize = 1;
 const SAMPLE_RUNS: usize = 3;
@@ -166,7 +165,6 @@ async fn test_import_export_1gib_benchmark() {
 async fn create_benchmark_source(runtime: &BoxliteRuntime) -> LiteBox {
     let mut options = common::alpine_opts();
     options.disk_size_gb = Some(DISK_SIZE_GB);
-    options.advanced.security.resource_limits.max_file_size = Some(MAX_FILE_SIZE_BYTES);
 
     let source = runtime
         .create(options, Some("import-export-perf-source".to_string()))

@@ -94,17 +94,7 @@ fn answer(
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let response = match serde_json::from_slice::<ControlRequest>(&read_frame(&mut stream)?) {
-        Ok(request) if request.version == VERSION => {
-            let budget = match &request.op {
-                ControlOp::ResizeDisk { bytes, .. } => crate::jailer::check_disk_size_limit(*bytes),
-            };
-            budget
-                .map_err(|error| match error.kind() {
-                    io::ErrorKind::InvalidInput => ControlError::InvalidInput(error.to_string()),
-                    _ => ControlError::Failed(format!("cannot check the file-size limit: {error}")),
-                })
-                .and_then(|()| handle(request.op))
-        }
+        Ok(request) if request.version == VERSION => handle(request.op),
         Ok(request) => Err(ControlError::Unsupported(format!(
             "protocol version {}",
             request.version
