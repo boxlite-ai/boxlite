@@ -197,6 +197,21 @@ Deploy the API after upgrading the package to apply the new list.
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
 
+## Coupon link claims
+
+`POST /api/organizations/:organizationId/coupon-claims` accepts
+`{ "eventId": "evt_coupon_001", "couponCode": "ABCD-EFGH" }` from a verified
+organization owner. The API sends a `RedeemCouponAfterBindCard` event to
+`POST /internal/organization/:organizationId/billing-events` with a UTC
+`occurredAt`, the supplied event ID, and `data: { "coupon_code": "ABCD-EFGH" }`.
+It uses the internal Commerce destination and `USAGE_EXPORT_TOKEN`.
+
+The first accepted delivery returns HTTP 202 with `status: "pending"` and
+`result: null`. Retrying the same event ID reads its current status and saved
+result. Coupon eligibility errors preserve the Commerce status and reason.
+After a timeout, retry the same organization, code and event ID. Registration
+commits before the Dashboard submits a claim.
+
 ## Background lifecycle requests
 
 Automated stop requests use `BoxService.stop` with a platform operation context.

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../queries/queryKeys'
 import { useApi } from '../useApi'
 
@@ -13,21 +13,22 @@ interface RedeemCouponVariables {
   couponCode: string
 }
 
+export function invalidateCouponQueries(queryClient: QueryClient, organizationId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.billing.invoices(organizationId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) }),
+  ])
+}
+
 export const useRedeemCouponMutation = () => {
   const { billingApi } = useApi()
   const queryClient = useQueryClient()
 
   return useMutation<string, unknown, RedeemCouponVariables>({
     mutationFn: ({ organizationId, couponCode }) => billingApi.redeemCoupon(organizationId, couponCode),
-    onSuccess: async (_data, { organizationId }) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.billing.invoices(organizationId) }),
-        // a coupon can upgrade the plan
-        queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) }),
-      ])
-    },
+    onSuccess: (_data, { organizationId }) => invalidateCouponQueries(queryClient, organizationId),
   })
 }

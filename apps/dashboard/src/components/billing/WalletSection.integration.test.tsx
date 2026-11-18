@@ -8,10 +8,12 @@ import visaLogo from '@/assets/payment-brands/visa.svg'
 import mastercardLogo from '@/assets/payment-brands/mastercard.svg'
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { toast } from 'sonner'
+import { CouponClaimUnconfirmedError } from '@/api/coupon-claim'
 import { WalletSection } from './WalletSection'
 
 const mocks = vi.hoisted(() => ({
@@ -24,6 +26,10 @@ const mocks = vi.hoisted(() => ({
     details: Record<string, unknown>
   }>,
   redeemCoupon: vi.fn(),
+  claimCoupon: vi.fn(),
+  accountId: 'owner-1',
+  organizationId: 'org-without-card',
+  membersStatus: 'ready',
   emailVerified: true,
   memberRole: 'owner',
   // Two organizations make the target ambiguous, so a coupon link waits for a click.
@@ -43,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   failLaterPage: false,
   // The wallet query has not answered yet.
   walletPending: false,
+  walletPlaceholder: false,
   // A top-up request is in flight.
   topUpPending: false,
   wallet: {
@@ -57,7 +64,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: { id: 'org-without-card', name: 'Acme Labs' },
+    selectedOrganization: { id: mocks.organizationId, name: 'Acme Labs' },
+    organizationMembersStatus: mocks.membersStatus,
     authenticatedUserOrganizationMember: { role: mocks.memberRole },
   }),
 }))
@@ -67,8 +75,10 @@ vi.mock('@/hooks/useOrganizations', () => ({
 }))
 
 vi.mock('react-oidc-context', () => ({
-  useAuth: () => ({ user: { profile: { email_verified: mocks.emailVerified } } }),
+  useAuth: () => ({ user: { profile: { sub: mocks.accountId, email_verified: mocks.emailVerified } } }),
 }))
+
+vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ claimCoupon: mocks.claimCoupon }) }))
 
 vi.mock('@/hooks/queries/billingQueries', () => ({
   useFetchOwnerCheckoutUrlQuery: () => mocks.fetchCheckoutUrl,
@@ -136,10 +146,15 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   },
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
   useOwnerPlanQuery: () => ({ data: { quotaRemainingCents: 0 } }),
-  useOwnerWalletQuery: () => ({ data: mocks.walletPending ? undefined : mocks.wallet, isLoading: mocks.walletPending }),
+  useOwnerWalletQuery: () => ({
+    data: mocks.walletPending ? undefined : mocks.wallet,
+    isLoading: mocks.walletPending,
+    isPlaceholderData: mocks.walletPlaceholder,
+  }),
 }))
 
-vi.mock('@/hooks/mutations/useRedeemCouponMutation', () => ({
+vi.mock('@/hooks/mutations/useRedeemCouponMutation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/mutations/useRedeemCouponMutation')>()),
   useRedeemCouponMutation: () => ({ mutateAsync: mocks.redeemCoupon, isPending: false }),
 }))
 
@@ -151,7 +166,7 @@ vi.mock('@/hooks/mutations/useTopUpWalletMutation', () => ({
   useTopUpWalletMutation: () => ({ mutateAsync: mocks.topUpWallet, isPending: mocks.topUpPending }),
 }))
 
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 function typeInto(element: HTMLInputElement, value: string) {
   const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
@@ -190,11 +205,18 @@ describe('WalletSection top-up checkout', () => {
     mocks.refetchHistory.mockClear()
     mocks.historiesPending = false
     mocks.walletPending = false
+    mocks.walletPlaceholder = false
     mocks.topUpPending = false
     mocks.emailVerified = true
+    mocks.accountId = 'owner-1'
+    mocks.organizationId = 'org-without-card'
+    mocks.membersStatus = 'ready'
+    sessionStorage.clear()
     mocks.memberRole = 'owner'
     mocks.organizations = [{ id: 'org-without-card' }, { id: 'org-other' }]
     mocks.redeemCoupon.mockReset()
+    mocks.claimCoupon.mockReset()
+    vi.mocked(toast.info).mockClear()
     vi.mocked(toast.success).mockClear()
     vi.mocked(toast.error).mockClear()
   })
@@ -676,114 +698,182 @@ describe('WalletSection top-up checkout', () => {
     expect(discountRibbon?.parentElement?.previousElementSibling).toBe(topUpButton)
   })
 
-  async function renderCouponLink(linkCouponCode?: string, onCouponRedeemed = vi.fn()) {
+  async function renderCouponLink(initialCode?: string) {
     const host = document.createElement('div')
     document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host)
-      // StrictMode mounts effects twice, as the dashboard does in development.
-      root.render(
+    const client = new QueryClient()
+    let code = initialCode
+    const onCouponClaimAccepted = vi.fn(() => {
+      code = undefined
+      render()
+    })
+    function render() {
+      root!.render(
         <StrictMode>
-          <WalletSection linkCouponCode={linkCouponCode} onCouponRedeemed={onCouponRedeemed} />
+          <QueryClientProvider client={client}>
+            <WalletSection linkCouponCode={code} onCouponClaimAccepted={onCouponClaimAccepted} />
+          </QueryClientProvider>
         </StrictMode>,
       )
-    })
-    await flush()
-    const input = host.querySelector<HTMLInputElement>('input[placeholder="Enter coupon code"]')
-    const redeem = [...host.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.trim() === 'Redeem',
-    )
-    return { host, input, redeem, onCouponRedeemed }
+    }
+    async function visit(nextCode?: string, refresh = false) {
+      code = nextCode
+      await act(async () => {
+        if (refresh) root?.unmount()
+        if (refresh || !root) root = createRoot(host)
+        render()
+      })
+    }
+    await visit(initialCode)
+    const button = (name: string) => [...host.querySelectorAll('button')].find((el) => el.textContent?.trim() === name)
+    const input = () => host.querySelector<HTMLInputElement>('input[placeholder="Enter coupon code"]')
+    return { host, button, input, visit, onCouponClaimAccepted, client }
   }
 
-  it('opens the coupon form filled in from a coupon link and redeems it for the named organization', async () => {
-    mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')
+  it('confirms the coupon link for the selected organization and offers card setup after URL cleanup', async () => {
+    mocks.claimCoupon.mockResolvedValue({ status: 'pending', result: null })
+    const checkout = { location: { href: '' }, close: vi.fn() }
+    vi.spyOn(window, 'open').mockReturnValue(checkout as unknown as Window)
+    const { host, button, input, onCouponClaimAccepted } = await renderCouponLink('ACME50')
+    expect(input()?.value).toBe('ACME50')
+    expect(host.textContent).toContain('Acme Labs')
+    expect(mocks.claimCoupon).not.toHaveBeenCalled()
 
-    const { host, input, redeem, onCouponRedeemed } = await renderCouponLink('ACME50')
-
-    expect(input?.value).toBe('ACME50')
-    expect(host.textContent).toContain('Credits go to Acme Labs')
-    // Two organizations: nothing is redeemed until the user picks this one by clicking.
-    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
-    await act(async () => redeem!.click())
-    await flush()
-    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
-    expect(mocks.redeemCoupon).toHaveBeenCalledWith({ organizationId: 'org-without-card', couponCode: 'ACME50' })
-    expect(onCouponRedeemed).toHaveBeenCalledTimes(1)
-    expect(host.textContent).toContain('Coupon redeemed')
-  })
-
-  it('keeps the coupon form folded without a coupon link code', async () => {
-    const { host, input } = await renderCouponLink()
-
-    expect(input).toBeNull()
-    expect(host.textContent).toContain('Have a coupon code?')
-  })
-
-  it('shows a rejected coupon link code and keeps it for another try', async () => {
-    mocks.redeemCoupon.mockRejectedValue(new Error('Coupon not found'))
-
-    const { host, input, redeem, onCouponRedeemed } = await renderCouponLink('NOPE')
-
-    await act(async () => redeem!.click())
-    await flush()
-    expect(host.textContent).toContain('Coupon not found')
-    expect(onCouponRedeemed).not.toHaveBeenCalled()
-    expect(input?.value).toBe('NOPE')
-  })
-
-  it('asks to verify the email before redeeming a coupon link code', async () => {
-    mocks.emailVerified = false
-    mocks.organizations = [{ id: 'org-without-card' }]
-
-    const { host, input, redeem } = await renderCouponLink('ACME50')
-
-    expect(host.textContent).toContain('Verify your email to redeem coupon code ACME50')
-    expect(input).toBeNull()
-    expect(redeem).toBeUndefined()
-    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
-  })
-
-  it('redeems a coupon link once without a click for the owner of a single organization', async () => {
-    mocks.organizations = [{ id: 'org-without-card' }]
-    mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')
-
-    const { host, onCouponRedeemed } = await renderCouponLink('ACME50')
-    await flush()
-
-    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
-    expect(mocks.redeemCoupon).toHaveBeenCalledWith({ organizationId: 'org-without-card', couponCode: 'ACME50' })
-    expect(onCouponRedeemed).toHaveBeenCalledTimes(1)
-    expect(host.textContent).toContain('Coupon redeemed')
-    // The inline note sits low in the panel and fades; a toast is visible wherever the page is scrolled.
-    expect(toast.success).toHaveBeenCalledWith('Coupon redeemed')
-  })
-
-  it('does not auto-redeem a coupon link for a member who does not own the organization', async () => {
-    mocks.organizations = [{ id: 'org-without-card' }]
-    mocks.memberRole = 'member'
-
-    const { input } = await renderCouponLink('ACME50')
-    await flush()
-
-    expect(input?.value).toBe('ACME50')
-    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
-  })
-
-  it('tries a rejected coupon link once and leaves it for the user', async () => {
-    mocks.organizations = [{ id: 'org-without-card' }]
-    mocks.redeemCoupon.mockRejectedValue(new Error('Coupon not found'))
-
-    const { host, input, onCouponRedeemed } = await renderCouponLink('NOPE')
-    await flush()
-    await flush()
-
-    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
-    expect(host.textContent).toContain('Coupon not found')
-    expect(input?.value).toBe('NOPE')
-    expect(onCouponRedeemed).not.toHaveBeenCalled()
-    expect(toast.error).toHaveBeenCalledWith('Coupon NOPE was not redeemed', {
-      description: 'Error: Coupon not found',
+    await act(async () => button('Claim reward')!.click())
+    expect(mocks.claimCoupon).toHaveBeenCalledExactlyOnceWith('org-without-card', {
+      eventId: expect.any(String),
+      couponCode: 'ACME50',
     })
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+    expect(onCouponClaimAccepted).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('Add a card soon to claim your reward.')
+    await act(async () => button('Add card')!.click())
+    expect(checkout.location.href).toBe('https://checkout.stripe.com/c/pay/cs_connect')
+  })
+
+  it('waits for the selected organization’s wallet before offering Add card', async () => {
+    mocks.organizations = [{ id: mocks.organizationId }]
+    mocks.walletPlaceholder = true
+    mocks.claimCoupon.mockResolvedValue({ status: 'pending', result: null })
+    const { host, button, visit } = await renderCouponLink('ACME50')
+    expect(host.textContent).toContain('Your reward claim was received.')
+    expect(button('Add card')).toBeUndefined()
+    mocks.walletPlaceholder = false
+    await visit()
+    expect(host.textContent).toContain('Add a card soon to claim your reward.')
+    expect(button('Add card')).toBeDefined()
+  })
+
+  it('restores coupon claim outcomes on refresh and reuses the event ID after an unknown result', async () => {
+    mocks.organizations = [{ id: mocks.organizationId }]
+    mocks.wallet.creditCardConnected = true
+    mocks.claimCoupon
+      .mockRejectedValueOnce(new CouponClaimUnconfirmedError())
+      .mockResolvedValueOnce({ status: 'pending', result: null })
+      .mockResolvedValueOnce({ status: 'done', result: { outcome: 'processed' } })
+    const { host, onCouponClaimAccepted, button, visit, client } = await renderCouponLink('ACME50')
+    expect(mocks.claimCoupon).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('We couldn’t confirm your reward claim. Please try again.')
+    expect(onCouponClaimAccepted).not.toHaveBeenCalled()
+    await act(async () => button('Claim reward')!.click())
+    expect(host.textContent).toContain('Your reward is being processed.')
+    expect(button('Add card')).toBeUndefined()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    await visit('ACME50', true)
+    expect(host.textContent).toContain('Reward credited.')
+    expect(invalidate).toHaveBeenCalled()
+    expect(onCouponClaimAccepted).toHaveBeenCalledTimes(2)
+    const calls = mocks.claimCoupon.mock.calls
+    expect(calls).toHaveLength(3)
+    expect(calls[0][1].eventId).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(calls[1]).toEqual(calls[0])
+    expect(calls[2]).toEqual(calls[0])
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ...[
+      'Coupon not found',
+      'This coupon is not available to this organization',
+      'Coupon has already been redeemed',
+      'This coupon is disabled',
+      'This coupon is expired',
+      'This coupon is exhausted',
+    ].map((reason) => [reason, () => Promise.reject(new Error(reason)), `Reward claim failed. ${reason}`] as const),
+    [
+      'skipped',
+      () => Promise.resolve({ status: 'done', result: { outcome: 'skipped', reason: 'coupon_expired' } }),
+      'Reward claim failed. This coupon has expired',
+    ],
+    ['failed', () => Promise.resolve({ status: 'failed', result: null }), 'Reward claim failed.'],
+  ])('retains the coupon link after a definite %s', async (_name, reply, message) => {
+    mocks.organizations = [{ id: mocks.organizationId }]
+    mocks.claimCoupon.mockImplementation(reply as () => Promise<unknown>)
+    const { input, host, onCouponClaimAccepted } = await renderCouponLink('NOPE')
+    expect(mocks.claimCoupon).toHaveBeenCalledTimes(1)
+    expect(input()?.value).toBe('NOPE')
+    expect(host.textContent).toContain(message)
+    expect(onCouponClaimAccepted).not.toHaveBeenCalled()
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [false, 'owner', 'ready', 'Verify your email'],
+    [true, 'member', 'ready', 'owner'],
+    [true, 'owner', 'loading', ''],
+  ])(
+    'gates coupon claims on verified email and current ownership (%s, %s, %s)',
+    async (verified, role, status, prompt) => {
+      mocks.emailVerified = verified as boolean
+      mocks.memberRole = role as string
+      mocks.membersStatus = status as string
+      mocks.organizations = [{ id: mocks.organizationId }]
+      mocks.walletPending = true
+      const { host, button } = await renderCouponLink('ACME50')
+      if (prompt) expect(host.textContent).toContain(prompt)
+      expect(button('Claim reward')).toBeUndefined()
+      expect(mocks.claimCoupon).not.toHaveBeenCalled()
+      expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+    },
+  )
+
+  it('isolates coupon codes, accounts and organizations when navigation overtakes a claim', async () => {
+    mocks.organizations = [{ id: mocks.organizationId }]
+    let finish!: (value: unknown) => void
+    mocks.claimCoupon.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+    mocks.claimCoupon.mockRejectedValue(new Error('Coupon disabled'))
+    const { host, visit, onCouponClaimAccepted } = await renderCouponLink('FIRST')
+    await visit('SECOND')
+    mocks.organizationId = 'org-other'
+    mocks.organizations = [{ id: mocks.organizationId }]
+    await visit('SECOND')
+    mocks.accountId = 'owner-2'
+    await visit('SECOND')
+    await act(async () => finish({ status: 'done', result: { outcome: 'processed' } }))
+    expect(onCouponClaimAccepted).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('Coupon disabled')
+    expect(host.textContent).not.toContain('Reward credited.')
+    expect(mocks.claimCoupon).toHaveBeenCalledTimes(4)
+    const ids = mocks.claimCoupon.mock.calls.map(([, { eventId }]) => eventId)
+    expect(new Set(ids).size).toBe(4)
+  })
+
+  it('redeems independently entered Wallet coupon codes through Commerce', async () => {
+    mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')
+    const { button, input, host } = await renderCouponLink()
+    expect(input()).toBeNull()
+    await act(async () => button('Have a coupon code?')!.click())
+    await act(async () => typeInto(input()!, 'TeamDiscount'))
+    await act(async () => button('Redeem')!.click())
+    expect(mocks.redeemCoupon).toHaveBeenCalledExactlyOnceWith({
+      organizationId: mocks.organizationId,
+      couponCode: 'TeamDiscount',
+    })
+    expect(mocks.claimCoupon).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('Coupon redeemed')
   })
 })

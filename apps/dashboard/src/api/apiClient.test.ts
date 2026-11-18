@@ -3,6 +3,38 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
+describe('coupon link claims', () => {
+  const claim = { eventId: 'evt_coupon_001', couponCode: 'ABCD-EFGH' }
+
+  it('posts the claim to BoxLite with the signed-in user and reads the pending receipt', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 202, { status: 'pending', result: null }, requests)
+    await expect(api.claimCoupon('org/one', claim)).resolves.toEqual({ status: 'pending', result: null })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      method: 'post',
+      baseURL: 'http://api.test/api',
+      url: '/organizations/org%2Fone/coupon-claims',
+      data: JSON.stringify(claim),
+      headers: { Authorization: 'Bearer tok' },
+    })
+  })
+
+  it('preserves a definitive coupon refusal', async () => {
+    const api = await makeClient(vi.fn(), 409, { code: 'coupon_expired', message: 'This coupon has expired.' })
+    await expect(api.claimCoupon('org', claim)).rejects.toThrow('This coupon has expired.')
+  })
+
+  it.each([
+    [503, {}],
+    [202, { status: 'done', result: null }],
+  ] as const)('treats an unavailable or invalid receipt as unconfirmed (%s)', async (status, body) => {
+    const api = await makeClient(vi.fn(), status, body)
+    const { CouponClaimUnconfirmedError } = await import('./coupon-claim')
+    await expect(api.claimCoupon('org', claim)).rejects.toBeInstanceOf(CouponClaimUnconfirmedError)
+  })
+})
+
 describe('ApiClient domains', () => {
   it('uses separate setup routes and unchanged portable binding fields', async () => {
     const requests: any[] = []
