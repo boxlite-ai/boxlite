@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/boxlite-ai/runner/internal/timing"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -202,7 +203,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 		return
 	}
 
-	runAttachLoop(ctx.Request.Context(), conn, target)
+	runAttachLoop(ctx.Request.Context(), conn, target, timing.IDs{BoxID: boxId, ExecID: execId})
 }
 
 // runAttachLoop owns the WebSocket lifecycle: spawns reader/writer/keepalive
@@ -213,7 +214,9 @@ func BoxliteExecAttach(ctx *gin.Context) {
 // unbounded allocation.
 const maxAttachFrameBytes = 1 * 1024 * 1024 // 1 MiB
 
-func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec) {
+func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec, ids timing.IDs) {
+	started := time.Now()
+	attachDone := func(status string) { timing.Emit("exec", "exec.attach_done", status, started, ids) }
 	conn.SetReadLimit(maxAttachFrameBytes)
 
 	// Detect a dead client via Pong liveness: a tiny Ping write fits in
@@ -337,6 +340,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		// pump goroutines drain their remaining buffered data and exit
 		// naturally — no ctx cancellation needed for pumps. This
 		// ensures all output is written before the exit frame.
+		drainStart := time.Now()
 		unsubscribe()
 
 		pumpsDone := make(chan struct{})
@@ -351,16 +355,29 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		case <-time.After(2 * time.Second):
 		}
 
+		drainStatus := timing.Error
+		if drained && loopCtx.Err() == nil {
+			drainStatus = timing.OK
+		}
+		timing.Emit("exec", "exec.output_drained", drainStatus, drainStart, ids)
 		if drained {
-			_ = writeJSONFrame(conn, &writeMu, map[string]any{
+			frameErr := writeJSONFrame(conn, &writeMu, map[string]any{
 				"type":      "exit",
 				"exit_code": exec.ExitCodeValue(),
 			})
+			status := drainStatus
+			if frameErr != nil {
+				status = timing.Error
+			}
+			attachDone(status)
 			closeWS(websocket.CloseNormalClosure, "")
 		} else {
+			attachDone(timing.Error)
 			closeWS(websocket.CloseInternalServerErr, "pump drain timed out")
 		}
 	} else {
+		timing.Emit("exec", "exec.output_drained", timing.Skipped, time.Now(), ids)
+		attachDone(timing.Error)
 		// The failure exits send their Close here rather than leaving it to the
 		// deferred cleanup, so that every path that sends one goes on to
 		// complete the handshake below. A cancelled loop is not always a dead

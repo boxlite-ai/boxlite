@@ -26,6 +26,7 @@ import (
 
 	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/internal"
+	"github.com/boxlite-ai/runner/internal/timing"
 	"github.com/boxlite-ai/runner/pkg/api/controllers"
 	"github.com/boxlite-ai/runner/pkg/api/docs"
 	"github.com/boxlite-ai/runner/pkg/api/middlewares"
@@ -120,6 +121,11 @@ func (a *ApiServer) Start(ctx context.Context) error {
 
 	protected := a.router.Group("/")
 	protected.Use(middlewares.AuthMiddleware(a.apiToken))
+	protected.GET("/timing/:box_id", func(ctx *gin.Context) {
+		boxID := ctx.Param("box_id")
+		ctx.Header("Cache-Control", "no-store")
+		ctx.JSON(http.StatusOK, gin.H{"box_id": boxID, "events": timing.Snapshot(boxID)})
+	})
 
 	metricsController := protected.Group("/metrics")
 	{
