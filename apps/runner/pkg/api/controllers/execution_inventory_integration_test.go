@@ -61,9 +61,10 @@ func TestIntegrationExecutionInventoryRecoveryHTTP(t *testing.T) {
 
 	manager := withFreshExecManager(t)
 	t.Cleanup(manager.Stop)
+	apiBoxName := box.Name()
 	previous := getExecutionBox
 	getExecutionBox = func(_ *gin.Context, id string) (*sdk.Box, error) {
-		if id != box.Name() {
+		if id != apiBoxName {
 			return nil, &sdk.Error{Code: sdk.ErrNotFound, Message: "box not found"}
 		}
 		return box, nil
@@ -77,7 +78,7 @@ func TestIntegrationExecutionInventoryRecoveryHTTP(t *testing.T) {
 	router.DELETE("/v1/boxes/:boxId/executions/:execId", BoxliteExecKill)
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
-	base := "/v1/boxes/" + box.Name() + "/executions"
+	base := "/v1/boxes/" + apiBoxName + "/executions"
 	request := func(method, path string) *httptest.ResponseRecorder {
 		t.Helper()
 		response := httptest.NewRecorder()

@@ -88,6 +88,14 @@ Image publication and the stage's scan policy are separate checks. Already-publi
 are verified instead of blindly overwritten. Release images carry a version-qualified address,
 so a commit build is not interchangeable with the release build from the same SHA.
 
+## Publication audit tests
+
+`make test:apps:mbuild` checks the release preflight workflow against mbuild's real publication audit arguments.
+The tests live in `mbuild/test`, alongside the publisher they import, so relative imports stay inside the Nx project boundary.
+
+They retain the workflow trigger, permission, timeout, stdout/stderr, and success/failure exit checks.
+`make test:apps:infra` also runs this suite through the complete infrastructure test sequence.
+
 ## Exit codes
 
 | Code | Meaning | Response |

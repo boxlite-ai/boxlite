@@ -529,6 +529,7 @@ or `archived`.
 | `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services under each tunnel's access policy (public: no sign-in; private: tunnel token or member) |
 | `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
 | `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
+| `outboundControl` | `jsonb` | nullable private revision and pending-attempt metadata; omitted from ordinary entity reads |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |
 | `daemonVersion` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
@@ -540,6 +541,13 @@ network-settings bodies carry the same `outboundEnabled` / `outboundAllowNet`.
 The control-plane `Box` DTO reports them as `network.outbound {mode, allow_net}`
 and `network.inbound {mode, allow_net}`, the same `NetworkInfo` schema the `/v1`
 box read returns, and nothing else.
+
+`outboundControl` records its format version, the persisted revision and any complete pending candidate with its expected revision and assigned Runner.
+Policy columns and persisted revision finalize in one transaction; dispatch starts only after the pending reservation is committed.
+The nullable column preserves existing policies, using revision `initial` when metadata is absent.
+
+The column is private storage, separate from the public Box DTO.
+Dedicated policy and status resources expose revision and completion state through the [outbound durability contract](../outbound-contract.md#cloud-durable-intent).
 
 **Unique:** `(organizationId, name)`.
 

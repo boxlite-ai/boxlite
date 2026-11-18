@@ -291,6 +291,20 @@ impl ApiClient {
         self.send_json(builder).await
     }
 
+    /// Revision control uses a short total bound, including the response body.
+    pub(super) async fn outbound_request(
+        &self,
+        method: Method,
+        path: &str,
+    ) -> BoxliteResult<RequestBuilder> {
+        self.authorize(
+            self.http
+                .request(method, self.url(path))
+                .timeout(Duration::from_secs(10)),
+        )
+        .await
+    }
+
     pub async fn get_with_query<T: DeserializeOwned>(
         &self,
         path: &str,

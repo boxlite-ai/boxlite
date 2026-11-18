@@ -211,9 +211,231 @@ A newly requested unconditional complete replacement may use the observed revisi
 The existing unconditional setter retains its old-backend path only while no versioned control metadata exists.
 A versioned call, or a Box already using versioned state, cannot silently fall back to that path.
 
+### Revision-aware REST transport
+
+The Rust REST backend carries `outbound_snapshot`, `outbound_status`, and conditional replacement through the same typed NetworkHandle API.
+The policy GET decodes user policy and one strong ETag; the separate status GET retains durable/live comparison and pending evidence.
+A response claiming confirmation must contain matching durable and completed live snapshots with no pending attempt.
+
+Internal replacement uses `PUT /boxes/{id}/network/outbound/snapshot`, one expected token in `If-Match`, and the candidate in `X-Boxlite-Outbound-Revision`.
+Only policy enters the JSON request body.
+HTTP 200 requires one strong matching ETag and the complete matching policy; 412 remains a distinct rejected-precondition outcome.
+
+Missing, weak, duplicated, malformed, or mismatched acknowledgements cannot establish application.
+Unsupported routes never trigger the old policy setter, whose unconditional request shape remains unchanged.
+Revision control exchanges have a ten-second total bound, including response reading.
+
+Socket-backed REST tests run requests through NetworkHandle and the real HTTP encoder/decoder.
+They cover exact request metadata, matching and rejected acknowledgements, old peers, invalid stored policy, and contradictory confirmed status.
+
+### Native C revision boundary
+
+The additive C ABI exposes `boxlite_network_outbound_snapshot`, `boxlite_network_outbound_status`, and `boxlite_network_replace_outbound_snapshot`.
+Read calls allocate JSON strings owned by the caller; release them with `boxlite_free_string`.
+Their output pointer is initialized to NULL before validating other inputs.
+
+Replacement takes separate expected revision, fresh candidate revision, and complete policy JSON strings, borrowed for the blocking call.
+For example, expected `rev-a`, candidate `rev-b`, and `{"mode":"disabled"}` preserve the same identity through NetworkHandle and its selected local or REST backend.
+`Ok` with `out_applied=1` confirms application; `Ok` with `out_applied=0` reports a failed precondition.
+
+Errors also initialize `out_applied` to zero and keep the existing error-code ABI.
+Malformed UTF-8, invalid tokens, repeated/reserved candidates, invalid policy, and null required pointers are rejected before dispatch.
+These are trusted-coordinator operations; the existing unconditional setters retain their signatures.
+
+The C boundary tests call the actual exported functions through a REST runtime and inspect the resulting HTTP requests.
+They free returned strings and check output initialization and rejection without dispatch.
+
+### Go coordinator API
+
+`Network.OutboundSnapshot` reads durable intent; `Network.OutboundStatus` reads the durable/live comparison and pending evidence.
+`ReplaceOutboundSnapshot(ctx, expected, candidate)` preserves the coordinator's fresh candidate across the C ABI and selected Runtime backend.
+Check both its error and `OutboundReplaceOutcome`: `OutboundPreconditionFailed` with a nil error is a rejected update, not application.
+
+`OutboundPolicy` supplies explicit wire field names without changing the existing `OutboundNetworkSpec` structure or setter request shapes.
+
+Revision strings are validated before C-string conversion, including embedded NUL, length, and ASCII-token checks.
+Network calls retain a shared lifetime lock; Close takes the exclusive lock before freeing the C handle.
+Policy updates remain serialized by Runtime's Box operation lock, while a concurrent status read through the same Go Network handle remains available.
+
+As with the existing blocking setters, context cancellation is checked before entering the native call; it does not cancel an in-flight native update.
+
+Go tests use the actual Go/C/Rust stack against controlled HTTP peers, including a held update with concurrent status read.
+They cover precondition failure, malformed ACK, unsupported peers, and invalid or cancelled calls rejected before dispatch.
+
 Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
 They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
 These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
+
+### Runner control resources
+
+Runner exposes policy GET, status GET, and dedicated snapshot PUT under its existing bearer-authenticated Box network routes.
+Reads use request-owned Runtime handles without starting a VM; replacements require a running Box.
+
+The independent network handle retains its native ownership after the temporary Box wrapper closes.
+Readback leaves borrowed lifecycle cache entries untouched.
+
+Policy GET returns the policy body and persisted revision as a strong ETag.
+
+Snapshot PUT requires one strong expected revision and one fresh candidate header before acquiring a Runtime handle.
+A stale comparison returns 412; only the explicit `applied` outcome returns the matching policy and candidate ETag.
+
+Runner tests execute its production bearer and error middleware over HTTP.
+Missing, malformed, and wrong credentials cannot reach control lookup; the configured bearer can use all three resources.
+A separate client test crosses the actual Go/C/Rust transport against a controlled Runtime peer, including stopped-Box reads and refused mutation.
+
+### CLI serve control resources
+
+The CLI serve router implements the same resources.
+Its existing public policy PUT accepts HTTP `If-Match`, including tag lists and wildcard matching, while retaining the unconditional response shape.
+Coordinator headers on that public resource are rejected; trusted candidates use the dedicated snapshot path.
+
+A rejected CAS triggers a fresh predicate check; tag lists and wildcard requests may still match a competing revision.
+The server retains one candidate identity across at most two CAS attempts, then returns conflict if contention persists.
+Transport errors and uncertain outcomes return immediately without retry or an unconditional fallback.
+
+The diagram uses illustrative revision tokens; HTTP tests allocate the candidate through the real coordinator.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Serve as CLI serve
+    participant Other as Concurrent coordinator
+    participant Runtime
+    Caller->>Serve: PUT with If-Match [rev-a, rev-b]
+    Note over Serve: Allocate candidate rev-c once
+    Serve->>Runtime: Read persisted snapshot
+    Runtime-->>Serve: rev-a
+    Other->>Runtime: Replace rev-a with rev-b
+    Runtime-->>Other: ACK rev-b
+    Serve->>Runtime: CAS expected rev-a, candidate rev-c
+    Runtime-->>Serve: 412, candidate not applied
+    Serve->>Runtime: Read persisted snapshot
+    Runtime-->>Serve: rev-b
+    Note over Serve: The public tag list still matches
+    Serve->>Runtime: CAS expected rev-b, same candidate rev-c
+    Runtime-->>Serve: Matching ACK rev-c
+    Serve-->>Caller: 200, ETag rev-c
+```
+
+Local status reports the same durable snapshot in `persisted` and `runtime_persisted` because this server has no separate Cloud store.
+Absent pending and observation-error fields are omitted; an existing pending revision remains a string.
+HTTP tests exercise the actual API-key middleware and verify denied requests cannot reach Box lookup or Runtime control.
+
+### Cloud-to-Runner control adapter
+
+`RunnerOutboundControl` uses the dedicated snapshot and status resources through the assigned Runner's existing control endpoint and bearer credential.
+It never retries a versioned operation through the unconditional policy route.
+
+```mermaid
+flowchart LR
+    C[Cloud coordinator] -->|Expected revision and full candidate| A[RunnerOutboundControl]
+    A -->|Authenticated snapshot PUT or status GET| R[Assigned Runner]
+    R -->|Revision-aware SDK and FFI| T[Runtime]
+    T -->|Snapshot or refusal| R
+    R -->|HTTP response| A
+    A -->|Verified result or classified failure| C
+```
+
+Only HTTP 200 with the exact strong candidate ETag and complete matching policy acknowledges replacement.
+HTTP 412 is a distinct precondition outcome; bare 404, 405, or 501 reports unsupported control.
+
+Status requires `revision-v1`, valid complete snapshots, and an explicit application phase.
+Runtime confirmation requires matching persisted and observed snapshots, a confirmed observation, and no pending revision or observation error.
+
+For example, a live `rev-b` with unfinished Runtime persistence remains pending or uncertain, even when its policy matches.
+This adapter validates Runtime completion; the Cloud coordinator must additionally compare its own durable state.
+
+Every HTTP call has a ten-second deadline including response-body consumption and a 64 KiB response limit.
+Redirects are rejected, and public errors omit endpoint credentials and upstream diagnostics.
+
+`make test:apps:api TEST_FILES=runner-adapter/outbound-control.spec` exercises actual loopback HTTP, including stalled bodies and invalid acknowledgements.
+The fixture models a Runner control peer; it does not boot a guest VM.
+
+### Cloud durable intent
+
+`OutboundPolicyStore` keeps private control metadata in the Box's nullable `outboundControl` JSONB column.
+Apply pre-deploy migration `AddOutboundControl1794888000000` before deploying callers; older records use revision `initial`.
+Ordinary entity reads omit the column.
+
+The pending record contains the expected Runtime revision, full candidate policy and revision, and assigned Runner identity.
+Policy and persisted revision change together when finalization clears pending.
+
+`OutboundPolicyCoordinator` reserves pending in one transaction before dispatch.
+A second transaction reacquires the same organization-scoped Box row lock and verifies that reservation and Runner still own the attempt.
+It holds the lock through matching acknowledgement or confirmed Runtime readback and final persistence.
+
+Five seconds bounds database lock acquisition; each Runner request independently has the adapter's ten-second deadline.
+Failed or ambiguous application leaves the already committed pending evidence intact.
+
+```mermaid
+sequenceDiagram
+    participant C as Cloud coordinator
+    participant P as PostgreSQL primary
+    participant R as Runner / Runtime
+    C->>P: Tx1 lock Box; write full pending
+    P-->>C: COMMIT reservation; release lock
+    C->>P: Tx2 lock Box; verify exact pending owner
+    C->>R: CAS expected to candidate
+    R-->>C: Matching complete ACK
+    C->>P: Write policy + revision; clear pending; COMMIT
+    alt COMMIT reply received
+        P-->>C: Completion; release lock
+    else Publication failed or COMMIT outcome unknown
+        C->>P: Release failed connection; new primary transaction and lock
+        P-->>C: Durable policy, revision, pending owner
+        alt Matching candidate is already durable
+            Note over C,P: Keep the committed candidate; no restoration
+        else Original pending still owns the previous durable policy
+            C->>P: Write fresh restoration pending; COMMIT reservation
+            C->>P: Reacquire Box lock; verify restoration and Runner owner
+            C->>R: CAS acknowledged candidate to fresh restoration
+            Note over C,R: Failed restoration keeps its pending evidence
+            Note over C,P: Completed restoration uses the same finalization path
+        else Superseded owner or primary unavailable
+            Note over C,R: Return failure; no restoration dispatch
+        end
+    end
+```
+
+`OutboundCommitUnknown` distinguishes an unacknowledged commit from an error inside the transaction callback.
+Recovery reads through a new primary transaction before deciding whether restoration is allowed.
+A matching durable candidate needs no restoration; a superseded owner or unavailable database cannot authorize one.
+
+Proven failed persistence may reserve the previous policy with a fresh revision and apply it conditionally against the acknowledged candidate.
+Restoration failure preserves its own pending evidence and returns failure.
+A successful restoration repairs state but does not make the original failed replacement successful.
+
+Cloud status compares its persisted snapshot with both Runtime persistence and completed backend observation.
+GET does not reconcile pending or wait behind the writer's row lock.
+
+A later mutation may finalize a completed pending candidate before checking its public precondition; stale callers then receive 412.
+An unconditional complete replacement may fence unresolved older requests through a fresh CAS.
+
+Run `make test:apps:api TEST_FILES=outbound-policy.store.integration` with loopback `DB_HOST`, `DB_PORT`, `DB_USERNAME`, and `DB_DATABASE`.
+The suite owns a temporary schema and a PostgreSQL frame proxy that disconnects before forwarding COMMIT or before forwarding its server completion.
+It combines real transactions and HTTP with a controlled Runner peer; it does not exercise a guest VM or deployed Cloud instance.
+
+A real PostgreSQL trigger rejects final publication after the Runner ACK to exercise restoration and failed-restoration intent.
+Socket loss and pending/uncertain readback checks distinguish matching revisions from completed application.
+
+### Public Cloud control resources
+
+Public policy GET returns the existing policy object with a strong revision ETag; status GET returns completion metadata separately.
+Policy PUT retains its complete-replacement body and accepts optional HTTP `If-Match`, including strong tag lists and wildcard matching.
+The coordinator allocates candidate revisions; caller-supplied internal candidate headers are rejected.
+
+Public lists ignore empty elements; an empty list matches no revision, while weak tags never satisfy strong comparison.
+Wildcard stands alone, and the complete field is validated before any matching tag can authorize a mutation.
+Only HTTP SP and HTAB count as surrounding whitespace, including on internal single-revision control resources.
+
+These rules follow [RFC 9110 list parsing and whitespace](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6).
+
+Reads require organization membership; writes also require the existing Box write permission.
+Status describes control-state agreement and does not probe destination connectivity.
+MCP access to these outbound resources requires an API key under its OAuth default-deny policy.
+
+The HTTP authorization suite runs actual API-key and signed-JWT strategies and organization guards with controlled credential, membership, Redis, and Box storage.
+It checks canonical, organization-prefixed, and legacy paths; it does not boot the production Cloud application or guest VMs.
 
 ### Runtime readback and coordinator recovery
 

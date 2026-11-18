@@ -36,8 +36,8 @@ func (n *Network) setPolicy(ctx context.Context, mode NetworkMode, rules []strin
 	if n == nil {
 		return ErrRuntimeClosed
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	if n.handle == nil {
 		return ErrRuntimeClosed
 	}

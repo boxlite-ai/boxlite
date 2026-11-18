@@ -24,7 +24,7 @@ import (
 
 // Network is a box-scoped handle for network operations.
 type Network struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	handle  *C.CBoxNetworkHandle
 	runtime *Runtime
 }

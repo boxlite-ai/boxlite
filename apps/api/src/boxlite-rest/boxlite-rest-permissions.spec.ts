@@ -41,6 +41,8 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   stopBox: [WRITE_BOXES],
   updateInboundNetwork: [WRITE_BOXES],
   updateOutboundNetwork: [WRITE_BOXES],
+  getOutboundNetwork: null,
+  getOutboundStatus: null,
   // proxy controller
   proxyExec: [WRITE_BOXES],
   proxyExecSignal: [WRITE_BOXES],

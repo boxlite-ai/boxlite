@@ -52,7 +52,17 @@ func TestOutboundRevisionHeaderContract(t *testing.T) {
 		{"legacy-list", `"old", "initial"`, "", 200},
 		{"legacy-opaque-comma", `"other,tag", "initial"`, "", 200},
 		{"legacy-wildcard", "*", "", 200},
-		{"rejects-malformed-tail", `"initial",`, "", 412},
+		{"legacy-leading-empty", `, "initial"`, "", 200},
+		{"legacy-interior-empty", `"old",, "initial"`, "", 200},
+		{"legacy-trailing-empty", `"initial",`, "", 200},
+		{"legacy-only-empty", ", ,", "", 412},
+		{"legacy-rejects-non-http-prefix", "\u00a0\"initial\"", "", 412},
+		{"legacy-rejects-non-http-after-tag", "\"initial\"\u00a0, \"old\"", "", 412},
+		{"legacy-rejects-non-http-after-comma", "\"old\",\u00a0\"initial\"", "", 412},
+		{"candidate-rejects-non-http-whitespace", "\u00a0\"initial\"\u00a0", "rev-b", 400},
+		{"candidate-accepts-http-whitespace", " \t\"initial\"\t ", "rev-b", 200},
+		{"candidate-rejects-empty-elements", `, "initial",`, "rev-b", 400},
+		{"rejects-malformed-tail", `"initial", broken`, "", 412},
 		{"rejects-unquoted", "initial", "", 412},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

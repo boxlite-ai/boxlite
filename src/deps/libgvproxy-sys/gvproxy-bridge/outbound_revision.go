@@ -37,12 +37,16 @@ func validOutboundRevision(value string) bool {
 // If-Match uses strong comparison. Parse the complete list before accepting a
 // match, so a valid tag followed by malformed input cannot authorize a write.
 func matchesOutboundRevision(condition, revision string) bool {
-	condition = strings.TrimSpace(condition)
+	condition = strings.Trim(condition, " \t")
 	if condition == "*" {
 		return true
 	}
 	matched := false
 	for condition != "" {
+		if condition[0] == ',' {
+			condition = strings.TrimLeft(condition[1:], " \t")
+			continue
+		}
 		weak := strings.HasPrefix(condition, "W/")
 		if weak {
 			condition = condition[2:]
@@ -61,24 +65,21 @@ func matchesOutboundRevision(condition, revision string) bool {
 			}
 		}
 		matched = matched || !weak && value == revision
-		condition = strings.TrimSpace(condition[end+1:])
+		condition = strings.TrimLeft(condition[end+1:], " \t")
 		if condition == "" {
 			return matched
 		}
 		if condition[0] != ',' {
 			return false
 		}
-		condition = strings.TrimSpace(condition[1:])
-		if condition == "" {
-			return false
-		}
+		condition = strings.TrimLeft(condition[1:], " \t")
 	}
-	return false
+	return matched
 }
 
 func revisionForOutboundUpdate(r *http.Request, current string) (string, int, error) {
 	conditions := r.Header.Values("If-Match")
-	condition := strings.TrimSpace(strings.Join(conditions, ","))
+	condition := strings.Trim(strings.Join(conditions, ","), " \t")
 	values := r.Header.Values(outboundRevisionHeader)
 	if len(values) > 1 {
 		return "", http.StatusBadRequest, fmt.Errorf("expected one candidate revision")

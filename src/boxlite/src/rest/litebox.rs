@@ -709,6 +709,23 @@ impl BoxBackend for RestBox {
 
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
+    async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
+        self.client.read_outbound_snapshot(&self.box_id_str()).await
+    }
+
+    async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
+        self.client.read_outbound_status(&self.box_id_str()).await
+    }
+
+    async fn replace_outbound_snapshot(
+        &self,
+        replacement: crate::net::OutboundReplacement,
+    ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        self.client
+            .replace_outbound_snapshot(&self.box_id_str(), &replacement)
+            .await
+    }
+
     async fn update_inbound(&self, config: InboundNetworkConfig) -> BoxliteResult<()> {
         self.client
             .put_no_content(

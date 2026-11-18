@@ -42,6 +42,8 @@ import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { recordBoxRequested } from '../box/utils/box-business-event.util'
 import { Box } from '../box/entities/box.entity'
+import { outboundRecord } from '../box/stores/outbound-policy.store'
+import { outboundPrecondition } from './outbound-precondition'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
@@ -379,6 +381,22 @@ export class BoxliteBoxController {
     return { mode: box.inboundEnabled ? 'enabled' : 'disabled' }
   }
 
+  @Get(':boxId/network/outbound')
+  async getOutboundNetwork(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<OutboundNetworkSpecDto> {
+    const snapshot = await this.boxService.getOutboundNetwork(boxId, authContext.organizationId)
+    response.setHeader('ETag', `"${snapshot.revision}"`)
+    return snapshot.policy
+  }
+
+  @Get(':boxId/network/outbound/status')
+  async getOutboundStatus(@AuthContext() authContext: OrganizationAuthContext, @Param('boxId') boxId: string) {
+    return this.boxService.getOutboundStatus(boxId, authContext.organizationId)
+  }
+
   @Put(':boxId/network/outbound')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @ApiResponse({ status: 200, type: OutboundNetworkSpecDto })
@@ -394,12 +412,20 @@ export class BoxliteBoxController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Body() dto: OutboundNetworkSpecDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<OutboundNetworkSpecDto> {
+    if (request.headers['x-boxlite-outbound-revision'] !== undefined) {
+      throw new BadRequestException('Outbound candidate revisions are internal control metadata')
+    }
+    const matches = outboundPrecondition(request.headers['if-match'])
     const box = await this.boxService.setOutboundNetwork(
       boxId,
       { mode: dto.mode, allow_net: dto.allow_net ?? [] },
       authContext.organizationId,
+      matches,
     )
+    response.setHeader('ETag', `"${outboundRecord(box).revision}"`)
     return { mode: box.outboundEnabled ? 'enabled' : 'disabled', allow_net: box.outboundAllowNet ?? [] }
   }
 

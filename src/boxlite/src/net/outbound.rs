@@ -15,7 +15,8 @@ impl OutboundRevision {
         Self("initial".into())
     }
 
-    pub(crate) fn fresh() -> Self {
+    /// Allocate a fresh identity for a trusted replacement coordinator.
+    pub fn fresh() -> Self {
         Self(uuid::Uuid::new_v4().simple().to_string())
     }
 

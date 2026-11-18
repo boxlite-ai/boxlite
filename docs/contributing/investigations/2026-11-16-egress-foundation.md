@@ -1,6 +1,6 @@
 # Outbound transport and policy update foundation
 
-**Status:** Accepted; implementation and traffic validation are pending.
+**Status:** Accepted design. The problem observations below describe the linked baseline commits; current implementation and verification are documented in the outbound contract.
 
 Design: https://github.com/boxlite-ai/boxlite/issues/2715
 
@@ -12,12 +12,12 @@ Unify outbound connection setup and versioned policy replacement so target check
 
 ## Problem
 
-BoxLite currently has separate socket paths for ordinary TCP, inspected hostname traffic, and secrets interception.
+At baseline `0c15a54267a87c529ff5f587adeaa20d1c62e9e8`, BoxLite has separate socket paths for ordinary TCP, inspected hostname traffic, and secrets interception.
 The ordinary forwarder calls `net.Dial` directly; hostname traffic already has injectable resolver and dial functions.
 See the [forwarder](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/src/deps/libgvproxy-sys/gvproxy-bridge/forked_tcp.go#L149) and [dialer](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/src/deps/libgvproxy-sys/gvproxy-bridge/egress_dialer.go#L33).
 
-Runtime and Cloud already serialize outbound replacement, apply it, persist it, and attempt rollback on persistence failure.
-They do not correlate application with a policy revision, and Cloud currently accepts a successful status without validating an acknowledgement body.
+At that baseline, Runtime and Cloud serialize outbound replacement, apply it, persist it, and attempt rollback on persistence failure.
+They do not correlate application with a policy revision, and Cloud accepts a successful status without validating an acknowledgement body.
 See [Runtime replacement](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/src/boxlite/src/litebox/box_impl.rs#L1787), [Cloud replacement](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/apps/api/src/box/repositories/box.repository.ts#L113), and [Runner acknowledgement handling](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/apps/api/src/box/runner-adapter/network-policy.ts#L7).
 
 These boundaries need a common contract before adding independent policy and upstream transport extensions.
@@ -39,14 +39,14 @@ Their eventual configuration must use the same snapshot and replacement operatio
 
 ## Related work and lessons
 
-| Method | Projects and primary sources | Trade-off | Stance |
-| --- | --- | --- | --- |
-| Check resolved candidates, then dial a pinned address | [BoxLite's existing dialer](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/src/deps/libgvproxy-sys/gvproxy-bridge/egress_dialer.go#L104), [Smokescreen](https://github.com/stripe/smokescreen/blob/master/pkg/smokescreen/smokescreen.go) | Domain approval alone does not approve every resolved IP; centralization must preserve NAT and cancellation. | **Pick:** adapt existing seams; do not add a second resolver/dialer. |
-| Gate disabled mode before endpoint demultiplexing | [gVisor input filtering](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/network/ipv4/ipv4.go#L1207-L1216), [gVisor target interface](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/stack/iptables_types.go#L382-L388) | Covers registered DNS endpoints as well as default forwarders; adds per-packet filtering cost, which must be measured before claiming equivalent performance. | **Pick:** adapt the existing dependency's input/forward hooks, retain NIC suspension, and share the immutable mode snapshot. |
-| Conditional replacement | [Kubernetes resource versions](https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions), [HTTP If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.1) | Prevents stale client writes; requires a compatibility path for existing clients. | **Pick:** optional HTTP preconditions for current clients, mandatory internal compare-and-swap for versioned operations. |
-| Correlate acceptance with configuration identity | [Envoy xDS](https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol.html#ack-nack-and-resource-type-instance-version), [go-control-plane](https://pkg.go.dev/github.com/envoyproxy/go-control-plane/pkg/cache/v3) | A success without an identity cannot identify which update was applied; xDS streaming is unnecessary here. | **Pick:** adapt versioned acknowledgement over existing control channels. |
-| Add a separate proxy or configuration service | [Envoy in Istio](https://istio.io/latest/docs/ops/deployment/architecture/) | Strong isolation and extensive features, with additional processes and operational scope. | Reject for this foundation; the existing embedded boundary is sufficient. |
-| Retain separate dial paths and status-only success | Current BoxLite source above | Smallest immediate change, but future transport and policy paths can diverge. | Reject as the integration contract. |
+| Method | Projects and primary sources | Trade-off | Stance | Reason |
+| --- | --- | --- | --- | --- |
+| Check resolved candidates, then dial a pinned address | [BoxLite's existing dialer](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/src/deps/libgvproxy-sys/gvproxy-bridge/egress_dialer.go#L104), [Smokescreen](https://github.com/stripe/smokescreen/blob/master/pkg/smokescreen/smokescreen.go) | Domain approval alone does not approve every resolved IP; centralization must preserve NAT and cancellation. | **Pick:** adapt existing seams; do not add a second resolver/dialer. | Target approval must precede literal-address dialing while retaining existing cancellation and NAT semantics. |
+| Gate disabled mode before endpoint demultiplexing | [gVisor input filtering](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/network/ipv4/ipv4.go#L1207-L1216), [gVisor target interface](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/stack/iptables_types.go#L382-L388) | Covers registered DNS endpoints as well as default forwarders; adds per-packet filtering cost, which must be measured before claiming equivalent performance. | **Pick:** adapt the existing dependency's input/forward hooks, retain NIC suspension, and share the immutable mode snapshot. | Registered DNS bypasses default forwarders, so the shared mode gate must cover earlier packet delivery. |
+| Conditional replacement | [Kubernetes resource versions](https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions), [HTTP If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.1) | Prevents stale client writes; requires a compatibility path for existing clients. | **Pick:** optional HTTP preconditions for current clients, mandatory internal compare-and-swap for versioned operations. | Stale public clients and internal coordinators must not overwrite a newer complete policy. |
+| Correlate acceptance with configuration identity | [Envoy xDS](https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol.html#ack-nack-and-resource-type-instance-version), [go-control-plane](https://pkg.go.dev/github.com/envoyproxy/go-control-plane/pkg/cache/v3) | A success without an identity cannot identify which update was applied; xDS streaming is unnecessary here. | **Pick:** adapt versioned acknowledgement over existing control channels. | Identity-correlated completion is required without adding a streaming control plane. |
+| Add a separate proxy or configuration service | [Envoy in Istio](https://istio.io/latest/docs/ops/deployment/architecture/) | Strong isolation and extensive features, with additional processes and operational scope. | Reject for this foundation; the existing embedded boundary is sufficient. | A separate service adds deployment and lifecycle cost beyond this in-process foundation. |
+| Retain separate dial paths and status-only success | Current BoxLite source above | Smallest immediate change, but future transport and policy paths can diverge. | Reject as the integration contract. | Independent paths and status-only success cannot establish one applied, persisted snapshot. |
 
 Smokescreen's [documented rule precedence](https://github.com/stripe/smokescreen/blob/master/README.md#ip-filtering) differs from a deny-first policy, so its precedence is not adopted.
 Its [hostname normalization advisory](https://github.com/stripe/smokescreen/security/advisories/GHSA-gcj7-j438-hjj2) motivates mixed-case and trailing-dot tests.
@@ -68,8 +68,9 @@ The applied acknowledgement identifies `rev-b`; a later update with stale `If-Ma
 Guest flow → capture snapshot → identify/check target → controlled resolution
            → check each candidate → selected transport dials approved IP
 
-Complete replacement + expected revision → existing update lock → validate/compile
-           → apply candidate revision → validate matching acknowledgement → persist
+Complete replacement + expected revision → validate and reserve durable pending
+           → lock and verify ownership → apply → verify acknowledgement → commit
+           → unknown COMMIT: reconnect and read durable state before compensation
 ```
 
 ### Connection boundary
@@ -149,6 +150,42 @@ When the database itself is unavailable, durable status cannot be promised; retu
 
 See the [application and recovery timing visual](../architecture/outbound-contract.md#application-and-recovery-timing) for named actors, NIC publication order, delayed application, and conditional compensation.
 
+### Cloud durable intent and commit recovery
+
+Keep policy, revision, and pending metadata in the existing Box row; policy and revision change atomically.
+A nullable control record expands existing storage without changing user policy JSON; absent metadata retains the initial revision.
+The coordinator uses the existing row lock, with bounded lock waits, and allocates each candidate once.
+
+1. Lock the organization-scoped Box, validate lifecycle/Runner ownership and the public precondition, then commit expected revision and the complete candidate as pending.
+2. Reacquire the row lock, verify that exact pending candidate and Runner still own the attempt, then hold the lock through Runner application and final persistence.
+3. Persist only after a matching ACK or a completed matching Runtime readback; atomically store policy/revision and clear that pending attempt.
+
+The first commit precedes dispatch, so coordinator loss cannot erase the only evidence of a possibly applied candidate.
+The second lock closes the gap between reservation and dispatch: a superseded reservation cannot send its stale candidate.
+A pending attempt survives failed or ambiguous application; a read-only GET neither clears it nor claims confirmation from stored configuration.
+
+A later mutation may reconcile a completed matching attempt; an unresolved old-revision readback is not proof that an earlier request cannot apply.
+An unconditional complete replacement may reserve a fresh candidate against the observed revision and fence older queued requests by CAS.
+Conditional requests retain their precondition and fail when reconciliation changes the resource identity.
+
+
+Distinguish statement failure from a missing COMMIT acknowledgement.
+[TypeORM 0.3.31](https://github.com/typeorm/typeorm/blob/0.3.31/src/driver/postgres/PostgresQueryRunner.ts#L180-L195) awaits COMMIT before marking its transaction inactive.
+The [PostgreSQL protocol](https://www.postgresql.org/docs/18/protocol-flow.html#PROTOCOL-FLOW-SIMPLE-QUERY) returns completion after executing a command; losing that reply alone cannot establish rollback.
+
+After an unknown commit, release the failed transaction.
+Read durable policy, revision, and pending identity through a new primary connection and row lock.
+A durably committed matching candidate needs no compensation; a newer owner must never be overwritten.
+
+If the database cannot be inspected, retain uncertainty and perform no blind restoration.
+
+After a proven failed persistence operation, restoration must still own the pending candidate and compare against that candidate at Runtime.
+Reserve the complete restoration as durable pending before dispatch, using a fresh revision and the previous policy; finalize it through the same apply-and-persist path.
+Failed restoration or restoration persistence retains its own pending evidence; never restore an old revision token.
+
+Status compares Cloud durable intent with Runtime durable and observed state, including Runtime completion and pending evidence.
+Only exact agreement with no unresolved attempt can report overall confirmation.
+
 ## Validation
 
 Source inspection is complete; implementation and traffic validation below are planned.
@@ -163,6 +200,8 @@ Source inspection is complete; implementation and traffic validation below are p
 | Success identifies an installed snapshot | Missing/mismatched ACK, delayed ACK, old backend, and status readback tests | No status-only success; unsupported or uncertain state is explicit. |
 | Recovery preserves state | Persistence failure, compensation failure, lifecycle writes, handle reacquisition, and restart | Confirmed configuration/revision survive; uncertainty cannot appear as confirmed live state. |
 | A crash cannot turn live/persisted divergence into confirmed success | Stop the coordinator after a matching ACK and before persistence; restart with gvproxy surviving, then repeat with gvproxy restarting | Reconcile the observed and persisted revisions, or expose uncertainty; never report a stale persisted revision as confirmed live state. |
+| Cloud intent survives coordinator loss | Stop after reservation, before dispatch, and after matching ACK before the final write; reacquire ownership on another coordinator | Pending survives; a superseded owner cannot dispatch; stale durable intent cannot appear confirmed. |
+| Unknown COMMIT cannot trigger incorrect compensation | Disconnect the PostgreSQL socket before forwarding COMMIT and after the server commits but before its acknowledgement reaches Cloud; reconnect and read actual rows | Before-COMMIT rollback and after-COMMIT success are distinguished; compensation never reverts a committed or newer candidate. |
 | Public compatibility is intentional | OpenAPI compatibility/default checks and production request/response tests | Legacy requests retain documented behavior; conditional requests enforce their precondition. |
 
 Publish capability and acceptance evidence per layer; a parsed future field or a module-only test does not establish a working proxy or IPv6 data plane.

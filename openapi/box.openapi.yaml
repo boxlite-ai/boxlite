@@ -1369,6 +1369,26 @@ paths:
     parameters:
       - $ref: "#/components/parameters/prefix"
       - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: getOutboundNetwork
+      summary: Read the persisted outbound policy and revision
+      description: Does not start a Box or confirm that the stored policy is live.
+      tags: [Network]
+      responses:
+        "200":
+          description: Persisted policy with its opaque strong revision ETag
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundNetworkSpec"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
     put:
       operationId: updateOutboundNetwork
       summary: Replace a running box's outbound policy
@@ -1382,10 +1402,23 @@ paths:
         their policy. Disabled suspends NIC traffic, including DNS and inbound,
         while preserving the control channel for re-enabling.
 
-        Success confirms application and persistence. Timeouts or failed
-        rollback can leave live and stored policy different; retry the full
-        replacement. GET box reports the last persisted policy.
+        Success confirms the exact candidate's application and persistence.
+        If-Match uses strong comparison at conditional publication; false
+        preconditions return 412 before application. Omission retains an
+        unconditional complete replacement. The server chooses the fresh
+        candidate revision; caller-supplied internal revision headers are invalid.
+
+        Timeouts or persistence failures can leave live and stored policy
+        different; read the separate status resource before retrying the full
+        replacement. A policy GET reports the last persisted policy and ETag.
       tags: [Network]
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          description: Strong entity-tag list or wildcard for the current persisted revision.
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -1395,6 +1428,10 @@ paths:
       responses:
         "200":
           description: Applied outbound policy
+          headers:
+            ETag:
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1405,12 +1442,50 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "412":
+          description: The persisted revision did not match the supplied precondition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
         "500":
           description: Application or persistence failed; retry the complete policy
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/boxes/{box_id}/network/outbound/status:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: getOutboundStatus
+      summary: Compare persisted policy with Runtime persistence and application
+      description: |
+        Read-only control-plane observation; does not start a Box, clear pending
+        intent, or probe Internet connectivity. Confirmation requires complete
+        matching policy and revision at coordinator persistence, Runtime persistence,
+        and the observed backend, with no unresolved pending attempt. Local servers
+        use the same durable snapshot for persisted and runtime_persisted.
+      tags: [Network]
+      responses:
+        "200":
+          description: Persisted and observed outbound application state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/domains:
     parameters:
@@ -3055,6 +3130,48 @@ components:
             gate. That connection is dialed by name, and under a non-empty
             list an answer in a private, loopback or CGNAT range is refused
             unless an IP or CIDR rule covers it.
+
+    OutboundSnapshot:
+      type: object
+      required: [revision, policy]
+      properties:
+        revision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Opaque Box-scoped identity, compared only for equality.
+        policy:
+          $ref: "#/components/schemas/OutboundNetworkSpec"
+
+    OutboundStatus:
+      type: object
+      required: [persisted, runtime_persisted, observed, application_state, capabilities]
+      properties:
+        persisted:
+          $ref: "#/components/schemas/OutboundSnapshot"
+        runtime_persisted:
+          $ref: "#/components/schemas/OutboundSnapshot"
+        observed:
+          anyOf:
+            - allOf:
+                - $ref: "#/components/schemas/OutboundSnapshot"
+                - type: object
+                  required: [application_state]
+                  properties:
+                    application_state:
+                      type: string
+                      enum: [pending, confirmed, uncertain]
+            - type: "null"
+        application_state:
+          type: string
+          enum: [pending, confirmed, uncertain]
+        pending_revision:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
 
     InboundNetworkSpec:
       type: object
