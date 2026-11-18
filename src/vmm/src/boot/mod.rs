@@ -47,7 +47,7 @@ pub(crate) fn prepare(
     config: &VmConfig,
     leaf: CheckedBootLeaf,
 ) -> Result<BootSetup> {
-    let memory = ram.memory().as_ref();
+    let memory = ram.boot_memory().as_ref();
     let ranges: Vec<(GuestAddress, usize)> = ram.ranges().collect();
     let load_kernel = |source: io::Error| Error::LoadKernel {
         path: config.kernel.clone(),

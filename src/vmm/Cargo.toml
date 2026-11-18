@@ -16,7 +16,7 @@ imago = { version = "0.2.6", default-features = false, features = ["sync"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 tracing = "0.1"
 virtio-queue = "0.18.0"
-vm-memory = { version = "0.18.0", features = ["backend-mmap"] }
+vm-memory = { version = "0.18.0", features = ["backend-atomic", "backend-mmap"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

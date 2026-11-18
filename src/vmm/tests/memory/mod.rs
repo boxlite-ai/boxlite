@@ -7,7 +7,7 @@
 use std::{error::Error as _, io, sync::Arc};
 
 use boxlite_hypervisor::{Error as HypervisorError, Vm};
-use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
+use vm_memory::{Bytes, GuestAddress, GuestAddressSpace, GuestMemoryBackend};
 
 use super::{ARM64_LAYOUT, GuestRam, RAM_START, X86_LAYOUT, check_ram_end, ram_ranges};
 use crate::{
@@ -144,21 +144,21 @@ fn ram_layout_rejects_end_gpa_overflow() {
 #[test]
 fn allocated_ram_is_zeroed_and_mirrors_its_ranges() {
     let ram = GuestRam::new(&ram_ranges(2)).unwrap();
-    let regions: Vec<_> = ram.regions().collect();
-    assert_eq!(regions.len(), 1);
-    assert_eq!(regions[0].guest_addr, RAM_START);
-    assert_eq!(regions[0].size, 2 * MIB);
+    let [region] = ram.regions().collect::<Vec<_>>().try_into().unwrap();
+    assert_eq!(region.guest_addr, RAM_START);
+    assert_eq!(region.size, 2 * MIB);
     let host = ram
+        .memory()
         .memory()
         .get_host_address(GuestAddress(RAM_START))
         .unwrap();
-    assert_eq!(regions[0].host_addr.as_ptr(), host);
+    assert_eq!(region.host_addr.as_ptr(), host);
     assert_eq!(host as usize % 4096, 0, "mmap returns page-aligned memory");
 
     let last = GuestAddress(RAM_START + 2 * MIB as u64 - 1);
-    assert_eq!(ram.memory().read_obj::<u8>(last).unwrap(), 0);
-    ram.memory().write_obj(0x4bu8, last).unwrap();
-    assert_eq!(ram.memory().read_obj::<u8>(last).unwrap(), 0x4b);
+    assert_eq!(ram.memory().memory().read_obj::<u8>(last).unwrap(), 0);
+    ram.memory().memory().write_obj(0x4bu8, last).unwrap();
+    assert_eq!(ram.memory().memory().read_obj::<u8>(last).unwrap(), 0x4b);
 }
 
 #[test]
@@ -187,14 +187,14 @@ fn maps_ascending_and_unmaps_descending_with_the_backing_addresses() {
         [
             (
                 1 << 32,
-                ram.memory()
+                ram.boot_memory()
                     .get_host_address(GuestAddress(1 << 32))
                     .unwrap() as usize,
                 MIB,
             ),
             (
                 0,
-                ram.memory().get_host_address(GuestAddress(0)).unwrap() as usize,
+                ram.boot_memory().get_host_address(GuestAddress(0)).unwrap() as usize,
                 MIB,
             ),
         ]
@@ -205,7 +205,7 @@ fn maps_ascending_and_unmaps_descending_with_the_backing_addresses() {
 fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
     let mut ram = GuestRam::new(&ram_ranges(16)).unwrap();
     let vm = MockVm::failing_at(&[0]);
-    let backing = Arc::downgrade(ram.memory());
+    let backing = Arc::downgrade(ram.boot_memory());
 
     assert!(matches!(
         ram.map(&vm),
@@ -320,7 +320,7 @@ fn failed_rollback_keeps_the_backing_alive() {
     let mut ram = two_regions();
     let vm = MockVm::failing_at(&[2, 4]);
     seed_second_registration(&ram, &vm);
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(ram.boot_memory());
     let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
         panic!("two regions")
     };
@@ -346,7 +346,7 @@ fn a_map_failure_cleans_up_slices_before_returning() {
     let mut ram = two_regions();
     let vm = MockVm::failing_at(&[2]);
     seed_second_registration(&ram, &vm);
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(ram.boot_memory());
     let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
         panic!("two regions")
     };
@@ -367,7 +367,7 @@ fn a_failed_cleanup_keeps_the_backing_alive() {
         (3, io::ErrorKind::NotFound),
     ]);
     seed_second_registration(&ram, &vm);
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(ram.boot_memory());
     let [(map0, _), (map1, unmap1)] = expected_calls(&ram)[..] else {
         panic!("two regions")
     };
@@ -391,7 +391,7 @@ fn failed_unmap_keeps_state_and_retry_unmaps_only_the_remainder() {
     let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
         panic!("two regions")
     };
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(&ram.memory().memory().into_inner());
     ram.map(&vm).unwrap();
 
     let error = ram.unmap(&vm).unwrap_err();
@@ -406,14 +406,14 @@ fn failed_unmap_keeps_state_and_retry_unmaps_only_the_remainder() {
         [
             (
                 1 << 32,
-                ram.memory()
+                ram.boot_memory()
                     .get_host_address(GuestAddress(1 << 32))
                     .unwrap() as usize,
                 MIB,
             ),
             (
                 0,
-                ram.memory().get_host_address(GuestAddress(0)).unwrap() as usize,
+                ram.boot_memory().get_host_address(GuestAddress(0)).unwrap() as usize,
                 MIB,
             ),
         ]
@@ -439,7 +439,7 @@ fn failed_unmap_keeps_state_and_retry_unmaps_only_the_remainder() {
 #[test]
 fn drop_without_unmap_leaks_the_backing() {
     let mut ram = two_regions();
-    let weak = Arc::downgrade(ram.memory());
+    let weak = Arc::downgrade(&ram.memory().memory().into_inner());
     ram.map(&MockVm::new()).unwrap();
 
     drop(ram);

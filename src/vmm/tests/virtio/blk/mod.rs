@@ -345,11 +345,11 @@ impl Fixture {
             QUEUE_MAXIMUM,
             false,
             false,
-            Arc::clone(&self.memory),
+            Arc::clone(&self.memory).into(),
         )
         .unwrap();
         ActivationContext {
-            memory: Arc::clone(&self.memory),
+            memory: Arc::clone(&self.memory).into(),
             queues,
             interrupt: Arc::clone(&self.interrupt) as Arc<dyn VirtioInterrupt>,
             events: Arc::clone(&self.registrar) as Arc<dyn EventRegistrar>,
