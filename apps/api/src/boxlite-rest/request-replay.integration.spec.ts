@@ -5,6 +5,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
+import { request as httpRequest } from 'node:http'
 import Redis from 'ioredis'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import {
@@ -14,6 +15,7 @@ import {
   Controller,
   HttpCode,
   INestApplication,
+  Param,
   Post,
   Res,
   UseInterceptors,
@@ -25,7 +27,7 @@ import { IsString } from 'class-validator'
 import type { Request, Response, NextFunction } from 'express'
 import { BoxRequestReplayService, REPLAY_MAX_RESPONSE_BYTES } from './box-request-replay.service'
 import { RequestReplayInterceptor } from './request-replay.interceptor'
-import { ReplayValidationPipe } from '../common/replay-validation.pipe'
+import { ReplayParseIntPipe, ReplayValidationPipe } from '../common/replay-validation.pipe'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
 
 class Input {
@@ -67,6 +69,10 @@ class ProbeController {
   validate(@Body() body: Input) {
     return this.create(body)
   }
+  @Post('count/:count')
+  count(@Param('count', ReplayParseIntPipe) count: number) {
+    return this.create({ count })
+  }
   @Post('dto')
   @UseInterceptors(ClassSerializerInterceptor)
   dto() {
@@ -99,6 +105,7 @@ integration('Replay HTTP contract with shared Redis', () => {
   const apps: INestApplication[] = []
   const bases: string[] = []
   let redis: Redis
+  const services: BoxRequestReplayService[] = []
   beforeAll(async () => {
     redis = new Redis({
       host: process.env.REDIS_HOST,
@@ -112,6 +119,7 @@ integration('Replay HTTP contract with shared Redis', () => {
         controllers: [ProbeController, VolumeWriteController],
         providers: [BoxRequestReplayService, { provide: getRedisConnectionToken(), useValue: redis }],
       }).compile()
+      services.push(module.get(BoxRequestReplayService))
       const app = module.createNestApplication()
       app.setGlobalPrefix('api')
       app.use((req: Request & { user?: unknown }, res: Response, next: NextFunction) => {
@@ -204,6 +212,58 @@ integration('Replay HTTP contract with shared Redis', () => {
     })
     expect(response.status).toBe(400)
     expect(effects).toBe(before)
+  })
+
+  it('keeps a disconnected owner fenced until its late response is recorded', async () => {
+    entered = Promise.withResolvers<void>()
+    release = Promise.withResolvers<void>()
+    const key = randomUUID()
+    const request = httpRequest(`${bases[0]}/api/v1/probe/target/slow`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': key, 'Content-Type': 'application/json' },
+    })
+    request.on('error', () => undefined)
+    request.end('{}')
+    await entered.promise
+    try {
+      request.destroy()
+      const deadline = Date.now() + 3000
+      while ((await send(key, 'probe/target/slow', {}, 1)).status !== 422) {
+        if (Date.now() >= deadline) throw new Error('Disconnected owner was not fenced')
+        await delay(5)
+      }
+      release.resolve()
+      await completed(key)
+      expect((await send(key, 'probe/target/slow', {}, 1)).status).toBe(201)
+    } finally {
+      request.destroy()
+      release.resolve()
+    }
+  })
+
+  it('preserves the fence when recording an error fails', async () => {
+    const original = services[0].session.bind(services[0])
+    const spy = jest.spyOn(services[0], 'session').mockImplementationOnce(async (...args) => {
+      const owner = await original(...args)
+      jest.spyOn(owner, 'markUnknown').mockRejectedValueOnce(new Error('Redis unavailable'))
+      return owner
+    })
+    const key = randomUUID()
+    try {
+      expect((await send(key, 'probe/target/failure')).status).toBe(400)
+      expect((await send(key, 'probe/target/failure')).status).toBe(409)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('rejects malformed numeric input without fencing a later identical attempt', async () => {
+    const key = randomUUID()
+    const before = effects
+    expect((await send(key, 'probe/target/count/invalid')).status).toBe(400)
+    expect((await send(key, 'probe/target/count/invalid')).status).toBe(400)
+    expect((await send(randomUUID(), 'probe/target/count/3')).status).toBe(201)
+    expect(effects).toBe(before + 1)
   })
 
   it('holds one owner across replicas and records its late success', async () => {

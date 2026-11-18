@@ -68,6 +68,7 @@ integration('Replay Redis ownership and storage failures', () => {
       { status: 500, body: '' },
       { status: 201, body: '', headers: { cookie: 'secret' } },
       { status: 201, body: '', resource: { id: 'volume' } },
+      { status: 201, body: '', encoding: 'utf16' },
     ]) {
       await redis.hset(record(key), 'response', JSON.stringify(response))
       expect(await service.peekCompleted(org, 'u', 'op', key, 'fingerprint')).toBeUndefined()
@@ -81,6 +82,13 @@ integration('Replay Redis ownership and storage failures', () => {
       status: 204,
       resource: { id: 'v' },
     })
+    const replay = await session(key)
+    expect(replay.isOwner).toBe(false)
+    await replay.complete({ status: 204, body: '' })
+    await replay.markUnknown()
+    const unkeyed = await service.session(org, 'u', 'op', undefined, 'fingerprint')
+    expect(unkeyed.isOwner).toBe(false)
+    await unkeyed.heartbeat()
   })
 
   it('releases a reservation arriving after the caller deadline', async () => {

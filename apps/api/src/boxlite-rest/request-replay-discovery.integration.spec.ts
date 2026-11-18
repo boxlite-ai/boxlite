@@ -13,7 +13,7 @@ import { McpCatalog } from '../mcp/mcp-catalog'
 import { McpDispatcher } from '../mcp/mcp-dispatcher'
 import { servedOperations } from '../mcp/mcp-routes'
 import { BoxliteConfigController } from './boxlite-config.controller'
-import { replayPolicy, RequestReplayPolicy } from './request-replay-policy'
+import { assertReplaySupported, replayPolicy, RequestReplayPolicy } from './request-replay-policy'
 
 jest.mock('http-proxy-middleware', () => ({ createProxyMiddleware: jest.fn(() => ({ upgrade: jest.fn() })) }))
 
@@ -126,5 +126,22 @@ describe('hosted replay discovery and production requests', () => {
       expect(catalog.get(id)!.inputSchema.properties).not.toHaveProperty('Idempotency-Key')
     }
     expect(box.components.parameters.idempotencyKey.schema.default).toBeUndefined()
+  })
+  it('rejects keyed file transfers before transport dispatch', () => {
+    expect(() => assertReplaySupported('GET', '/api/v1/boxes/b/files', { 'idempotency-key': key })).toThrow()
+    expect(() => assertReplaySupported('POST', '/api/v1/boxes', { 'idempotency-key': key })).not.toThrow()
+    expect(() => assertReplaySupported('GET', '/api/v1/boxes/b/files', {})).not.toThrow()
+  })
+
+  it('discovers wildcard write routes and refuses writes without operation IDs', () => {
+    const app = express()
+    app.use((_req, _res, next) => next())
+    app.all('/api/v1/probe', (_req, res) => res.end())
+    const policy = new RequestReplayPolicy()
+    policy.configure(app, { paths: { '/probe': { post: { operationId: 'probe' }, get: {} } } })
+    expect(policy.operations()).toEqual(['probe'])
+    expect(() => policy.configure(app, { paths: { '/probe': { post: {} } } })).toThrow('Missing operationId')
+    policy.configure({}, {})
+    expect(policy.operations()).toEqual([])
   })
 })

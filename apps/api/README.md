@@ -226,6 +226,8 @@ rejection and WebSocket attachment before side effects; existing guard tests cov
 Storage fault regressions hold a real Redis reservation past the caller deadline and verify its release;
 corrupt records, oversized responses and unsafe eviction policies retain the request fence or reject dispatch.
 The concurrent HTTP test observes a renewed owner heartbeat before retrying on another replica.
+Disconnect tests confirm that an unfinished owner remains fenced and can publish its late response;
+failed outcome persistence also keeps retries from dispatching the business operation again.
 
 A Box rejected at its creation limit refunds exactly one cold-pull charge to the window that paid it.
 Refunds preserve the window's expiry; an expired ticket cannot debit a replacement window.

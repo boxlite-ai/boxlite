@@ -121,6 +121,29 @@ describe('VolumeAccessGuard', () => {
     expect(Reflect.get(request, REPLAY_RESOURCE)).toEqual(completed.resource)
   })
 
+  it('never replays an absent volume without a key or through a read route', async () => {
+    for (const keyed of [false, true]) {
+      const { guard, context, request, peekCompleted } = replayGuard()
+      if (!keyed) {
+        request.headers = {} as typeof request.headers
+        request.rawHeaders = []
+      } else request.method = 'GET'
+      await expect(guard.canActivate(context)).rejects.toBeInstanceOf(NotFoundException)
+      expect(peekCompleted).not.toHaveBeenCalled()
+    }
+  })
+
+  it('authorizes a named volume from current ownership rather than stored replay evidence', async () => {
+    const { guard, context, request, peekCompleted, getOrganizationId } = replayGuard()
+    const named = request as unknown as Request
+    named.params = { name: 'named-volume' }
+    getOrganizationId.mockResolvedValue('org-1')
+    await expect(guard.canActivate(context)).resolves.toBe(true)
+    expect(getOrganizationId).toHaveBeenCalledWith({ name: 'named-volume', organizationId: 'org-1' })
+    expect(peekCompleted).not.toHaveBeenCalled()
+    expect(Reflect.get(request, REPLAY_RESOURCE)).toBeUndefined()
+  })
+
   it.each([
     undefined,
     { status: 204, body: '' },
