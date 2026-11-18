@@ -81,7 +81,10 @@ impl LocalVolumeStore {
                 for entry in entries {
                     let entry = entry
                         .map_err(|error| storage("read volume recovery entry", &root, error))?;
-                    remove_entry_nofollow(&entry.path())?;
+                    let path = entry.path();
+                    if let Err(error) = remove_entry_nofollow(&path) {
+                        tracing::error!(path = %path.display(), %error, "Failed to remove local volume recovery entry");
+                    }
                 }
             }
             Ok(())
@@ -99,6 +102,11 @@ impl LocalVolumeStore {
     ) -> BoxliteResult<VolumeInfo> {
         if let Some(name) = name {
             validate_name(name)?;
+            if validate_id(name).is_ok() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "volume name {name:?} must not be a canonical UUID"
+                )));
+            }
         }
         self.with_registry_lock(true, || {
             let existing = self.scan_valid()?;
@@ -238,9 +246,10 @@ impl LocalVolumeStore {
             }
             std::fs::rename(&path, &trash)
                 .map_err(|error| storage("move volume to trash", &path, error))?;
-            remove_entry_nofollow(&trash).map_err(|error| {
-                BoxliteError::Storage(format!("remove payload for volume {id}: {error}"))
-            })
+            if let Err(error) = remove_entry_nofollow(&trash) {
+                tracing::error!(volume_id = %id, path = %trash.display(), %error, "Failed to remove local volume payload from trash");
+            }
+            Ok(())
         })
     }
 
@@ -832,6 +841,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removal_succeeds_when_physical_trash_cleanup_fails() {
+        // SAFETY: geteuid only reads the effective user ID.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("root: chmod-based cleanup fault injection skipped");
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        let payload = runtime
+            .layout
+            .volumes_dir()
+            .join(&volume.id)
+            .join(PAYLOAD_DIR);
+        std::fs::write(payload.join("keep"), b"payload").unwrap();
+        let original_mode = std::fs::metadata(&payload).unwrap().permissions().mode();
+        std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = runtime.local_volume_store.remove(&volume.id, false);
+        let trash_entry = std::fs::read_dir(runtime.layout.volumes_dir().join(TRASH_DIR))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let trash_payload = trash_entry.join(PAYLOAD_DIR);
+        let cleanup_failed = trash_payload.join("keep").exists();
+        std::fs::set_permissions(
+            &trash_payload,
+            std::fs::Permissions::from_mode(original_mode),
+        )
+        .unwrap();
+
+        assert!(
+            cleanup_failed,
+            "the test must inject a physical cleanup failure"
+        );
+        result.expect("logical removal succeeds after the rename to trash");
+        assert!(matches!(
+            runtime.local_volume_store.get(&volume.id),
+            Err(BoxliteError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn runtime_reopens_and_retries_after_trash_cleanup_failure() {
+        // SAFETY: geteuid only reads the effective user ID.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("root: chmod-based cleanup fault injection skipped");
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let operation = runtime
+            .layout
+            .volumes_dir()
+            .join(TRASH_DIR)
+            .join("operation");
+        let nested = operation.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("keep"), b"payload").unwrap();
+        let original_mode = std::fs::metadata(&nested).unwrap().permissions().mode();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o555)).unwrap();
+        drop(runtime);
+
+        let recovered = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        });
+        let cleanup_failed = nested.join("keep").exists();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(original_mode)).unwrap();
+
+        assert!(
+            cleanup_failed,
+            "the test must inject a physical cleanup failure"
+        );
+        let runtime = recovered.expect("physical cleanup failure must not block runtime startup");
+        assert!(operation.exists());
+        runtime.local_volume_store.recover().unwrap();
+        assert!(!operation.exists());
+    }
+
+    #[tokio::test]
     async fn public_errors_do_not_leak_internal_volume_paths() {
         let home = tempfile::tempdir().unwrap();
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
@@ -962,6 +1069,127 @@ mod tests {
             .local_volume_store
             .remove(&volumes[0].id, false)
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn box_commit_after_caller_drop_is_manageable_and_recovers_on_restart() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        let store = runtime.local_volume_store.clone();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let lock_task = tokio::task::spawn_blocking(move || {
+            store.create_impl(Some("lock-holder"), move |_, _| {
+                ready_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+            })
+        });
+        ready_receiver.recv().unwrap();
+
+        let create_runtime = Arc::clone(&runtime);
+        let volume_id = volume.id.clone();
+        let create = create_runtime.create(
+            BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume(&volume_id, "/workspace")],
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            Some("after-timeout".to_string()),
+        );
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), create).await;
+        assert!(result.is_err(), "the registry lock must delay creation");
+        drop(create_runtime);
+        release_sender.send(()).unwrap();
+        lock_task.await.unwrap().unwrap();
+
+        let mut created = None;
+        for _ in 0..100 {
+            created = runtime.get("after-timeout").await.unwrap();
+            if created.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let created = created.expect("the committed box remains discoverable");
+        let (config, _) = runtime
+            .box_manager
+            .box_by_id(created.id())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            config.options.volumes[0].managed_volume.as_deref(),
+            Some(volume.id.as_str())
+        );
+        assert!(
+            runtime
+                .list_info()
+                .await
+                .unwrap()
+                .iter()
+                .any(|info| info.id == *created.id())
+        );
+
+        drop(created);
+        drop(runtime);
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .expect("restart recovers the committed box");
+        let recovered = runtime
+            .get("after-timeout")
+            .await
+            .unwrap()
+            .expect("the committed box survives restart");
+        assert_eq!(
+            recovered.info().await.unwrap().status,
+            crate::BoxStatus::Configured
+        );
+        assert_eq!(runtime.lock_manager.allocated_count().unwrap(), 1);
+        assert_eq!(runtime.disk_lock_manager.allocated_count().unwrap(), 1);
+
+        runtime.remove("after-timeout", false).unwrap();
+        runtime
+            .local_volume_store
+            .remove(&volume.id, false)
+            .expect("removing the box releases its volume holder");
+    }
+
+    #[tokio::test]
+    async fn user_supplied_uuid_volume_names_are_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let existing = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+
+        for name in [existing.id, Uuid::new_v4().to_string()] {
+            let error = runtime
+                .local_volume_store
+                .create(Some(&name))
+                .expect_err("a user-supplied UUID must not become a volume name");
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{error:?}"
+            );
+        }
+        assert_eq!(runtime.local_volume_store.list().unwrap().len(), 1);
+
+        let unnamed = runtime.local_volume_store.create(None).unwrap();
+        assert_eq!(unnamed.name, unnamed.id);
     }
 
     fn seed_raw_volume(root: &Path, id: &str, name: &str) {

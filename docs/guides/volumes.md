@@ -39,7 +39,8 @@ boxlite volume ls
 boxlite volume get <volume-id>
 ```
 
-The create command prints a UUID. The name is optional and defaults to that UUID. Get and remove
+The create command prints a UUID. The name is optional and defaults to that UUID. A user-supplied
+name cannot itself be a canonical UUID, which keeps mount selectors unambiguous. Get and remove
 accept only the canonical id; mount accepts either the id or the name.
 
 Mount by name with the existing shorthand:

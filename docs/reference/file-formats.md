@@ -54,7 +54,9 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 Named volumes keep resource identity outside `_data`, so guest writes cannot alter their own id or
 creation metadata. Box configuration stores only the canonical volume id and mount declaration, not
 the resolved host path. The path is resolved again on each start. Temporary and deleted operation
-directories are cleaned during runtime initialization and are not returned as volumes.
+directories are cleaned during runtime initialization and are not returned as volumes. A physical
+cleanup failure is logged and retried at the next initialization; it neither restores a logically
+removed volume nor prevents the runtime from opening.
 
 The embedded runtime lives outside the home directory, in `boxlite/runtimes/` under the platform's
 local data directory: `~/Library/Application Support` on macOS, `~/.local/share` on Linux.
