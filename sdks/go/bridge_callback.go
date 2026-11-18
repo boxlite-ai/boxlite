@@ -318,6 +318,40 @@ func goBoxliteOnImageRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
+//export goBoxliteOnImageDelete
+func goBoxliteOnImageDelete(result *C.CImageRemovalResult, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &result, func(value **C.CImageRemovalResult) {
+		if value != nil && *value != nil {
+			C.boxlite_free_image_removal_result(*value)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan imageRemovalResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- imageRemovalResult{err: err}
+		return
+	}
+	if result == nil {
+		ch <- imageRemovalResult{}
+		return
+	}
+	out := &ImageRemovalResult{ImageID: C.GoString(result.image_id), ReclaimedBytes: uint64(result.reclaimed_bytes)}
+	for _, reference := range unsafe.Slice(result.removed_references, int(result.removed_references_count)) {
+		out.RemovedReferences = append(out.RemovedReferences, C.GoString(reference))
+	}
+	C.boxlite_free_image_removal_result(result)
+	ch <- imageRemovalResult{value: out}
+}
+
 // goBoxliteOnImageUsage copies the usage out during the callback: the C side
 // lends the pointer for the callback only.
 //
@@ -771,6 +805,11 @@ type handleResult[T any] struct {
 
 type imagePullResult struct {
 	value *ImagePullResult
+	err   error
+}
+
+type imageRemovalResult struct {
+	value *ImageRemovalResult
 	err   error
 }
 

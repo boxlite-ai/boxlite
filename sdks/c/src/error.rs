@@ -64,6 +64,12 @@ pub enum BoxliteErrorCode {
     /// Interactive execution session was reaped server-side after disconnect.
     /// Reattach is no longer possible — start a new exec.
     SessionReaped = 21,
+    /// A local image ID prefix matches more than one manifest.
+    AmbiguousImageId = 22,
+    /// Tags still reference the local image.
+    ImageHasTags = 23,
+    /// Existing boxes still depend on the local image.
+    ImageUsedByBoxes = 24,
 }
 
 /// Extended error information for C API.
@@ -98,6 +104,9 @@ pub fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
         BoxliteError::Config(_) => BoxliteErrorCode::Config,
         BoxliteError::Storage(_) => BoxliteErrorCode::Storage,
         BoxliteError::Image(_) => BoxliteErrorCode::Image,
+        BoxliteError::AmbiguousImageId(_) => BoxliteErrorCode::AmbiguousImageId,
+        BoxliteError::ImageHasTags(_) => BoxliteErrorCode::ImageHasTags,
+        BoxliteError::ImageUsedByBoxes(_) => BoxliteErrorCode::ImageUsedByBoxes,
         BoxliteError::Network(_) => BoxliteErrorCode::Network,
         BoxliteError::Execution(_) => BoxliteErrorCode::Execution,
         BoxliteError::Stopped(_) => BoxliteErrorCode::Stopped,

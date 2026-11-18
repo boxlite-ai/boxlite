@@ -21,6 +21,18 @@ const MAX_NAME_CHARS: usize = 512;
 /// Longest tag the OCI distribution spec allows.
 const MAX_ALIAS_CHARS: usize = 128;
 
+/// Completed removal of one local manifest and its unneeded cache data.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImageRemovalResult {
+    /// Resolved platform manifest digest, including `sha256:`.
+    pub image_id: String,
+    /// Every removed index reference, including digest aliases.
+    pub removed_references: Vec<String>,
+    /// Allocated bytes of removed cache entries, excluding external hardlinks.
+    /// Filesystem snapshots and reflinks may defer physical reclamation.
+    pub reclaimed_bytes: u64,
+}
+
 /// Internal trait for image management, implemented by both backends.
 ///
 /// `name` arguments have passed [`checked_name`].
@@ -41,6 +53,21 @@ pub(crate) trait ImageBackend: Send + Sync {
 
     /// Stop holding `name`. The layers stay where they are.
     async fn remove_image(&self, name: &str) -> BoxliteResult<()>;
+
+    async fn delete_image(&self, _id: &str) -> BoxliteResult<ImageRemovalResult> {
+        Err(BoxliteError::Unsupported(
+            "local image cache removal requires an embedded runtime".into(),
+        ))
+    }
+
+    async fn resolve_image_ids(
+        &self,
+        _ids: &[String],
+    ) -> BoxliteResult<Vec<BoxliteResult<String>>> {
+        Err(BoxliteError::Unsupported(
+            "local image IDs require an embedded runtime".into(),
+        ))
+    }
 
     /// How many images are held against the caller's allowance.
     async fn image_usage(&self) -> BoxliteResult<ImageUsage>;
@@ -174,6 +201,19 @@ pub struct ImageHandle {
 }
 
 impl ImageHandle {
+    /// Delete an untagged local image by full manifest ID or unique hex prefix.
+    ///
+    /// Refuses tagged and box-dependent images. Active cache consumers return
+    /// `InvalidState`; retry after their work completes. REST returns `Unsupported`.
+    pub async fn delete(&self, id: &str) -> BoxliteResult<ImageRemovalResult> {
+        self.manager.delete_image(id).await
+    }
+
+    /// Resolve a batch against one cache snapshot without removing anything.
+    /// Each target has its own result, so failures need not stop a batch.
+    pub async fn resolve_ids(&self, ids: &[String]) -> BoxliteResult<Vec<BoxliteResult<String>>> {
+        self.manager.resolve_image_ids(ids).await
+    }
     /// Create a new ImageHandle with the given manager.
     ///
     /// This is an internal constructor used by `BoxliteRuntime`.

@@ -145,8 +145,8 @@ class TestNativeErrors:
     """The classes a failure from the native runtime is raised as."""
 
     def test_there_is_one_per_runtime_error_class(self):
-        # `BoxliteError::http()` (src/shared/src/errors.rs) names 18 classes.
-        assert len(NATIVE_ERRORS) == 18
+        # `BoxliteError::native()` adds three local-only image removal classes.
+        assert len(NATIVE_ERRORS) == 21
 
     @pytest.mark.parametrize("cls", NATIVE_ERRORS, ids=lambda cls: cls.__name__)
     def test_is_caught_by_older_runtime_error_handlers(self, cls):

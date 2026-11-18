@@ -206,7 +206,7 @@ class ErrorEnvelopeTests(unittest.TestCase):
         `500 InternalError`.
         """
         prefixes = display_prefixes()
-        self.assertEqual(len(prefixes), 21, prefixes)
+        self.assertEqual(len(prefixes), 24, prefixes)
 
         unmatched = [
             prefix

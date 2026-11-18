@@ -27,8 +27,8 @@ use crate::domains::{PyDomain, PyDomainHandle, PyDomainList, PyDomainTarget};
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution, PyExecutionInfo};
 use crate::executions::PyExecutions;
 use crate::images::{
-    PyImageAliasEvent, PyImageDetail, PyImageHandle, PyImageInfo, PyImagePullResult, PyImageUsage,
-    PyImageVersion,
+    PyImageAliasEvent, PyImageDetail, PyImageHandle, PyImageInfo, PyImagePullResult,
+    PyImageRemovalResult, PyImageUsage, PyImageVersion,
 };
 use crate::info::{
     PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyInboundNetworkInfo, PyNetworkInfo,
@@ -75,6 +75,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageHandle>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyImagePullResult>()?;
+    m.add_class::<PyImageRemovalResult>()?;
     m.add_class::<PyImageDetail>()?;
     m.add_class::<PyImageVersion>()?;
     m.add_class::<PyImageAliasEvent>()?;

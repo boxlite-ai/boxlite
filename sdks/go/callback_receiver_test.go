@@ -13,13 +13,14 @@ func checkpointCallbackChannel[T, E any](_ func(T, E, unsafe.Pointer)) chan hand
 	return make(chan handleResult[T], 1)
 }
 
-func TestCheckpointCallbacksRefuseMissingStaleAndWrongReceivers(t *testing.T) {
+func TestAsyncCallbacksRefuseMissingStaleAndWrongReceivers(t *testing.T) {
 	for _, callback := range []struct {
 		name string
 		call func(unsafe.Pointer)
 	}{
 		{"metadata", func(data unsafe.Pointer) { goBoxliteOnCheckpointInfo(nil, nil, data) }},
 		{"list", func(data unsafe.Pointer) { goBoxliteOnCheckpointList(nil, nil, data) }},
+		{"image deletion", func(data unsafe.Pointer) { goBoxliteOnImageDelete(nil, nil, data) }},
 	} {
 		t.Run(callback.name, func(t *testing.T) {
 			callback.call(nil)
@@ -29,6 +30,7 @@ func TestCheckpointCallbacksRefuseMissingStaleAndWrongReceivers(t *testing.T) {
 			if len(wrong) != 0 || claimHandleForDispatch(handle) {
 				t.Fatal("callback retained or delivered to an incompatible receiver")
 			}
+			expectAlreadyDeleted(t, handle)
 			stale := registerHandleForDispatch(cgo.NewHandle(wrong))
 			deleteHandleForDispatch(stale)
 			callback.call(handleToPtr(stale))
@@ -37,6 +39,21 @@ func TestCheckpointCallbacksRefuseMissingStaleAndWrongReceivers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestImageDeleteCallbackCompletesAndReleasesReceiverForEmptyPayload(t *testing.T) {
+	receiver := make(chan imageRemovalResult, 1)
+	handle := registerHandleForDispatch(cgo.NewHandle(receiver))
+	goBoxliteOnImageDelete(nil, nil, handleToPtr(handle))
+	select {
+	case <-receiver:
+	default:
+		t.Fatal("callback left the image deletion receiver waiting")
+	}
+	if claimHandleForDispatch(handle) {
+		t.Fatal("callback retained the completed image deletion receiver")
+	}
+	expectAlreadyDeleted(t, handle)
 }
 
 func TestCheckpointCallbackEmptySuccessIsRejectedByMetadataDecoder(t *testing.T) {

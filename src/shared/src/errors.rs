@@ -22,6 +22,15 @@ pub enum BoxliteError {
     #[error("images error: {0}")]
     Image(String),
 
+    #[error("ambiguous image ID: {0}")]
+    AmbiguousImageId(String),
+
+    #[error("image has tags: {0}")]
+    ImageHasTags(String),
+
+    #[error("image used by boxes: {0}")]
+    ImageUsedByBoxes(String),
+
     #[error("portal error: {0}")]
     Portal(String),
 
@@ -175,6 +184,10 @@ impl BoxliteError {
             BoxliteError::InvalidState(_) => (409, "InvalidStateError", "invalid_state"),
             BoxliteError::Stopped(_) => (409, "StoppedError", "stopped"),
             BoxliteError::Image(_) => (422, "ImageError", "image_pull_failed"),
+            BoxliteError::AmbiguousImageId(_) => (400, "InvalidArgumentError", "invalid_argument"),
+            BoxliteError::ImageHasTags(_) | BoxliteError::ImageUsedByBoxes(_) => {
+                (409, "InvalidStateError", "invalid_state")
+            }
             BoxliteError::Execution(_) => (422, "ExecutionError", "execution_failed"),
             BoxliteError::ResourceExhausted(_) => {
                 (429, "ResourceExhaustedError", "resource_exhausted")
@@ -189,6 +202,21 @@ impl BoxliteError {
             BoxliteError::MetadataError(_) => (500, "MetadataError", "metadata_error"),
             BoxliteError::Config(_) => (500, "ConfigError", "config_error"),
             BoxliteError::Internal(_) => (500, "InternalError", "internal"),
+        }
+    }
+
+    /// Native SDK exception class and machine code. Local cache removal has
+    /// finer categories than HTTP, where it is unsupported and the existing
+    /// InvalidArgument/InvalidState response contract remains unchanged.
+    pub fn native(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::AmbiguousImageId(_) => ("AmbiguousImageIdError", "ambiguous_image_id"),
+            Self::ImageHasTags(_) => ("ImageHasTagsError", "image_has_tags"),
+            Self::ImageUsedByBoxes(_) => ("ImageUsedByBoxesError", "image_used_by_boxes"),
+            error => {
+                let (_, class, code) = error.http();
+                (class, code)
+            }
         }
     }
 }
@@ -370,7 +398,12 @@ mod tests {
     fn http_code_strings_are_unique_per_logical_status() {
         // Variants that intentionally share a code (multi-variant
         // rows in the canonical table).
-        let shared_ok: &[&str] = &["unsupported", "upstream_unavailable"];
+        let shared_ok: &[&str] = &[
+            "unsupported",
+            "upstream_unavailable",
+            "invalid_argument",
+            "invalid_state",
+        ];
 
         let all: Vec<&'static str> = [
             BoxliteError::InvalidArgument(String::new()),
@@ -382,6 +415,9 @@ mod tests {
             BoxliteError::InvalidState(String::new()),
             BoxliteError::Stopped(String::new()),
             BoxliteError::Image(String::new()),
+            BoxliteError::AmbiguousImageId(String::new()),
+            BoxliteError::ImageHasTags(String::new()),
+            BoxliteError::ImageUsedByBoxes(String::new()),
             BoxliteError::Execution(String::new()),
             BoxliteError::ResourceExhausted(String::new()),
             BoxliteError::Network(String::new()),

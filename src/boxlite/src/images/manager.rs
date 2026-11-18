@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::collections::hash_map::{Entry, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
 use chrono::{DateTime, Utc};
 
@@ -20,8 +21,11 @@ use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::{CachedImage, Database};
 use crate::images::store::{ImageStore, SharedImageStore};
+use crate::litebox::config::BoxConfig;
+use crate::runtime::ImageRemovalResult;
+use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{ImageRegistry, ImageRegistryProxy};
-use crate::runtime::types::{ImageDetail, ImageInfo, ImageVersion};
+use crate::runtime::types::{BoxState, ImageDetail, ImageInfo, ImageVersion};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use std::str::FromStr;
@@ -85,7 +89,11 @@ pub(super) struct LayerInfo {
 #[derive(Clone)]
 pub struct ImageManager {
     store: SharedImageStore,
+    // Owned guards keep the home lock alive in detached cache workers too.
+    cache_access: Arc<RwLock<Option<Arc<RuntimeLock>>>>,
 }
+
+pub(super) type CacheLease = Arc<OwnedRwLockReadGuard<Option<Arc<RuntimeLock>>>>;
 
 impl std::fmt::Debug for ImageManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -113,7 +121,49 @@ impl ImageManager {
             image_registries,
             image_registry_proxy,
         )?);
-        Ok(Self { store })
+        Ok(Self {
+            store,
+            cache_access: Arc::new(RwLock::new(None)),
+        })
+    }
+
+    pub(crate) fn with_runtime_lock(mut self, lock: Arc<RuntimeLock>) -> Self {
+        self.cache_access = Arc::new(RwLock::new(Some(lock)));
+        self
+    }
+
+    pub(crate) async fn cache_lease(&self) -> CacheLease {
+        Arc::new(Arc::clone(&self.cache_access).read_owned().await)
+    }
+
+    pub(crate) async fn resolve_ids(
+        &self,
+        ids: &[String],
+    ) -> BoxliteResult<Vec<BoxliteResult<String>>> {
+        let entries = self.store.list().await?;
+        Ok(ids
+            .iter()
+            .map(|id| super::id::resolve_id(id, &entries))
+            .collect())
+    }
+
+    pub(crate) async fn delete(
+        &self,
+        id: String,
+        boxes: impl FnOnce() -> BoxliteResult<Vec<(BoxConfig, BoxState)>> + Send + 'static,
+    ) -> BoxliteResult<ImageRemovalResult> {
+        // Never queue a writer: callers may hold nested read leases, or a
+        // pulled ImageObject in the same task that requests removal.
+        let exclusive = Arc::clone(&self.cache_access).try_write_owned().map_err(|_| {
+            BoxliteError::InvalidState("image cache is busy; finish active pulls, box initialization, or release image handles and retry".into())
+        })?;
+        let cache = self.store.removal_cache().await;
+        tokio::task::spawn_blocking(move || {
+            let _exclusive = exclusive;
+            cache.remove(&id, &boxes()?)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("image removal task failed: {e}")))?
     }
 
     /// Pull an OCI image from a registry.
@@ -124,8 +174,9 @@ impl ImageManager {
     /// Thread Safety: `ImageStore` handles locking internally. Multiple
     /// concurrent pulls of the same image will only download once.
     pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
+        let lease = self.cache_lease().await;
         let manifest = self.store.pull(image_ref).await?;
-        Ok(self.image_object(image_ref, manifest).await)
+        Ok(self.image_object(image_ref, manifest, lease).await)
     }
 
     /// Resolve an image reference against its registry, even when it is cached.
@@ -136,8 +187,9 @@ impl ImageManager {
     /// registry cannot be reached, fails on its side, or throttles — the cached
     /// image stands in, so an offline host still starts what it has.
     pub async fn refresh(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
+        let lease = self.cache_lease().await;
         let manifest = self.store.refresh(image_ref).await?;
-        Ok(self.image_object(image_ref, manifest).await)
+        Ok(self.image_object(image_ref, manifest, lease).await)
     }
 
     #[cfg(test)]
@@ -145,9 +197,14 @@ impl ImageManager {
         &self.store
     }
 
-    async fn image_object(&self, image_ref: &str, manifest: ImageManifest) -> ImageObject {
+    async fn image_object(
+        &self,
+        image_ref: &str,
+        manifest: ImageManifest,
+        lease: CacheLease,
+    ) -> ImageObject {
         let storage = self.store.storage().await;
-        let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
+        let blob_source = BlobSource::Store(StoreBlobSource::new(storage)).with_lease(lease);
         ImageObject::new(image_ref.to_string(), manifest, blob_source)
     }
 
@@ -240,6 +297,7 @@ impl ImageManager {
     /// build again reuses them; but a box built from one now fetches the
     /// image's configuration from the registry when it next starts.
     pub async fn remove(&self, name: &str) -> BoxliteResult<()> {
+        let _lease = self.cache_lease().await;
         let name = canonical_name(name)?;
         let forgotten = self
             .store
@@ -292,6 +350,7 @@ impl ImageManager {
         path: std::path::PathBuf,
         reference: String,
     ) -> BoxliteResult<ImageObject> {
+        let lease = self.cache_lease().await;
         let manifest = self.store.load_from_local(path.clone()).await?;
 
         // Let store compute cache dir (layout owns directory structure decisions)
@@ -300,7 +359,8 @@ impl ImageManager {
             .store
             .local_bundle_cache_dir(&path, &manifest.manifest_digest)
             .await;
-        let blob_source = BlobSource::LocalBundle(LocalBundleBlobSource::new(path, cache_dir));
+        let blob_source =
+            BlobSource::LocalBundle(LocalBundleBlobSource::new(path, cache_dir)).with_lease(lease);
 
         Ok(ImageObject::new(reference, manifest, blob_source))
     }

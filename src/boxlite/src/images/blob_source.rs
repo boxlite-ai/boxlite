@@ -36,6 +36,13 @@ pub enum BlobSource {
 }
 
 impl BlobSource {
+    pub(super) fn with_lease(mut self, lease: super::manager::CacheLease) -> Self {
+        match &mut self {
+            Self::Store(source) => source._cache_lease = Some(lease),
+            Self::LocalBundle(source) => source._cache_lease = Some(lease),
+        }
+        self
+    }
     /// Get path to layer tarball for given digest.
     pub fn layer_tarball_path(&self, digest: &str) -> PathBuf {
         match self {
@@ -100,12 +107,16 @@ impl BlobSource {
 pub struct StoreBlobSource {
     /// Shared reference to image storage
     storage: std::sync::Arc<ImageStorage>,
+    _cache_lease: Option<super::manager::CacheLease>,
 }
 
 impl StoreBlobSource {
     /// Create a new store blob source.
     pub fn new(storage: std::sync::Arc<ImageStorage>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            _cache_lease: None,
+        }
     }
 
     /// Get path to layer tarball.
@@ -161,6 +172,7 @@ pub struct LocalBundleBlobSource {
     bundle_path: PathBuf,
     /// Path to namespaced cache directory
     cache_dir: PathBuf,
+    _cache_lease: Option<super::manager::CacheLease>,
 }
 
 impl LocalBundleBlobSource {
@@ -173,6 +185,7 @@ impl LocalBundleBlobSource {
         Self {
             bundle_path,
             cache_dir,
+            _cache_lease: None,
         }
     }
 

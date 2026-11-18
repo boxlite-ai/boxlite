@@ -38,7 +38,10 @@ const (
 	// Interactive execution session was reaped server-side after
 	// disconnect; reattach is no longer possible — start a new exec.
 	// Server-side HTTP 410.
-	ErrSessionReaped ErrorCode = 21
+	ErrSessionReaped    ErrorCode = 21
+	ErrAmbiguousImageID ErrorCode = 22
+	ErrImageHasTags     ErrorCode = 23
+	ErrImageUsedByBoxes ErrorCode = 24
 )
 
 // Error is a typed error from the BoxLite runtime.

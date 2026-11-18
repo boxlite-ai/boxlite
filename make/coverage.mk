@@ -120,6 +120,18 @@ coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-checkpoint-native.out" \
 		-run '^TestCheckpointNative' ./integration/archive
 
+PHONY_TARGETS += coverage\:go\:images
+
+# Native cache operations use the production constructor, so run these after
+# enabling KVM in the Linux native-binding job, rather than hosted Go coverage.
+# Stub builds omit gvproxy's Go runtime and need no Go symbol rewriting.
+coverage\:go\:images: $(if $(BOXLITE_DEPS_STUB),dev\:c,dev\:go)
+	@mkdir -p target/coverage
+	@cd sdks/go && go test -count=1 -tags=boxlite_dev,boxlite_integration -v \
+		-covermode=atomic -coverpkg=github.com/boxlite-ai/boxlite/sdks/go \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-images-native.out" \
+		$(GOTEST_FILTER) ./integration/images
+
 coverage\:python: _ensure-python-deps
 	@mkdir -p target/coverage/python
 	@. .venv/bin/activate && cd sdks/python && \

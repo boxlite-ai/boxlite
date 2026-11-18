@@ -79,6 +79,14 @@ for info in await runtime.list_info():
 
 ### `boxlite.ImageHandle`
 
+`await runtime.images.delete("1f8c03c8f5e5")` accepts a full manifest ID or unique hex prefix.
+It returns an `ImageRemovalResult` with read-only `image_id: str`, `removed_references: list[str]`, and `reclaimed_bytes: int` fields.
+The synchronous handle exposes the same method without `await`.
+
+Conflicts raise `AmbiguousImageIdError`, `ImageHasTagsError`, or `ImageUsedByBoxesError`.
+Dependency errors list blockers; unknown IDs raise `NotFoundError` and active cache consumers raise `InvalidStateError`.
+See [local deletion semantics](../../concepts/images.md#removing-local-images), including shared data and accounting limits.
+
 The images a runtime can boot from: the local cache on an embedded runtime,
 the server catalog on a REST runtime. Registry credentials are accessed through
 `runtime.images.registries`.
@@ -89,6 +97,7 @@ the server catalog on a REST runtime. Registry credentials are accessed through
 | `list` | One row per cached reference | Catalog alias and digest references |
 | `get` | Cached versions under the name | Catalog versions, aliases and history |
 | `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
+| `delete` | Removes an eligible local manifest and reclaims unused data | Unsupported |
 | `usage` | Unsupported | Image count, allowance and known bytes |
 | `create_alias()` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
 | `delete_alias()` | Unsupported | Removes only the named alias; absent names return NotFound |

@@ -24,6 +24,14 @@ export interface ImagePullResult {
   layerCount: number;
 }
 
+/** Completed removal of one untagged local image. */
+export interface ImageRemovalResult {
+  imageId: string;
+  removedReferences: string[];
+  /** Allocated bytes removed; snapshots and reflinks may defer physical reclamation. */
+  reclaimedBytes: number;
+}
+
 /** One build of an image. */
 export interface ImageVersion {
   /** Manifest digest, such as `sha256:…`. */
@@ -104,6 +112,8 @@ export interface ImageHandle {
    * on a REST runtime `invalid_state` while a box can still boot from it.
    */
   remove(name: string): Promise<void>;
+  /** Delete an untagged local image and reclaim unused cache data. REST returns `unsupported`. */
+  delete(imageId: string): Promise<ImageRemovalResult>;
   /** Images held against the allowance. @throws `unsupported` locally. */
   usage(): Promise<ImageUsage>;
   /**

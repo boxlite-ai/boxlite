@@ -4,7 +4,7 @@ use pyo3::{exceptions::PyRuntimeError, prelude::*};
 type Raise = fn(String) -> PyErr;
 
 /// Imports each `boxlite.errors` class (lazily, on the first failure raised as
-/// it) and keys it by its name, which is the name `BoxliteError::http()` gives
+/// it) and keys it by its name, which is the name `BoxliteError::native()` gives
 /// the class — so the grouping of variants into classes is decided there.
 macro_rules! python_classes {
     ($($class:ident),+ $(,)?) => {
@@ -26,6 +26,9 @@ python_classes!(
     InvalidStateError,
     StoppedError,
     ImageError,
+    AmbiguousImageIdError,
+    ImageHasTagsError,
+    ImageUsedByBoxesError,
     ExecutionError,
     ResourceExhaustedError,
     NetworkError,
@@ -40,7 +43,7 @@ python_classes!(
 
 /// Raise a runtime failure as its `boxlite.errors` class, message unchanged.
 pub(crate) fn map_err(err: BoxliteError) -> PyErr {
-    let (_, class, _) = err.http();
+    let (class, _) = err.native();
     let message = err.to_string();
     match CLASSES.iter().find(|(name, _)| *name == class) {
         Some((_, raise)) => raise(message),
@@ -61,6 +64,9 @@ mod tests {
             BoxliteError::Config(String::new()),
             BoxliteError::Storage(String::new()),
             BoxliteError::Image(String::new()),
+            BoxliteError::AmbiguousImageId(String::new()),
+            BoxliteError::ImageHasTags(String::new()),
+            BoxliteError::ImageUsedByBoxes(String::new()),
             BoxliteError::Portal(String::new()),
             BoxliteError::Network(String::new()),
             BoxliteError::Rpc(String::new()),
@@ -85,6 +91,9 @@ mod tests {
                 | BoxliteError::Config(_)
                 | BoxliteError::Storage(_)
                 | BoxliteError::Image(_)
+                | BoxliteError::AmbiguousImageId(_)
+                | BoxliteError::ImageHasTags(_)
+                | BoxliteError::ImageUsedByBoxes(_)
                 | BoxliteError::Portal(_)
                 | BoxliteError::Network(_)
                 | BoxliteError::Rpc(_)
@@ -109,7 +118,7 @@ mod tests {
     #[test]
     fn every_variant_is_raised_as_a_class_of_its_own() {
         for err in every_variant() {
-            let (_, class, _) = err.http();
+            let (class, _) = err.native();
             assert!(
                 CLASSES.iter().any(|(name, _)| *name == class),
                 "{err:?} would be raised as a bare RuntimeError: no class for {class}"
@@ -134,7 +143,7 @@ mod tests {
         Python::attach(|py| {
             put_the_package_on_the_import_path(py);
             for err in every_variant() {
-                let (_, class, _) = err.http();
+                let (class, _) = err.native();
                 let message = err.to_string();
 
                 let raised = map_err(err);
@@ -158,7 +167,7 @@ mod tests {
     fn every_class_is_declared_in_python_with_its_code() {
         let source = include_str!("../boxlite/errors.py");
         for err in every_variant() {
-            let (_, class, code) = err.http();
+            let (class, code) = err.native();
             let start = source
                 .find(&format!("\nclass {class}(_NativeError):"))
                 .unwrap_or_else(|| panic!("errors.py declares no {class}"));

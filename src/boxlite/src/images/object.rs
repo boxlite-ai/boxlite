@@ -323,13 +323,12 @@ impl ImageObject {
     /// This is used as a cache key for base disks - same layers = same base disk.
     /// Uses SHA256 hash of concatenated layer digests.
     pub(crate) fn compute_image_digest(&self) -> String {
-        use sha2::{Digest, Sha256};
-
-        let mut hasher = Sha256::new();
-        for layer in &self.manifest.layers {
-            hasher.update(layer.digest.as_bytes());
-        }
-        format!("sha256:{}", hex::encode(hasher.finalize()))
+        super::ImageDiskManager::cache_key(
+            self.manifest
+                .layers
+                .iter()
+                .map(|layer| layer.digest.as_str()),
+        )
     }
 
     // ========================================================================

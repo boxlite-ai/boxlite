@@ -73,6 +73,7 @@ pub type CExecutionInfo = exec::CExecutionInfo;
 pub type CExecutionInfoList = exec::CExecutionInfoList;
 pub type CImageInfoList = images::CImageInfoList;
 pub type CImagePullResult = images::CImagePullResult;
+pub type CImageRemovalResult = images::CImageRemovalResult;
 pub type CImageDetail = images::CImageDetail;
 pub type CImageUsage = images::CImageUsage;
 pub type CVolumeInfo = volumes::CVolumeInfo;

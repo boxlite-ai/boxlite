@@ -10,6 +10,7 @@ if TYPE_CHECKING:
         ImageHandle,
         ImageInfo,
         ImagePullResult,
+        ImageRemovalResult,
         ImageUsage,
     )
     from ._boxlite import SyncBoxlite
@@ -54,6 +55,10 @@ class SyncImageHandle:
 
     def remove(self, name: str) -> None:
         return self._sync(self._handle.remove(name))
+
+    def delete(self, image_id: str) -> "ImageRemovalResult":
+        """Delete an untagged local image by ID and reclaim unneeded cache data."""
+        return self._sync(self._handle.delete(image_id))
 
     def usage(self) -> "ImageUsage":
         return self._sync(self._handle.usage())

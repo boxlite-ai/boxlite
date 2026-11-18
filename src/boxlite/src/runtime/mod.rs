@@ -25,6 +25,6 @@ pub use auth::{AuthHandle, Principal};
 pub use checkpoints::{CheckpointHandle, CheckpointInfo, CheckpointState};
 pub use core::BoxliteRuntime;
 pub use domains::{Domain, DomainHandle, DomainList, DomainTarget};
-pub use images::ImageHandle;
+pub use images::{ImageHandle, ImageRemovalResult};
 pub use registries::{NewRegistryCredential, RegistryCredential, RegistryHandle};
 pub use volumes::VolumeHandle;
