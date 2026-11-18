@@ -251,6 +251,16 @@ describe('SecretServerClient HTTP boundary', () => {
     expect(requests).toHaveLength(0)
   })
 
+  it('refuses identity headers without authorization before POST', async () => {
+    jest.spyOn(GoogleAuth.prototype, 'getIdTokenClient').mockResolvedValue({
+      getRequestHeaders: async () => new Headers(),
+    } as any)
+    await expect(
+      client(url, { 'secretServer.devToken': undefined }).storeBoxSecrets('id', 'org', 'user', secrets),
+    ).rejects.toMatchObject({ status: 503, message: 'Secret store unavailable' })
+    expect(requests).toHaveLength(0)
+  })
+
   it('times out identity acquisition and never posts after a late completion', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] })
     let release: (value: any) => void

@@ -61,9 +61,19 @@ wildcard does not cover another service prefix.
 
 Credential ingress uses the regional ACL `boxlite-<stage>-internal-routes`.
 The deploy policy scopes WAF creation, lifecycle, tagging and association to that
-ACL in the stage account and region. Disassociation uses the AWS-required wildcard
-resource with a requested-region condition; existing ELB permissions cover the
-load-balancer side. See [AWS association permissions](https://docs.aws.amazon.com/waf/latest/developerguide/security_iam_service-with-iam.html).
+ACL in the stage account and region. Disassociation currently uses a wildcard
+resource with a requested-region condition. Together with the existing ELB grant,
+this permits detaching an ACL from unrelated ALBs in that region.
+
+The [WAF V2 authorization table](https://docs.aws.amazon.com/service-authorization/latest/reference/list_wafv2.html#awswafv2-DisassociateWebACL)
+supports ALB resources for disassociation, not web ACL resources. A supported
+restriction uses the actual deployed ALB ARN; it cannot select the attached ACL
+by its name. Bootstrap must obtain that ARN from trusted stage inventory before
+using such a restriction. SST's generated ALB names can truncate the stage, so
+an assumed `boxlite-<stage>-*` name is not a safe substitute. Renaming an existing
+ALB would require a separate replacement rollout. The
+[AWS permissions guide](https://docs.aws.amazon.com/waf/latest/developerguide/security_iam_service-with-iam.html)
+also describes the separate ELB permission required by the disassociation operation.
 
 Reconcile bootstrap and read back its inline deploy policy before previewing or
 applying either AWS deployment path. Updating the repository does not update a live role.
