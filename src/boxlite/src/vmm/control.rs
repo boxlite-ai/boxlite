@@ -1,6 +1,6 @@
 //! The host's control channel to a running shim.
 //!
-//! The shim serves one Unix socket, `control.sock` in the box's socket
+//! The shim serves one Unix socket, `vmm.sock` in the box's socket
 //! directory, for runtime operations on the VMM it hosts. The socket is
 //! host-only (mode 0600, never bridged into guest vsock) and at a fixed path,
 //! so a runtime that restarts can still reach a running box. Each connection

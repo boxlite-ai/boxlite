@@ -555,7 +555,7 @@ logged.
   The single filesystem device exports logical shares below its aggregate root;
   matching mount instructions are sent only for the native engine.
 - **Runtime control (`src/boxlite/src/vmm/control.rs`).** The native shim
-  serves `control.sock` in the box socket directory: host-only (mode 0600,
+  serves `vmm.sock` in the box socket directory: host-only (mode 0600,
   never bridged into guest vsock), at a fixed path so a restarted runtime can
   reach a running box. Each connection carries one length-prefixed JSON request
   naming a protocol version and one answer; an unknown version or operation is
