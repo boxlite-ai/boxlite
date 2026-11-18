@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::io;
+use std::sync::Arc;
 
 use super::{AggregateFs, Share, descriptor::request_buffers, server::Server};
 use crate::virtio::{
@@ -22,7 +23,7 @@ const SPEC: DeviceSpec = DeviceSpec {
     snapshot: SnapshotSupport::Unsupported,
 };
 
-/// One immutable share registry and one FUSE session, independent of transport.
+/// One dynamic share registry and one FUSE session, independent of transport.
 ///
 /// Reset releases the session's file handles and lookup references before the
 /// transport can replace guest RAM. It retains the export configuration.
@@ -50,6 +51,25 @@ impl Fs {
             server: Server::new(AggregateFs::new(shares)?),
             activation: None,
         })
+    }
+
+    /// The aggregate filesystem this device serves, shared with the
+    /// process-wide mount registry for the control socket.
+    pub(crate) fn filesystem(&self) -> Arc<AggregateFs> {
+        self.server.filesystem()
+    }
+}
+
+impl Drop for Fs {
+    fn drop(&mut self) {
+        // Unpublish only this device's registration, then close its session
+        // even when a control operation still holds a filesystem reference.
+        let bytes = &self.config[..TAG_LEN];
+        let len = bytes.iter().position(|byte| *byte == 0).unwrap_or(TAG_LEN);
+        if let Ok(tag) = std::str::from_utf8(&bytes[..len]) {
+            super::remove_aggregate(tag, &self.server.filesystem());
+        }
+        self.server.reset();
     }
 }
 

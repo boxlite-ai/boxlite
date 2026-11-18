@@ -30,6 +30,11 @@ use super::super::multikey::MultikeyBTreeMap;
 
 const ROOT: u64 = 1;
 
+/// `SYS_faccessat2` (uniform across supported architectures). libc does not
+/// export it yet. This check requires Linux 5.8; confined `openat2` walks
+/// require Linux 5.6.
+const SYS_FACCESSAT2: libc::c_long = 439;
+
 pub(crate) fn errno(code: i32) -> io::Error {
     io::Error::from_raw_os_error(code)
 }
@@ -50,6 +55,36 @@ fn openat(parent: i32, name: &CStr, flags: i32, mode: u32) -> io::Result<File> {
     }
     // SAFETY: openat returned a new owned descriptor.
     Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+/// Resolves `name` strictly beneath `parent`: parent traversal and escape
+/// symlinks (absolute targets or `..` hops beyond the parent) fail with
+/// `EXDEV`. Guests pass a single validated component, but a hostile host
+/// directory may contain symlinks, so every guest-driven walk goes through
+/// this range limit.
+pub(crate) fn openat_beneath(parent: i32, name: &CStr, flags: i32, mode: u32) -> io::Result<File> {
+    // SAFETY: open_how is a plain integer struct and non-exhaustive, so it
+    // cannot be built with a struct expression; zeroed padding is the valid
+    // initializer the kernel expects.
+    let mut how: libc::open_how = unsafe { mem::zeroed() };
+    how.flags = (flags | libc::O_CLOEXEC) as u64;
+    how.mode = mode as u64;
+    how.resolve = libc::RESOLVE_BENEATH;
+    // SAFETY: name is terminated and a successful descriptor is owned below.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            parent,
+            name.as_ptr(),
+            &how,
+            mem::size_of::<libc::open_how>(),
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat2 returned a new owned descriptor.
+    Ok(unsafe { File::from_raw_fd(fd as i32) })
 }
 
 fn stat(file: &File) -> io::Result<libc::stat64> {
@@ -249,7 +284,40 @@ impl PassthroughFs {
             libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW,
             0,
         )?;
+        // Static configuration keeps the baseline contract: write access is
+        // enforced per operation, not at construction.
+        Self::from_dir_fd(file, false)
+    }
+
+    /// Builds a backend over a descriptor the runtime already holds. The
+    /// descriptor must be a directory this process can use: an `O_PATH`
+    /// descriptor of a symlink or any non-directory is rejected, and the
+    /// kernel evaluates the access mode — read always, write when the
+    /// export publishes write access — so a delivered directory can never
+    /// widen host access beyond the delivering user's rights.
+    pub(crate) fn from_dir_fd(file: File, writable: bool) -> io::Result<Self> {
         let (attr, mount) = statx(&file)?;
+        if attr.st_mode & libc::S_IFMT != libc::S_IFDIR {
+            return Err(errno(libc::ENOTDIR));
+        }
+        let required = if writable {
+            libc::R_OK | libc::W_OK
+        } else {
+            libc::R_OK
+        };
+        // SAFETY: an empty path with AT_EMPTY_PATH operates on the descriptor.
+        let granted = unsafe {
+            libc::syscall(
+                SYS_FACCESSAT2,
+                file.as_raw_fd(),
+                c"".as_ptr(),
+                required,
+                libc::AT_EMPTY_PATH,
+            )
+        };
+        if granted != 0 {
+            return Err(io::Error::last_os_error());
+        }
         let fs = Self {
             root: Arc::new(InodeData {
                 inode: ROOT,
@@ -457,7 +525,7 @@ impl PassthroughFs {
         } else {
             name
         };
-        let file = openat(
+        let file = openat_beneath(
             parent.file.as_raw_fd(),
             name,
             libc::O_PATH | libc::O_NOFOLLOW,
@@ -832,7 +900,7 @@ impl FileSystem for PassthroughFs {
         let mode = mode & !umask & 0o7777;
         // O_EXCL pins a new regular file. Existing names are first opened with
         // O_PATH so CREATE cannot block on a FIFO or open a device or symlink.
-        let file = match openat(
+        let file = match openat_beneath(
             parent.data.file.as_raw_fd(),
             name,
             flags | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW,
@@ -847,7 +915,7 @@ impl FileSystem for PassthroughFs {
             Err(error)
                 if error.raw_os_error() == Some(libc::EEXIST) && flags & libc::O_EXCL == 0 =>
             {
-                let existing = openat(
+                let existing = openat_beneath(
                     parent.data.file.as_raw_fd(),
                     name,
                     libc::O_PATH | libc::O_NOFOLLOW,
@@ -897,7 +965,7 @@ impl FileSystem for PassthroughFs {
         let mode = mode & !umask & 0o7777;
         // SAFETY: the parent descriptor and component remain alive.
         cvt(unsafe { libc::mkdirat(parent.data.file.as_raw_fd(), name.as_ptr(), mode) })?;
-        let file = openat(
+        let file = openat_beneath(
             parent.data.file.as_raw_fd(),
             name,
             libc::O_PATH | libc::O_NOFOLLOW | libc::O_DIRECTORY,
@@ -936,7 +1004,7 @@ impl FileSystem for PassthroughFs {
                 0,
             )
         })?;
-        let file = openat(
+        let file = openat_beneath(
             parent.data.file.as_raw_fd(),
             name,
             libc::O_PATH | libc::O_NOFOLLOW,
