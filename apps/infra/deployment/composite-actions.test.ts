@@ -195,7 +195,7 @@ const generatedScript = (callerScript: string): string => {
   try {
     const result = runShell(
       manylinuxAssembly(),
-      { PATH: `${bin}:/usr/bin:/bin:${hostPathWithoutSccache()}`, RUNNER_TEMP: dir, BUILD_SCRIPT: callerScript, TARGET: 'linux-x64-gnu' },
+      { PATH: `/usr/bin:/bin:${process.env.PATH ?? ''}`, RUNNER_TEMP: dir, BUILD_SCRIPT: callerScript, TARGET: 'linux-x64-gnu' },
       dir,
     )
     assert.equal(result.status, 0, `assembly failed: ${result.stderr}`)
