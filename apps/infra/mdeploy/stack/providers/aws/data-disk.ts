@@ -93,5 +93,5 @@ export const awsDataDiskEnvironment = ({
   RUNNER_DATA_DISK_ZONE: zone,
   RUNNER_DATA_DISK_NAME: volumeId,
   RUNNER_DATA_DISK_TYPE: 'gp3',
-  RUNNER_DATA_DISK_DEVICE: AWS_DATA_DEVICE,
+  RUNNER_DATA_DISK_DEVICE: `/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${volumeId.replace('-', '')}`,
 })

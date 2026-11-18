@@ -34,6 +34,7 @@ pulumi.runtime.setMocks(
         bucket: args.inputs.bucket ?? args.name.toLowerCase(),
         name: args.inputs.name ?? args.name,
         arn: `arn:aws:fixture:us-east-1:123456789012:${args.name}`,
+        dkimSigningAttributes: { tokens: ['fixture1', 'fixture2', 'fixture3'] },
         primaryNetworkInterfaceId: `eni-${args.name}`,
         domainValidationOptions: [args.inputs.domainName, ...(args.inputs.subjectAlternativeNames ?? [])]
           .filter(Boolean)
@@ -199,6 +200,10 @@ test('native AWS connects checkpoint, credential and disk capabilities at real p
     ['aws', 'boxlite-app', 'dev'],
   )
   assert.deepEqual([environment.AWS_ACCOUNT_ID, environment.AWS_REGION], ['123456789012', 'us-east-1'])
+  assert.equal(environment.S3_ENDPOINT, 'https://s3.us-east-1.amazonaws.com')
+  assert.equal(environment.S3_STS_ENDPOINT, 'https://sts.us-east-1.amazonaws.com')
+  assert.equal(environment.S3_ROLE_NAME, 'boxlite-app-dev-s3-access')
+  assert.equal(environment.S3_ACCOUNT_ID, '123456789012')
   const proxyTask = resources.find((resource) => resource.name === 'RegistryProxyService')!
   assert.deepEqual(proxyTask.inputs.networkConfiguration.securityGroups, ['RegistryProxySecurityGroup'])
   assert.ok(!proxyTask.inputs.networkConfiguration.securityGroups.includes('db-client'))
@@ -308,4 +313,57 @@ test('AWS Redis refuses AUTH without encrypted transit before creating resources
     /AWS Redis AUTH requires encryptInTransit=true/,
   )
   assert.equal(resources.length, before)
+})
+
+test('native Pulumi program composes every AWS service and preserves the deployed non-API images', async (t) => {
+  const { awsProgram } = await import('../pulumi/aws-program.ts')
+  const { fileURLToPath } = await import('node:url')
+  const cwd = fileURLToPath(new URL('../../', import.meta.url))
+  const previous = process.env.MSTAGE_CONFIG
+  process.env.MSTAGE_CONFIG = fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
+  t.after(() => {
+    if (previous === undefined) delete process.env.MSTAGE_CONFIG
+    else process.env.MSTAGE_CONFIG = previous
+  })
+  const environment = {
+    BOXLITE_IMAGE_TAG: 'b'.repeat(40),
+    STACK_DOMAIN: 'dev.example.test',
+    PROXY_DOMAIN: 'box.dev.example.test',
+    OIDC_ISSUER_BASE_URL: 'https://identity.example.test',
+    CLOUDFLARE_ZONE_ID: 'fixture-zone',
+    ADMIN_API_KEY: 'fixture-admin',
+    ENCRYPTION_KEY: 'fixture-key',
+    ENCRYPTION_SALT: 'fixture-salt',
+    OIDC_CLIENT_ID: 'fixture-client',
+    OTEL_COLLECTOR_API_KEY: 'fixture-collector',
+    PROXY_API_KEY: 'fixture-proxy',
+    MAIL_DOMAIN: 'mail.example.test',
+  }
+  const retainedImages = {
+    proxy: 'images/proxy:old',
+    'otel-collector': 'images/collector:old',
+    'registry-proxy': 'images/registry:old',
+  }
+  const start = resources.length
+  const program = awsProgram({
+    cwd,
+    app: 'boxlite-app',
+    stage: 'dev',
+    region: 'us-east-1',
+    environment,
+    retainedImages,
+  })
+  await pulumi.runtime.runInPulumiStack(async () => {
+    const outputs = await program()
+    await Promise.all(Object.values(outputs).map(resolved))
+    return outputs
+  })
+  const graph = resources.slice(start)
+  const taskImage = (name: string) =>
+    JSON.parse(graph.find((r) => r.name === name + 'Task')!.inputs.containerDefinitions)[0].image
+  assert.match(taskImage('Api'), /b{40}/)
+  assert.equal(taskImage('Proxy'), retainedImages.proxy)
+  assert.equal(taskImage('OtelCollector'), retainedImages['otel-collector'])
+  assert.equal(taskImage('RegistryProxy'), retainedImages['registry-proxy'])
+  assert.equal(graph.find((r) => r.name === 'DatabaseInstance')!.inputs.publiclyAccessible, false)
 })

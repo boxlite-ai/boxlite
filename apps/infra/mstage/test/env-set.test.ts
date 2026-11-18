@@ -47,7 +47,7 @@ const clients = ({ stored, passphrase = KEY }: { stored?: Record<string, string>
         }
         const object = store[command.input.Key]
         if (!object) throw notFound('NoSuchKey')
-        return { Body: { transformToByteArray: async () => object } }
+        return { ETag: '"fixture"', Body: { transformToByteArray: async () => object } }
       },
     },
   }

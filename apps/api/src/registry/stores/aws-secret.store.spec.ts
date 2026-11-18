@@ -42,7 +42,6 @@ it('revokes exactly its one-secret-per-write reference with recoverable deletion
   expect(send.mock.calls[0][0].input).toEqual({
     SecretId: arn,
     RecoveryWindowInDays: 7,
-    ForceDeleteWithoutRecovery: false,
   })
 })
 it.each([

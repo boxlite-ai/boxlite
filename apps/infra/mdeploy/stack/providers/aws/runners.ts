@@ -182,28 +182,39 @@ export const awsRunnerProvider =
     const checkpointPolicy = request.checkpointBucket
       ? new aws.iam.RolePolicy('RunnerCheckpoints', {
           role: role.name,
-          policy: $util.output(request.checkpointBucket).apply((bucket) =>
-            JSON.stringify({
-              Version: '2012-10-17',
-              Statement: [
-                {
-                  Effect: 'Allow',
-                  Action: ['s3:GetBucketLocation', 's3:ListBucket', 's3:ListBucketMultipartUploads'],
-                  Resource: 'arn:aws:s3:::' + bucket,
-                },
-                {
-                  Effect: 'Allow',
-                  Action: [
-                    's3:GetObject',
-                    's3:PutObject',
-                    's3:DeleteObject',
-                    's3:AbortMultipartUpload',
-                    's3:ListMultipartUploadParts',
-                  ],
-                  Resource: 'arn:aws:s3:::' + bucket + '/checkpoints/*',
-                },
-              ],
-            }),
+          policy: $resolve([request.checkpointBucket, request.migrationArchivePrefix ?? 'box-migrations']).apply(
+            ([bucket, configured]) => {
+              const path = configured.trim().replace(/\/+$/, '') || 'box-migrations'
+              const qualified = path.startsWith('s3://')
+              const segments = (qualified ? path.slice(5) : path).split('/')
+              if (!segments.every((segment: string) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment)))
+                throw new Error('Invalid BOX_MIGRATION_ARCHIVE_PREFIX for the Runner archive grant')
+              const archiveBucket = qualified ? segments.shift()! : bucket
+              // An externally owned bucket needs a separately authorized role/bucket policy.
+              const paths = new Set(['checkpoints/*', 'box-migrations/*'])
+              if (archiveBucket === bucket) paths.add([...segments, '*'].join('/'))
+              return JSON.stringify({
+                Version: '2012-10-17',
+                Statement: [
+                  {
+                    Effect: 'Allow',
+                    Action: ['s3:GetBucketLocation', 's3:ListBucket', 's3:ListBucketMultipartUploads'],
+                    Resource: 'arn:aws:s3:::' + bucket,
+                  },
+                  {
+                    Effect: 'Allow',
+                    Action: [
+                      's3:GetObject',
+                      's3:PutObject',
+                      's3:DeleteObject',
+                      's3:AbortMultipartUpload',
+                      's3:ListMultipartUploadParts',
+                    ],
+                    Resource: [...paths].map((key) => `arn:aws:s3:::${bucket}/${key}`),
+                  },
+                ],
+              })
+            },
           ),
         })
       : undefined

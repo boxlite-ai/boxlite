@@ -56,7 +56,7 @@ const harness = (stored: Record<string, string>, envDigest: unknown) => {
               }
               const object = store[command.input.Key]
               if (!object) throw notFound('NoSuchKey')
-              return { Body: { transformToByteArray: async () => object } }
+              return { ETag: '"fixture"', Body: { transformToByteArray: async () => object } }
             },
           },
           ssm: {

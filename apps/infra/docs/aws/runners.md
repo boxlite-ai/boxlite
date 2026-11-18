@@ -10,12 +10,16 @@ Use shared [artifact build/promotion](../runners.md#build-and-promote),
 [release update](../runners.md#upgrade-or-roll-back-a-release) and [scaling](../runners.md#scale-out) commands.
 Development binaries live in the stage's S3 artifact bucket.
 
+### Migration archives
+
+The Runner can read and write `checkpoints/`, `box-migrations/` and the configured migration prefix inside the stage archive bucket. If `BOX_MIGRATION_ARCHIVE_PREFIX` names a different bucket, its owner must authorize access to that bucket and prefix before moving Boxes.
+
 ### Data disks
 
 Each host receives an encrypted, independently retained gp3 volume mounted at `/var/lib/boxlite`.
 Configure `deploy.runners.dataDiskGb`; its default is 200 GiB, while `rootDiskGb` sizes the operating-system disk.
 
-Bootstrap identifies the assigned volume from its NVMe serial, records an ext4 UUID mount, and creates `/dev/disk/by-id/boxlite-data`.
+Bootstrap identifies the assigned volume by its NVMe serial and records the ext4 UUID in fstab. For expansion and rollout checks, the Runner resolves the per-volume Nitro link that udev recreates at boot, such as `/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0`.
 Unexpected signatures, root-device selection or an existing unmounted data directory fail closed.
 
 Existing hosts retain instance sizing, boot settings and data-disk performance settings.

@@ -241,6 +241,27 @@ test('AWS supplies the registry proxy and checkpoint bucket to boot and update t
   const grant = JSON.parse(resources.get('RunnerCheckpoints')!.args.policy.value)
   assert.deepEqual(
     grant.Statement.map((statement: any) => statement.Resource),
-    ['arn:aws:s3:::checkpoint-bucket', 'arn:aws:s3:::checkpoint-bucket/checkpoints/*'],
+    [
+      'arn:aws:s3:::checkpoint-bucket',
+      ['arn:aws:s3:::checkpoint-bucket/checkpoints/*', 'arn:aws:s3:::checkpoint-bucket/box-migrations/*'],
+    ],
   )
 })
+
+for (const [configured, granted] of [
+  ['moving/boxes/', true],
+  ['s3://checkpoint-bucket/moving/boxes', true],
+  ['s3://external-bucket/moving/boxes', false],
+] as const) {
+  test('Runner archive grants respect the bucket boundary for ' + configured, (t) => {
+    const { resources, output } = captureResources(t)
+    awsProvider()({
+      ...requestFor(),
+      checkpointBucket: output('checkpoint-bucket'),
+      migrationArchivePrefix: configured,
+    })
+    const policy = JSON.parse(resources.get('RunnerCheckpoints')!.args.policy.value)
+    assert.equal(policy.Statement[1].Resource.includes('arn:aws:s3:::checkpoint-bucket/moving/boxes/*'), granted)
+    assert.doesNotMatch(JSON.stringify(policy), /external-bucket/)
+  })
+}

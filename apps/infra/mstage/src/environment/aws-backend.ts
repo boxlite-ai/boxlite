@@ -105,6 +105,53 @@ const readObject = async (clients: AwsClients, key: string): Promise<Buffer | nu
 
 export const awsBackend = (clients: AwsClients): StoreBackend => ({
   home: 'aws',
+  async edit(scope, work) {
+    const Bucket = await readStateBucket(clients)
+    const Key = objectKey(scope.app, scope.stage)
+    for (let attempt = 0; attempt < 8; attempt++) {
+      let etag: string | null | undefined
+      const snapshot: StoreBackend = {
+        ...awsBackend(clients),
+        edit: undefined,
+        async read() {
+          let answer
+          try {
+            answer = await clients.s3.send(new GetObjectCommand({ Bucket, Key }))
+          } catch (error) {
+            if (!isNotFound(error)) throw error
+            etag = null
+            return null
+          }
+          if (!answer.ETag) throw new EnvError(`${Key} has no ETag; cannot safely edit it`)
+          etag = answer.ETag
+          const bytes = Buffer.from(await answer.Body.transformToByteArray())
+          return bytes.length ? bytes : null
+        },
+        async write({ sealed }) {
+          if (etag === undefined) throw new EnvError('A conditional stage edit requires an observed revision')
+          await clients.s3.send(
+            new PutObjectCommand({
+              Bucket,
+              Key,
+              Body: sealed,
+              ContentType: 'application/json',
+              ...(etag === null ? { IfNoneMatch: '*' } : { IfMatch: etag }),
+            }),
+          )
+        },
+      }
+      try {
+        return await work(snapshot)
+      } catch (error: any) {
+        if (
+          !['PreconditionFailed', 'ConditionalRequestConflict'].includes(error?.name) &&
+          ![409, 412].includes(error?.$metadata?.httpStatusCode)
+        )
+          throw error
+      }
+    }
+    throw new EnvError(`${Key} kept changing; retry after concurrent writes finish`)
+  },
   ownership: awsOwnership({
     s3: clients.s3,
     stateBucket: () => readStateBucket(clients),

@@ -860,3 +860,22 @@ test('the deploy reports the registry proxy where one runs, and nothing where no
   // that is not there.
   assert.equal(read(quiet.apiUrl), 'https://dev.boxlite.ai')
 })
+
+test('a scoped release keeps the deployed image of each unselected workload', () => {
+  const before = bundle()
+  deployStack({ providers: before.providers, config, inputs: inputs() })
+  const after = bundle()
+  const retainedImages = {
+    proxy: read(before.seen.edge.request.image),
+    'otel-collector': read(before.seen.collector.request.image),
+    'registry-proxy': read(before.seen.registryProxy.request.image),
+  }
+  deployStack({
+    providers: after.providers,
+    config,
+    inputs: { ...inputs({ tag: 'b'.repeat(40) }), retainedImages } as StackInputs,
+  })
+  assert.notEqual(read(after.seen.api.request.image), read(before.seen.api.request.image))
+  for (const workload of ['edge', 'collector', 'registryProxy'])
+    assert.equal(read(after.seen[workload].request.image), read(before.seen[workload].request.image))
+})

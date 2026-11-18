@@ -135,7 +135,9 @@ npm run aws:migrate -- --stage dev --action unlock --writers-settled --confirm
 Rollback is allowed only before the first native mutating engine call.
 That attempt is recorded durably before submission, so an uncertain response does not reopen the legacy path.
 
-Legacy checkpoints are never rewritten by adoption.
+At `begin`, the ownership record saves the SHA-256 of the encrypted native checkpoint, or records its absence. Rollback verifies and restores those bytes, or removes the imported checkpoint if the stage originally had none. It restores legacy ownership after this succeeds.
+
+For an adoption begun with an older tool that recorded no backup, rollback stops for manual recovery from the operator’s pre-import backup. The SST source checkpoints stay frozen throughout adoption.
 After pre-update rollback, an administrator may separately approve restoring legacy role access and use the saved source state.
 
 After a native attempt, use forward repair.

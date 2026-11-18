@@ -241,3 +241,43 @@ test('a lost lease prevents cutover after a long validation completes', async (t
   await rejected
   assert.equal((await f.owner.inspect(scope))?.phase, 'adopting')
 })
+
+for (const original of [null, '{"checkpoint":{"latest":{"resources":[]}}}']) {
+  test(
+    'rollback restores ' + (original ? 'the preceding native checkpoint' : 'an absent native checkpoint'),
+    async () => {
+      const f = fixture()
+      const key = '.pulumi/stacks/boxlite-app/dev.json'
+      if (original) f.objects.set(key, { body: original, etag: '"before"' })
+      f.objects.set('app/boxlite/dev.json', { etag: 'legacy', body: legacyBytes })
+      await f.owner.transition({ ...scope, action: 'begin', sourceDigests: frozen, confirmed: true })
+      f.objects.set(key, { body: '{"checkpoint":{"latest":{"resources":[{"id":"imported"}]}}}', etag: '"imported"' })
+      await f.owner.transition({ ...scope, action: 'rollback', confirmed: true })
+      assert.equal(f.objects.get(key)?.body ?? null, original)
+      assert.equal((await f.owner.inspect(scope))?.phase, 'legacy')
+    },
+  )
+}
+
+test('a missing or corrupt backup preserves native state and keeps the stage fenced', async () => {
+  const f = fixture()
+  const key = '.pulumi/stacks/boxlite-app/dev.json'
+  f.objects.set(key, { body: '{"before":true}', etag: 'before' })
+  await f.owner.transition({ ...scope, action: 'begin', sourceDigests: frozen, confirmed: true })
+  const digest = (await f.owner.inspect(scope))!.nativeCheckpointDigest!
+  f.objects.set(key, { body: '{"after":true}', etag: 'after' })
+  const backupKey = 'migration/aws/dev/native-checkpoints/' + digest + '.json'
+  f.objects.set(backupKey, { body: '{}', etag: 'different' })
+  await assert.rejects(
+    f.owner.transition({ ...scope, action: 'rollback', confirmed: true }),
+    /backup is missing or changed/,
+  )
+  assert.equal(f.objects.get(key)!.body, '{"after":true}')
+  assert.equal((await f.owner.inspect(scope))!.phase, 'adopting')
+  await f.recover()
+  f.objects.delete(backupKey)
+  await assert.rejects(
+    f.owner.transition({ ...scope, action: 'rollback', confirmed: true }),
+    /backup is missing or changed/,
+  )
+})

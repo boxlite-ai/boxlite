@@ -760,7 +760,7 @@ The Runner resizes their filesystems to use the extra capacity.
 
 Every 10 seconds the ticker reads the block device's size from sysfs and compares it with the last observed size.
 It uses `/dev/disk/by-id/google-boxlite-data` or the deployment's `RUNNER_DATA_DISK_DEVICE` override.
-AWS uses `/dev/disk/by-id/boxlite-data`.
+AWS uses the Nitro EBS link `/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol<id>`, using the volume ID without its hyphen.
 
 - unchanged: nothing happens (steady state costs one sysfs read);
 - larger: runs `resize2fs` on the device, which grows the mounted ext4

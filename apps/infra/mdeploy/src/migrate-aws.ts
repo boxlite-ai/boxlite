@@ -21,11 +21,15 @@ export const migrateAws = async ({
   cwd = process.cwd(),
   environment = process.env,
   log = console.log,
+  resolveHomeWith = resolveHome,
+  createStackWith = createStack,
 }: {
   argv: string[]
   cwd?: string
   environment?: NodeJS.ProcessEnv
   log?: (line: string) => void
+  resolveHomeWith?: typeof resolveHome
+  createStackWith?: typeof createStack
 }): Promise<number> => {
   const { options, inner } = parseInvocation(['migration', ...argv], environment, {
     flags: ['writers-settled'],
@@ -39,7 +43,7 @@ export const migrateAws = async ({
   const config = loadConfig({ cwd, environment })
   const scope = resolveScope({ config, options, environment })
   if (scope.home !== 'aws') throw new Error('AWS migration requires an AWS stage')
-  const home = await resolveHome({ scope })
+  const home = await resolveHomeWith({ scope })
   const { backend, identity } = home
   const ownership = backend.ownership
   if (!ownership) throw new Error('AWS backend has no ownership guard')
@@ -114,7 +118,7 @@ export const migrateAws = async ({
   if (!envVars.PULUMI_CONFIG_PASSPHRASE)
     throw new Error('Migration requires the native Pulumi passphrase in the stage store')
   const migrationStack = async () => {
-    const stack = await createStack({
+    const stack = await createStackWith({
       projectName: app,
       stackName: stage,
       backendUrl: 's3://' + (await home.stateBucket()),

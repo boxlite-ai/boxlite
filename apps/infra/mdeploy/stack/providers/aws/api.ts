@@ -161,6 +161,8 @@ export const awsApiProvider =
         ]),
       ),
     })
+    const region = aws.getRegionOutput({}).name
+    const account = aws.getCallerIdentityOutput({}).accountId
     const service = awsService('Api', {
       host,
       placement: {
@@ -176,8 +178,12 @@ export const awsApiProvider =
       taskRole: role,
       environment: {
         ...request.environment,
-        AWS_REGION: aws.getRegionOutput({}).name,
-        AWS_ACCOUNT_ID: aws.getCallerIdentityOutput({}).accountId,
+        AWS_REGION: region,
+        AWS_ACCOUNT_ID: account,
+        S3_ENDPOINT: $interpolate`https://s3.${region}.amazonaws.com`,
+        S3_STS_ENDPOINT: $interpolate`https://sts.${region}.amazonaws.com`,
+        S3_ACCOUNT_ID: account,
+        S3_ROLE_NAME: storage.credentialVending.roleName,
         RUNNER_DISK_CLOUD: 'aws',
         RUNNER_DISK_APP: $app.name,
         RUNNER_DISK_STAGE: $app.stage,

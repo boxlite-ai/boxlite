@@ -105,20 +105,20 @@ Provider-input tests do not replace a deployed App/CI acceptance run.
 
 ### Scheduler deployment generation
 
-mdeploy passes the invocation's `CI_SCHEDULER_GENERATION`, or `GITHUB_RUN_ID`
-when no override is supplied, into the API environment on both clouds.
+API-only and full releases on both clouds pass `CI_SCHEDULER_GENERATION` into the API environment, defaulting to `GITHUB_RUN_ID`.
+A Runner-only release keeps the deployed API generation, including its absence on an older stage.
+
 The value must be a positive safe integer in canonical decimal form.
 This is per-deployment metadata, like `BOXLITE_IMAGE_TAG`; do not store it in
 mstage groups. Invocations without either value retain local lease behavior.
 
 A newer generation takes over scheduling after its API listens and the current
 database transaction finishes. Older deployments cannot renew or reacquire ownership.
-Retrying the same workflow run preserves its generation. To roll back an image,
-dispatch a new workflow run so the rollback receives a higher generation.
-Manual invocations must supply a generation greater than the last active deployment.
 
-To test this PR's deployment program, dispatch the workflow with
-`--ref fix/ci-label-capacity`; the deploy program comes from the dispatch ref.
+Retrying the same API workflow run preserves its generation. To roll back an API image, dispatch a new workflow run so the rollback receives a higher generation.
+A manual API or full release must supply a generation greater than the last active API deployment.
+
+To test a PR’s deployment program, use its branch as the workflow dispatch ref.
 
 ## Runner convergence
 

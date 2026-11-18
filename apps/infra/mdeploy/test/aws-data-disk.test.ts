@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { awsDataDiskSetup } from '../stack/providers/aws/data-disk.ts'
+import { awsDataDiskEnvironment, awsDataDiskSetup } from '../stack/providers/aws/data-disk.ts'
 
 const volumeId = 'vol-0123456789abcdef0'
 const fixture = (
@@ -155,4 +155,9 @@ test('EBS boot refuses an already-mounted foreign device and conflicting fstab',
   } finally {
     host.cleanup()
   }
+})
+
+test('resize and rollout resolve the per-volume Nitro udev link after a reboot', () => {
+  const env = awsDataDiskEnvironment({ accountId: '123456789012', zone: 'us-east-1a', volumeId })
+  assert.equal(env.RUNNER_DATA_DISK_DEVICE, '/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0')
 })

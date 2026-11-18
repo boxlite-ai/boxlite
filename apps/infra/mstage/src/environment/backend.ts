@@ -70,6 +70,8 @@ export type StateObjects = {
 export type StoreBackend = {
   /** Names the cloud this backend keeps configuration in. */
   readonly home: string
+  /** Execute a stage map edit against one revision, retrying when a concurrent writer wins. */
+  edit?: <T>(scope: { app: string; stage: string }, work: (snapshot: StoreBackend) => Promise<T>) => Promise<T>
   readonly ownership?: AwsOwnership
   read: (input: { app: string; stage: string; versionId?: string }) => Promise<Buffer | null>
   write: (input: { app: string; stage: string; sealed: Buffer }) => Promise<void>

@@ -48,6 +48,5 @@ EBS modifications require matching app, stage and Runner-data tags; application 
 
 Sources: [bootstrap policies](../../bootstrap/aws/), [runtime defaults](../../mdeploy/pulumi/aws-defaults.ts), [legacy wrapper](../../deployment/sst.ts).
 
-The retained Runner-unreachable alarm contract expects an API `runner.unreachable` event.
-No producer was found in the current API source; verify and implement that shared signal separately before relying on this alarm.
+The API emits `runner.unreachable` after a failed Runner health check is recorded. Continued v2 heartbeat loss supplies samples for alarms that require multiple breached periods.
 Disk expansion and pressure filters consume the existing structured events.

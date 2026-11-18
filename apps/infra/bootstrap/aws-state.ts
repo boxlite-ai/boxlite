@@ -7,7 +7,7 @@ import {
   PutPublicAccessBlockCommand,
 } from '@aws-sdk/client-s3'
 import { GetParameterCommand, PutParameterCommand } from '@aws-sdk/client-ssm'
-import { readEnvironment, writeStage, type Clients } from 'mstage/env'
+import { setValues, type Clients } from 'mstage/env'
 
 const missing = (error: any) =>
   ['ParameterNotFound', 'NotFound', 'NoSuchBucket'].includes(error?.name) || error?.$metadata?.httpStatusCode === 404
@@ -55,21 +55,25 @@ export const bootstrapAwsState = async ({
     await clients.s3.send(new HeadBucketCommand({ Bucket: bucket }))
   } catch (error) {
     if (!missing(error)) throw error
-    await clients.s3.send(
-      new CreateBucketCommand({
-        Bucket: bucket,
-        ...(region === 'us-east-1' ? {} : { CreateBucketConfiguration: { LocationConstraint: region as any } }),
-      }),
-    )
+    try {
+      await clients.s3.send(
+        new CreateBucketCommand({
+          Bucket: bucket,
+          ...(region === 'us-east-1' ? {} : { CreateBucketConfiguration: { LocationConstraint: region as any } }),
+        }),
+      )
+      await clients.s3.send(
+        new PutBucketEncryptionCommand({
+          Bucket: bucket,
+          ServerSideEncryptionConfiguration: {
+            Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
+          },
+        }),
+      )
+    } catch (error: any) {
+      if (error?.name !== 'BucketAlreadyOwnedByYou') throw error
+    }
   }
-  await clients.s3.send(
-    new PutBucketEncryptionCommand({
-      Bucket: bucket,
-      ServerSideEncryptionConfiguration: {
-        Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
-      },
-    }),
-  )
   await clients.s3.send(
     new PutBucketVersioningCommand({ Bucket: bucket, VersioningConfiguration: { Status: 'Enabled' } }),
   )
@@ -116,14 +120,13 @@ export const bootstrapAwsState = async ({
       if (error?.name !== 'ParameterAlreadyExists') throw error
     }
   }
-  const values = await readEnvironment({ clients, app, stage })
-  if (!values.PULUMI_CONFIG_PASSPHRASE) {
-    await writeStage({
-      clients,
-      app,
-      stage,
-      values: { ...values, PULUMI_CONFIG_PASSPHRASE: randomBytes(32).toString('base64') },
-    })
-  }
+  await setValues({
+    clients,
+    app,
+    stage,
+    entries: [],
+    derive: (values) =>
+      values.PULUMI_CONFIG_PASSPHRASE ? [] : [['PULUMI_CONFIG_PASSPHRASE', randomBytes(32).toString('base64')]],
+  })
   return bucket
 }

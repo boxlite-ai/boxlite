@@ -2,6 +2,18 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "CreateCloudMapPrivateZone",
+      "Effect": "Allow",
+      "Action": ["route53:CreateHostedZone", "route53:ListHostedZonesByName"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadCloudMapPrivateZone",
+      "Effect": "Allow",
+      "Action": "route53:GetHostedZone",
+      "Resource": "arn:aws:route53:::hostedzone/*"
+    },
+    {
       "Sid": "BoxLiteAwsControlPlane",
       "Effect": "Allow",
       "Action": [

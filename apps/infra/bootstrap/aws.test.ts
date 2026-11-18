@@ -162,6 +162,12 @@ test('native AWS bootstrap follows declared identities and preserves the legacy 
   const policy = JSON.parse(policyCall[policyCall.indexOf('--policy-document') + 1])
   assert.ok(JSON.stringify(policy).length < 10_240, 'inline role policy exceeds the IAM aggregate size limit')
   assert.doesNotMatch(JSON.stringify(policy), /<[A-Z_]+>/)
+  for (const action of ['route53:CreateHostedZone', 'route53:GetHostedZone', 'route53:ListHostedZonesByName']) {
+    assert.ok(
+      policy.Statement.some((s: any) => s.Effect === 'Allow' && s.Action.includes(action)),
+      action,
+    )
+  }
   const deny = policy.Statement.find((statement: any) => statement.Sid === 'DenySelfPrivilegeEscalation')
   assert.ok(deny.Action.includes('iam:DeleteRolePolicy'))
   assert.ok(deny.Resource.includes('arn:aws:iam::123456789012:role/boxlite-*-github-deploy'))

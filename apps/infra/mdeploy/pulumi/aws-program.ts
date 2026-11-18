@@ -31,6 +31,7 @@ export const awsProgram =
     region,
     protectedStage = false,
     environment,
+    retainedImages,
     cwd,
     loadModules = loadAwsModules,
     deployStackWith,
@@ -40,6 +41,7 @@ export const awsProgram =
     region: string
     protectedStage?: boolean
     environment: NodeJS.ProcessEnv
+    retainedImages?: Record<string, string>
     cwd: string
     loadModules?: () => Promise<AwsModules>
     deployStackWith?: typeof deployStack
@@ -93,6 +95,7 @@ export const awsProgram =
           clickHouseRetentionHours: values.clickHouseRetentionHours,
           stage,
           tag: values.tag,
+          retainedImages,
           domain: values.domain,
           proxyDomain: values.proxyDomain,
           proxyProtocol: values.proxyProtocol,
