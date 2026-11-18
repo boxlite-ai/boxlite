@@ -97,6 +97,17 @@ pub struct VsockConfig {
     pub connect: Vec<(u32, PathBuf)>,
 }
 
+/// Routes host control connections from one vsock listener without consuming bytes.
+/// The receiver owns full protocol validation and any descriptor transfer.
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+pub struct VsockControl {
+    pub port: u32,
+    pub guest_prefix: u8,
+    pub control_prefix: u8,
+    pub connections: std::sync::mpsc::SyncSender<std::os::unix::net::UnixStream>,
+}
+
 /// A virtio-net interface connected to a Linux gvproxy stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetConfig {

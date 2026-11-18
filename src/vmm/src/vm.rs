@@ -103,6 +103,8 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// about 35 bytes each, under `config::MAX_CMDLINE_BYTES`. The guest's
     /// COM1 output goes to `console` through a queue, so a slow sink never
     /// stalls the guest.
+    /// `control` dispatches matching host connections before guest forwarding;
+    /// its receiver validates the control protocol and owns descriptor transfers.
     pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
         use crate::devices::console::DEFAULT_QUEUE_BYTES;
 

@@ -1289,7 +1289,9 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
             );
             Ok(BootRegisters::default())
         },
-        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer).map(|_| ()),
+        |chipset, ctx, config| {
+            crate::devices::add_all(chipset, ctx, config, writer).map(|_| ())
+        },
     )
     .unwrap();
     let mut id = [0; 4];

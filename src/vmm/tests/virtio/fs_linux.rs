@@ -5,7 +5,8 @@
 use std::ffi::{CStr, CString, OsString};
 use std::fs::{self, File};
 use std::io::{self, Cursor, Read, Write};
-use std::os::unix::ffi::OsStringExt;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
@@ -20,7 +21,7 @@ use crate::virtio::fs::filesystem::{
     Context, Entry, Extensions, FileSystem, FsOptions, GetxattrReply, ListxattrReply, OpenOptions,
     SetattrValid, ZeroCopyReader, ZeroCopyWriter,
 };
-use crate::virtio::fs::linux::passthrough::PassthroughFs;
+use crate::virtio::fs::linux::passthrough::{PassthroughFs, openat_beneath};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -1110,4 +1111,62 @@ fn xattr_writes_on_unreadable_directories_remain_bound_after_name_replacement() 
         fs.getxattr(ctx(), replacement, c"user.write", 0),
         libc::ENODATA,
     );
+}
+
+#[test]
+fn directory_range_confines_walks_to_the_shared_subtree() {
+    use std::os::unix::fs::symlink;
+
+    let dir = Directory::new();
+    fs::write(dir.0.join("plain"), b"inside").unwrap();
+    symlink("/etc/passwd", dir.0.join("escape")).unwrap();
+    symlink("plain", dir.0.join("within")).unwrap();
+    let root = File::open(&dir.0).unwrap();
+    let fd = root.as_raw_fd();
+    let plain = &CString::new("plain").unwrap();
+    let parent = &CString::new("..").unwrap();
+    let escape = &CString::new("escape").unwrap();
+    let within = &CString::new("within").unwrap();
+
+    // Reads and writes beneath the directory succeed.
+    let mut plain_file =
+        openat_beneath(fd, plain, libc::O_RDWR, 0).expect("in-range open must succeed");
+    plain_file.write_all(b"!").unwrap();
+    // The single byte replaces the first character: the write landed on the
+    // host file beneath the directory.
+    assert_eq!(fs::read(dir.0.join("plain")).unwrap(), b"!nside");
+    // Internal symlink targets still resolve while they stay beneath.
+    let mut within_file =
+        openat_beneath(fd, within, libc::O_RDONLY, 0).expect("internal symlink must resolve");
+    let mut buf = String::new();
+    within_file.read_to_string(&mut buf).unwrap();
+    assert_eq!(buf, "!nside");
+    // Parent traversal and escape symlinks are rejected outright.
+    error(openat_beneath(fd, parent, libc::O_PATH, 0), libc::EXDEV);
+    error(openat_beneath(fd, escape, libc::O_RDONLY, 0), libc::EXDEV);
+}
+
+#[test]
+fn from_dir_fd_requires_a_readable_directory_descriptor() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = Directory::new();
+    let regular = File::create(dir.0.join("regular")).unwrap();
+    error(PassthroughFs::from_dir_fd(regular, false), libc::ENOTDIR);
+
+    let delivered = File::open(&dir.0).unwrap();
+    let fs = PassthroughFs::from_dir_fd(delivered, false).unwrap();
+    let entry = fs.lookup(ctx(), 1, c"regular").unwrap();
+    assert!(entry.attr.st_mode & libc::S_IFMT == libc::S_IFREG);
+
+    // A descriptor the process cannot read is unusable, whatever its owner.
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o000)).unwrap();
+    let path = CString::new(dir.0.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a plain O_PATH open of a NUL-terminated path we own.
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH) };
+    assert!(fd >= 0);
+    // SAFETY: open returned a fresh owned descriptor.
+    let unreadable = unsafe { File::from_raw_fd(fd) };
+    error(PassthroughFs::from_dir_fd(unreadable, false), libc::EACCES);
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
 }

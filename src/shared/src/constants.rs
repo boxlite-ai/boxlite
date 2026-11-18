@@ -50,6 +50,10 @@ pub mod mount_tags {
     /// Tag for prepared rootfs virtiofs share (merged mode)
     pub const ROOTFS: &str = "BoxLiteContainer0Rootfs";
 
+    /// Selects host mount control on the shared box socket. The client waits
+    /// for `OK\n` before sending frames with descriptor attachments.
+    pub const MOUNT_CONTROL_PREFACE: &[u8] = b"BOXLITE-MOUNT/1\n";
+
     /// Tag for image layers directory (mounted at container's diff dir)
     pub const LAYERS: &str = "BoxLiteContainer0Layers";
 

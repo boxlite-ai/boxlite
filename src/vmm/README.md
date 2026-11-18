@@ -12,7 +12,7 @@ lifecycle API, memory layout, buses, interrupts, and threads.
 are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
-`Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
+`Vm::new(config, console, control)` adds COM1, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
 
@@ -46,7 +46,18 @@ boxlite-vmm
 The Linux x86_64 native engine composes disks, reporting balloon, aggregate
 virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
 The adapter maps the runtime specification into `VmConfig`; optional devices
-are omitted when not requested. Disk order remains `vda` (container) then
+are omitted when not requested.
+
+The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
+publishes a live device by tag when it enters the transport, and
+`lookup_aggregate` gives the shim control handler its filesystem. Dropping the
+device removes the registration (lookups then answer `ENODEV`) and releases
+every export descriptor with it. The runtime
+registers (`AggregateFs::register`/`register_fd`) and retires (`remove`)
+per-directory exports while the VM runs. A retired export's name stops resolving
+while its in-use nodes, handles and in-flight requests retain their backend;
+a re-registered name has a new identity and independent read-only policy.
+Disk order remains `vda` (container) then
 `vdb` (read-only guest root). The guest runs as PID 1, reports readiness over
 vsock and receives aggregate mount instructions before container startup.
 Linux arm64 and macOS arm64 remain separate M2 qualification gates; x86_64
@@ -286,6 +297,33 @@ contract. `Vm::new` attaches it when `VmConfig::vsock` is present; the native
 engine maps host RPC and ready sockets to guest ports 2695 and 2696. The device
 removes its listener paths after failed attachment or teardown only when the
 path still identifies the socket it bound; pre-existing and replaced paths survive.
+
+The native runtime uses one `box.sock` listener for guest RPC and host mount
+control. `Vm::new` accepts an optional `VsockControl` describing the port,
+protocol first bytes and bounded control-connection sender. With it, the backend
+peeks one byte without consuming stream data: HTTP/2's `P` selects the guest
+bridge, while `B` selects the shim's `BOXLITE-MOUNT/1\n` handshake. The control
+client waits for `OK\n` before sending any directory descriptor with
+`SCM_RIGHTS`; the descriptor stays in the host shim and is never forwarded to
+the guest. Each connection keeps its selected protocol for its lifetime.
+
+```text
+runtime connections -> box.sock -> peek first byte
+                                  | P -> vsock -> guest HTTP/2 RPC
+                                  | B -> bounded queue -> shim control
+                                                         | full preface / OK
+                                                         | commands + directory FD
+                                                         v
+                                                    AggregateFs
+```
+
+Pending protocol selections register readable readiness and share the guest
+connection limit. An incomplete selection does not block another connection;
+an unknown first byte or full/disconnected control queue closes only that
+connection. Reset and teardown close pending selections. The shim handles full
+control handshakes and filesystem operations outside the virtio worker, with
+peer-uid verification and bounded socket waits. With `control: None`, listeners
+retain their raw stream-forwarding contract.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
 payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
