@@ -553,6 +553,75 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ---
 
+## Runner TTI timing
+
+`GET /timing/:box_id` returns this runner's retained events, oldest first. It
+uses the same runner Bearer token as `/boxes`: send
+`Authorization: Bearer <runner-token>` (or `X-BoxLite-Authorization` with the
+same value format). An unknown box, or one with no retained events, returns
+HTTP 200 with `{"box_id":"<id>","events":[]}`. The endpoint does not query
+box state, so the history remains readable after deletion until eviction.
+
+```json
+{"box_id":"box-1","events":[{"op":"create","stage":"create.finished","status":"ok","dur_ms":42,"box_id":"box-1","job_id":"job-1","ts":"2026-01-01T00:00:00.042Z"}]}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `op` | `create`, `exec`, or `destroy` |
+| `stage` | Measured boundary (see below) |
+| `status` | `ok`, `error`, or `skipped`, relative to the phase |
+| `dur_ms` | Elapsed whole milliseconds from a monotonic clock; intervals can overlap |
+| `box_id` | Control-plane box ID; events without it are not retained in memory |
+| `job_id` | Control-plane job ID, omitted when unknown or not applicable |
+| `exec_id` | Execution ID, omitted when unknown or not applicable |
+| `ts` | UTC RFC3339Nano observation time |
+
+History is in memory only and is lost on restart. Each box keeps up to 256
+records, overwriting the oldest. At 1,024 boxes, adding a new box evicts the
+box least recently **updated**; reads do not refresh retention. At full
+capacity (262,144 slots), 64-bit Go uses about 32 MiB for the ring slots and
+index, plus retained string data. With typical 36-byte IDs and 30-byte
+timestamps, budget roughly 80 MiB total if all fields are populated and
+backed by separate allocations; actual usage depends on ID lengths and reuse.
+If the history lock is busy, the in-memory append is dropped rather than
+blocking the operation.
+
+Both stdout and the in-memory ring are always enabled. Each best-effort JSON
+line on stdout has the same shape as an event in the HTTP response and can
+include events without a box ID. On a systemd runner, use the `{"op":"`
+prefix to distinguish timing events from tint text logs:
+
+```sh
+journalctl -u boxlite-runner -o cat | grep '^{"op":"'
+```
+
+| Stage | Interval |
+| --- | --- |
+| `create.received` | Receipt marker before launching the executor (including replays) |
+| `create.dispatched` | Poller receipt to create-handler dispatch, including the executor's box lock; starts at executor dispatch entry if there is no poller receipt |
+| `create.runtime_getorcreate` | Runner call into SDK `GetOrCreate`, when called |
+| `create.started` | Runner call into SDK `Start`; `skipped` for `SkipStart`, not a readiness signal |
+| `create.client` | BoxLite client method entry to return |
+| `create.finished` | Executor job body, excluding job-status reporting |
+| `create.job_status`, `destroy.job_status` | Status-report call including retries; result of reporting, not of the job body |
+| `exec.request`, `exec.manager_start` | Exec HTTP handler through response and, separately, its manager `Start` call |
+| `exec.started`, `exec.exited` | SDK execution start and, separately, SDK wait; wait error or nonzero exit is `error` |
+| `exec.output_drained`, `exec.attach_done` | Output drain after exec completion (`skipped` if the attach loop exits before draining) and, separately, attach loop through the exit-frame write or failure, excluding the close handshake |
+| `destroy.dispatched` | Destroy job handler entry through dispatch to the backend, including checkpoint retirement; `error` if retirement prevents dispatch |
+| `destroy.runtime` | Each SDK `ForceRemove` call; `status: skipped` for a missing native target or if no SDK call was reached |
+| `destroy.client` | BoxLite client method entry to return; `status: skipped` if all native targets were already absent or the method was not reached. For both phases, use `status`, not `dur_ms`, to tell whether the phase was skipped. |
+| `destroy.finished` | Executor job body excluding job-status reporting; `skipped` if all native targets were already absent, without failing the job |
+
+The dispatch and finish events are specific to executor jobs. Direct client
+calls (including `POST /boxes/:boxId/destroy`) produce the client and runtime
+phases only.
+
+The probes only observe: they do not change HTTP, WebSocket, or job contracts
+or business results. They record no commands, output, or credentials. A
+failed write or a full logging queue only affects the stdout copy. Runtime
+internals are not instrumented by these runner events.
+
 ## Background services
 
 ### Box state sync

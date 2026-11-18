@@ -7,6 +7,7 @@ import (
 	"time"
 
 	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/internal/timing"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -85,13 +86,17 @@ type ResizeRequest struct {
 }
 
 func BoxliteExec(ctx *gin.Context) {
+	started := time.Now()
+	boxId := ctx.Param("boxId")
+	ids := timing.IDs{BoxID: boxId}
+	status := timing.Error
+	defer func() { timing.Emit("exec", "exec.request", status, started, ids) }()
+
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	boxId := ctx.Param("boxId")
 
 	var req ExecRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
@@ -105,13 +110,17 @@ func BoxliteExec(ctx *gin.Context) {
 		return
 	}
 
+	startPhase := time.Now()
 	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOptionsFrom(req))
+	ids.ExecID = execId
+	timing.Emit("exec", "exec.manager_start", timing.Status(err), startPhase, ids)
 	if err != nil {
 		ctx.JSON(execStartStatus(err), gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return
 	}
 
 	ctx.JSON(http.StatusCreated, ExecResponse{ExecutionID: execId})
+	status = timing.OK
 }
 
 // startOptionsFrom translates the wire request into the exec start options.
