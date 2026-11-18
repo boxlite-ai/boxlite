@@ -727,7 +727,8 @@ def up(env):
             pass
     host_starting = False
     try:
-        compose(["up", "-d"], env)
+        # --remove-orphans drops services no longer in compose.yaml (dex, minio).
+        compose(["up", "-d", "--remove-orphans"], env)
         wait_dependencies(env)
         create_bucket(env)
         host_starting = True
@@ -748,7 +749,7 @@ def up(env):
                 if leftover:
                     print("[e2e] leftover box processes; run down to retry cleanup", file=sys.stderr)
             if not existing:
-                compose(["down"], env)
+                compose(["down", "--remove-orphans"], env)
             else:
                 created = [name for name in ("postgres", "redis", "registry", "rauthy", "rustfs")
                            if name not in existing]
@@ -769,7 +770,7 @@ def down(env):
     write_files()
     stop_host()
     stop_orphaned_boxes()
-    compose(["down"], env)
+    compose(["down", "--remove-orphans"], env)
     leftover = stop_orphaned_boxes()
     if leftover:
         raise Failure("leftover box processes after teardown: "

@@ -162,7 +162,7 @@ describe('POST /api/auth/register', () => {
     expect(verifyJwt).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
       audience: AUDIENCE,
       issuer: ISSUER,
-      algorithms: ['RS256', 'EdDSA'],
+      algorithms: ['RS256'],
     })
     expect(validate).not.toHaveBeenCalled()
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith(storedUser.id, expect.objectContaining(identity))

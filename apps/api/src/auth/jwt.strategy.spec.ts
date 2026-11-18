@@ -179,11 +179,18 @@ describe('JwtStrategy.verifyToken', () => {
 
   it.each(['EdDSA', 'RS256'] as const)('accepts an MCP token signed with %s', async (alg) => {
     const { strategy, token } = await signedBy(alg)
-    await expect(strategy.verifyToken(token, 'http://localhost:3001/mcp')).resolves.toMatchObject({ sub: 'u1' })
+    await expect(strategy.verifyMcpToken(token, 'http://localhost:3001/mcp')).resolves.toMatchObject({ sub: 'u1' })
   })
 
   it('rejects an MCP token signed with another algorithm', async () => {
     const { strategy, token } = await signedBy('ES256')
-    await expect(strategy.verifyToken(token, 'http://localhost:3001/mcp')).rejects.toThrow(jose.errors.JOSEError)
+    await expect(strategy.verifyMcpToken(token, 'http://localhost:3001/mcp')).rejects.toThrow(jose.errors.JOSEError)
+  })
+
+  it('keeps EdDSA out of every non-MCP verification', async () => {
+    const { strategy, token } = await signedBy('EdDSA')
+    await expect(strategy.verifyToken(token, 'http://localhost:3001/mcp')).rejects.toThrow(
+      jose.errors.JOSEAlgNotAllowed,
+    )
   })
 })

@@ -428,7 +428,7 @@ class LocalE2ETest(unittest.TestCase):
                 patch.object(local, "prune_box_dirs"):
             with self.assertRaisesRegex(local.Failure, "readiness"):
                 local.up({})
-        self.assertIn(("down",), events)
+        self.assertIn(("down", "--remove-orphans"), events)
         stop.assert_called()
 
     def test_build_failure_does_not_stop_existing_stack(self):
@@ -471,10 +471,12 @@ class LocalE2ETest(unittest.TestCase):
                 patch.object(local, "stop_orphaned_boxes", return_value=[]):
             with self.assertRaises(KeyboardInterrupt):
                 local.up({})
-        self.assertNotIn(["down"], events)
+        self.assertEqual([args for args in events if args[:1] == ["down"]], [])
         removed = [args for args in events if args[:3] == ["rm", "-s", "-f"]]
         self.assertEqual(len(removed), 1)
         self.assertNotIn("postgres", removed[0])
+        # Services dropped from compose.yaml (dex, minio) must not keep their ports.
+        self.assertIn(["up", "-d", "--remove-orphans"], events)
 
 
     def test_owned_process_is_scoped_to_this_checkout(self):

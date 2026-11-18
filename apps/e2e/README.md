@@ -42,7 +42,7 @@ exists to catch those.
 It sits under `apps/` because the stack it drives — `apps/api`, `apps/runner`,
 `apps/proxy` — does. It is **not** an Nx project: there is no `project.json` or
 Jest config for Nx to infer, and pytest invokes its polyglot SDK drivers. It is
-driven by npm scripts: use the `make test:e2e*` targets.
+**not** driven by npm scripts: it runs through the `make test:e2e*` targets.
 
 The wider REST API test flow, from the contract inventory and this suite to the
 CLI matrix and both authentication modes, is in

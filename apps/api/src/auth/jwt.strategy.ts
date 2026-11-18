@@ -137,14 +137,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return this.options.issuer
   }
 
-  /** Verifies a token for the API's audience, or for another one this API serves (the MCP endpoint). */
+  /** Verifies a token for the API's audience. */
   async verifyToken(token: string, audience: string = this.options.audience): Promise<JWTPayload> {
-    const { payload } = await jwtVerify(token, this.JWKS, {
-      audience,
-      issuer: this.options.issuer,
-      // EdDSA: Rauthy signs tokens for dynamically registered MCP clients with Ed25519.
-      algorithms: ['RS256', 'EdDSA'],
-    })
+    return this.verify(token, audience, ['RS256'])
+  }
+
+  /**
+   * Verifies a token for the MCP endpoint's audience. MCP clients register
+   * themselves, and Rauthy signs their tokens with EdDSA (Ed25519) by default.
+   */
+  async verifyMcpToken(token: string, audience: string): Promise<JWTPayload> {
+    return this.verify(token, audience, ['RS256', 'EdDSA'])
+  }
+
+  private async verify(token: string, audience: string, algorithms: string[]): Promise<JWTPayload> {
+    const { payload } = await jwtVerify(token, this.JWKS, { audience, issuer: this.options.issuer, algorithms })
     return payload
   }
 }
