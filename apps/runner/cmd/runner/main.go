@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -111,22 +112,8 @@ func run() int {
 
 	logger.Info("BoxLite runtime initialized")
 
-	if cfg.BoxliteApiUrl != "" && cfg.ApiToken != "" {
-		usageReporter, err := featureusage.NewReporter(cfg.BoxliteApiUrl, cfg.ApiToken, logger)
-		if err != nil {
-			logger.Warn("Cloud feature usage reporting disabled")
-		} else {
-			usageCtx, stopUsage := context.WithCancel(ctx)
-			usageDone := make(chan struct{})
-			reportDone := make(chan struct{})
-			go func() { defer close(reportDone); usageReporter.Run(usageCtx) }()
-			go func() {
-				defer close(usageDone)
-				sshusage.New(boxliteClient, usageReporter.Record, logger).Run(usageCtx)
-			}()
-			defer func() { stopUsage(); <-usageDone; <-reportDone }()
-		}
-	}
+	stopSSHUsage := startSSHUsage(ctx, cfg, boxliteClient, logger)
+	defer stopSSHUsage()
 
 	boxService := services.NewBoxService(logger, boxliteClient)
 
@@ -329,6 +316,34 @@ func run() int {
 		apiServer.Stop()
 		logger.Info("Shutdown complete")
 		return 143
+	}
+}
+
+// Stop both workers before the Runner closes the native BoxLite client.
+func startSSHUsage(ctx context.Context, cfg *config.Config, source sshusage.Source, logger *slog.Logger) func() {
+	if cfg.BoxliteApiUrl == "" || cfg.ApiToken == "" {
+		return func() {}
+	}
+	reporter, err := featureusage.NewReporter(cfg.BoxliteApiUrl, cfg.ApiToken, logger)
+	if err != nil {
+		logger.Warn("Cloud feature usage reporting disabled")
+		return func() {}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	running.Add(2)
+	go func() {
+		defer running.Done()
+		reporter.Run(ctx)
+	}()
+	go func() {
+		defer running.Done()
+		sshusage.New(source, reporter.Record, logger).Run(ctx)
+	}()
+	return func() {
+		cancel()
+		running.Wait()
 	}
 }
 

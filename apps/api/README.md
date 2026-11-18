@@ -824,7 +824,7 @@ Resume observations cover API proxy requests, WebSocket attaches and preview `en
 Each caller that observes a pending start records one resume attempt, including when the Box reaches `STARTED` during lifecycle lock acquisition. Already-ready traffic emits no resume attempt. A stop-then-start wait counts as one attempt.
 
 HTTP ingress time is captured before body parsing and authentication, then only admitted operations are recorded.
-WebSocket timing starts at upgrade dispatch. A successful duration ends when the API observes `STARTED`, before response metadata reads such as last activity. Client networking and guest application readiness are outside this measurement.
+WebSocket timing starts at upgrade dispatch. A successful duration ends when the API observes `STARTED`, before dashboard notification enrichment and response metadata reads such as last activity. Client networking and guest application readiness are outside this measurement.
 
 | Attribute                | Contract                                                           |
 | ------------------------ | ------------------------------------------------------------------ |

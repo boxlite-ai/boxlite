@@ -105,7 +105,7 @@ describe('audit targets at HTTP boundaries', () => {
       } else {
         expect(boxes.create).toHaveBeenCalledTimes(1)
         expect(boxes.create.mock.calls[0][0]).toMatchObject({ cmd, entrypoint })
-        if (outcome === 'timeout') expect(waitForStarted).toHaveBeenCalledWith(box.id, 'org', 30)
+        if (outcome === 'timeout') expect(waitForStarted).toHaveBeenCalledWith(box.id, 'org', 30, expect.any(Function))
         else expect(waitForStarted).not.toHaveBeenCalled()
       }
     })
@@ -120,7 +120,7 @@ describe('audit targets at HTTP boundaries', () => {
     expect(res.status).toBe(408)
     expect(await res.json()).toMatchObject({ boxId: box.id })
     expect(boxes.create).toHaveBeenCalledTimes(1)
-    expect(waitForStarted).toHaveBeenCalledWith(box.id, 'org', 30)
+    expect(waitForStarted).toHaveBeenCalledWith(box.id, 'org', 30, expect.any(Function))
     expect(audit.updateLog).toHaveBeenCalledWith(
       'audit',
       expect.objectContaining({ statusCode: 408, targetId: box.id }),
