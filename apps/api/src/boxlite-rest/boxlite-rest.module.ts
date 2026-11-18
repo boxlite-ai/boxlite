@@ -26,6 +26,7 @@ import { UserModule } from '../user/user.module'
 import { BoxliteMeController } from './boxlite-me.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { BoxliteTimingController } from './boxlite-timing.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
@@ -62,6 +63,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
+    BoxliteTimingController,
     BoxliteProxyController,
     BoxliteVolumeController,
     BoxliteRegistryController,

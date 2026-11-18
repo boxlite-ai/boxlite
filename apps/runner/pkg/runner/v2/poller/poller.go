@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/internal/timing"
 	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 )
@@ -58,7 +59,7 @@ func (s *Service) Start(ctx context.Context) {
 		if inProgressJobs != nil && len(inProgressJobs.Items) > 0 {
 			s.log.InfoContext(ctx, "Found IN_PROGRESS jobs", "count", len(inProgressJobs.Items))
 			for _, job := range inProgressJobs.Items {
-				go s.executor.Execute(ctx, &job)
+				s.execute(ctx, &job)
 			}
 		} else {
 			s.log.InfoContext(ctx, "No IN_PROGRESS jobs found")
@@ -86,12 +87,20 @@ func (s *Service) Start(ctx context.Context) {
 			if len(jobs) > 0 {
 				s.log.DebugContext(ctx, "Received jobs", "count", len(jobs))
 				for _, job := range jobs {
-					// Execute job in goroutine for parallel processing
-					go s.executor.Execute(ctx, &job)
+					s.execute(ctx, &job)
 				}
 			}
 		}
 	}
+}
+
+func (s *Service) execute(ctx context.Context, job *apiclient.Job) {
+	if job.GetType() == apiclient.JOBTYPE_CREATE_BOX {
+		received := time.Now()
+		timing.Emit("create", "create.received", timing.OK, received, timing.IDs{BoxID: job.GetResourceId(), JobID: job.GetId()})
+		ctx = timing.WithReceipt(ctx, received)
+	}
+	go s.executor.Execute(ctx, job)
 }
 
 // pollJobs polls the API for pending jobs

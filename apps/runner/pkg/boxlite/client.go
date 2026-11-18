@@ -21,6 +21,7 @@ import (
 	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/internal/timing"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
@@ -460,7 +461,10 @@ func (c *Client) NestedVirtualizationEnabled() bool {
 
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
-func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (_ string, _ string, createErr error) {
+	started := time.Now()
+	ids := timing.IDs{BoxID: boxDto.Id, JobID: timing.JobID(ctx)}
+	defer func() { timing.Emit("create", "create.client", timing.Status(createErr), started, ids) }()
 	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
 	if err != nil {
 		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
@@ -663,7 +667,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 			}
 			return "", "", err
 		}
+		runtimeStart := time.Now()
 		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+		timing.Emit("create", "create.runtime_getorcreate", timing.Status(err), runtimeStart, ids)
 	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
@@ -697,11 +703,16 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// an error, and the two would disagree with no way to tell which is right.
 	// TestCreateHasNoFallibleStepAfterStart enforces this.
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
+	startPhase := time.Now()
 	if !skipStart {
 		if err := bx.Start(ctx); err != nil {
+			timing.Emit("create", "create.started", timing.Error, startPhase, ids)
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
+		timing.Emit("create", "create.started", timing.OK, startPhase, ids)
 		c.recordPulledImage(ctx, boxDto.Id, bx)
+	} else {
+		timing.Emit("create", "create.started", timing.Skipped, startPhase, ids)
 	}
 
 	return bx.ID(), "boxlite", nil
@@ -800,7 +811,20 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 }
 
 // Destroy removes a box entirely.
-func (c *Client) Destroy(ctx context.Context, boxId string) error {
+func (c *Client) Destroy(ctx context.Context, boxId string) (destroyErr error) {
+	started := time.Now()
+	timingIDs := timing.IDs{BoxID: boxId, JobID: timing.JobID(ctx)}
+	attempted, removed := false, false
+	defer func() {
+		status := timing.Status(destroyErr)
+		if !attempted {
+			timing.Emit("destroy", "destroy.runtime", timing.Skipped, time.Now(), timingIDs)
+		} else if destroyErr == nil && !removed {
+			status = timing.Skipped
+			timing.MarkDestroySkipped(ctx)
+		}
+		timing.Emit("destroy", "destroy.client", status, started, timingIDs)
+	}()
 	// Same boundary check as Create/Start: the runtime removal and the
 	// volume mount record paths below all key off boxId, so a
 	// traversal-shaped id is rejected before any of them runs.
@@ -824,7 +848,17 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		return err
 	}
 	for _, id := range ids {
-		if err := c.runtime.ForceRemove(ctx, id); err != nil && !boxlite.IsNotFound(err) {
+		attempted = true
+		runtimeStart := time.Now()
+		err := c.runtime.ForceRemove(ctx, id)
+		removed = removed || err == nil
+		notFound := err != nil && boxlite.IsNotFound(err)
+		status := timing.Status(err)
+		if notFound {
+			status = timing.Skipped
+		}
+		timing.Emit("destroy", "destroy.runtime", status, runtimeStart, timingIDs)
+		if err != nil && !notFound {
 			return err
 		}
 	}
