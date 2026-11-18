@@ -12,12 +12,14 @@ use std::io;
 
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend, GuestMemoryRegion, ReadVolatile};
 
+use crate::memory::RAM_START;
+
 /// Linux frees the initramfs pages after unpacking them and warns about a
 /// start that is not page aligned.
 const PAGE_SIZE: u64 = 0x1000;
 
 /// Reads `size` bytes of `image` into the top page-aligned slot of the RAM
-/// region at 0 and returns its start.
+/// region at [`RAM_START`] and returns its start.
 ///
 /// Fails with `InvalidInput`, writing nothing, if `size` is zero or larger
 /// than that region.
@@ -32,12 +34,21 @@ where
             "the initramfs is empty",
         ));
     }
-    let ram_end = ram
-        .find_region(GuestAddress(0))
-        .map_or(0, |region| region.len());
+    let region = ram.find_region(GuestAddress(RAM_START)).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("no guest RAM region found at {RAM_START:#x}"),
+        )
+    })?;
+    let ram_end = region
+        .start_addr()
+        .0
+        .checked_add(region.len())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "guest RAM address overflow"))?;
     let start = ram_end
         .checked_sub(size as u64)
         .map(|start| start & !(PAGE_SIZE - 1))
+        .filter(|&start| start >= region.start_addr().0)
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
