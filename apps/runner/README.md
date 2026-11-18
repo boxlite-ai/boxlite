@@ -757,6 +757,15 @@ a replacement without secrets. Jobs without credentials retain inline values,
 and START_BOX continues using runtime-local secrets. Direct HTTP create/recover
 still require inline values.
 
+Credential-free v2 jobs pass inline secrets to backend validation without extra
+name or value restrictions. Empty names, duplicate names and empty values retain
+their existing semantics; host and header validation remains in the backend.
+Credential-bearing jobs require unique, nonempty names to match fetched secrets.
+If replay adoption confirms the box is absent, the runner removes the volume
+ownership record written during preparation. Other lookup errors preserve that
+record because the box may still exist. The backend error wraps the lookup cause;
+credential job status retains its sanitized error.
+
 Configure an HTTPS `SECRET_SERVER_URL`; HTTP is accepted only for loopback test
 services. Credentials, identity tokens and returned secret content stay out of
 errors, job status and logs. The runner releases its job payload after execution;

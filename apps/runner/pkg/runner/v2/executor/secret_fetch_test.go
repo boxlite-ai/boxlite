@@ -143,12 +143,13 @@ func TestSecretCredentialWireValidationAndInline(t *testing.T) {
 		valid      bool
 	}{
 		{"inline", false, []map[string]any{{"name": "A", "value": "inline"}}, true},
-		{"missing inline value", false, requestedSecrets(), false},
+		{"omitted inline value", false, requestedSecrets(), true},
 		{"credential omitted value", true, requestedSecrets(), true},
 		{"credential empty value", true, []map[string]any{{"name": "A", "value": ""}}, false},
 		{"credential null value", true, []map[string]any{{"name": "A", "value": nil}}, false},
 		{"credential supplied value", true, []map[string]any{{"name": "A", "value": "inline"}}, false},
 		{"duplicate names", true, []map[string]any{{"name": "A"}, {"name": "A"}}, false},
+		{"empty credential name", true, []map[string]any{{"name": ""}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &secretBackend{exists: true}
@@ -157,7 +158,7 @@ func TestSecretCredentialWireValidationAndInline(t *testing.T) {
 			if (err == nil) != tc.valid || (len(b.created) > 0) != tc.valid {
 				t.Fatalf("valid=%v err=%v creates=%d", tc.valid, err, len(b.created))
 			}
-			if !tc.credential && tc.valid && b.created[0].Secrets[0].Value != "inline" {
+			if tc.name == "inline" && b.created[0].Secrets[0].Value != "inline" {
 				t.Fatal("inline value changed")
 			}
 		})
@@ -183,6 +184,30 @@ func TestSecretCredentialWireValidationAndInline(t *testing.T) {
 }
 
 type metadataFunc func(context.Context, string) (string, error)
+
+func TestInlineSecretCompatibility(t *testing.T) {
+	for _, scenario := range []string{"empty name", "duplicate names", "empty value"} {
+		t.Run(scenario, func(t *testing.T) {
+			secrets := returnedSecrets()
+			switch scenario {
+			case "empty name":
+				secrets[0].Name = ""
+			case "duplicate names":
+				secrets[0].Name = secrets[1].Name
+			case "empty value":
+				secrets[0].Value = ""
+			}
+			b := &secretBackend{}
+			_, err := secretExecutor(b, nil).executeJob(t.Context(), secretJob(t, false, secrets))
+			if err != nil {
+				t.Fatalf("inline request rejected before backend: %v", err)
+			}
+			if len(b.created) != 1 || !reflect.DeepEqual(b.created[0].Secrets, secrets) || b.created[0].RequireExisting {
+				t.Fatalf("inline request changed: %+v", b.created)
+			}
+		})
+	}
+}
 
 func (f metadataFunc) GetWithContext(ctx context.Context, path string) (string, error) {
 	return f(ctx, path)

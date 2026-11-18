@@ -7,17 +7,79 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	sdk "github.com/boxlite-ai/boxlite/sdks/go"
+	runnerconfig "github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
+
+func TestCredentialReplayVolumeRecordOnLookupError(t *testing.T) {
+	t.Setenv("BOXLITE_API_URL", "http://127.0.0.1")
+	t.Setenv("BOXLITE_RUNNER_TOKEN", "test-token")
+	cfg, err := runnerconfig.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousEnvironment := cfg.Environment
+	cfg.Environment = "development"
+	t.Cleanup(func() { cfg.Environment = previousEnvironment })
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "mountpoint"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, status := range []int{http.StatusNotFound, http.StatusServiceUnavailable} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			boxID := "replay-" + filepath.Base(filepath.Dir(t.TempDir()))
+			recordPath := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
+			t.Cleanup(func() { _ = os.Remove(recordPath) })
+			var lookups, creates atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					creates.Add(1)
+				}
+				lookups.Add(1)
+				if _, err := os.Stat(recordPath); err != nil {
+					t.Errorf("Create did not write ownership before lookup: %v", err)
+				}
+				http.Error(w, "lookup failed", status)
+			}))
+			defer server.Close()
+			runtime, err := sdk.NewRest(sdk.BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			client := &Client{runtime: runtime, homeDir: t.TempDir(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)), volumeMutexes: make(map[string]*sync.Mutex)}
+			outbound, skipStart := false, true
+			_, _, err = client.Create(t.Context(), dto.CreateBoxDTO{Id: boxID, Image: "alpine:latest", RequireExisting: true, OutboundEnabled: &outbound, SkipStart: &skipStart, Volumes: []dto.VolumeDTO{{VolumeId: boxID, MountPath: "/data"}}})
+			if err == nil || errors.Unwrap(err) == nil || sdk.IsNotFound(err) != (status == http.StatusNotFound) {
+				t.Errorf("lookup cause not preserved: %v", err)
+			}
+			_, statErr := os.Stat(recordPath)
+			if status == http.StatusNotFound && !os.IsNotExist(statErr) {
+				t.Errorf("absent replay target retained volume record: %v", statErr)
+			}
+			if status != http.StatusNotFound && statErr != nil {
+				t.Errorf("uncertain lookup removed volume record: %v", statErr)
+			}
+			if lookups.Load() == 0 || creates.Load() != 0 {
+				t.Fatalf("lookups=%d creates=%d", lookups.Load(), creates.Load())
+			}
+		})
+	}
+}
 
 // Cross the actual Go/C/Rust REST boundary. A replay lookup is only a hint:
 // deleting the persisted box before adoption must never produce a replacement.

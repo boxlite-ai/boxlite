@@ -596,7 +596,12 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// The target lease excludes HTTP destruction until adoption/start finishes.
 	// Never recreate a replay target whose single-use credential was skipped.
 	if boxDto.RequireExisting && bx == nil {
-		return "", "", fmt.Errorf("existing box unavailable")
+		if len(volumeMounts) > 0 && boxlite.IsNotFound(err) {
+			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
+				c.logger.WarnContext(ctx, "failed to remove box volume mount record for absent replay target", "box", boxDto.Id, "error", cleanupErr)
+			}
+		}
+		return "", "", fmt.Errorf("existing box unavailable: %w", err)
 	}
 	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
 		if err := operation.ClearPublished(); err != nil {

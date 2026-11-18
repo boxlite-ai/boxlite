@@ -32,27 +32,29 @@ type createBoxJobPayload struct {
 }
 
 func validateCreateSecrets(job *apiclient.Job, payload createBoxJobPayload) error {
-	if payload.SecretCredential != nil {
-		if payload.Id == "" || job.ResourceType != "BOX" || payload.Id != job.ResourceId || strings.TrimSpace(payload.SecretCredential.Token) == "" {
-			return fmt.Errorf("invalid secret credential payload")
-		}
-		var wire struct {
-			Secrets []struct {
-				Value json.RawMessage `json:"value"`
-			} `json:"secrets"`
-		}
-		if json.Unmarshal([]byte(*job.Payload), &wire) != nil {
-			return fmt.Errorf("invalid secret credential payload")
-		}
-		for _, secret := range wire.Secrets {
-			if secret.Value != nil {
-				return fmt.Errorf("inline values forbidden with secret credential")
-			}
+	// Credential matching needs unique names; inline jobs retain backend validation.
+	if payload.SecretCredential == nil {
+		return nil
+	}
+	if payload.Id == "" || job.ResourceType != "BOX" || payload.Id != job.ResourceId || strings.TrimSpace(payload.SecretCredential.Token) == "" {
+		return fmt.Errorf("invalid secret credential payload")
+	}
+	var wire struct {
+		Secrets []struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"secrets"`
+	}
+	if json.Unmarshal([]byte(*job.Payload), &wire) != nil {
+		return fmt.Errorf("invalid secret credential payload")
+	}
+	for _, secret := range wire.Secrets {
+		if secret.Value != nil {
+			return fmt.Errorf("inline values forbidden with secret credential")
 		}
 	}
 	names := make(map[string]bool, len(payload.Secrets))
 	for _, secret := range payload.Secrets {
-		if secret.Name == "" || names[secret.Name] || (payload.SecretCredential == nil && secret.Value == "") {
+		if secret.Name == "" || names[secret.Name] {
 			return fmt.Errorf("invalid create secrets")
 		}
 		names[secret.Name] = true
