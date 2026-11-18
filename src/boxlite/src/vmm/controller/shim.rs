@@ -43,6 +43,83 @@ pub struct ShimHandler {
     metrics_sys: Mutex<sysinfo::System>,
 }
 
+/// Snapshot before stopping the launcher: detached bwrap descendants can enter
+/// another session and become reparented as soon as the launcher exits.
+#[cfg(target_os = "linux")]
+struct ShimProcessTree(Vec<crate::util::PidRecord>);
+
+#[cfg(target_os = "linux")]
+impl ShimProcessTree {
+    fn capture(root: u32) -> Self {
+        let mut system = sysinfo::System::new();
+        system.refresh_processes_specifics(sysinfo::ProcessRefreshKind::new());
+        let mut parents = vec![sysinfo::Pid::from_u32(root)];
+        let mut descendants = crate::util::process_start_time(root)
+            .map(|start_time| crate::util::PidRecord {
+                pid: root,
+                start_time: Some(start_time),
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        while let Some(parent) = parents.pop() {
+            for (pid, process) in system.processes() {
+                if process.parent() == Some(parent) {
+                    parents.push(*pid);
+                    if let Some(start_time) = crate::util::process_start_time(pid.as_u32()) {
+                        descendants.push(crate::util::PidRecord {
+                            pid: pid.as_u32(),
+                            start_time: Some(start_time),
+                        });
+                    }
+                }
+            }
+        }
+        Self(descendants)
+    }
+
+    fn retain_alive(&mut self) {
+        self.0.retain(|record| {
+            crate::util::process_start_time(record.pid) == record.start_time
+                && crate::util::is_process_alive(record.pid)
+        });
+    }
+
+    fn signal(&mut self, signal: i32) {
+        // A recycled PID is unrelated to this box and must never be signalled.
+        self.retain_alive();
+        for record in self.0.iter().rev() {
+            unsafe { libc::kill(record.pid as i32, signal) };
+        }
+    }
+
+    fn wait(&mut self) {
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            self.retain_alive();
+            if self.0.is_empty() || Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn stop(mut self, box_id: &BoxID) -> BoxliteResult<()> {
+        // Let the inner shim flush its disks before any hard tree kill.
+        self.signal(libc::SIGTERM);
+        self.wait();
+        crate::jailer::reap_box(box_id);
+        self.signal(libc::SIGKILL);
+        self.wait();
+        if !self.0.is_empty() {
+            return Err(BoxliteError::InvalidState(format!(
+                "box {box_id} still has live sandbox processes: {:?}",
+                self.0.iter().map(|record| record.pid).collect::<Vec<_>>()
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl ShimHandler {
     /// Create a handler from a spawned shim.
     ///
@@ -81,8 +158,8 @@ impl ShimHandler {
     /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
     ///
     /// Signals only `self.pid` (the outer launcher). The full process-tree
-    /// sweep happens in `stop()` after this returns — see the comment there for
-    /// why the order matters (libkrun must flush before the hard cgroup kill).
+    /// sweep happens in `stop()` after this returns so libkrun can flush before
+    /// a hard process-tree kill.
     fn graceful_stop(&mut self) -> BoxliteResult<()> {
         // Graceful shutdown: SIGTERM first, wait, then SIGKILL if needed.
         // This gives libkrun time to flush its virtio-blk buffers to disk,
@@ -173,15 +250,16 @@ impl VmmHandlerTrait for ShimHandler {
     }
 
     fn stop(&mut self) -> BoxliteResult<()> {
-        // Graceful shutdown of the recorded pid first, then sweep the box's
-        // whole tree. `graceful_stop` only signals the recorded pid — the outer
-        // bwrap launcher — and a detached box's inner pid-ns tree (inner bwrap +
-        // shim + VM) outlives it, since #851 stopped applying `--die-with-parent`
-        // to detached boxes. The whole tree lives in the box's cgroup, so reap it
-        // by id — *after* graceful shutdown, so libkrun can flush its virtio-blk
-        // buffers first (a cgroup kill is a hard kill; reaping mid-flush risks
-        // qcow2 corruption). Best-effort and idempotent.
+        #[cfg(target_os = "linux")]
+        let process_tree = ShimProcessTree::capture(self.pid);
+
         let result = self.graceful_stop();
+
+        // cgroup setup is optional. Keep a process-identity-checked fallback for
+        // sandboxes without delegated controllers, including nested sessions.
+        #[cfg(target_os = "linux")]
+        process_tree.stop(&self.box_id)?;
+        #[cfg(not(target_os = "linux"))]
         crate::jailer::reap_box(&self.box_id);
         result
     }
@@ -409,6 +487,96 @@ impl VmmController for ShimController {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_listener_child() {
+        if std::env::var_os("BOXLITE_TEST_PORT_CHILD").is_none() {
+            return;
+        }
+        // Model bwrap's inner shim: a new session outside the launcher's group.
+        assert!(unsafe { libc::setsid() } > 0);
+        // Exercise the bounded SIGKILL fallback as well as normal SIGTERM exit.
+        if std::env::var_os("BOXLITE_TEST_IGNORE_TERM").is_some() {
+            unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        println!(
+            "\nPORT_CHILD {} {}",
+            std::process::id(),
+            listener.local_addr().unwrap()
+        );
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stop_releases_descendant_port_without_cgroup() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        for attached in [false, true] {
+            for ignore_term in [false, true] {
+                let mut command = Command::new("sh");
+                command
+                    .args(["-c", "\"$@\" & wait", "port-launcher"])
+                    .arg(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        concat!(module_path!(), "::port_listener_child")
+                            .split_once("::")
+                            .unwrap()
+                            .1,
+                        "--nocapture",
+                    ])
+                    .env("BOXLITE_TEST_PORT_CHILD", "1")
+                    .stdout(Stdio::piped());
+                if ignore_term {
+                    command.env("BOXLITE_TEST_IGNORE_TERM", "1");
+                }
+                let mut launcher = command.spawn().unwrap();
+                let output = BufReader::new(launcher.stdout.take().unwrap());
+                let line = output
+                    .lines()
+                    .map(Result::unwrap)
+                    .find(|line| line.starts_with("PORT_CHILD "))
+                    .unwrap();
+                let mut fields = line.split_whitespace().skip(1);
+                let descendant: u32 = fields.next().unwrap().parse().unwrap();
+                let address: std::net::SocketAddr = fields.next().unwrap().parse().unwrap();
+
+                // Always clean up even when the pre-fix assertion fails.
+                struct Cleanup(u32);
+                impl Drop for Cleanup {
+                    fn drop(&mut self) {
+                        unsafe { libc::kill(self.0 as i32, libc::SIGKILL) };
+                    }
+                }
+                let _cleanup = Cleanup(descendant);
+                assert!(std::net::TcpListener::bind(address).is_err());
+                let box_id = crate::runtime::id::BoxIDMint::mint();
+                let mut handler = if attached {
+                    ShimHandler::from_pid(launcher.id(), box_id)
+                } else {
+                    ShimHandler::from_spawned(
+                        SpawnedShim {
+                            child: launcher,
+                            keepalive: None,
+                        },
+                        box_id,
+                    )
+                };
+                handler.stop().unwrap();
+                assert!(
+                    std::net::TcpListener::bind(address).is_ok(),
+                    "stop returned with descendant {descendant} still holding {address}; attached={attached}, ignore_term={ignore_term}"
+                );
+                handler.stop().unwrap();
+            }
+        }
+    }
 
     /// Captures `tracing` output into a shared byte buffer so a test can
     /// assert what was (and wasn't) written by an event emitted within
