@@ -152,14 +152,14 @@ test('GCP imports and scans use the publisher, then restore the deployer before 
   const verified = steps.findIndex((step) => step.name === 'Verify the images')
   const isGcpAuth = (step: any) => /^google-github-actions\/auth@/.test(step.uses ?? '')
   const publisher = steps.slice(0, imported).filter(isGcpAuth).at(-1)
-  assert.equal(publisher?.with.service_account, '${{ vars.GCP_IMAGE_PUBLISHER }}',
+  assert.equal(publisher?.with.service_account, '${{ inputs.gcp-image-publisher }}',
     'the deployer has registry reader access; import and scans need the existing publisher permissions')
   assert.match(publisher.if, /inputs\.api-route == 'release-import'/)
   assert.match(publisher.if, /steps\.config\.outputs\.kind == 'artifact-registry'/)
   const restored = steps.slice(imported + 1, verified).find(isGcpAuth)
   assert.equal(
     restored?.with.service_account,
-    '${{ vars.GCP_DEPLOYER }}',
+    '${{ inputs.gcp-deployer }}',
     'deployment checks and apply must recover the deployment identity',
   )
   assert.equal(restored.if, publisher.if)
