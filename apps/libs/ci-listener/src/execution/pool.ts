@@ -146,6 +146,8 @@ export class WorkerPool {
   private demandAfter = 0
   private executionAfter = 0
   private readonly idleRetryAt = new Map<string, number>()
+  // Invalidate cached demand once for each newly unclaimed busy runner.
+  private readonly busyRefreshes = new Set<number>()
   private readonly creationFailures = new Map<string, { attempts: number; retryAt: number }>()
   constructor(
     private readonly journal: ExecutionJournal,
@@ -279,7 +281,7 @@ export class WorkerPool {
     policy: CapacityPolicy,
     demands: readonly LabelDemand[],
     signal?: AbortSignal,
-    verified = false,
+    verified: boolean | 'positive' = false,
     queueChecks: readonly StateCheck[] = [],
   ): Promise<void> {
     lease = { ...lease }
@@ -315,6 +317,8 @@ export class WorkerPool {
         throw error
       }
       const supplied = new Map<string, number>()
+      const unissued = new Map<string, number>()
+      const unissuedLabels = new Map<string, string>()
       const idle = new Map<string, AllocationRow[]>()
       const retiring = new Set<string>()
       const active = new Set(allocations.map((row) => row.record.key))
@@ -327,10 +331,27 @@ export class WorkerPool {
         ),
       )
       const unknownBusy = new Set<string>()
+      const newBusy = new Map<number, string>()
+      for (const id of this.busyRefreshes) if (!inventory.get(id)?.busy || claims.has(id)) this.busyRefreshes.delete(id)
       for (const [index, row] of allocations.entries()) {
         if (row.value.closing || row.value.box.phase === 'absent') continue
         // Legacy records have no label snapshot; only their recovery uses job details.
-        const labels = row.value.supply?.labels ?? (await backend.job(row.value.job, signal)).labels
+        let labels = row.value.supply?.labels
+        if (!labels) {
+          try {
+            labels = (await backend.job(row.value.job, signal)).labels
+          } catch (error) {
+            if (
+              error instanceof LeaseLost ||
+              error instanceof StateCorrupt ||
+              error instanceof StateConflict ||
+              signal?.aborted
+            )
+              throw error
+            await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
+            throw error
+          }
+        }
         const selection = selectRunnerLabels(labels, this.settings.labels)
         if (!selection) throw new StateCorrupt()
         const runner = row.value.runner.id === null ? undefined : inventory.get(row.value.runner.id)
@@ -357,12 +378,19 @@ export class WorkerPool {
           continue
         }
         if (runner?.busy) {
-          if (!claims.has(runner.id)) unknownBusy.add(selection.label)
+          if (!claims.has(runner.id)) {
+            unknownBusy.add(selection.label)
+            if (!this.busyRefreshes.has(runner.id)) newBusy.set(runner.id, selection.label)
+          }
           continue
         }
         if (runner && !selection.labels.every((label) => runner.labels.includes(label.toLowerCase())))
           throw new StateCorrupt()
         supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
+        if (row.value.box.phase === 'none') {
+          unissued.set(selection.label, (unissued.get(selection.label) ?? 0) + 1)
+          unissuedLabels.set(row.record.key, selection.label)
+        }
         if (
           row.value.box.phase === 'none' ||
           (runner?.status === 'online' &&
@@ -392,8 +420,18 @@ export class WorkerPool {
         if (!selection || !demand.queued) continue
         totalDemand.set(selection.label, (totalDemand.get(selection.label) ?? 0) + demand.queued)
         const existing = requested.get(selection.label)
-        const checks = demand.key && demand.version ? [{ key: demand.key, version: demand.version }] : []
-        if ((existing?.checks.length ?? 0) + checks.length > demandBudget) {
+        const checks = new Map((existing?.checks ?? []).map((check) => [check.key, check]))
+        if (demand.key && demand.version) {
+          const prior = checks.get(demand.key)
+          if (prior && prior.version !== demand.version) throw new StateConflict()
+          checks.set(demand.key, {
+            key: demand.key,
+            version: demand.version,
+            expiresAt: Math.min(prior?.expiresAt ?? Infinity, demand.expiresAt ?? Infinity),
+          })
+          if (checks.get(demand.key)!.expiresAt === Infinity) delete checks.get(demand.key)!.expiresAt
+        }
+        if (checks.size > demandBudget) {
           nextDemand ??= index
           continue
         }
@@ -401,7 +439,7 @@ export class WorkerPool {
           count: (existing?.count ?? 0) + demand.queued,
           demand,
           labels: selection.labels,
-          checks: [...(existing?.checks ?? []), ...checks],
+          checks: [...checks.values()],
         })
       }
       this.demandAfter = nextDemand ?? 0
@@ -414,6 +452,19 @@ export class WorkerPool {
       const expanding =
         [...requested].some(([label, target]) => target.count > (supplied.get(label) ?? 0)) &&
         (await this.journal.hasCapacity(lease, this.scopeKey, policy))
+      const missingClaims = [...requested].some(([label]) => unknownBusy.has(label))
+      const needsRefresh = [...newBusy].filter(([, label]) => {
+        const target = requested.get(label)?.count ?? 0
+        const available = supplied.get(label) ?? 0
+        const reserved = unissued.get(label) ?? 0
+        // Starting an existing reservation needs fresh demand even when quota is full.
+        return target > available - reserved && (reserved > 0 || expanding)
+      })
+      if (verified && needsRefresh.length) {
+        for (const [id] of needsRefresh) this.busyRefreshes.add(id)
+        await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
+        throw new DemandUncertain('New busy supply requires fresh job observations', true)
+      }
       if (
         !verified &&
         (expanding ||
@@ -422,25 +473,56 @@ export class WorkerPool {
           allocations.some((row) => row.value.box.phase === 'none' && !row.value.closing))
       ) {
         await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
-        const missingClaims = [...requested].some(([label]) => unknownBusy.has(label))
+        const refresh = needsRefresh.length > 0
+        if (refresh) for (const [id] of needsRefresh) this.busyRefreshes.add(id)
         throw new DemandUncertain(
           missingClaims
             ? 'Runner claims arrived without matching demand observations'
             : 'Authoritative GitHub queue snapshot required before changing worker capacity',
+          refresh,
         )
       }
-      if (verified)
+      if (verified === true && (queueChecks.length > 0 || !this.execution) && queueChecks.length <= 100)
         for (const row of surplus) {
-          if (row.value.box.phase === 'none') {
+          if (
+            row.value.box.phase === 'none' &&
+            row.value.runner.phase === 'none' &&
+            row.value.delivery === 'none' &&
+            row.value.effect === null
+          ) {
             allocations[allocations.indexOf(row)] = await this.journal.advance(
               lease,
               row.record.key,
               row.record.version,
-              { closing: true },
+              { closing: true, box: { phase: 'absent', id: null }, runner: { phase: 'absent', id: null } },
               queueChecks,
             )
           } else retiring.add(row.record.key)
         }
+      const creationBudget = new Map<string, number>()
+      for (const [label, target] of requested)
+        creationBudget.set(label, Math.max(0, target.count - ((supplied.get(label) ?? 0) - (unissued.get(label) ?? 0))))
+      // Only accepted work consumes a grant; both dispatch passes reuse that selection.
+      const creationChecks = new Map<string, StateCheck[]>()
+      if (verified)
+        for (const row of allocations) {
+          if (row.value.box.phase !== 'none' || row.value.closing || (this.execution && !row.value.supply)) continue
+          const label = unissuedLabels.get(row.record.key)
+          if (!label) continue
+          const target = requested.get(label)
+          const remaining = creationBudget.get(label) ?? 0
+          if (!target || remaining <= 0) continue
+          const checks = [...(policy.checks ?? []), ...target.checks]
+          if (this.execution && !this.dispatch(lease, row, backend, scope.scope, signal, false, checks)) continue
+          creationChecks.set(row.record.key, checks)
+          creationBudget.set(label, remaining - 1)
+        }
+      const proof = (row: AllocationRow, retire: boolean): readonly StateCheck[] | undefined => {
+        if (retire)
+          return queueChecks.length <= 100 && (queueChecks.length || !this.execution) ? queueChecks : undefined
+        if (row.value.box.phase !== 'none' || row.value.closing) return []
+        return creationChecks.get(row.record.key)
+      }
       let pending = verified
       while (pending) {
         pending = false
@@ -466,21 +548,15 @@ export class WorkerPool {
             break
           }
           allocations.push(row)
+          const checks = [...(policy.checks ?? []), ...target.checks]
+          creationChecks.set(row.record.key, checks)
           if (this.execution) {
             this.event(scope.scope, row, 'ci-worker-reserved', 'info')
-            this.dispatch(lease, row, backend, scope.scope, signal, false, [...(policy.checks ?? []), ...target.checks])
+            this.dispatch(lease, row, backend, scope.scope, signal, false, checks)
           }
           supplied.set(label, available + 1)
           pending = true
         }
-      }
-      const proof = (row: AllocationRow, retire: boolean): readonly StateCheck[] | undefined => {
-        if (retire) return queueChecks.length && queueChecks.length <= 100 ? queueChecks : undefined
-        if (row.value.box.phase !== 'none' || row.value.closing) return []
-        if (!verified || !row.value.supply) return undefined
-        const selection = selectRunnerLabels(row.value.supply.labels, this.settings.labels)
-        const target = selection && requested.get(selection.label)
-        return target ? [...(policy.checks ?? []), ...target.checks] : undefined
       }
       await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, true, proof)
     } finally {
@@ -528,9 +604,12 @@ export class WorkerPool {
     const results = await Promise.allSettled(
       allocations.map(async (row) => {
         if (!allowCreate && row.value.box.phase === 'none' && !row.value.closing) return
+        const retire = retiring.has(row.record.key)
+        const checks = proof?.(row, retire)
+        if (proof && checks === undefined) return
         await backend.retire?.(row.value.name)
         try {
-          await this.reconcile(lease, row, backend, scope, signal, retiring.has(row.record.key))
+          await this.reconcile(lease, row, backend, scope, signal, retire, checks)
         } finally {
           await backend.retire?.(row.value.name)
         }
@@ -559,7 +638,7 @@ export class WorkerPool {
   ): boolean {
     return this.execution!.queue.enqueue(
       planned.record.key,
-      planned.record.version + '/' + retireIdle,
+      planned.record.version + '/' + retireIdle + '/' + JSON.stringify(checks),
       async (queueWaitMs) => {
         signal?.throwIfAborted()
         const current = await this.journal.allocation(lease, planned.record.key)

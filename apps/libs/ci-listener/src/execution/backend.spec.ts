@@ -172,6 +172,75 @@ describe('CI shared execution authority', () => {
     backend = makeBackend()
   })
   const makeBackend = () => new GitHubExecutionBackend(state, lease, scope, source, host, ['boxlite'])
+  it('isolates complete background reads from foreground notified-job credentials', async () => {
+    const fetch = global.fetch
+    let entered!: () => void, release!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    global.fetch = jest.fn(async (input, options) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/actions/runs')) {
+        entered()
+        await held
+      }
+      return fetch(input, options)
+    }) as typeof fetch
+    const updated = backend as unknown as {
+      reader(): {
+        queued(repository: number): Promise<unknown>
+        pending(notices: readonly (typeof notice)[]): Promise<unknown>
+        close(): Promise<void>
+      }
+      pending(notices: readonly (typeof notice)[]): Promise<unknown>
+    }
+    const reader = updated.reader(),
+      scanning = reader.queued(21)
+    try {
+      await started
+      const verifier = updated.reader()
+      try {
+        await expect(verifier.pending([notice])).resolves.toEqual([expect.objectContaining(notice)])
+      } finally {
+        await verifier.close()
+      }
+      await expect(updated.pending([notice])).resolves.toEqual([expect.objectContaining(notice)])
+    } finally {
+      release()
+      await scanning
+      await reader.close()
+    }
+    expect(calls.filter((call) => call.path.endsWith('/access_tokens'))).toHaveLength(3)
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(3)
+  })
+  it('defers minting on a replacement reader after an unknown issuance outcome', async () => {
+    const fetch = global.fetch
+    let failMint = true,
+      mints = 0
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname.endsWith('/access_tokens')) {
+        mints++
+        if (failMint) throw new Error('Unknown token issuance response')
+      }
+      return fetch(input, options)
+    }) as typeof fetch
+    const first = backend.reader()
+    let replacement: ReturnType<GitHubExecutionBackend['reader']> | undefined
+    try {
+      await expect(first.pending([notice])).rejects.toMatchObject({ uncertain: true })
+      await first.close()
+      failMint = false
+      replacement = backend.reader()
+      await expect(replacement.pending([notice])).rejects.toThrow('deferred')
+      expect(mints).toBe(1)
+      expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(0)
+    } finally {
+      await Promise.all([first.close(), replacement?.close()])
+    }
+  })
   afterEach(async () => {
     await backend.close().catch(() => {})
     global.fetch = originalFetch
