@@ -46,7 +46,13 @@ caches it on `kernel.lock`, `kernel.config` and the build script.
 
 The fragment enables virtio-mmio, the reporting-only balloon and its selected
 `PAGE_REPORTING` dependency. Rebuild after a fragment change; an older M1
-kernel cannot qualify reporting. The fragment carries no test-only setting: the
+kernel cannot qualify reporting.
+
+It also enables `VIRTIO_MEM` with memory hotplug and hot-remove.
+`MEMORY_HOTPLUG` selects `MEMORY_ISOLATION`, which with `COMPACTION` gives the
+`CONTIG_ALLOC` that virtio-mem needs to unplug.
+
+The fragment carries no test-only setting: the
 qualification init reaches the host through its console, so nothing in the
 guest needs a capability the shipped kernel lacks. Reporting is deliberately
 disabled by the pinned driver under `init_on_free=1` without PAGE_POISON
