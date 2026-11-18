@@ -594,8 +594,11 @@ An allocation accepted by the execution queue counts against its label's create
 budget until it leaves the queue or its durable create intent accounts for it.
 For one job, if B is queued while A is backing off, A becoming eligible cannot
 start a second Box. Routine recovery of the same allocation version preserves
-an outstanding idle retirement. Execution checks its proof and runner identity
-before deregistration.
+an outstanding idle retirement. If verified jobs need an idle runner of that
+label, a positive-only plan replaces its queued retirement with ordinary recovery.
+The consumer rechecks the request before submitting the GitHub deletion.
+Surplus runners keep their existing retirement requests. Starting a retirement
+requires complete queue evidence; execution checks its proof and runner identity.
 
 Each run verifier owns its credential handles. If token issuance has an unknown
 outcome, replacement readers share a 60-second retry delay for that repository
@@ -836,6 +839,9 @@ conflicting state, abort and unretired credential handles stop further work.
 If soft deletion frees a Hosted worker's name but the runner fails to confirm
 destruction, the Box manager retries on the original runner. It matches the
 Box ID, original name and organization in the configured Hosted App's ledger.
+If a V2 Box still says destroying after its last destroy job failed on that runner,
+the manager submits a replacement once no incomplete job remains. A late failure
+from an earlier attempt preserves a confirmed destroyed Box.
 Stale-error cleanup retains that row until confirmation lets CI return the slot.
 A change to the primary Hosted App ID requires draining its old namespace first.
 

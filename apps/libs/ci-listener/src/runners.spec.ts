@@ -94,6 +94,21 @@ describe('CI shared GitHub JIT runners', () => {
     await expect(registry().retireIdle({ id: 91, name })).rejects.toMatchObject({ status })
     expect(journal).toHaveBeenCalledTimes(1)
   })
+  it('keeps the runner when a retirement is withdrawn during the mutation check', async () => {
+    onlineIdle()
+    let wanted = true
+    journal.mockImplementationOnce(async () => {
+      wanted = false
+    })
+    const beforeDelete = () => {
+      if (!wanted) throw new Error('retirement withdrawn')
+    }
+    await expect(registry().retireIdle({ id: 91, name }, undefined, beforeDelete)).rejects.toThrow(
+      'retirement withdrawn',
+    )
+    expect(calls.filter((call) => call.method === 'DELETE')).toHaveLength(0)
+    expect(exists).toBe(true)
+  })
   it('keeps the Box decision pending when a busy assignment races the idle read', async () => {
     onlineIdle()
     const previous = reply
