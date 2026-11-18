@@ -36,26 +36,24 @@ func TestCopyInStreamOverwriteProtection(t *testing.T) {
 		}
 		return bytes.NewReader(data.Bytes())
 	}
-	if err := box.CopyInStream(ctx, "/root", CopySourceDir, archive("original")); err != nil {
+	if err := box.CopyInStream(ctx, "/root", archive("original")); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []CopySourceKind{CopySourceDir, CopySourceUnknown} {
-		// More than the bounded Go/C/portal buffers: rejection must retain
-		// its type when the producer observes the guest closing early.
-		err := box.CopyInStream(ctx, "/root", kind, archive(strings.Repeat("x", 16<<20)), WithCopyOverwrite(false))
-		var conflict *Error
-		if !errors.As(err, &conflict) || conflict.Code != ErrAlreadyExists {
-			t.Fatalf("conflict = %v", err)
-		}
-		out := filepath.Join(t.TempDir(), "keep.txt")
-		if err := box.CopyOut(ctx, "/root/keep.txt", out); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := os.ReadFile(out); err != nil || string(got) != "original" {
-			t.Fatalf("preserved bytes=%q err=%v", got, err)
-		}
+	// More than the bounded Go/C/portal buffers: rejection must retain its
+	// type when the producer observes the guest closing early.
+	err := box.CopyInStream(ctx, "/root", archive(strings.Repeat("x", 16<<20)), WithCopyOverwrite(false))
+	var conflict *Error
+	if !errors.As(err, &conflict) || conflict.Code != ErrAlreadyExists {
+		t.Fatalf("conflict = %v", err)
 	}
-	if err := box.CopyInStream(ctx, "/root", CopySourceDir, archive("replacement"), WithCopyOverwrite(true)); err != nil {
+	out := filepath.Join(t.TempDir(), "keep.txt")
+	if err := box.CopyOut(ctx, "/root/keep.txt", out); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(out); err != nil || string(got) != "original" {
+		t.Fatalf("preserved bytes=%q err=%v", got, err)
+	}
+	if err := box.CopyInStream(ctx, "/root", archive("replacement"), WithCopyOverwrite(true)); err != nil {
 		t.Fatal(err)
 	}
 }

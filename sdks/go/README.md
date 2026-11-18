@@ -180,7 +180,7 @@ defer restored.Close()
 Pass `WithCopyOverwrite(false)` to add only new entries:
 
 ```go
-err := box.CopyInStream(ctx, "/app", boxlite.CopySourceDir, tarReader,
+err := box.CopyInStream(ctx, "/app", tarReader,
     boxlite.WithCopyOverwrite(false))
 ```
 
