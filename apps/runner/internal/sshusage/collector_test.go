@@ -3,10 +3,14 @@
 package sshusage
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,12 +21,13 @@ import (
 )
 
 type source struct {
-	boxes []boxlite.BoxInfo
-	take  func(context.Context, string) (*boxlite.SSHUsageBatch, error)
+	listErr error
+	boxes   []boxlite.BoxInfo
+	take    func(context.Context, string) (*boxlite.SSHUsageBatch, error)
 }
 
 func (s source) ListInfo(context.Context) ([]boxlite.BoxInfo, error) {
-	return append([]boxlite.BoxInfo(nil), s.boxes...), nil
+	return append([]boxlite.BoxInfo(nil), s.boxes...), s.listErr
 }
 func (s source) TakeSSHUsage(ctx context.Context, id string) (*boxlite.SSHUsageBatch, error) {
 	return s.take(ctx, id)
@@ -107,5 +112,62 @@ func TestPollDeadlineShutdownAndFailures(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("collector blocked shutdown")
+	}
+}
+
+func TestPollRecoversAfterInventoryAndGuestFailures(t *testing.T) {
+	var logs bytes.Buffer
+	var events []featureusage.Event
+	var batch *boxlite.SSHUsageBatch
+	src := &source{
+		listErr: errors.New("inventory offline"),
+		boxes: []boxlite.BoxInfo{
+			{ID: "native", Name: "CloudBox1234", Running: true},
+			{ID: "other", Name: "CloudBox123!", Running: true},
+		},
+		take: func(_ context.Context, id string) (*boxlite.SSHUsageBatch, error) {
+			if id != "native" {
+				t.Errorf("drained unexpected box %q", id)
+			}
+			return batch, nil
+		},
+	}
+	record := func(event featureusage.Event) bool {
+		events = append(events, event)
+		return true
+	}
+	c := New(src, record, slog.New(slog.NewTextHandler(&logs, nil)))
+	poll := func() { c.poll(context.Background()) }
+	poll()
+	poll()
+	src.listErr = nil
+	poll()
+	poll()
+	batch = &boxlite.SSHUsageBatch{DroppedTotal: 2, Events: []boxlite.SSHUsageEvent{
+		{ID: "invalid-time", OccurredAtMS: math.MaxUint64},
+		{ID: "accepted", OccurredAtMS: 1234},
+	}}
+	poll()
+	if len(events) != 1 || events[0].ID != "accepted" || events[0].OccurredAt.UnixMilli() != 1234 {
+		t.Fatalf("recovered observations: %v", events)
+	}
+	batch.Events = nil
+	poll()
+	batch = nil
+	poll()
+	src.boxes[0].Running = false
+	poll()
+	src.boxes[0].Running = true
+	poll()
+	batch = &boxlite.SSHUsageBatch{DroppedTotal: 2}
+	poll()
+	for message, want := range map[string]int{
+		"SSH usage listing unavailable":               1,
+		"SSH usage unavailable":                       3,
+		"Guest SSH usage buffer dropped observations": 2,
+	} {
+		if got := strings.Count(logs.String(), message); got != want {
+			t.Errorf("%s: got %d warnings, want %d", message, got, want)
+		}
 	}
 }
