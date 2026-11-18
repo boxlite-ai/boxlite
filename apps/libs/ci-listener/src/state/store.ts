@@ -171,7 +171,7 @@ export class ListenerState {
     lease = { ...lease }
     this.ttl(ttlMs)
     await this.database.transaction(this.namespace, async (tx) => {
-      const row = await this.assertLease(tx, lease, 'exclusive'),
+      const row = await this.assertLease(tx, lease, 'renew'),
         until = Math.max(this.until(row), (await tx.now()) + ttlMs)
       // Keep the locked identity tuple stable; snapshots may conservatively see an older deadline.
       if (!(await tx.put(record('@lease', { until }), row.version))) throw new StateConflict()
@@ -412,16 +412,13 @@ export class ListenerState {
   private async assertLease(
     tx: StateTransaction,
     lease: ExecutionLease,
-    lock: 'shared' | 'exclusive' = 'shared',
+    operation: 'check' | 'renew' = 'check',
   ): Promise<StateRecord> {
     if (lease.namespace !== this.namespace) throw new LeaseLost()
     this.anchor(await tx.get('@anchor'))
-    // Identity changes wait for every guarded transaction; ordinary consumers
-    // share the fence. Renewal takes it exclusively before reading the deadline.
-    const current = this.owner(
-        await (lock === 'shared' && tx.getShared ? tx.getShared('@owner') : tx.get('@owner', true)),
-      ),
-      expiry = await tx.get('@lease'),
+    // Identity changes wait for both workers and renewals. Only renewals serialize on the deadline.
+    const current = this.owner(await (tx.getShared ? tx.getShared('@owner') : tx.get('@owner', true))),
+      expiry = await tx.get('@lease', operation === 'renew'),
       until = this.until(expiry)
     if (
       current.deployment !== this.deployment ||
