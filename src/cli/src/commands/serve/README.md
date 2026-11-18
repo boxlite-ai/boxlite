@@ -125,6 +125,18 @@ permissive (accepts any/no bearer) — the zero-config local-dev default. A
 permissive server only binds to loopback: `serve` refuses to start on any
 other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 
+**Browser guard.** Before auth, every route, WebSocket upgrades included,
+passes `BrowserGuard` (`browser_guard.rs`), which answers `403` to:
+
+| Request | Refused when | Attack it stops |
+|---------|--------------|-----------------|
+| `Host` header | The server is bound to loopback and the name is not `localhost`, `127.0.0.1`, `[::1]` or an `--allowed-host` value | DNS rebinding: a web page re-resolves its own domain to 127.0.0.1 |
+| `Origin` header | Present and its `host:port` differs from `Host` | Cross-site POSTs and WebSocket upgrades, which browsers send without a CORS preflight |
+
+SDK, CLI and curl requests send a loopback `Host` and no `Origin`, so they
+pass. A reverse proxy that forwards its own name to a loopback-bound server
+needs `--allowed-host <name>`.
+
 ### Box CRUD & Lifecycle
 
 | Method | Path                                  | Handler             | Description                    |
@@ -464,6 +476,7 @@ sets `reaping_kill` under one lock acquisition.
 |----------|-----------|--------------------------|
 | `--port` | `8100`    | TCP port to listen on    |
 | `--host` | `127.0.0.1` | Address to bind; non-loopback requires `--api-key` |
+| `--allowed-host` | none | Extra `Host` name accepted on a loopback bind (repeatable); see the browser guard |
 
 ### Internal Constants
 
