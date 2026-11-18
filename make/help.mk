@@ -51,6 +51,8 @@ help:
 	@echo "    make plugin:boxlite:dist     - Build cloud/local plugin and marketplace ZIPs"
 	@echo "    make plugin:boxlite:check:cc - Validate Claude Code plugin and marketplace"
 	@echo "    make plugin:boxlite:coverage - Collect plugin package coverage XML"
+	@echo "    make plugin:boxlite:smoke:cloud - Exercise production MCP using BOXLITE_API_KEY (creates and removes a Box)"
+	@echo "    make plugin:boxlite:smoke:local - Exercise the real local VM using PLUGIN_LOCAL_CLI (creates and removes a Box)"
 	@echo ""
 	@echo "  Testing (strict full-matrix default):"
 	@echo "    make test                   - Run full test matrix (same as make test:all)"

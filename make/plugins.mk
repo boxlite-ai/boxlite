@@ -1,5 +1,6 @@
 # Cloud MCP and local-runtime plugin distribution; no runtime build is required.
 PLUGIN_COVERAGE_PYTHON ?= $(PLUGIN_PYTHON)
+PLUGIN_LOCAL_CLI ?= $(CURDIR)/target/plugins/tools/boxlite
 PLUGIN_COVERAGE = PYTHONDONTWRITEBYTECODE=1 COVERAGE_FILE=target/coverage/plugins/.coverage COVERAGE_RCFILE=scripts/plugins/.coveragerc $(PLUGIN_COVERAGE_PYTHON) -m coverage
 
 
@@ -20,3 +21,9 @@ plugin\:boxlite\:coverage: plugin-boxlite-force
 	@$(PLUGIN_COVERAGE) run --append scripts/plugins/boxlite.py dist
 	@$(PLUGIN_COVERAGE) xml -o target/coverage/plugins/coverage.xml
 	@$(PLUGIN_COVERAGE) report -m
+
+plugin\:boxlite\:smoke\:cloud: plugin-boxlite-force
+	@$(PLUGIN_PYTHON) scripts/plugins/cloud_acceptance.py
+
+plugin\:boxlite\:smoke\:local: plugin-boxlite-force
+	@$(PLUGIN_PYTHON) scripts/plugins/local_acceptance.py --cli "$(PLUGIN_LOCAL_CLI)"
