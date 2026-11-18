@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { workflowSource } from 'mdeploy/test/workflow-source'
+import { workflowSource } from '../../mdeploy/test/workflow-source.js'
 
 const workflow = workflowSource('mbuild.yml')
 

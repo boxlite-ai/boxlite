@@ -1,8 +1,10 @@
+/// <reference lib="es2024.promise" />
 /*
  * Copyright 2026 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { setImmediate as nextTurn } from 'node:timers/promises'
 import { randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
 import { BoxRequestReplayService } from './box-request-replay.service'
@@ -118,6 +120,22 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     await cleanup(keyOf('capacity', key))
   })
 
+  it('does not send a reservation after readiness exceeds its deadline', async () => {
+    const ready = Promise.withResolvers<Redis>()
+    const settled = Promise.withResolvers<void>()
+    const evaluate = jest.fn(async () => ['owner'])
+    const slow: BoxRequestReplayService = Object.assign(new BoxRequestReplayService(redis), {
+      ready: () => ready.promise.finally(settled.resolve),
+    })
+    await expect(slow.session(org, user, 'createBox', randomUUID(), 'late-ready')).rejects.toMatchObject({
+      status: 503,
+    })
+    ready.resolve({ eval: evaluate } as unknown as Redis)
+    await settled.promise
+    await nextTurn()
+    expect(evaluate).not.toHaveBeenCalled()
+  })
+
   // A corrupt stored body is unusable: replaying it would send garbage, and
   // deleting it would re-dispatch, so the conservative unknown applies.
   it('treats a corrupt stored response as unknown', async () => {
@@ -177,8 +195,13 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     expect(before['state']).toBe('pending')
     expect(before['owner']).not.toBe('')
 
-    await second.complete({ status: 201, body: '{}' })
     await first.complete({ status: 201, body: '{"box_id":"stale"}' })
+    const pending = await redis.hgetall(keyOf('createBox', key))
+    expect(pending['state']).toBe('pending')
+    expect(pending['owner']).toBe(before['owner'])
+    expect(pending['response']).toBeUndefined()
+
+    await second.complete({ status: 201, body: '{}' })
     const after = await redis.hgetall(keyOf('createBox', key))
     expect(after['state']).toBe('complete')
     expect(after['response']).toBe(JSON.stringify({ status: 201, body: '{}' }))

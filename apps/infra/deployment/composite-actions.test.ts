@@ -38,18 +38,6 @@ const runShell = (script: string, env: Record<string, string>, cwd: string) =>
     encoding: 'utf8',
   })
 
-/**
- * Fallback lookup directories that cannot resolve a host-installed sccache.
- * The run-in-manylinux and sccache-action cases assert the missing-tool
- * branches; a host PATH entry carrying sccache would satisfy `command -v
- * sccache` and turn them into the cached path instead.
- */
-const hostPathWithoutSccache = (): string =>
-  (process.env.PATH ?? '')
-    .split(':')
-    .filter((dir) => dir !== '' && !existsSync(join(dir, 'sccache')))
-    .join(':')
-
 test('every workflow reference to a composite action resolves and passes declared inputs', () => {
   // A `uses: ./...` that names a missing directory, or a `with:` key the action never declares,
   // fails only when the job runs — which for the release-only workflows means at release time.
@@ -195,7 +183,7 @@ const generatedScript = (callerScript: string): string => {
   try {
     const result = runShell(
       manylinuxAssembly(),
-      { PATH: `/usr/bin:/bin:${process.env.PATH ?? ''}`, RUNNER_TEMP: dir, BUILD_SCRIPT: callerScript, TARGET: 'linux-x64-gnu' },
+      { PATH: '/usr/bin:/bin', RUNNER_TEMP: dir, BUILD_SCRIPT: callerScript, TARGET: 'linux-x64-gnu' },
       dir,
     )
     assert.equal(result.status, 0, `assembly failed: ${result.stderr}`)
@@ -277,7 +265,7 @@ for (const cached of [true, false]) {
         writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
       }
       const result = runShell(String(readAction('run-in-manylinux').runs.steps[0].run), {
-        PATH: `${bin}:/usr/bin:/bin:${hostPathWithoutSccache()}`, RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir,
+        PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir,
         BUILD_SCRIPT: '', TARGET: 'linux-arm64-gnu', TRACE: join(dir, 'trace'),
         SCCACHE_DIR: join(dir, 'sccache'),
         ARGS: join(dir, 'args'), OWNER_ARGS: join(dir, 'owner-args'),
@@ -312,7 +300,7 @@ for (const status of [0, 17]) {
         writeFileSync(join(dir, name), `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "$TRACE"\n`, { mode: 0o755 })
       }
       const result = runShell(generatedScript(`exit ${status}`), {
-        PATH: `${dir}:/usr/bin:/bin:${process.env.PATH ?? ''}`, CARGO_HOME: dir, TRACE: join(dir, 'trace'),
+        PATH: `${dir}:/usr/bin:/bin`, CARGO_HOME: dir, TRACE: join(dir, 'trace'),
       }, dir)
       assert.equal(result.status, status)
       assert.match(readFileSync(join(dir, 'trace'), 'utf8'), /sccache --stop-server\n$/)
@@ -369,7 +357,7 @@ const sccacheEnvironment = ({
     const result = runShell(
       String(step.run),
       {
-        PATH: `${binDir}:/usr/bin:/bin:${hostPathWithoutSccache()}`,
+        PATH: `${binDir}:/usr/bin:/bin`,
         GITHUB_ENV: envFile,
         GITHUB_WORKSPACE: dir,
         RUNNER_TEMP: dir,
@@ -449,7 +437,7 @@ test('compiler cache save reuses the lockfile hash captured before container bui
       assert.ok(step.run && step.id, 'cache preparation must expose its result')
       const output = join(directory, step.id)
       const env = Object.fromEntries(Object.entries<string>(step.env ?? {}).map(([name, value]) => [name, evaluate(value)]))
-      const result = runShell(evaluate(step.run), { ...env, PATH: `/usr/bin:/bin:${process.env.PATH ?? ''}`, GITHUB_OUTPUT: output }, directory)
+      const result = runShell(evaluate(step.run), { ...env, PATH: '/usr/bin:/bin', GITHUB_OUTPUT: output }, directory)
       assert.equal(result.status, 0, result.stderr)
       context.steps[step.id] = { outputs: Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map((line) => {
         const separator = line.indexOf('=')
@@ -652,7 +640,7 @@ const restoreDeclaration = ({
     const result = runShell(
       String(step.run),
       {
-        PATH: `${binDir}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
+        PATH: `${binDir}:/usr/bin:/bin`,
         RUNNER_TEMP: runnerTemp,
         STAGES: stages,
         BOXLITE_MSTAGE_BOXLITE_APP_CONFIG: config,

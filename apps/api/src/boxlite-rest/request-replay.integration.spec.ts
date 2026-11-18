@@ -4,7 +4,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import http from 'node:http'
 import { connect, createServer, type Server, type Socket } from 'node:net'
@@ -474,7 +474,14 @@ describeIfRedis('Unified request replay HTTP (real Redis)', () => {
       gate = new RedisGate()
       await gate.open()
       redis = await connectRedis()
-      client = new Redis({ host: '127.0.0.1', port: gate.port, lazyConnect: true, retryStrategy: null })
+      client = new Redis({
+        host: '127.0.0.1',
+        port: gate.port,
+        username: process.env.REDIS_USERNAME || undefined,
+        password: process.env.REDIS_PASSWORD || undefined,
+        lazyConnect: true,
+        retryStrategy: null,
+      })
       const started = await replayServer({
         redis: client,
         controllers: [StorageController],
@@ -539,12 +546,6 @@ describeIfRedis('Unified request replay HTTP (real Redis)', () => {
     })
     it('rejects new reservations at noeviction capacity without losing existing fences', async () => {
       // Isolate maxmemory to another Redis process, never mutate the shared integration server.
-      // CI runners expose a Redis service without the server binary; there the case skips and
-      // the contract stays established by the connection-backed cases around it.
-      if (spawnSync('redis-server', ['--version'], { encoding: 'utf8' }).status !== 0) {
-        console.warn('Skipping the noeviction capacity case: redis-server binary is unavailable')
-        return
-      }
       const port = gate.port
       await gate.close()
       const process = spawn(
@@ -708,6 +709,17 @@ describeIfRedis('Unified request replay HTTP (real Redis)', () => {
     const post = (base: string, path: string, key: string | undefined, body: unknown) =>
       postJson(base, path, { key, body })
 
+    const record = (key: string) =>
+      `replay:${org}:${caller.userId}:createBox:${createHash('sha256').update(key).digest('hex')}`
+
+    async function completed(key: string) {
+      const deadline = Date.now() + 3000
+      while ((await redis.hget(record(key), 'state')) !== 'complete') {
+        if (Date.now() > deadline) throw new Error(`record ${record(key)} never completed`)
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
+
     it('one of two concurrent same-key replicas creates; the loser gets 409 and its retry replays', async () => {
       const key = randomUUID()
       const body = { image: 'boxlite/base' }
@@ -731,14 +743,13 @@ describeIfRedis('Unified request replay HTTP (real Redis)', () => {
       // Wait until replica A owns the key (exact record key, same formula as
       // the service), then let replica B race for it. Bounded so a regression
       // fails with a clear message instead of eating the suite timeout.
-      const digest = createHash('sha256').update(key).digest('hex')
-      const recordKey = `replay:${org}:${caller.userId}:createBox:${digest}`
+      const recordKey = record(key)
       const deadline = Date.now() + 3000
-      while (!(await redis.exists(recordKey))) {
-        if (Date.now() > deadline) throw new Error(`record ${recordKey} never appeared`)
-        await new Promise((r) => setTimeout(r, 10))
-      }
       try {
+        while (!(await redis.exists(recordKey))) {
+          if (Date.now() > deadline) throw new Error(`record ${recordKey} never appeared`)
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
         // The loser's 409 arrives while the owner's create is still held open:
         // deterministic overlap, no reliance on Promise.all scheduling.
         const loser = await post(baseB, '/api/v1/boxes', key, body)
@@ -751,17 +762,16 @@ describeIfRedis('Unified request replay HTTP (real Redis)', () => {
         expect(owner.status).toBe(201)
 
         // The loser retries with the same key and now gets the stored success.
+        await completed(key)
         const retryBase = owner.status === 201 ? baseB : baseA
         const retry = await post(retryBase, '/api/v1/boxes', key, body)
         expect(retry.status).toBe(201)
         expect(retry.body).toEqual(owner.body)
         expect(callsA.value + callsB.value).toBe(1)
-      } catch (error) {
-        // Release the held create even on failure, so afterAll can close appA.
+      } finally {
         releaseCreate()
-        throw error
+        await ownerPromise.catch(() => undefined)
       }
-      await ownerPromise.catch(() => undefined)
     }, 15_000)
 
     it('releases a quota rejection for a safe retry and replays the original success at full quota', async () => {
@@ -778,6 +788,7 @@ describeIfRedis('Unified request replay HTTP (real Redis)', () => {
       const succeeded = await post(baseB, '/api/v1/boxes', key, body)
       expect(succeeded.status).toBe(201)
       expect(succeeded.body.box_id).toBe(startedBox.id)
+      await completed(key)
 
       // Step 3: a fresh key at full quota is rejected again and does not disturb the stored record.
       createA.mockRejectedValueOnce(new BoxCreationLimitExceededError(3, 3))

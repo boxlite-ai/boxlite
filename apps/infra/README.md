@@ -52,7 +52,6 @@ missing, including older installs that already have `node_modules`. CI uploads t
 infrastructure changes cannot use the empty-upload path. The wheel smoke fixture copies Python
 sources while omitting native extensions, so unrelated missing modules cannot mask a broken wheel.
 `test:apps:infra-config` installs SST's platform and typechecks the full configuration.
-Infrastructure tests use package exports with the `development` condition so shared mbuild helpers resolve to their source entry points across project boundaries.
 Runtime synthesis tests load SST builders through dynamic module paths so tooling-only typechecking
 does not require generated SST globals.
 Registration synthesis tests execute `deployStack()` through the API service constructor with

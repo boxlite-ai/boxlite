@@ -27,9 +27,9 @@ export function replayPolicy(
   if (!/^\/(?:api\/)?v1(?:\/|$)/.test(route)) return 'outside'
   if (/\/v1\/organizations(?:\/|$)/.test(route)) return 'outside'
   if (webSocket || /\/attach(?:\/|$)/.test(route)) return 'excluded'
-  if (!WRITES[method.toUpperCase()]) return 'read'
   if (/\/files(?:\/|$)/.test(route) || (method.toUpperCase() === 'POST' && /\/network\/tunnel$/.test(route)))
     return 'excluded'
+  if (!WRITES[method.toUpperCase()]) return 'read'
   return 'supported'
 }
 

@@ -40,7 +40,6 @@ esac
         timeout: 10_000,
         env: {
           PATH: `${directory}:${process.env.PATH}`,
-          NOSYSBASHRC: '1',
           PLAN_CALLS: calls,
           IMAGE_STATUS: components === 'runner' ? '1' : missing ? '66' : '0',
           RUNNER_STAGED: missing ? 'absent' : 'complete',

@@ -169,10 +169,38 @@ describe('hosted replay capability discovery and production client requests', ()
     },
   )
 
-  it('does not apply Redis replay to the independent invitation contract', () => {
+  it('preserves the independent invitation idempotency header', async () => {
     const admin = parse(readFileSync(resolve(__dirname, '../../../../openapi/admin.openapi.yaml'), 'utf8'))
-    const operations = new McpCatalog({ box: {}, admin, dashboard: {}, delegable: () => true, served: () => true })
-    expect(operations.get('createInvite')?.params.some((param) => param.name === 'Idempotency-Key')).toBe(false)
+    const operations = new McpCatalog({ box, admin, dashboard: {}, delegable: () => true, served: () => true })
+    const operation = operations.get('createInvite')!
+    expect(operation.params).toContainEqual({ name: 'Idempotency-Key', in: 'header', required: false })
+    const app = express()
+    const seen: (string | undefined)[] = []
+    app.use(express.json())
+    app.use((req, res) => {
+      seen.push(req.headers['idempotency-key'] as string | undefined)
+      res.status(201).json({ id: 'invitation' })
+    })
+    const dispatcher = new McpDispatcher(
+      { httpAdapter: { getInstance: () => app } } as never,
+      new McpDelegation(),
+      {} as never,
+    )
+    const args = Object.fromEntries(
+      operation.params.filter((param) => param.in === 'path').map((param) => [param.name, 'org']),
+    )
+    const request = { headers: {}, user: { organizationId: 'org', userId: 'user' } } as unknown as Request
+    try {
+      await dispatcher.call(operation, { ...args, body: { email: 'invite@example.test' } }, request)
+      await dispatcher.call(
+        operation,
+        { ...args, body: { email: 'invite@example.test' }, 'Idempotency-Key': key },
+        request,
+      )
+      expect(seen).toEqual([undefined, key])
+    } finally {
+      await dispatcher.onModuleDestroy()
+    }
   })
 })
 

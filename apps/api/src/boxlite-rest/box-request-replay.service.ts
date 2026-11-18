@@ -264,6 +264,7 @@ export class BoxRequestReplayService implements OnModuleDestroy {
     })
     const claim = async () => {
       const connection = await this.ready()
+      if (abandoned) throw new Error('Replay reservation deadline exceeded')
       const result = await connection.eval(RESERVE_SCRIPT, 1, key, fingerprint, owner, RECORD_TTL_SECONDS, mode)
       // The caller has already been told the request was not dispatched, so a
       // reservation landing here would fence the key for its whole TTL with no

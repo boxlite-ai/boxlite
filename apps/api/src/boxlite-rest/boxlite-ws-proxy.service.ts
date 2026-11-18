@@ -25,7 +25,6 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { AttachTicketService } from '../box/services/attach-ticket.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AttachAuditSession } from './attach-audit-session'
-import { assertReplaySupported } from './request-replay-policy'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -131,9 +130,7 @@ export class BoxliteWsProxyService {
       return
     }
 
-    try {
-      assertReplaySupported(req.method ?? 'GET', req.url ?? '', req.headers)
-    } catch {
+    if (req.headers['idempotency-key'] !== undefined) {
       this.respondAndClose(socket, 400, 'Bad Request')
       return
     }

@@ -519,12 +519,7 @@ export class BoxliteProxyController {
     policy: ProxyActivityPolicy,
     // admit throws to refuse the request after activity is recorded and before
     // any resume.
-    opts?: {
-      ws?: boolean
-      proxyTimeoutMs?: number
-      admit?: ProxyAdmission
-      operation?: ProxiedOperation
-    },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission; operation?: ProxiedOperation },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {

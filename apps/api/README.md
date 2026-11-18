@@ -177,8 +177,9 @@ Hosted `/api/v1` writes returning finite JSON or empty responses honour an optio
 `Idempotency-Key` UUID header through `RequestReplayInterceptor`, after authentication,
 organization membership, and resource permissions. New write routes are covered automatically;
 controllers do not opt in or manage reservations. Requests without the header execute normally.
-File transfers, WebSocket upgrades, and private tunnel preparation reject the header before
-their operation begins. Organization invitations retain their separate transactional replay.
+File transfers, WebSocket upgrades, and public or private tunnel preparation reject the header before
+their operation begins. Organization invitations retain their separate transactional replay, including
+their declared MCP `Idempotency-Key` input.
 
 For example, retrying `POST /boxes` with the same key and input returns the original Box ID
 and creation response even after quota fills or the Box changes state. Object key order is
@@ -216,6 +217,16 @@ Run `make test:apps:api TEST_FILES='request-replay|box-request-replay|box-replay
 `REDIS_HOST/REDIS_PORT` and PostgreSQL `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_DATABASE`
 for the HTTP, real Redis, and production-service persistence suites. Missing dependencies
 skip integration tests and do not establish the contract.
+The capacity test requires a local `redis-server` executable to start an isolated noeviction instance.
+Install it before running the replay integration suite; a missing executable fails that test.
+
+Fault-injection Redis clients use the same `REDIS_USERNAME/REDIS_PASSWORD` credentials as direct clients.
+Cross-replica replay assertions wait for the exact record to become complete: receiving the owner's
+HTTP success alone does not establish that Redis has stored it. Transport rejection tests cover keyed
+downloads and uploads, and attach requests with tenant names that overlap organization routes.
+
+A Box rejected at its creation limit refunds exactly one cold-pull charge to the window that paid it.
+Refunds preserve the window's expiry; an expired ticket cannot debit a replacement window.
 
 ## Registration email policy
 
@@ -1756,15 +1767,15 @@ promised. Deployment and dev data reset remain operator actions.
 
 The removal release deletes these operations (paths relative to the hosted API base):
 
-| Removed operation                                                            | Supported path or behavior                                                                                  |
-| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `POST /users/{id}/regenerate-key-pair`                                       | SSH gateway keys have no consumer; account creation no longer generates them                                |
-| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics`      | Dashboard queries the independent Analytics API                                                             |
-| `GET /object-storage/push-access`                                            | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning            |
-| `GET /box`                                                                   | Use `/box/paginated` or portable `/v1` listing                                                              |
-| `PUT /box/{id}/labels`                                                       | No replacement mutation; stored labels and label filters remain                                             |
+| Removed operation | Supported path or behavior |
+| --- | --- |
+| `POST /users/{id}/regenerate-key-pair` | SSH gateway keys have no consumer; account creation no longer generates them |
+| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics` | Dashboard queries the independent Analytics API |
+| `GET /object-storage/push-access` | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning |
+| `GET /box` | Use `/box/paginated` or portable `/v1` listing |
+| `PUT /box/{id}/labels` | No replacement mutation; stored labels and label filters remain |
 | `POST /box/{id}/autostop/{interval}`, `POST /box/{id}/autodelete/{interval}` | Set `auto_stop` and `auto_delete` in seconds when creating a Box through `/v1`; dynamic updates are retired |
-| `GET /volumes/by-name/{name}`                                                | Look up volumes by ID; managed-volume selectors still accept names                                          |
+| `GET /volumes/by-name/{name}` | Look up volumes by ID; managed-volume selectors still accept names |
 
 Removed operations return 404 and are absent from regenerated TypeScript and Go cloud clients.
 External consumers must stop calling them before this release; absence of repository callers does not establish absence of external use.

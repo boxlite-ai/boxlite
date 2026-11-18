@@ -193,6 +193,15 @@ describeWithRedis('Request replay unsupported transport boundaries', () => {
     expect(autoResume.ensureReady).not.toHaveBeenCalled()
   })
 
+  it('rejects keyed file download before runner dispatch', async () => {
+    const response = await fetch(`${base}/api/v1/boxes/${boxId}/files?path=/tmp/file`, {
+      headers: { 'Idempotency-Key': randomUUID() },
+    })
+    expect(response.status).toBe(400)
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+  })
+
   it('streams an unkeyed upload through the production helper without changing bytes', async () => {
     const payload = Buffer.from([0, 1, 2, 255, 10, 13, 0])
     const response = await fetch(`${base}/api/v1/boxes/${boxId}/files?path=/tmp/file`, {
@@ -234,41 +243,42 @@ describeWithRedis('Request replay unsupported transport boundaries', () => {
     expect(tunnels.size).toBe(1)
   })
 
-  it.each(['', 'invalid-key', '9521e865-87b5-4ad9-8ed7-818ee4f182d4'])(
-    'rejects keyed WebSocket %p with HTTP 400 before ticket, guest, or attach effects',
-    async (key) => {
-      const result = Promise.withResolvers<number>()
-      const request = httpRequest(
-        `${base}/api/v1/${org}/boxes/${boxId}/executions/e1/attach?ticket=unused`,
-        {
-          headers: {
-            Connection: 'Upgrade',
-            Upgrade: 'websocket',
-            'Sec-WebSocket-Version': '13',
-            'Sec-WebSocket-Key': Buffer.alloc(16).toString('base64'),
-            'Idempotency-Key': key,
-          },
+  it.each(
+    ['', 'invalid-key', '9521e865-87b5-4ad9-8ed7-818ee4f182d4'].flatMap((key) =>
+      [org, 'organizations'].map((tenant) => ({ key, tenant })),
+    ),
+  )('rejects keyed WebSocket $key for tenant $tenant before effects', async ({ key, tenant }) => {
+    const result = Promise.withResolvers<number>()
+    const request = httpRequest(
+      `${base}/api/v1/${tenant}/boxes/${boxId}/executions/e1/attach?ticket=unused`,
+      {
+        headers: {
+          Connection: 'Upgrade',
+          Upgrade: 'websocket',
+          'Sec-WebSocket-Version': '13',
+          'Sec-WebSocket-Key': Buffer.alloc(16).toString('base64'),
+          'Idempotency-Key': key,
         },
-        (response) => {
-          response.resume()
-          result.resolve(response.statusCode!)
-        },
-      )
-      request.once('upgrade', (_response, socket) => {
-        socket.destroy()
-        result.reject(new Error('Unexpected upgrade'))
-      })
-      request.once('error', result.reject)
-      request.end()
-      expect(await result.promise).toBe(400)
-      expect(consumeTicket).not.toHaveBeenCalled()
-      expect(authenticateKey).not.toHaveBeenCalled()
-      expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
-      expect(autoResume.ensureReady).not.toHaveBeenCalled()
-      expect(audit.createLog).not.toHaveBeenCalled()
-      expect(attachCount).toBe(0)
-    },
-  )
+      },
+      (response) => {
+        response.resume()
+        result.resolve(response.statusCode!)
+      },
+    )
+    request.once('upgrade', (_response, socket) => {
+      socket.destroy()
+      result.reject(new Error('Unexpected upgrade'))
+    })
+    request.once('error', result.reject)
+    request.end()
+    expect(await result.promise).toBe(400)
+    expect(consumeTicket).not.toHaveBeenCalled()
+    expect(authenticateKey).not.toHaveBeenCalled()
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(audit.createLog).not.toHaveBeenCalled()
+    expect(attachCount).toBe(0)
+  })
 
   it('preserves unkeyed WebSocket attach and its guest byte stream', async () => {
     const client = new WebSocket(`${base.replace('http:', 'ws:')}/api/v1/${org}/boxes/${boxId}/executions/e1/attach`, {
