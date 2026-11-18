@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { parallelReads } from './parallel-reads'
 import { GitHubCredential } from './github-app'
 import { selectRunnerLabels } from './resource-labels'
 
@@ -182,11 +183,16 @@ export class GitHubJobs {
     await this.authority(signal)
     const runs = new Set<number>(),
       jobs = new Map<number, WorkflowJob>()
-    const batches = await parallelReads(
-      ['queued', 'in_progress', 'waiting', 'pending', 'requested'],
-      (status, signal) => this.list(`${this.route}/actions/runs?status=${status}`, 'workflow_runs', signal, 1000),
-      signal,
-    )
+    // Sample queued before in_progress so a starting run cannot fall between both inventories.
+    const queued = await this.list(`${this.route}/actions/runs?status=queued`, 'workflow_runs', signal, 1000)
+    const batches = [
+      queued,
+      ...(await parallelReads(
+        ['in_progress', 'waiting', 'pending', 'requested'],
+        (status, signal) => this.list(`${this.route}/actions/runs?status=${status}`, 'workflow_runs', signal, 1000),
+        signal,
+      )),
+    ]
     for (const batch of batches) {
       for (const run of batch) {
         if (!object(run) || !id(run.id) || !object(run.repository) || run.repository.id !== this.repository.id)
@@ -239,38 +245,6 @@ export class GitHubJobs {
     }
     throw new Error('GitHub task inventory exceeds pagination limit')
   }
-}
-
-/** Drain siblings before returning the initiating failure; the caller owns credential retirement. */
-async function parallelReads<T, R>(
-  values: readonly T[],
-  read: (value: T, signal: AbortSignal) => Promise<R>,
-  signal?: AbortSignal,
-): Promise<R[]> {
-  const stop = new AbortController(),
-    combined = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
-  const results: R[] = []
-  let next = 0,
-    failed = false,
-    failure: unknown
-  await Promise.allSettled(
-    Array.from({ length: Math.min(5, values.length) }, async () => {
-      while (!failed && next < values.length) {
-        const index = next++
-        try {
-          results[index] = await read(values[index], combined)
-        } catch (error) {
-          if (!failed) {
-            failed = true
-            failure = error
-            stop.abort()
-          }
-        }
-      }
-    }),
-  )
-  if (failed) throw failure
-  return results
 }
 
 /** JIT registration must supply every requested label; a custom runner name alone is insufficient. */

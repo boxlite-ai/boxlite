@@ -64,6 +64,37 @@ describe('CI shared GitHub jobs', () => {
     reply = (url) => (url.pathname === '/repositories/21' ? repository : queued({ run_id: 34 }))
     await expect(pending([notice])).rejects.toThrow('workflow job')
   })
+  it.each([
+    { total_count: 1, jobs: [queued(), queued({ id: 56 })] },
+    { total_count: 2, jobs: [queued(), queued()] },
+  ])('rejects a malformed or duplicate notified-run inventory: %j', async (inventory) => {
+    reply = (url) => (url.pathname === '/repositories/21' ? repository : inventory)
+    await expect(pending([notice, { ...notice, job: 56 }])).rejects.toThrow(/inventory|Duplicate/)
+    expect(calls.filter((path) => path === '/repositories/21')).toHaveLength(1)
+  })
+  it('rejects a point lookup returning another job from the same run', async () => {
+    reply = (url) => (url.pathname === '/repositories/21' ? repository : queued({ id: 56 }))
+    await expect(pending([notice])).rejects.toThrow('identity changed')
+  })
+  it('cancels notified-job reads through the caller signal before returning evidence', async () => {
+    const controller = new AbortController()
+    let started!: () => void
+    const reading = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname === '/repositories/21') return new Response(JSON.stringify(repository))
+      started()
+      return new Promise<Response>((_resolve, reject) => {
+        options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true })
+      })
+    }) as typeof fetch
+    const result = reader.pending([notice], controller.signal)
+    const rejected = expect(result).rejects.toBeInstanceOf(GitHubRequestError)
+    await reading
+    controller.abort(new Error('caller stopped'))
+    await rejected
+  })
   it('drains aborted sibling requests before credential close and preserves the initiating 429', async () => {
     let started = 0,
       settled = 0,
@@ -91,8 +122,10 @@ describe('CI shared GitHub jobs', () => {
         return new Response(null, { status: 204 })
       }
       if (url.pathname === '/repositories/21') return new Response(JSON.stringify(repository))
-      if (++started === 5) release()
-      if (url.searchParams.get('status') === 'queued') {
+      if (url.searchParams.get('status') === 'queued')
+        return new Response(JSON.stringify({ total_count: 0, workflow_runs: [] }))
+      if (++started === 4) release()
+      if (url.searchParams.get('status') === 'in_progress') {
         await ready
         return new Response(null, { status: 429, headers: { 'retry-after': '60' } })
       }
@@ -116,29 +149,67 @@ describe('CI shared GitHub jobs', () => {
     expect(error).toBeInstanceOf(GitHubRequestError)
     expect(error.status).toBe(429)
     expect(error.retryAt).toBeGreaterThanOrEqual(before + 60000)
-    expect(settledAtClose).toBe(4)
+    expect(settledAtClose).toBe(3)
   })
-  it('overlaps all five active-status reads before awaiting their responses', async () => {
-    let release!: () => void
-    const held = new Promise<void>((resolve) => {
-      release = resolve
+  it('finishes queued sampling before overlapping the four remaining active-status reads', async () => {
+    let releaseQueued!: () => void, releaseOthers!: () => void, entered!: () => void, allStarted!: () => void
+    const queuedHeld = new Promise<void>((resolve) => {
+      releaseQueued = resolve
+    })
+    const othersHeld = new Promise<void>((resolve) => {
+      releaseOthers = resolve
+    })
+    const queuedStarted = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const othersStarted = new Promise<void>((resolve) => {
+      allStarted = resolve
     })
     const started: string[] = []
     global.fetch = jest.fn(async (input) => {
       const url = new URL(String(input))
       if (url.pathname === '/repositories/21') return new Response(JSON.stringify(repository))
-      started.push(url.searchParams.get('status')!)
-      await held
+      const status = url.searchParams.get('status')!
+      started.push(status)
+      if (status === 'queued') {
+        entered()
+        await queuedHeld
+      } else {
+        if (started.length === 5) allStarted()
+        await othersHeld
+      }
       return new Response(JSON.stringify({ total_count: 0, workflow_runs: [] }))
     }) as typeof fetch
     const reading = reader.queued()
     try {
-      await new Promise((resolve) => setTimeout(resolve, 30))
-      expect(started.sort()).toEqual(['in_progress', 'pending', 'queued', 'requested', 'waiting'])
+      await queuedStarted
+      expect(started).toEqual(['queued'])
+      releaseQueued()
+      await othersStarted
+      expect(started.slice(1).sort()).toEqual(['in_progress', 'pending', 'requested', 'waiting'])
     } finally {
-      release()
+      releaseQueued()
+      releaseOthers()
       await reading
     }
+  })
+  it('retains a queued job while its run moves from queued to in_progress between status responses', async () => {
+    let transitioned = false
+    global.fetch = jest.fn(async (input) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/repositories/21') return new Response(JSON.stringify(repository))
+      if (url.pathname.endsWith('/runs/33/jobs'))
+        return new Response(JSON.stringify({ total_count: 1, jobs: [queued()] }))
+      const status = url.searchParams.get('status')
+      if (status === 'queued') {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        const runs = transitioned ? [] : [{ id: 33, repository: { id: 21 } }]
+        return new Response(JSON.stringify({ total_count: runs.length, workflow_runs: runs }))
+      }
+      if (status === 'in_progress') transitioned = true
+      return new Response(JSON.stringify({ total_count: 0, workflow_runs: [] }))
+    }) as typeof fetch
+    expect(await reader.queued()).toEqual([expect.objectContaining({ job: 55, status: 'queued' })])
   })
   it('reads the original job between repository identity checks', async () => {
     expect(await reader.job(notice)).toMatchObject({ ...notice, status: 'queued', runner: null })

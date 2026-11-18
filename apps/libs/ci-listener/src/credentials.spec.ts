@@ -90,6 +90,13 @@ describe('CI shared credential ownership', () => {
   })
   const posts = () => calls.filter((call) => call.path.endsWith('/access_tokens'))
   const deletes = () => calls.filter((call) => call.path === '/installation/token')
+  it('rejects a new isolated reader after its credential owner closes', async () => {
+    await provider.open({ kind: 'jobs', repository: 11 })
+    await provider.close()
+    expect(() => provider.fork('scope/read')).toThrow('closed')
+    expect(posts()).toHaveLength(1)
+    expect(deletes()).toHaveLength(1)
+  })
   it.each(['app', 'pat'] as const)('retires %s locally after deployment takeover', async (kind) => {
     state = new ListenerState(db, namespace, 1)
     await state.activate()

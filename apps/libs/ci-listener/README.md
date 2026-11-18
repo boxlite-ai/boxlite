@@ -519,7 +519,7 @@ reads use point-job reads. Runner inventory is read after fresh verification,
 without an initial unverified inventory pass.
 
 Verified queued jobs accumulate across turns in the owner's memory, with a
-30-second lifetime and a total budget of 4096 jobs. For example, 64 one-job runs
+30-second lifetime starting before HTTP and a total budget of 4096 jobs. For example, 64 one-job runs
 can contribute 32 verified jobs in each of two turns; the second turn deducts
 existing starting/idle supply from the combined demand. Each repository ingress
 transaction revalidates accumulated `job-fact` versions and accepts new HTTP
@@ -533,8 +533,9 @@ non-queued jobs or complete background snapshots settle captured notice versions
 A duplicate webhook does not add another counted job or reservation. Custom
 backends without supply inventory retain the job-driven fallback.
 
-Complete repository scans run in two independent background lanes, using isolated
-credential providers. Five active-status reads overlap per repository; a failure
+Two background lanes coordinate complete scope scans, with at most four repository
+reads per scope and isolated credential providers. The queued status is sampled
+before the other four active statuses overlap, preserving queued-to-running transitions; a failure
 aborts and drains sibling requests before credential retirement. Each status keeps
 its pagination and completeness checks. Failed credential cleanup remains owned
 and must succeed before a replacement reader opens.
@@ -543,9 +544,16 @@ Background scans retain the five-minute cadence. New dirty counter versions can
 request immediate correction; uncertain surplus requests are bounded separately.
 The existing compensation scanner continues publishing missed-job notices on
 replicas. A complete scan rebuilds persisted counts behind captured wake and
-repository revisions, then publishes a 30-second proof consumed once by planning.
+repository revisions. The scope publishes one complete cohort while every repository's
+30-second proof remains live; early completions retain their original deadlines.
+For example, three 35-second reads start together rather than requiring a second wave.
+When scan skew exceeds the freshness window, or a scope exceeds 100 proof checks,
+`surplus-retirement-deferred` reports the reason and retries at the periodic cadence.
+New dirty versions can request correction sooner. Admission and stopped-resource
+recovery continue while physical surplus retirement waits.
 Each newly unclaimed busy runner invalidates cached admission evidence once and
-requests fresh job verification. This covers missed assignment notifications
+fences in-flight reads with a repository generation and requests fresh job verification.
+Invalidated reads cannot repopulate evidence or publish a verification timestamp. This covers missed assignment notifications
 without treating an older queued observation as a new capacity grant.
 
 Each run verifier uses an isolated credential session. Many small runs therefore
@@ -553,8 +561,8 @@ increase credential issuance/retirement traffic; deployment latency and shared
 GitHub rate limits still need workload measurements.
 
 Every repository in a scope must have a matching proof before physical surplus
-retirement. Partial positive evidence can add capacity but cannot delete a live
-idle runner. More than 100 retirement checks defer retirement while bounded
+retirement, including cancellation of an unissued reservation. Partial positive
+evidence can add capacity but cannot establish surplus. More than 100 retirement checks defer retirement before the point lookup while bounded
 admission and stopped-resource recovery continue.
 
 ```mermaid

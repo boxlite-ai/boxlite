@@ -455,7 +455,7 @@ export class WorkerPool {
           refresh,
         )
       }
-      if (verified)
+      if (verified === true && (queueChecks.length > 0 || !this.execution) && queueChecks.length <= 100)
         for (const row of surplus) {
           if (
             row.value.box.phase === 'none' &&
@@ -468,10 +468,9 @@ export class WorkerPool {
               row.record.key,
               row.record.version,
               { closing: true, box: { phase: 'absent', id: null }, runner: { phase: 'absent', id: null } },
-              verified === true && queueChecks.length <= 100 ? queueChecks : [],
+              queueChecks,
             )
-          } else if (verified === true && (queueChecks.length > 0 || !this.execution) && queueChecks.length <= 100)
-            retiring.add(row.record.key)
+          } else retiring.add(row.record.key)
         }
       const proof = (row: AllocationRow, retire: boolean): readonly StateCheck[] | undefined => {
         if (retire) return queueChecks.length && queueChecks.length <= 100 ? queueChecks : undefined
