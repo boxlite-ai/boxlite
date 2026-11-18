@@ -162,6 +162,7 @@ macro_rules! record_enum {
         fn $encode(value: $ty) -> &'static str {
             match value { $($variant => $wire),+ }
         }
+        #[cfg(feature = "rest")]
         fn $decode(value: &str) -> BoxliteResult<$ty> {
             match value { $($wire => Ok($variant),)+ other => Err(invalid($field, other)) }
         }
@@ -186,6 +187,7 @@ record_enum!(outcome_name, parse_outcome, AgentOutcome, "outcome", {
     AgentOutcome::Answer => "answer", AgentOutcome::Question => "question",
 });
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 pub(super) struct Resource {
     pub(super) id: String,
@@ -195,6 +197,7 @@ pub(super) struct Resource {
     pub(super) capabilities: Capabilities,
 }
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 pub(super) struct Capabilities {
     pub(super) operations: Vec<String>,
@@ -204,6 +207,7 @@ pub(super) struct Capabilities {
     pub(super) idempotency_retention_seconds: Option<f64>,
 }
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 pub(super) struct State {
     pub(super) id: String,
@@ -215,6 +219,7 @@ pub(super) struct State {
     pub(super) steering: Vec<Receipt>,
 }
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 pub(super) struct Request {
     pub(super) id: String,
@@ -222,6 +227,7 @@ pub(super) struct Request {
     pub(super) kind: RequestKind,
 }
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum RequestKind {
@@ -229,6 +235,7 @@ pub(super) enum RequestKind {
     Permission { tool: String, arguments: Value },
 }
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 pub(super) struct Receipt {
     pub(super) id: String,
@@ -236,6 +243,7 @@ pub(super) struct Receipt {
     pub(super) status: String,
 }
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 pub(super) struct Turn {
     pub(super) id: String,
@@ -247,6 +255,7 @@ pub(super) struct Turn {
     pub(super) steering: Vec<Receipt>,
 }
 
+#[cfg(feature = "rest")]
 #[derive(Deserialize)]
 pub(super) struct ResultRecord {
     pub(super) turn_id: String,
@@ -259,10 +268,12 @@ pub(super) struct ResultRecord {
     pub(super) error: Option<String>,
 }
 
+#[cfg(feature = "rest")]
 pub(super) fn invalid(field: &str, value: &str) -> BoxliteError {
     BoxliteError::Internal(format!("invalid REST agent {field}: {value}"))
 }
 
+#[cfg(feature = "rest")]
 impl TryFrom<ResultRecord> for AgentResult {
     type Error = BoxliteError;
     fn try_from(value: ResultRecord) -> BoxliteResult<Self> {
@@ -280,6 +291,7 @@ impl TryFrom<ResultRecord> for AgentResult {
     }
 }
 
+#[cfg(feature = "rest")]
 impl TryFrom<Turn> for AgentTurnState {
     type Error = BoxliteError;
     fn try_from(value: Turn) -> BoxliteResult<Self> {
@@ -314,6 +326,7 @@ impl TryFrom<Turn> for AgentTurnState {
     }
 }
 
+#[cfg(feature = "rest")]
 impl TryFrom<Receipt> for AgentSteeringReceipt {
     type Error = BoxliteError;
 
@@ -327,6 +340,7 @@ impl TryFrom<Receipt> for AgentSteeringReceipt {
     }
 }
 
+#[cfg(feature = "rest")]
 impl From<Request> for AgentRequest {
     fn from(value: Request) -> Self {
         let kind = match value.kind {
@@ -343,6 +357,7 @@ impl From<Request> for AgentRequest {
     }
 }
 
+#[cfg(feature = "rest")]
 impl TryFrom<State> for AgentState {
     type Error = BoxliteError;
 
@@ -364,7 +379,7 @@ impl TryFrom<State> for AgentState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rest"))]
 mod record_roundtrip_tests {
     use super::*;
 
