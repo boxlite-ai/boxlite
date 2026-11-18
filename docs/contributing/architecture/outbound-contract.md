@@ -51,9 +51,9 @@ The selected `connectFunc` receives this target after the applicable checks.
 Its error is returned without selecting the direct socket dialer; an unset connector selects the existing direct transport.
 Configure resolver and transport seams before installing the forwarder.
 
-Initial unrestricted TCP also installs this boundary; initial unrestricted UDP retains its upstream handler.
+Initial unrestricted TCP also installs this boundary; unrestricted UDP delegates to the upstream forwarder.
 Address setup and controlled hostname resolution each use a bounded setup context, including candidate retries and MITM redials.
-The typed connector does not implement proxy registration or a proxy protocol, and this step does not implement revisioned snapshot publication.
+The connector carries the captured policy revision; revisioned publication uses the control resources below.
 
 The guest-stack transport tests consume the shared NAT and hostname examples, relay HTTP/TLS bytes to test-owned listeners, and verify refused targets never enter the connector.
 The MITM test uses an isolated test CA in a subprocess so production certificate verification remains active; a wrong upstream certificate must receive no HTTP request.
@@ -116,6 +116,157 @@ An update carrying stale `If-Match: "rev-a"` receives 412 without application.
 Reuse the current Box update lock, Runtime persistence operation, and Cloud row-lock transaction.
 All complete replacements, including future proxy rotation, share this ownership boundary.
 Validate and compile the entire candidate before publishing it for new flows.
+
+### Bridge snapshot publication
+
+The bridge installs its TCP and UDP handlers once, before attaching the guest.
+An atomic pointer publishes the complete immutable policy, filter, dialer, and application state; a TCP flow keeps the snapshot captured at entry, including while resolution is paused.
+The gVisor IPv4 input/forward gate reads the same snapshot before registered endpoint delivery.
+Enabled traffic continues through the existing filter-table chains, including the embedded DNS service.
+
+Disabling publishes a rejecting snapshot before NIC suspension; enabling retains that gate until the NIC has enabled successfully.
+NIC errors retain the disabled gate and mark application uncertain.
+Policy GET returns 503 while application is pending or uncertain, and successful GET/PUT retain the existing policy JSON shape.
+The separate status resource reports the observed snapshot identity and application state without changing the policy body.
+
+The registered-DNS regression fixture binds native gVisor UDP/TCP endpoints on port 5353 and forwards received DNS messages to a test-owned host listener.
+It exercises endpoint demultiplexing without replacing the global mode gate, and includes a new query on an established TCP DNS connection.
+Controlled NIC pauses separately verify the interval before suspension and the interval after enabling but before policy publication.
+
+### Bridge revision protocol
+
+| Control resource | Contract |
+| --- | --- |
+| `GET /network/outbound` | Existing policy JSON plus a strong ETag; 503 while application is pending or uncertain. |
+| `PUT /network/outbound` | Existing complete policy replacement, optional HTTP `If-Match`; the bridge chooses a fresh revision. |
+| `PUT /network/outbound/snapshot` | Version-required internal replacement; one strong expected revision in `If-Match` and a fresh candidate in `X-Boxlite-Outbound-Revision`. |
+| `GET /network/outbound/status` | Policy, observed `revision`, `application_state`, and capabilities including `revision-v1`; no persistence or Internet-connectivity claim. |
+
+Version-aware clients use the dedicated snapshot resource and never fall back to legacy PUT.
+An old handler may ignore extra headers on its existing resource; a new resource makes unsupported peers reject the operation before application, including after a capability-probe/backend-restart race.
+Coordinator headers on the legacy resource are rejected rather than silently ignored.
+
+For a snapshot initialized as `initial`, this request returns policy JSON with `ETag: "rev-b"` only after NIC suspension succeeds:
+
+```http
+PUT /network/outbound/snapshot
+If-Match: "initial"
+X-Boxlite-Outbound-Revision: rev-b
+Content-Type: application/json
+
+{"mode":"disabled"}
+```
+
+A stale expected revision returns 412 without application.
+Candidate metadata requires a single strong expected token; missing, empty, ambiguous, oversized, reserved, or current candidate identities are rejected.
+Trusted coordinators allocate fresh candidate IDs once and propagate them unchanged; the bridge does not keep a historical ID registry.
+Legacy conditional requests use HTTP strong comparison, including tag lists and wildcard matching.
+
+Startup wire metadata may supply `outbound_revision` to restore an existing identity.
+Without a seed, the bridge generates a fresh 128-bit token for that startup, avoiding an initial-token reset across unseeded restarts.
+Internal identities use 1–128 ASCII letters, digits, hyphens, or underscores; clients treat them as opaque values.
+The public Rust `GvproxyConfig` shape remains unchanged; restoring Runtime-owned revisions belongs to its private bootstrap metadata path.
+
+A matching status revision is not an acknowledgement while `application_state` is `pending` or `uncertain`.
+This capability describes the gvproxy control boundary; Runtime persistence and Cloud/Runner propagation require their own completed implementation and verification.
+
+### Runtime control client
+
+`NetworkBackend::outbound_snapshot` reads the backend's policy identity and installation phase.
+It requires the `revision-v1` capability and rejects invalid tokens, policies, or phases.
+An observed `pending` or `uncertain` phase remains visible to the caller; an identity match alone does not establish completion.
+
+`replace_outbound_snapshot` sends an `OutboundReplacement` to the dedicated snapshot resource.
+The validated operation keeps expected and candidate revisions separate from user policy JSON.
+It returns `Applied` only for HTTP 200 with exactly one matching strong ETag and the complete matching policy response.
+Missing, weak, duplicate, or different acknowledgements produce an error with an uncertain application outcome.
+HTTP 412 returns `PreconditionFailed`, a must-use outcome that does not represent successful application.
+Unsupported backends return an explicit error; the versioned operation never falls back to the existing unconditional setter.
+
+The existing setters and public configuration structs retain their signatures and wire shapes.
+Backends inherit unsupported defaults for the added methods, so an existing custom implementation still compiles.
+These methods verify the Runtime-to-gvproxy control boundary, independently of durable recovery or Cloud/Runner propagation.
+
+### Runtime pending attempts and persistence
+
+Runtime replacement uses the existing Box operation lock, including its disk refresh and VM-handle identity checks.
+Control metadata lives under `outbound_control` in the stored state JSON; public `BoxState` and user policy structs keep their existing fields.
+Records without control metadata use the initial token `initial`.
+Lifecycle state writes preserve both the latest policy and its control metadata, including when a handle holds an older state copy.
+
+Before contacting the backend, Runtime durably records the expected live revision and the complete candidate.
+Only a matching ACK or a matching `confirmed` readback permits policy and revision to be committed together.
+For example, after an ambiguous attempt from `rev-a` to `rev-b`, observing `rev-a` does not clear the pending attempt.
+Observing `rev-b` while pending does not confirm completion either.
+A later mutating operation may finish persistence once `rev-b` and its policy are confirmed; a persisted-policy read performs no such reconciliation.
+
+If confirmed application succeeds but persistence fails, restoration compares against the applied candidate and uses a fresh identity.
+Restoring the old policy as `rev-c` never makes a stale `If-Match: "rev-a"` valid again.
+A rejected restoration or failed restoration persistence leaves explicit uncertainty and the durable pending evidence.
+An ambiguous timeout never causes an unchecked replay or compensation.
+A newly requested unconditional complete replacement may use the observed revision for a fresh CAS, fencing a queued older request once acknowledged.
+
+`NetworkHandle::outbound_snapshot` reads persisted policy and identity without claiming live confirmation.
+`replace_outbound_snapshot` applies a trusted coordinator's validated candidate and returns the explicit precondition outcome.
+The existing unconditional setter retains its old-backend path only while no versioned control metadata exists.
+A versioned call, or a Box already using versioned state, cannot silently fall back to that path.
+
+Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
+They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
+These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
+
+### Runtime readback and coordinator recovery
+
+`NetworkHandle::outbound_status` compares a durable snapshot with the backend's observed snapshot and installation phase.
+It reports `persisted`, optional `observed`, overall `application_state`, optional `pending_revision`, and optional `observation_error` outside user policy JSON.
+The durable policy, revision, pending attempt, and VM identity come from one SQLite row version.
+Neither this status call nor `outbound_snapshot` acquires the mutating Box operation lock, so reads remain available during a pending update.
+Both calls leave pending records and policy unchanged.
+
+Overall `confirmed` requires an exact policy/revision match, a confirmed backend phase, and no durable pending attempt.
+A pending backend phase remains `pending`; any mismatch or unresolved attempt is `uncertain`.
+Backend observation has a ten-second bound; a failed observation retains durable intent and a diagnostic without claiming live confirmation.
+An unsupported backend returns an explicit unsupported error.
+A stopped Box returns uncertainty without starting a VM; a handle from an older VM epoch cannot query through its cached backend.
+A newly acquired running handle can read the existing control socket without booting or attaching the guest.
+
+After coordinator loss, a surviving backend can report the confirmed pending candidate while durable policy still identifies its predecessor.
+GET preserves that divergence as uncertainty.
+A subsequent mutating operation can reconcile the matching confirmed candidate before evaluating the caller's precondition; a caller using the predecessor then receives `PreconditionFailed`.
+When the backend restarts from committed policy, matching the old durable revision still does not resolve the pending attempt.
+A new unconditional complete intent can replace that uncertain state with a fresh candidate through CAS.
+
+Recovery acceptance uses real SQLite storage and a real gvproxy instance over its Unix control socket.
+A test-only cancellation point stops the coordinator after a matching backend ACK and before durable commit, then reacquires the Box handle with the backend surviving or restarting.
+The VM and guest session remain test fixtures; this checks the control and persistence boundary, rather than an operating-system process crash or guest-VM boot.
+Run these checks with real dependencies:
+
+```sh
+make test:unit:rust FILTER=outbound_recovery RUST_UNIT_CORE_ARGS='-p boxlite --all-features --lib'
+```
+
+### Runtime bootstrap identity
+
+New and restarted VMs receive the persisted revision alongside their persisted policy.
+Records without control metadata use `initial`.
+An unresolved pending candidate is not replayed at startup: the committed policy and revision seed the backend, and the pending record remains available for reconciliation.
+Reattaching to a surviving backend does not replace its live identity.
+
+The revision travels in a private field of the existing stdin launch message, then in the private JSON object passed to gvproxy.
+`InstanceSpec`, `NetworkBackendSpec`, `GvproxyConfig`, and `BoxState` keep their public fields.
+The existing `GvproxyInstance::from_config` constructor remains available; the explicit revision constructor restores a coordinator-owned identity.
+The shim validates the optional token before starting the backend; absent metadata preserves the legacy launch contract.
+
+The shared `bootstrap-v1.json` example passes through the production launch encoder, shim parser, and gvproxy JSON encoder.
+Real-library tests create gvproxy with a restored revision, verify live readback and conditional replacement, reject a stale replacement, and repeat after backend restart.
+These checks exercise the Rust/Go control boundary without requiring a guest VM.
+
+Run the bootstrap checks with real dependencies, because stub mode cannot link the shim or gvproxy FFI:
+
+```sh
+make test:unit:rust FILTER=outbound_bootstrap RUST_UNIT_CORE_ARGS='-p boxlite-shim --bin boxlite-shim'
+make test:unit:rust FILTER=outbound_bootstrap RUST_UNIT_CORE_ARGS='-p boxlite --all-features --lib'
+```
 
 Install stable TCP and UDP entry points before guest traffic starts, with one shared snapshot reference.
 Enabled-to-enabled replacement publishes that reference once; delayed setup, retries, and MITM upstream sockets retain their flow's captured snapshot.

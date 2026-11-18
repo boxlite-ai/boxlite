@@ -412,6 +412,26 @@ impl NetworkHandle {
         self.network_backend.update_outbound(config).await
     }
 
+    /// Read persisted policy and identity; this does not prove live application.
+    pub async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
+        self.network_backend.outbound_snapshot().await
+    }
+
+    /// Compare persisted and observed state without booting a VM or changing policy.
+    pub async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
+        self.network_backend.outbound_status().await
+    }
+
+    /// Apply a trusted coordinator's complete candidate with a revision precondition.
+    pub async fn replace_outbound_snapshot(
+        &self,
+        replacement: crate::net::OutboundReplacement,
+    ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        self.network_backend
+            .replace_outbound_snapshot(replacement)
+            .await
+    }
+
     /// Prepare a one-shot tunnel to a service inside the box under `options`;
     /// `TunnelOptions::default()` is public.
     ///

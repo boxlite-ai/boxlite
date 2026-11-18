@@ -28,6 +28,12 @@ pub mod constants;
 pub mod socket_path;
 
 pub mod gvproxy;
+mod outbound;
+
+pub use outbound::{
+    OutboundApplicationState, OutboundReplaceOutcome, OutboundReplacement, OutboundRevision,
+    OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus,
+};
 
 pub use gvproxy::GvproxyBackend;
 
@@ -387,6 +393,19 @@ fn control_unsupported(op: &str) -> BoxliteError {
 )]
 #[async_trait]
 pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
+    /// Observe a revision-capable backend without assuming policy persistence.
+    async fn outbound_snapshot(&self) -> BoxliteResult<OutboundSnapshotStatus> {
+        Err(control_unsupported("outbound_snapshot"))
+    }
+
+    /// Apply one complete candidate conditionally; never fall back to an unchecked PUT.
+    async fn replace_outbound_snapshot(
+        &self,
+        _replacement: &OutboundReplacement,
+    ) -> BoxliteResult<OutboundReplaceOutcome> {
+        Err(control_unsupported("replace_outbound_snapshot"))
+    }
+
     async fn set_outbound(
         &self,
         _config: &crate::runtime::options::OutboundNetworkConfig,
@@ -712,6 +731,19 @@ mod tests {
     #[tokio::test]
     async fn default_control_methods_report_unsupported_operation() {
         let backend = UnsupportedBackend;
+        assert_unsupported(backend.outbound_snapshot().await, "outbound_snapshot");
+        let replacement = OutboundReplacement::new(
+            OutboundRevision::parse("rev-a").unwrap(),
+            OutboundSnapshot {
+                policy: Default::default(),
+                revision: OutboundRevision::parse("rev-b").unwrap(),
+            },
+        )
+        .unwrap();
+        assert_unsupported(
+            backend.replace_outbound_snapshot(&replacement).await,
+            "replace_outbound_snapshot",
+        );
         let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
         let zone = DnsZoneSpec {
             name: "svc.local.".to_string(),

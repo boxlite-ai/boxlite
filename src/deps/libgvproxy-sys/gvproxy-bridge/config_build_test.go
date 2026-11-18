@@ -10,14 +10,15 @@ import (
 
 func testGvproxyConfig() GvproxyConfig {
 	return GvproxyConfig{
-		SocketPath: "/tmp/test-gvproxy.sock",
-		Subnet:     "192.168.127.0/24",
-		GatewayIP:  "192.168.127.1",
-		GatewayMac: "5a:94:ef:e4:0c:dd",
-		GuestIP:    "192.168.127.2",
-		HostIP:     "192.168.127.254",
-		GuestMac:   "5a:94:ef:e4:0c:ee",
-		MTU:        1500,
+		OutboundRevision: "initial",
+		SocketPath:       "/tmp/test-gvproxy.sock",
+		Subnet:           "192.168.127.0/24",
+		GatewayIP:        "192.168.127.1",
+		GatewayMac:       "5a:94:ef:e4:0c:dd",
+		GuestIP:          "192.168.127.2",
+		HostIP:           "192.168.127.254",
+		GuestMac:         "5a:94:ef:e4:0c:ee",
+		MTU:              1500,
 		DNSZones: []DNSZone{
 			{
 				Name: "boxlite.internal.",

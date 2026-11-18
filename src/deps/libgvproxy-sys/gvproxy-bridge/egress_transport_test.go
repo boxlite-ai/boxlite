@@ -19,20 +19,24 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
 type connectionExample struct {
-	ID           string `json:"id"`
-	Hostname     string `json:"hostname"`
-	PolicyIP     string `json:"policy_ip"`
-	ConnectionIP string `json:"connection_ip"`
-	Port         uint16 `json:"port"`
-	Protocol     string `json:"protocol"`
+	ID             string `json:"id"`
+	Hostname       string `json:"hostname"`
+	PolicyIP       string `json:"policy_ip"`
+	ConnectionIP   string `json:"connection_ip"`
+	Port           uint16 `json:"port"`
+	Protocol       string `json:"protocol"`
+	PolicyRevision string `json:"policy_revision"`
 }
 
 func (e connectionExample) target() egressTarget {
 	return egressTarget{Hostname: e.Hostname, PolicyIP: netip.MustParseAddr(e.PolicyIP),
-		ConnectionIP: netip.MustParseAddr(e.ConnectionIP), Port: e.Port, Protocol: e.Protocol}
+		ConnectionIP: netip.MustParseAddr(e.ConnectionIP), Port: e.Port, Protocol: e.Protocol, PolicyRevision: e.PolicyRevision}
 }
 
 func connectionExamples(t *testing.T) []connectionExample {
@@ -205,12 +209,27 @@ func TestEgressTransport_GuestFailureDoesNotFallback(t *testing.T) {
 			return nil, errors.New("unexpected direct fallback")
 		},
 	})
-	conn, err := startGuestStack(t, tap, cfg)(cfg.HostIP, 8080)
-	if err == nil {
-		_ = conn.Close()
+	// Send exactly one SYN. A TCP client may retransmit before receiving the
+	// rejection under instrumentation, which creates another forwarding attempt.
+	tap.send(t, tcpSynFrame(t, cfg.HostIP, 8080))
+	select {
+	case frame := <-tap.frames:
+		if len(frame) < header.EthernetMinimumSize+header.IPv4MinimumSize+header.TCPMinimumSize {
+			t.Fatalf("truncated rejection frame: %x", frame)
+		}
+		ip := header.IPv4(frame[header.EthernetMinimumSize:])
+		if ip.Protocol() != uint8(tcp.ProtocolNumber) || int(ip.HeaderLength())+header.TCPMinimumSize > len(ip) {
+			t.Fatalf("expected a TCP rejection: %x", frame)
+		}
+		reply := header.TCP(ip[ip.HeaderLength():])
+		if reply.Flags()&header.TCPFlagRst == 0 || reply.DestinationPort() != guestSrcPort || reply.AckNumber() != 1001 {
+			t.Fatalf("expected reset acknowledging the failed SYN: %x", frame)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("selected transport failure did not reject the guest SYN")
 	}
-	if err == nil || selected.Load() != 1 || direct.Load() != 0 {
-		t.Fatalf("err=%v selected=%d direct=%d", err, selected.Load(), direct.Load())
+	if selected.Load() != 1 || direct.Load() != 0 {
+		t.Fatalf("selected=%d direct=%d", selected.Load(), direct.Load())
 	}
 }
 

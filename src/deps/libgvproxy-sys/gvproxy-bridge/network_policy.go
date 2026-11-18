@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
 type outboundPolicy struct {
@@ -21,24 +21,24 @@ type outboundPolicy struct {
 	AllowNet []string `json:"allow_net"`
 }
 
+type nicOperations interface {
+	EnableNIC(tcpip.NICID) tcpip.Error
+	DisableNIC(tcpip.NICID) tcpip.Error
+}
+
 // One controller owns policy replacement for both transports and the NIC.
-// Forwarders capture immutable filters, so established flows keep their policy.
+// Forwarders capture immutable snapshots, so established flows keep their policy and transport.
 type outboundPolicyController struct {
 	mu      sync.Mutex
-	current outboundPolicy
-	vn      *virtualnetwork.VirtualNetwork
+	active  atomic.Pointer[outboundSnapshot]
 	config  *types.Configuration
 	guestIP string
 	stack   *stack.Stack
 	nic     tcpip.NICID
-	ca      *BoxCA
-	secrets *SecretHostMatcher
+	nicOps  nicOperations
 }
 
-func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy) (*outboundPolicyController, error) {
-	if initial.AllowNet == nil {
-		initial.AllowNet = []string{}
-	}
+func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, initialRevision string) (*outboundPolicyController, error) {
 	s, err := stackOf(vn)
 	if err != nil {
 		return nil, err
@@ -47,59 +47,90 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 	if len(nics) != 1 {
 		return nil, fmt.Errorf("policy updates require one guest NIC, got %d", len(nics))
 	}
-	p := &outboundPolicyController{vn: vn, config: config, guestIP: guestIP, stack: s, ca: ca, secrets: secrets, current: initial}
+	p := &outboundPolicyController{config: config, guestIP: guestIP, stack: s, nicOps: s}
 	for id := range nics {
 		p.nic = id
 	}
-	if len(initial.AllowNet) > 0 || secrets != nil || initial.Mode == "disabled" {
-		if err := p.apply(initial); err != nil {
-			return nil, err
-		}
-	} else {
-		// Unrestricted TCP still uses the selected transport. Keep upstream's
-		// initial UDP handler until a complete policy replacement requires it.
-		dialer, err := newEgressDialer(nil, config.Subnet)
+	if initialRevision == "" {
+		initialRevision, err = newOutboundRevision()
 		if err != nil {
 			return nil, err
 		}
-		var natLock sync.Mutex
-		forwarder := TCPWithFilter(s, natTable(config), &natLock, config.Ec2MetadataAccess, nil, dialer, ca, secrets)
-		s.SetTransportProtocolHandler(tcp.ProtocolNumber, forwarder.HandlePacket)
 	}
+	if !validOutboundRevision(initialRevision) {
+		return nil, fmt.Errorf("invalid initial outbound revision")
+	}
+	snapshot, err := p.compile(initial, initialRevision)
+	if err != nil {
+		return nil, err
+	}
+	p.publish(snapshot, "pending")
+	if err := installOutboundHandlers(p.stack, config, config.Ec2MetadataAccess, p.active.Load, ca, secrets); err != nil {
+		return nil, err
+	}
+	if initial.Mode == "disabled" {
+		if err := p.nicOps.DisableNIC(p.nic); err != nil {
+			return nil, fmt.Errorf("suspend initial guest NIC: %s", err)
+		}
+	}
+	p.publish(snapshot, "confirmed")
 	return p, nil
 }
 
-func (p *outboundPolicyController) apply(policy outboundPolicy) error {
-	filter := NewAllowNetFilter(policy.AllowNet, p.config.GatewayIP, p.guestIP)
-	dialer, err := newEgressDialer(filter, p.config.Subnet)
+func (p *outboundPolicyController) apply(policy outboundPolicy, revision string) error {
+	candidate, err := p.compile(policy, revision)
 	if err != nil {
 		return err
 	}
-	if err := installAllowNetHandlers(p.vn, p.config, p.config.Ec2MetadataAccess, filter, dialer, p.ca, p.secrets); err != nil {
-		return err
-	}
+	previous := p.active.Load()
+	transition := previous
 	var nicErr tcpip.Error
 	if policy.Mode == "disabled" {
-		nicErr = p.stack.DisableNIC(p.nic)
+		transition = candidate
+		p.publish(transition, "pending")
+		nicErr = p.nicOps.DisableNIC(p.nic)
 	} else {
-		nicErr = p.stack.EnableNIC(p.nic)
+		// Retain the disabled snapshot while the NIC is being enabled.
+		p.publish(transition, "pending")
+		if previous.policy.Mode == "disabled" {
+			nicErr = p.nicOps.EnableNIC(p.nic)
+		}
 	}
 	if nicErr != nil {
+		p.publish(transition, "uncertain")
 		return fmt.Errorf("change guest NIC state: %s", nicErr)
 	}
-	if policy.AllowNet == nil {
-		policy.AllowNet = []string{}
-	}
-	p.current = policy
+	p.publish(candidate, "confirmed")
 	return nil
 }
 
 func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	if r.URL.Path == outboundStatusPath {
+		p.serveStatus(w, r)
+		return
+	}
+	if r.URL.Path == outboundSnapshotPath {
+		if r.Method != http.MethodPut {
+			w.Header().Set("Allow", "PUT")
+			http.Error(w, "PUT required", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(r.Header.Values(outboundRevisionHeader)) == 0 {
+			http.Error(w, "snapshot replacement requires a candidate revision", http.StatusBadRequest)
+			return
+		}
+	} else if r.URL.Path != "/network/outbound" {
+		http.NotFound(w, r)
+		return
+	} else if len(r.Header.Values(outboundRevisionHeader)) != 0 {
+		http.Error(w, "coordinator metadata requires the snapshot resource", http.StatusBadRequest)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 	case http.MethodPut:
+		p.mu.Lock()
+		defer p.mu.Unlock()
 		var policy outboundPolicy
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 		decoder.DisallowUnknownFields()
@@ -115,7 +146,12 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := p.apply(policy); err != nil {
+		revision, status, err := revisionForOutboundUpdate(r, p.active.Load().revision)
+		if err != nil {
+			http.Error(w, err.Error(), status)
+			return
+		}
+		if err := p.apply(policy, revision); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -124,8 +160,14 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "GET or PUT required", http.StatusMethodNotAllowed)
 		return
 	}
+	snapshot := p.active.Load()
+	if snapshot.state != "confirmed" {
+		http.Error(w, "outbound policy application is "+snapshot.state, http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(p.current)
+	w.Header().Set("ETag", outboundETag(snapshot.revision))
+	_ = json.NewEncoder(w).Encode(snapshot.policy)
 }
 
 func (p outboundPolicy) validate() error {

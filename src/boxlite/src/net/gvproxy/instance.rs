@@ -58,11 +58,18 @@ impl GvproxyInstance {
     ///
     /// [`NetworkBackendSpec`]: super::super::NetworkBackendSpec
     pub(crate) fn new(config: super::config::GvproxyConfig) -> BoxliteResult<Self> {
+        Self::new_with_revision(config, None)
+    }
+
+    fn new_with_revision(
+        config: super::config::GvproxyConfig,
+        revision: Option<&crate::net::OutboundRevision>,
+    ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
         let socket_path = config.socket_path.clone();
-        let id = ffi::create_instance(&config)?;
+        let id = ffi::create_instance(&config, revision)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
@@ -86,6 +93,21 @@ impl GvproxyInstance {
     pub fn from_config(
         spec: &super::super::NetworkBackendSpec,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
+        Self::from_seed(spec, None)
+    }
+
+    /// Restore a Runtime-owned snapshot identity while provisioning networking.
+    pub fn from_config_with_revision(
+        spec: &super::super::NetworkBackendSpec,
+        revision: &crate::net::OutboundRevision,
+    ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
+        Self::from_seed(spec, Some(revision))
+    }
+
+    fn from_seed(
+        spec: &super::super::NetworkBackendSpec,
+        revision: Option<&crate::net::OutboundRevision>,
+    ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
         let secrets = spec.secrets.iter().map(Into::into).collect();
 
         // Derive gvproxy's control socket as a sibling of the data socket, so the
@@ -102,7 +124,11 @@ impl GvproxyInstance {
             config = config.with_ca(cert.to_string(), key.to_string());
         }
 
-        let instance = Self::new(config)?;
+        let instance = if revision.is_some() {
+            Self::new_with_revision(config, revision)?
+        } else {
+            Self::new(config)?
+        };
 
         let connection_type = if cfg!(target_os = "macos") {
             super::super::ConnectionType::UnixDgram
