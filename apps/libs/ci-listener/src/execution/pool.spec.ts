@@ -461,34 +461,38 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(2)
     expect(backend.workers.stop).not.toHaveBeenCalled()
   })
-  it('refreshes complete queue evidence before replacing newly unclaimed busy supply', async () => {
-    const busy = new Set<string>()
-    supplyInventory(busy)
-    const capacity = testCapacity({ account: 2, tenant: 2 })
-    const snapshot = await rebuildQueueSnapshot(
-      state,
-      lease,
-      { installationId: 1, accountId: 7, repositoryId: 21 },
-      [],
-      [await backend.job(demand)],
-    )
-    const demands = snapshot.demands.map(decodeDemand)
-    const checks = [{ key: snapshot.revision.key, version: snapshot.revision.version }]
-    await pool.balance(lease, capacity, demands, undefined, true, checks)
-    const first = await allocation()
-    busy.add(first.value.name)
-    jest.mocked(backend.job).mockImplementation(async (notice) => ({
-      ...notice,
-      status: 'in_progress',
-      labels: ['boxlite'],
-      runner: first.value.runner.id,
-    }))
-    await expect(pool.balance(lease, capacity, demands, undefined, true, checks)).rejects.toMatchObject({
-      requiresJobRefresh: true,
-    })
-    expect(backend.workers.create).toHaveBeenCalledTimes(1)
-    expect(await journal.used(definition.organization)).toBe(1)
-  })
+  it.each([false, true])(
+    'refreshes complete queue evidence before replacing newly unclaimed busy supply (reserved=%s)',
+    async (reserved) => {
+      const busy = new Set<string>()
+      supplyInventory(busy)
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      const snapshot = await rebuildQueueSnapshot(
+        state,
+        lease,
+        { installationId: 1, accountId: 7, repositoryId: 21 },
+        [],
+        [await backend.job(demand)],
+      )
+      const demands = snapshot.demands.map(decodeDemand)
+      const checks = [{ key: snapshot.revision.key, version: snapshot.revision.version }]
+      await pool.balance(lease, capacity, demands, undefined, true, checks)
+      const first = await allocation()
+      if (reserved) await journal.reserve(lease, key, { ...demand, job: 56 }, capacity, { labels: settings.labels })
+      busy.add(first.value.name)
+      jest.mocked(backend.job).mockImplementation(async (notice) => ({
+        ...notice,
+        status: 'in_progress',
+        labels: ['boxlite'],
+        runner: first.value.runner.id,
+      }))
+      await expect(pool.balance(lease, capacity, demands, undefined, true, checks)).rejects.toMatchObject({
+        requiresJobRefresh: true,
+      })
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(await journal.used(definition.organization)).toBe(reserved ? 2 : 1)
+    },
+  )
   it('dispatches an existing unsent allocation before waiting for another reservation', async () => {
     supplyInventory()
     const capacity = testCapacity({ account: 2, tenant: 2 })

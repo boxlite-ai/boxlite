@@ -603,6 +603,7 @@ export class Listener {
           session.verifiedAt.set(key, entry)
           return { key, entry }
         })
+        while (session.verifiedAt.size > 4096) session.verifiedAt.delete(session.verifiedAt.keys().next().value!)
         let observations: WorkflowJob[] = []
         const checkedAt = Date.now()
         await this.readWithSession(id, backend, async (reader) => {
@@ -624,7 +625,6 @@ export class Listener {
         })
         for (const { key, entry } of verifications)
           if (session.verifiedAt.get(key) === entry) entry.until = checkedAt + 30000
-        while (session.verifiedAt.size > 4096) session.verifiedAt.delete(session.verifiedAt.keys().next().value!)
         this.wake?.()
       })
     }
@@ -729,12 +729,14 @@ export class Listener {
         if (!current) return
         const demands = await session.positive.read(scope, [], async () => [])
         if (!demands.length && values.some((value) => value.queued > 0)) {
+          const stale = [...session.verifiedAt].filter(([id, entry]) => id.startsWith(key + '/') && entry.until > 0)
           try {
             await runtime.pool.balance(session.lease, closedCapacity, [], signal)
           } catch (error) {
             if (!(error instanceof DemandUncertain)) throw error
           }
-          for (const id of session.verifiedAt.keys()) if (id.startsWith(key + '/')) session.verifiedAt.delete(id)
+          // Pending verification can publish evidence while resource recovery awaits I/O.
+          for (const [id, entry] of stale) if (session.verifiedAt.get(id) === entry) session.verifiedAt.delete(id)
           return
         }
         try {

@@ -331,12 +331,27 @@ export class WorkerPool {
         ),
       )
       const unknownBusy = new Set<string>()
-      const newBusy = new Set<number>()
+      const newBusy = new Map<number, string>()
       for (const id of this.busyRefreshes) if (!inventory.get(id)?.busy || claims.has(id)) this.busyRefreshes.delete(id)
       for (const [index, row] of allocations.entries()) {
         if (row.value.closing || row.value.box.phase === 'absent') continue
         // Legacy records have no label snapshot; only their recovery uses job details.
-        const labels = row.value.supply?.labels ?? (await backend.job(row.value.job, signal)).labels
+        let labels = row.value.supply?.labels
+        if (!labels) {
+          try {
+            labels = (await backend.job(row.value.job, signal)).labels
+          } catch (error) {
+            if (
+              error instanceof LeaseLost ||
+              error instanceof StateCorrupt ||
+              error instanceof StateConflict ||
+              signal?.aborted
+            )
+              throw error
+            await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
+            throw error
+          }
+        }
         const selection = selectRunnerLabels(labels, this.settings.labels)
         if (!selection) throw new StateCorrupt()
         const runner = row.value.runner.id === null ? undefined : inventory.get(row.value.runner.id)
@@ -365,7 +380,7 @@ export class WorkerPool {
         if (runner?.busy) {
           if (!claims.has(runner.id)) {
             unknownBusy.add(selection.label)
-            if (!this.busyRefreshes.has(runner.id)) newBusy.add(runner.id)
+            if (!this.busyRefreshes.has(runner.id)) newBusy.set(runner.id, selection.label)
           }
           continue
         }
@@ -438,8 +453,15 @@ export class WorkerPool {
         [...requested].some(([label, target]) => target.count > (supplied.get(label) ?? 0)) &&
         (await this.journal.hasCapacity(lease, this.scopeKey, policy))
       const missingClaims = [...requested].some(([label]) => unknownBusy.has(label))
-      if (verified && expanding && missingClaims && newBusy.size) {
-        for (const id of newBusy) this.busyRefreshes.add(id)
+      const needsRefresh = [...newBusy].filter(([, label]) => {
+        const target = requested.get(label)?.count ?? 0
+        const available = supplied.get(label) ?? 0
+        const reserved = unissued.get(label) ?? 0
+        // Starting an existing reservation needs fresh demand even when quota is full.
+        return target > available - reserved && (reserved > 0 || expanding)
+      })
+      if (verified && needsRefresh.length) {
+        for (const [id] of needsRefresh) this.busyRefreshes.add(id)
         await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
         throw new DemandUncertain('New busy supply requires fresh job observations', true)
       }
@@ -451,8 +473,8 @@ export class WorkerPool {
           allocations.some((row) => row.value.box.phase === 'none' && !row.value.closing))
       ) {
         await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
-        const refresh = missingClaims && newBusy.size > 0
-        if (refresh) for (const id of newBusy) this.busyRefreshes.add(id)
+        const refresh = needsRefresh.length > 0
+        if (refresh) for (const [id] of needsRefresh) this.busyRefreshes.add(id)
         throw new DemandUncertain(
           missingClaims
             ? 'Runner claims arrived without matching demand observations'
