@@ -103,12 +103,16 @@ impl GuestInterface {
         Ok(response.thawed_count)
     }
 
-    /// Set the guest system clock (CLOCK_REALTIME) to a host-sampled UTC
-    /// instant, sent once per resume event.
+    /// Correct CLOCK_REALTIME from UTC sampled by the host just before sending.
     ///
-    /// Succeeds only when the guest confirms the kernel accepted the
-    /// setting; a guest rejection or an agent without the method surfaces
-    /// as an error.
+    /// The Linux/native shim pushes initially and checks every 2s, pushing on
+    /// a >=6s check gap, >=60s since success, no success, or host clock rollback.
+    /// It survives detached creator exit and needs no D-Bus. This host-only
+    /// operation leaves the RTC and monotonic clock unchanged.
+    /// Success means absolute drift <=100ms (no adjustment) or an accepted
+    /// clock setting in either direction; 100ms is not a precision guarantee.
+    /// Invalid timestamps, clock-read/set failures, and an agent without this
+    /// method surface as errors.
     pub async fn sync_clock(&mut self, unix_sec: i64, nanos: i32) -> BoxliteResult<()> {
         let _response = self
             .client

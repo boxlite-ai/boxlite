@@ -410,10 +410,6 @@
         ]
       },
       {
-        "syscall": "timerfd_create",
-        "comment": "Needed by the shim async runtime timers (resume clock sync). Required with network disabled, when the shim applies this filter."
-      },
-      {
         "syscall": "timerfd_settime",
         "comment": "Needed for rate limiting and metrics",
         "args": [

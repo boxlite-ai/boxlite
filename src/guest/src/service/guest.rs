@@ -216,12 +216,11 @@ impl GuestService for GuestServer {
         Ok(Response::new(ThawResponse { thawed_count }))
     }
 
-    /// Set the guest system clock (CLOCK_REALTIME) from host-sampled UTC.
+    /// Correct CLOCK_REALTIME from host-sampled UTC when drift exceeds 100ms.
     ///
-    /// The host sends this once per resume event with its own current UTC.
-    /// Success means the kernel accepted the setting; every rejection
-    /// propagates to the host so a failed correction is never reported as
-    /// applied.
+    /// Success means no adjustment was needed or the kernel accepted the
+    /// setting. Validation, clock reads, and clock setting failures propagate
+    /// to the host.
     async fn sync_clock(
         &self,
         request: Request<SyncClockRequest>,
@@ -230,6 +229,21 @@ impl GuestService for GuestServer {
             Ok(ts) => ts,
             Err(reject) => return Err(Status::invalid_argument(reject.reason())),
         };
+        let mut current = nix::libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: current is a valid writable timespec for clock_gettime.
+        if unsafe { nix::libc::clock_gettime(nix::libc::CLOCK_REALTIME, &mut current) } != 0 {
+            let error = std::io::Error::last_os_error();
+            error!(%error, "clock_gettime(CLOCK_REALTIME) failed");
+            return Err(Status::internal(format!(
+                "clock_gettime(CLOCK_REALTIME) failed: {error}"
+            )));
+        }
+        if !clock_correction_needed(&ts, &current) {
+            return Ok(Response::new(SyncClockResponse {}));
+        }
         if let Err(error) = set_system_clock(&ts) {
             error!(%error, "clock_settime(CLOCK_REALTIME) rejected the host time");
             return Err(clock_settime_status(&error));
@@ -287,6 +301,13 @@ fn sync_clock_timespec(request: SyncClockRequest) -> Result<nix::libc::timespec,
         tv_sec: unix_sec,
         tv_nsec: i64::from(nanos),
     })
+}
+
+fn clock_correction_needed(host: &nix::libc::timespec, guest: &nix::libc::timespec) -> bool {
+    let delta = (i128::from(host.tv_sec) - i128::from(guest.tv_sec)) * 1_000_000_000
+        + i128::from(host.tv_nsec)
+        - i128::from(guest.tv_nsec);
+    delta.abs() > 100_000_000
 }
 
 /// Set the guest system clock. Returns the raw OS error for callers to map.
@@ -393,6 +414,58 @@ mod tests {
         assert_eq!((fresh.tv_sec, fresh.tv_nsec), (now, 0));
     }
 
+    #[test]
+    fn sync_clock_corrects_only_beyond_100ms_in_both_directions() {
+        // Include a second boundary and timestamps near the i64 limit to
+        // exercise subtraction without overflowing seconds or nanoseconds.
+        for (seconds, nanos) in [(10, 500_000_000), (10, 950_000_000), (i64::MAX - 1, 0)] {
+            let earlier = nix::libc::timespec {
+                tv_sec: seconds,
+                tv_nsec: nanos,
+            };
+            for delta in [0, 99_999_999, 100_000_000, 100_000_001] {
+                let later = nix::libc::timespec {
+                    tv_sec: seconds + (nanos + delta) / 1_000_000_000,
+                    tv_nsec: (nanos + delta) % 1_000_000_000,
+                };
+                let expected = delta > 100_000_000;
+                assert_eq!(clock_correction_needed(&later, &earlier), expected);
+                assert_eq!(clock_correction_needed(&earlier, &later), expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_clock_within_tolerance_succeeds_without_clock_permission() {
+        crate::test_syscalls::deny(nix::libc::SYS_clock_settime);
+        let root = tempfile::tempdir().expect("tempdir");
+        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch");
+        server
+            .sync_clock(Request::new(SyncClockRequest {
+                unix_sec: now.as_secs() as i64,
+                nanos: now.subsec_nanos() as i32,
+            }))
+            .await
+            .expect("a current timestamp needs no clock_settime permission");
+    }
+
+    #[tokio::test]
+    async fn sync_clock_rejects_invalid_requests_before_setting_clock() {
+        crate::test_syscalls::deny(nix::libc::SYS_clock_settime);
+        let root = tempfile::tempdir().expect("tempdir");
+        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        for (unix_sec, nanos) in [(1, -1), (1, 1_000_000_000), (0, 0), (-1, 0)] {
+            let status = server
+                .sync_clock(Request::new(SyncClockRequest { unix_sec, nanos }))
+                .await
+                .expect_err("invalid timestamps must fail before clock_settime");
+            assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        }
+    }
+
     /// A guest that cannot set the clock (here: seccomp EPERM, standing in
     /// for the non-root agent) must fail the RPC instead of reporting a
     /// correction it did not apply.
@@ -408,7 +481,7 @@ mod tests {
         let server = GuestServer::new(GuestLayout::with_base(root.path()));
         let status = server
             .sync_clock(Request::new(SyncClockRequest {
-                unix_sec: now,
+                unix_sec: now + 90_000,
                 nanos: 0,
             }))
             .await
