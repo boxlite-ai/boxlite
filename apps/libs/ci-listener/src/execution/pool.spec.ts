@@ -192,6 +192,8 @@ describe('CI shared worker lifecycle', () => {
       expect(result.trace).toContain('dockerd')
       expect(result.jit).toBe('dGVzdC1qaXQ=')
       expect(result.jitRemoved).toBe(true)
+      expect(result.dockerEnvironment).toEqual([join(directory, 'runner'), 'runner', 'runner'])
+      expect(result.runnerEnvironment).toEqual(result.dockerEnvironment)
       if (scenario === 'install-success') expect(result.trace).toContain('apt-get:install')
     },
   )
