@@ -39,6 +39,11 @@ fn translate(ram: &GuestMemoryMmap, cr3: u64, virt: u64) -> Option<u64> {
         assert_eq!(entry & ((1 << 63) | (1 << 1)), 1 << 1, "writable, not NX");
         table = entry & ADDRESS;
         if shift == 12 || (matches!(shift, 30 | 21) && entry & (1 << 7) != 0) {
+            assert_eq!(
+                table & ((1 << shift) - 1),
+                0,
+                "unaligned leaf page address {table:#x} at shift {shift}"
+            );
             return Some(table | (virt & ((1 << shift) - 1)));
         }
     }

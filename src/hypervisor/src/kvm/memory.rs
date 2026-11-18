@@ -54,6 +54,12 @@ impl MemorySlots {
         chunks
             .clone()
             .try_for_each(|chunk| self.check_overlap(&chunk))?;
+        if self.regions.iter().filter(|slot| slot.is_none()).count() < chunks.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "not enough free KVM memory slots",
+            ));
+        }
         let mut logical = LogicalRegion {
             guest_addr: region.guest_addr,
             size: region.size,
@@ -722,6 +728,30 @@ mod tests {
             "guest memory overlaps an existing KVM slot"
         );
         assert_eq!(slots.regions, before);
+    }
+
+    #[test]
+    fn preflight_slots_rejects_multi_chunk_region_before_any_install() {
+        let mut slots = MemorySlots::new(2, 4096);
+        slots
+            .map_chunks(&region(0), 1, |_| Ok(()), |_| unreachable!())
+            .unwrap();
+        let before = slots.regions.clone();
+        let ram = MemoryRegion {
+            size: 0x2000,
+            ..region(0x1000)
+        };
+        let error = slots
+            .map_chunks(
+                &ram,
+                1,
+                |_| panic!("slot-exhausted region reached install"),
+                |_| panic!("slot-exhausted region reached remove"),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
+        assert_eq!(slots.regions, before);
+        assert_eq!(slots.logical.len(), 1);
     }
 
     #[test]

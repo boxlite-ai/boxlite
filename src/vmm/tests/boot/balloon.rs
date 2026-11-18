@@ -100,7 +100,7 @@ fn run_reporting_guest(init_on_free: bool) -> (Evidence, String) {
         cmdline.push_str(" init_on_free=1");
     }
     let config = linux_config(1, &cmdline, Some(initramfs.0.clone()));
-    let (probe, leaf) = probe_boot(&config);
+    let (prepared, leaf) = probe_boot(&config);
     let (writer, mut console) =
         ConsoleWorker::spawn(Box::new(log.clone()), DEFAULT_QUEUE_BYTES).unwrap();
     // The frame goes through the production composition: `devices::add_all`
@@ -108,7 +108,7 @@ fn run_reporting_guest(init_on_free: bool) -> (Evidence, String) {
     let mut sampler_memory = None;
     let mut vm = crate::Vm::with_devices(
         config,
-        move || probe.create_vm(),
+        move || boxlite_hypervisor::KvmVm::from_prepared(prepared),
         move |ram, config| prepare(ram, config, leaf).map(|setup| setup.boot_regs),
         |chipset, ctx, config| {
             sampler_memory = Some(Arc::clone(ctx.memory));

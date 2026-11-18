@@ -349,18 +349,18 @@ struct LinuxVm {
     gsi_4_edges: Arc<AtomicUsize>,
 }
 
-fn probe_boot(config: &VmConfig) -> (boxlite_hypervisor::KvmVmProbe, CheckedBootLeaf) {
+fn probe_boot(config: &VmConfig) -> (boxlite_hypervisor::PreparedKvm, CheckedBootLeaf) {
     probe_boot_with_leaf(config, BOOT_LEAF)
 }
 
 fn probe_boot_with_leaf(
     config: &VmConfig,
     leaf: PageSize,
-) -> (boxlite_hypervisor::KvmVmProbe, CheckedBootLeaf) {
+) -> (boxlite_hypervisor::PreparedKvm, CheckedBootLeaf) {
     config.validate().unwrap();
-    let probe = boxlite_hypervisor::KvmVm::probe().unwrap();
-    let leaf = preflight_x86(config.memory_mib, probe.supported_cpuid(), leaf).unwrap();
-    (probe, leaf)
+    let prepared = boxlite_hypervisor::KvmVm::prepare().unwrap();
+    let leaf = preflight_x86(config.memory_mib, prepared.supported_cpuid(), leaf).unwrap();
+    (prepared, leaf)
 }
 
 /// Builds a KVM VM for `config` with the legacy devices, COM1 writing to
@@ -375,7 +375,7 @@ fn linux_vm_with_leaf(
     console: Console,
     leaf: PageSize,
 ) -> LinuxVm {
-    let (probe, leaf) = probe_boot_with_leaf(config, leaf);
+    let (prepared, leaf) = probe_boot_with_leaf(config, leaf);
     let (writer, console) = ConsoleWorker::spawn(console.sink, console.capacity).unwrap();
     let gsi_4_edges = Arc::new(AtomicUsize::new(0));
     let edges = Arc::clone(&gsi_4_edges);
@@ -384,7 +384,7 @@ fn linux_vm_with_leaf(
         config.clone(),
         move || {
             Ok(Gsi4Counter {
-                kvm: probe.create_vm()?,
+                kvm: boxlite_hypervisor::KvmVm::from_prepared(prepared)?,
                 deliver: deliver_irqs,
                 edges,
             })

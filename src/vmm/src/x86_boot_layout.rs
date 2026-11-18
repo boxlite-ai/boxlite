@@ -34,7 +34,10 @@ pub(crate) enum PageSize {
     Gib,
     #[default]
     Mib,
-    #[allow(dead_code, reason = "This internal boot leaf may not be selected.")]
+    #[cfg_attr(
+        all(not(test), target_os = "linux", target_arch = "x86_64"),
+        expect(dead_code, reason = "This internal boot leaf may not be selected.")
+    )]
     Kib,
 }
 

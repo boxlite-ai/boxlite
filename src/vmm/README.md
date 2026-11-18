@@ -134,11 +134,12 @@ and `error` keep inline test modules.
 ## Kernel loading
 
 On Linux x86_64, `boot::elf::load_elf(ram, kernel)` delegates ELF parsing and
-segment loading to rust-vmm's linux-loader and returns the entry address as
-`io::Result<u64>`. It reads `kernel` through a seekable reader, usually the
-kernel file, so segments go straight into guest RAM without buffering the
-whole image. It uses vm-memory 0.18 and linux-loader 0.14 with only the ELF
-feature. `boot::prepare` calls it for `Vm::new`.
+segment loading to rust-vmm's linux-loader and returns `io::Result<LoadedKernel>`
+with `entry` and the physical bounds (`start`/`end`, including BSS) so the boot
+page tables can stay clear of the kernel. It reads `kernel` through a seekable
+reader, usually the kernel file, so segments go straight into guest RAM without
+buffering the whole image. It uses vm-memory 0.18 and linux-loader 0.14 with
+only the ELF feature. `boot::prepare` calls it for `Vm::new`.
 
 Pass the pinned `vmlinux` from `make vmm:boot` and fresh zero-filled guest
 RAM before guest execution. BSS relies on that initial zero state. Validation
@@ -164,9 +165,9 @@ the [boot tests](#boot-tests) run Linux itself.
 ## Boot parameters
 
 On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges,
-initramfs)` fills the zero page that RSI points to at the 64-bit entry
-(`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its address,
-`0x7000`:
+initramfs, reserved)` fills the zero page that RSI points to at the 64-bit
+entry (`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its
+address, `0x7000`:
 
 - Setup header: `type_of_loader` `0xFF`, `boot_flag` `0xAA55`, the `HdrS`
   magic, a 16 MiB `kernel_alignment`, and `cmd_line_ptr` and `cmdline_size`
@@ -174,8 +175,11 @@ initramfs)` fills the zero page that RSI points to at the 64-bit entry
   `ramdisk_size` when there is an initramfs. The rest stays zero: no
   `loadflags` or ACPI tables.
 - E820: each RAM range as usable RAM outside `[0x9_FC00, 1 MiB)`, where the
-  MP table and the legacy BIOS areas go. More entries than the 128 table slots
-  fail with `InvalidInput` before anything is written.
+  MP table and the legacy BIOS areas go, while `reserved` intervals are marked
+  `E820_RESERVED` (including the boot page-table span passed by `prepare` when
+  the tables cannot fit in the fixed window and are placed above the kernel).
+  More entries than the 128 table slots fail with `InvalidInput` before
+  anything is written.
 
 `VmConfig::validate` accepts a command line only if it is printable ASCII and
 shorter than 2048 bytes, the kernel's `COMMAND_LINE_SIZE` with the NUL.

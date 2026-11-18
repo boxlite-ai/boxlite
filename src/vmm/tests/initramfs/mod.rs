@@ -12,11 +12,17 @@ use super::load_initramfs;
 use crate::memory::GuestMemoryMmap;
 
 const RAM_SIZE: usize = 4 << 20;
-const RAM_RANGES: [(GuestAddress, usize); 1] = [(GuestAddress(0), RAM_SIZE)];
+const HIGH_RAM_SIZE: usize = 4096;
+const RAM_RANGES: [(GuestAddress, usize); 2] = [
+    (GuestAddress(0), RAM_SIZE),
+    (GuestAddress(1 << 32), HIGH_RAM_SIZE),
+];
 
 fn ram() -> GuestMemoryMmap {
     let ram = GuestMemoryMmap::from_ranges(&RAM_RANGES).unwrap();
     ram.write_slice(&vec![0xff; RAM_SIZE], GuestAddress(0))
+        .unwrap();
+    ram.write_slice(&vec![0xff; HIGH_RAM_SIZE], GuestAddress(1 << 32))
         .unwrap();
     ram
 }

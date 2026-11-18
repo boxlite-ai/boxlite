@@ -25,13 +25,13 @@ pub struct KvmVm {
 
 /// A checked KVM system handle and the supported CPUID for a prospective VM.
 #[derive(Debug)]
-pub struct KvmVmProbe {
+pub struct PreparedKvm {
     kvm: Kvm,
     kick_signal: i32,
     cpuid: Vec<crate::X86CpuidEntry>,
 }
 
-impl KvmVmProbe {
+impl PreparedKvm {
     fn open(kick_signal: i32) -> io::Result<Self> {
         super::kick::validate_signal(kick_signal)?;
         let kvm = Kvm::new().map_err(|error| {
@@ -78,11 +78,6 @@ impl KvmVmProbe {
         &self.cpuid
     }
 
-    /// Creates the VM on the probed system handle and retains its CPUID.
-    pub fn create_vm(self) -> Result<KvmVm> {
-        self.create().map_err(Error::CreateVm)
-    }
-
     fn create(self) -> io::Result<KvmVm> {
         let Self {
             kvm,
@@ -118,21 +113,24 @@ impl KvmVmProbe {
 impl KvmVm {
     /// Opens `/dev/kvm`, verifies the required API, and creates the empty VM.
     pub fn new() -> Result<Self> {
-        Self::probe()?.create_vm()
+        Self::from_prepared(Self::prepare()?)
     }
 
     /// Selects an application-reserved realtime signal for vCPU workers.
     /// It must retain its default disposition and be unblocked before creation.
     pub fn with_kick_signal(signal: i32) -> Result<Self> {
-        KvmVmProbe::open(signal)
-            .map_err(Error::CreateVm)?
-            .create_vm()
+        Self::from_prepared(PreparedKvm::open(signal).map_err(Error::CreateVm)?)
     }
 
     /// Opens `/dev/kvm`, verifies the required API and queries supported CPUID
     /// without creating a VM. Uses the default vCPU kick signal.
-    pub fn probe() -> Result<KvmVmProbe> {
-        KvmVmProbe::open(libc::SIGRTMIN() + 1).map_err(Error::CreateVm)
+    pub fn prepare() -> Result<PreparedKvm> {
+        PreparedKvm::open(libc::SIGRTMIN() + 1).map_err(Error::CreateVm)
+    }
+
+    /// Creates the VM on a prepared KVM system handle and retains its CPUID.
+    pub fn from_prepared(prepared: PreparedKvm) -> Result<Self> {
+        prepared.create().map_err(Error::CreateVm)
     }
 
     /// KVM-supported guest CPUID before the VMM applies guest topology/policy.

@@ -327,9 +327,9 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
     use crate::{boot::BOOT_LEAF, cpu_features::preflight_x86, memory::MMIO_HOLE_START};
 
     let config = config(1, 3072);
-    let probe = KvmVm::probe().unwrap();
-    preflight_x86(config.memory_mib, probe.supported_cpuid(), BOOT_LEAF).unwrap();
-    let vm = bare(config, move || probe.create_vm()).unwrap();
+    let prepared = KvmVm::prepare().unwrap();
+    preflight_x86(config.memory_mib, prepared.supported_cpuid(), BOOT_LEAF).unwrap();
+    let vm = bare(config, move || KvmVm::from_prepared(prepared)).unwrap();
     let memory = Arc::clone(vm.ram.memory());
     let last = GuestAddress(MMIO_HOLE_START - 1);
     // mov al,[0xBFFFFFFF]; mov dx,0x3f8; out dx,al; hlt
@@ -475,9 +475,9 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         0x0f, 0x0b, // ud2
     ]);
 
-    let probe = KvmVm::probe().unwrap();
-    let leaf = preflight_x86(config.memory_mib, probe.supported_cpuid(), BOOT_LEAF).unwrap();
-    let vm = bare(config, move || probe.create_vm()).unwrap();
+    let prepared = KvmVm::prepare().unwrap();
+    let leaf = preflight_x86(config.memory_mib, prepared.supported_cpuid(), BOOT_LEAF).unwrap();
+    let vm = bare(config, move || KvmVm::from_prepared(prepared)).unwrap();
     let memory = Arc::clone(vm.ram.memory());
     memory.write_slice(&program, GuestAddress(ENTRY)).unwrap();
     memory

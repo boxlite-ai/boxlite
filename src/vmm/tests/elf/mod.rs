@@ -91,8 +91,8 @@ fn loads_physical_bytes_and_returns_the_kernel_entry() {
     let kernel = load(memory, &image).unwrap();
     assert_eq!(kernel.entry, ENTRY);
     assert_eq!(kernel.start, 0x10_0000);
-    assert!(
-        kernel.end >= 0x10_3080,
+    assert_eq!(
+        kernel.end, 0x10_3080,
         "the kernel end must include pure BSS"
     );
     for (paddr, offset, filesz, memsz, _) in SEGMENTS {
@@ -118,6 +118,31 @@ fn reports_the_lowest_loadable_physical_address_not_the_entry() {
     let kernel = load(ram.memory().as_ref(), &image).unwrap();
     assert_eq!(kernel.entry, ENTRY);
     assert_eq!(kernel.start, lowest_paddr);
+}
+
+#[test]
+fn zero_memsz_load_segments_do_not_widen_kernel_bounds() {
+    let ram = ram(RAM_SIZE);
+    let mut image = fixture();
+    let phoff = image.len();
+    let existing = image[64..64 + SEGMENTS.len() * 56].to_vec();
+    image.extend_from_slice(&existing);
+    for paddr in [0x1_0000u64, 0x18_0000] {
+        let base = image.len();
+        image.resize(base + 56, 0);
+        put32(&mut image, base, 1);
+        put32(&mut image, base + 4, 4);
+        put64(&mut image, base + 16, paddr + 0xffff_8000_0000_0000);
+        put64(&mut image, base + 24, paddr);
+        put64(&mut image, base + 48, 1);
+    }
+    put64(&mut image, 32, phoff as u64);
+    put16(&mut image, 56, (SEGMENTS.len() + 2) as u16);
+
+    let kernel = load(ram.memory().as_ref(), &image).unwrap();
+    assert_eq!(kernel.entry, ENTRY);
+    assert_eq!(kernel.start, 0x10_0000);
+    assert_eq!(kernel.end, 0x10_3080);
 }
 
 #[test]

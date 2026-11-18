@@ -322,7 +322,7 @@ fn boots_linux_and_drives_virtio_blk_through_the_workers() {
         observed: observed.clone(),
     }));
     let edges = Arc::new(Mutex::new(Vec::new()));
-    let (probe, leaf) = probe_boot(&config);
+    let (prepared, leaf) = probe_boot(&config);
     let (writer, mut console) =
         ConsoleWorker::spawn(Box::new(log.clone()), DEFAULT_QUEUE_BYTES).unwrap();
     let counter_edges = Arc::clone(&edges);
@@ -330,7 +330,7 @@ fn boots_linux_and_drives_virtio_blk_through_the_workers() {
         config,
         move || {
             Ok(LineCounter {
-                kvm: probe.create_vm()?,
+                kvm: boxlite_hypervisor::KvmVm::from_prepared(prepared)?,
                 edges: counter_edges,
             })
         },

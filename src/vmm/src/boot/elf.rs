@@ -76,6 +76,9 @@ fn kernel_bounds(kernel: &mut (impl Read + Seek)) -> io::Result<(u64, u64)> {
             let segment_end = paddr
                 .checked_add(memsz)
                 .ok_or_else(|| invalid("ELF64 segment end overflows"))?;
+            if memsz == 0 {
+                continue;
+            }
             start = Some(start.map_or(paddr, |start| start.min(paddr)));
             end = end.max(segment_end);
         }

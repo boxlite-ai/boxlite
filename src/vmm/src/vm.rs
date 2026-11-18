@@ -108,13 +108,17 @@ impl Vm<boxlite_hypervisor::KvmVm> {
         use crate::{boot, cpu_features::preflight_x86, devices::console::DEFAULT_QUEUE_BYTES};
 
         config.validate()?;
-        let probe = boxlite_hypervisor::KvmVm::probe()?;
-        let leaf = preflight_x86(config.memory_mib, probe.supported_cpuid(), boot::BOOT_LEAF)?;
+        let prepared = boxlite_hypervisor::KvmVm::prepare()?;
+        let leaf = preflight_x86(
+            config.memory_mib,
+            prepared.supported_cpuid(),
+            boot::BOOT_LEAF,
+        )?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
         let mut vm = Self::with_devices(
             config,
-            move || probe.create_vm(),
+            move || boxlite_hypervisor::KvmVm::from_prepared(prepared),
             move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
             |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
         )?;
