@@ -438,7 +438,7 @@ describe('BoxService inbound defaults', () => {
     ]
     const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']
 
-    async function fixture(status = 201) {
+    async function fixture(status = 201, enabled = true) {
       let transfer: { boxId: string; payload: any; insertCalls: number }
       const server = createServer(async (request, response) => {
         const chunks: Buffer[] = []
@@ -462,7 +462,7 @@ describe('BoxService inbound defaults', () => {
       })
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
       const values = {
-        'secretServer.enabled': true,
+        'secretServer.enabled': enabled,
         'secretServer.url': `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
         'secretServer.devToken': 'test-token',
       }
@@ -538,6 +538,45 @@ describe('BoxService inbound defaults', () => {
       },
       10000,
     )
+
+    describe.each(['direct', 'rest'])('secret name admission through %s create', (path) => {
+      it.each([
+        ['key', 'key'],
+        ['key', 'KEY'],
+        ['open-ai', 'OPEN_AI'],
+        ['key😀', 'KEY_'],
+      ])('rejects conflicting names %s / %s before transfer when enabled', async (first, second) => {
+        const f = await fixture()
+        const onPersist = jest.fn()
+        const input = { secrets: secrets.map((secret, i) => ({ ...secret, name: [first, second][i] })) }
+        const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+        try {
+          await expect(
+            f.service.create(dto as any, activeOrg, Context.user(), { createdBy: 'user', onPersist }),
+          ).rejects.toBeInstanceOf(BadRequestError)
+          expect(f.transfer()).toBeUndefined()
+          expect(f.boxRepository.insert).not.toHaveBeenCalled()
+          expect(onPersist).not.toHaveBeenCalled()
+          expect(f.events.emitAsync).not.toHaveBeenCalled()
+        } finally {
+          await f.close()
+        }
+      })
+
+      it('preserves same-name secrets on different hosts when disabled', async () => {
+        const f = await fixture(201, false)
+        const inline = secrets.map((secret) => ({ ...secret, name: 'key' }))
+        const input = { secrets: inline }
+        const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+        try {
+          await f.service.create(dto as any, activeOrg, Context.user())
+          expect(f.transfer()).toBeUndefined()
+          expect(f.boxRepository.insert.mock.calls[0][0].secrets).toEqual(inline)
+        } finally {
+          await f.close()
+        }
+      })
+    })
 
     it('does not transfer a request that fails local lifecycle validation', async () => {
       const f = await fixture()
