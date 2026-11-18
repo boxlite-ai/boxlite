@@ -23,6 +23,16 @@ import { CiNativeWorkers } from './ci-native-workers'
 import { CiSettingsService } from './ci-settings.service'
 import { Box } from '../box/entities/box.entity'
 import { CheckpointOperation } from '../box/entities/checkpoint-operation.entity'
+import { Job } from '../box/entities/job.entity'
+import { JobStatus } from '../box/enums/job-status.enum'
+import { JobType } from '../box/enums/job-type.enum'
+import { ResourceType } from '../box/enums/resource-type.enum'
+import { RunnerState } from '../box/enums/runner-state.enum'
+import { JobService } from '../box/services/job.service'
+import { JobStateHandlerService } from '../box/services/job-state-handler.service'
+import { RunnerAdapterV2 } from '../box/runner-adapter/runnerAdapter.v2'
+import { BoxDestroyAction } from '../box/managers/box-actions/box-destroy.action'
+import { LockCode } from '../box/common/redis-lock.provider'
 import { BoxManager } from '../box/managers/box.manager'
 import { BoxCheckpointState } from '../box/entities/box-checkpoint-state.entity'
 import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
@@ -83,7 +93,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity, BoxCheckpointState, CheckpointOperation],
+      entities: [Box, BoxLastActivity, BoxCheckpointState, CheckpointOperation, Job],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       extra: { options: `-c search_path=${schema},public` },
@@ -997,6 +1007,79 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }
     },
   )
+  it('returns the slot only after the original runner completes a replacement destroy job', async () => {
+    const { box, host, row } = await deleting()
+    const repository = new BoxRepository(
+      db,
+      { emit: jest.fn() } as never,
+      { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as never,
+    )
+    const jobRows = db.getRepository(Job)
+    const held = new Map<string, LockCode>()
+    const locks = {
+      lock: async (key: string, _ttl: number, code: LockCode) => {
+        held.set(key, code)
+        return true
+      },
+      isLocked: async (key: string) => held.has(key),
+      getCode: async (key: string) => held.get(key) ?? null,
+      unlock: async (key: string) => held.delete(key),
+    }
+    const handler = new JobStateHandlerService(repository, locks as never, {} as never, {} as never, {} as never)
+    const jobs = new JobService(jobRows, { lpush: jest.fn() } as never, handler)
+    const failed = await jobs.createJob(null, JobType.DESTROY_BOX, runnerId, ResourceType.BOX, box.box_id)
+    await jobRows.save(
+      Object.assign(failed, { status: JobStatus.FAILED, completedAt: new Date(), errorMessage: 'timed out' }),
+    )
+    await handler.handleJobCompletion(failed)
+    const runner = { id: runnerId, state: RunnerState.READY }
+    const adapter = new RunnerAdapterV2(repository, jobRows, jobs)
+    await adapter.init(runner as never)
+    const runners = { findOneOrFail: async () => runner, getRunnerApiVersion: async () => '2' }
+    const destroy = new BoxDestroyAction(
+      runners as never,
+      { create: async () => adapter } as never,
+      repository,
+      locks as never,
+    )
+    const manager = new BoxManager(
+      repository,
+      runners as never,
+      {} as never,
+      locks as never,
+      {} as never,
+      {} as never,
+      destroy,
+      {} as never,
+      { get: () => app } as never,
+    )
+    const attempts = jest.spyOn(manager, 'syncInstanceState')
+    await manager.syncStates()
+    await Promise.all(attempts.mock.results.map((r) => r.value))
+    const retry = await jobRows.findOneBy({
+      resourceId: box.box_id,
+      runnerId,
+      type: JobType.DESTROY_BOX,
+      status: JobStatus.PENDING,
+    })
+    expect(retry).not.toBeNull()
+    expect(await journal.used(org)).toBe(1)
+    await jobRows.save(Object.assign(retry!, { status: JobStatus.COMPLETED, completedAt: new Date() }))
+    await handler.handleJobCompletion(retry!)
+    const pool = new WorkerPool(
+      journal,
+      scopeKey(scope()),
+      async () => ({ workers: host, admit: jest.fn(), job: jest.fn(), runners: jest.fn() }),
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
+    )
+    try {
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      expect(await journal.used(org)).toBe(0)
+      expect(await journal.allocation(lease, row.record.key)).toBeUndefined()
+    } finally {
+      await pool.close()
+    }
+  })
   it('recognizes the original destroyed Box after production soft deletion renames it', async () => {
     const { host, config, box } = await deleting()
     const deleted = await platform.findOne(box.box_id, true)
