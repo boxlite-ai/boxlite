@@ -332,6 +332,24 @@ func TestAgentRecordsRejectWrongTypes(t *testing.T) {
 	}
 }
 
+func TestAgentSnapshotsRejectUnknownNestedRequests(t *testing.T) {
+	for _, tc := range []struct {
+		fixture string
+		decode  func([]byte) error
+	}{
+		{"state", func(data []byte) error { _, err := parseAgentState(data); return err }},
+		{"turn", func(data []byte) error { _, err := parseAgentTurnState(data); return err }},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			input := agentField(t, agentFixture(t, tc.fixture), "requests", json.RawMessage(`[{"id":"request-1","kind":{"type":"future"}}]`))
+			var typed *Error
+			if err := tc.decode(input); !errors.As(err, &typed) || typed.Code != ErrInternal {
+				t.Fatalf("unknown nested request kind was accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestAgentFutureStatusesAndFields(t *testing.T) {
 	stateJSON := agentField(t, agentFixture(t, "state"), "status", json.RawMessage(`"future"`))
 	stateJSON = agentField(t, stateJSON, "new_field", json.RawMessage("true"))

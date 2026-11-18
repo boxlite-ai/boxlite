@@ -19,10 +19,29 @@ static inline void test_agent_barrier(CBoxliteRuntime *rt, uintptr_t token) {
 import "C"
 
 import (
+	"context"
 	"runtime"
 	"runtime/cgo"
 	"unsafe"
 )
+
+// Exercise shared call cleanup when C rejects a submission synchronously.
+// Public Send validates the mode in Go before reaching this C boundary.
+func testAgentNativeRejectedSend(ctx context.Context, agent *Agent) (*agentTurnHandle, error) {
+	text := toCString("work")
+	defer C.free(unsafe.Pointer(text))
+	return agentCall[*agentTurnHandle](ctx, agent.native, func(p *C.struct_CAgent, token C.uintptr_t, err *C.CBoxliteError) C.enum_BoxliteErrorCode {
+		opts := C.struct_CAgentSendOptions{mode: 77}
+		return C.go_agent_send(p, text, &opts, token, err)
+	}, func(h *agentTurnHandle) { h.release() })
+}
+
+// A null native argument produces a real C getter error without transferring JSON.
+func testAgentNativeRejectedGetter(agent *Agent) (*AgentState, error) {
+	return agentGetter(agent.native, func(_ *C.struct_CAgent, json **C.char, err *C.CBoxliteError) C.enum_BoxliteErrorCode {
+		return C.boxlite_agent_state(nil, json, err)
+	}, parseAgentState)
+}
 
 // This file is built only by the Go unit target with the C test-support feature.
 func newTestAgentNamespace(home string, manualDrain bool) (*Runtime, *Agents, error) {

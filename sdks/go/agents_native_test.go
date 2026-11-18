@@ -155,6 +155,138 @@ func TestAgentCoreErrorsAreCopied(t *testing.T) {
 	}
 }
 
+func TestAgentUninitializedAndReleasedHandles(t *testing.T) {
+	ctx := context.Background()
+	for _, namespace := range []*Agents{nil, {}, {box: &Box{}}} {
+		created, err := namespace.Create(ctx, "test", AgentCreateOptions{})
+		checkAgentError(t, created, err, ErrInvalidState)
+		loaded, err := namespace.Get(ctx, "agent-1")
+		checkAgentError(t, loaded, err, ErrInvalidState)
+	}
+	_, namespace := testAgents(t, false)
+	released := testCreateAgent(t, namespace)
+	released.native.release()
+	defer runtime.KeepAlive(released)
+	for _, agent := range []*Agent{nil, {}, released} {
+		state, err := agent.State()
+		checkAgentError(t, state, err, ErrInvalidState)
+		turn, err := agent.Send(ctx, "work", AgentSendOptions{})
+		checkAgentError(t, turn, err, ErrInvalidState)
+		stream, err := agent.Events(ctx, AgentEventsOptions{})
+		checkAgentError(t, stream, err, ErrInvalidState)
+	}
+	for _, turn := range []*AgentTurn{nil, {}} {
+		state, err := turn.State()
+		checkAgentError(t, state, err, ErrInvalidState)
+		result, err := turn.Wait(ctx, AgentWaitOptions{})
+		checkAgentError(t, result, err, ErrInvalidState)
+	}
+}
+
+func TestAgentAdditionalArgumentsFailBeforeDispatch(t *testing.T) {
+	r, namespace := testAgents(t, false)
+	agent := testCreateAgent(t, namespace)
+	ctx := context.Background()
+	turn, err := agent.Send(ctx, "work", AgentSendOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.KeepAlive(turn)
+	tokens, handles := agentTokenCount(), agentHandleCount(r)
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"get nil context", func() error { _, e := namespace.Get(nil, "agent-1"); return e }},
+		{"turn ID NUL", func() error { _, e := agent.GetTurn(ctx, "turn\x00"); return e }},
+		{"response ID NUL", func() error {
+			_, e := agent.Respond(ctx, "request\x00", AgentAnswer{}, AgentControlOptions{})
+			return e
+		}},
+		{"steer UTF8", func() error { _, e := turn.Steer(ctx, string([]byte{255}), AgentControlOptions{}); return e }},
+		{"interrupt key NUL", func() error { return turn.Interrupt(ctx, AgentControlOptions{IdempotencyKey: "key\x00"}) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			checkAgentError(t, nil, tc.call(), ErrInvalidArgument)
+			if agentTokenCount() != tokens || agentHandleCount(r) != handles {
+				t.Fatal("invalid argument changed native registrations")
+			}
+		})
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	result, err := agent.Requests(canceled)
+	if result != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled request: %v %v", result, err)
+	}
+}
+
+// Pause the result-side context check after native completion has been received.
+// The first check admits the call; the second lets the test cancel at return.
+type agentResultContext struct {
+	context.Context
+	checks    int
+	returning chan struct{}
+	release   chan struct{}
+}
+
+func (c *agentResultContext) Err() error {
+	c.checks++
+	if c.checks == 2 {
+		close(c.returning)
+		<-c.release
+	}
+	return c.Context.Err()
+}
+
+func TestAgentCancellationAfterNativeResultReleasesHandle(t *testing.T) {
+	r, namespace := testAgents(t, false)
+	agent := testCreateAgent(t, namespace)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observed := &agentResultContext{Context: ctx, returning: make(chan struct{}), release: make(chan struct{})}
+	var once sync.Once
+	release := func() { once.Do(func() { close(observed.release) }) }
+	t.Cleanup(release)
+	_, before := testAgentFreeCounts()
+	handles := agentHandleCount(r)
+	completed := make(chan handleResult[*AgentTurn], 1)
+	go func() {
+		turn, err := agent.Send(observed, "work", AgentSendOptions{})
+		completed <- handleResult[*AgentTurn]{value: turn, err: err}
+	}()
+	receiveAgent(t, observed.returning)
+	cancel()
+	release()
+	result := receiveAgent(t, completed)
+	if result.value != nil || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("canceled result: %v %v", result.value, result.err)
+	}
+	_, after := testAgentFreeCounts()
+	if after-before != 1 || agentHandleCount(r) != handles {
+		t.Fatal("native result survived cancellation at return")
+	}
+}
+
+func TestAgentNativeSynchronousErrorsLeaveNoRegistrations(t *testing.T) {
+	r, namespace := testAgents(t, false)
+	agent := testCreateAgent(t, namespace)
+	tokens, handles := agentTokenCount(), agentHandleCount(r)
+	turn, err := testAgentNativeRejectedSend(context.Background(), agent)
+	checkAgentError(t, turn, err, ErrInvalidArgument)
+	state, err := testAgentNativeRejectedGetter(agent)
+	checkAgentError(t, state, err, ErrInvalidArgument)
+	if agentTokenCount() != tokens || agentHandleCount(r) != handles {
+		t.Fatal("synchronous C rejection leaked a registration")
+	}
+	// A rejected submission does not prevent later successful C/core dispatch.
+	loaded, err := agent.State()
+	if err != nil || loaded.ID != "agent-1" {
+		t.Fatalf("getter after rejection: %+v %v", loaded, err)
+	}
+}
+
 func TestAgentArgumentsFailBeforeDispatch(t *testing.T) {
 	r, a := testAgents(t, false)
 	agent := testCreateAgent(t, a)
