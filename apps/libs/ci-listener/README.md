@@ -266,14 +266,20 @@ epoch and changes both records atomically.
 
 Execution checks hold a shared `FOR SHARE` lock on `@owner` before reading
 `@lease`, so unrelated readers and allocation transactions can overlap.
-Activation, acquisition, bootstrap and renewal take the owner lock exclusively.
+Standby ticks and webhook receipts validate an initialized journal's roots and
+requested seeds in a consistent snapshot. A missing or legacy owner sends
+initialization through serialized bootstrap, which rereads the roots before
+creating or migrating them. Missing seeds in an existing journal fail validation.
+During a standby tick, acquisition reads the owner and deadline without a row
+lock. A live lease or a different deployment ends the probe immediately.
+Activation, takeover, bootstrap and renewal take the owner lock exclusively.
 An identity change therefore waits for guarded transactions to finish; renewal
 serializes deadline updates without upgrading a shared lock.
 Adapters without shared point reads fall back to the exclusive lock; SQLite
 serializes transactions at the file boundary.
 Renewal rejects an expired or replaced owner and never shortens its deadline,
-even if a caller requests a shorter TTL. A contender checks the committed deadline
-after obtaining the owner lock, so it cannot take over a live renewed lease.
+even if a caller requests a shorter TTL. A takeover candidate rechecks the
+deployment and deadline against database time after obtaining the owner lock.
 The lock is held until the database transaction commits or rolls back.
 
 Snapshot checks read the deadline without locking that frequently updated row.
