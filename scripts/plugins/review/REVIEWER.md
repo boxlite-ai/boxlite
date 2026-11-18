@@ -33,6 +33,10 @@ Start each mode in a fresh session and complete P1 to verify its connection.
 Run P2, P3, P4, and N2 in that session using the Box ID returned by P2; run N3 there for OAuth only.
 Run P5 last to remove that Box, then retain evidence of expected outputs, errors, and cleanup.
 
+For Local P2, choose an available host port and create the Box with `-p HOST_PORT:8000`; record the mapping alongside its ID.
+This publishes on all host interfaces; follow the Local reference's firewall guidance before creation if access must be loopback-only.
+In P4, bind the guest app to `0.0.0.0:8000` and verify `http://127.0.0.1:HOST_PORT` using that existing mapping and Box.
+
 Run N1 separately after prior OAuth use, selecting API-key mode with a missing or empty key.
 Inspect the live schemas before calling tools; the case list is not the execution order.
 Five positive and three negative cases are definitions, not pre-recorded passing results.
