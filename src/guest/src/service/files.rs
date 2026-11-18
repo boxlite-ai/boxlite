@@ -309,6 +309,12 @@ impl Files for GuestServer {
                 mkdir_parents,
                 force_directory,
             },
+            // Parent resolution must stay inside the container rootfs.
+            self.layout
+                .shared()
+                .container(&container_id)
+                .rootfs_dir()
+                .to_path_buf(),
             owner,
             dest.payload_refusal(),
         )
@@ -591,6 +597,7 @@ mod tests {
                 mkdir_parents: true,
                 force_directory: false,
             },
+            PathBuf::from("/"),
             (
                 nix::unistd::Uid::current().as_raw(),
                 nix::unistd::Gid::current().as_raw(),

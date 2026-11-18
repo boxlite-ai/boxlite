@@ -289,7 +289,7 @@ fn extract_from_reader<R: Read>(
     reader: R,
     dest: &Path,
     opts: &UnpackContext,
-    owner: Option<(u32, u32)>,
+    owner: Option<&UnpackOwner>,
     refuse: &Refusal<'_>,
     mut report: Option<&mut UnpackReport>,
 ) -> BoxliteResult<()> {
@@ -324,6 +324,10 @@ fn extract_from_reader<R: Read>(
         let Some(landed) = placed else {
             continue;
         };
+        // A contents header describes the source, not the destination's mode.
+        if entry_is_directory(&file) && landed.name.as_os_str().is_empty() && landing.dest_exists {
+            continue;
+        }
         if let Some(report) = report.as_deref_mut() {
             record_paths(report, &mut seen, Some(dest), &landed.name);
         }
@@ -404,7 +408,7 @@ fn land<R: Read>(
     reader: &mut R,
     dest: &Path,
     opts: &UnpackContext,
-    owner: Option<(u32, u32)>,
+    owner: Option<&UnpackOwner>,
     refuse: &Refusal<'_>,
     report: Option<&mut UnpackReport>,
 ) -> BoxliteResult<()> {
@@ -516,10 +520,13 @@ impl Landing {
 
     /// Ready the destination for what the first entry decided, handing
     /// directories this creates to `owner`.
-    fn prepare(&self, opts: &UnpackContext, owner: Option<(u32, u32)>) -> BoxliteResult<()> {
+    fn prepare(&self, opts: &UnpackContext, owner: Option<&UnpackOwner>) -> BoxliteResult<()> {
         let dest = &self.dest;
         if self.lands_a_file() {
-            if let Some(parent) = dest.parent().filter(|parent| !parent.exists()) {
+            if let Some(parent) = dest
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty() && !parent.exists())
+            {
                 if !opts.mkdir_parents {
                     return Err(BoxliteError::Storage(format!(
                         "parent directory of {} does not exist",
@@ -665,7 +672,7 @@ fn unpack_at<R: Read>(
     entry: &mut tar::Entry<'_, R>,
     dest: &Path,
     landed: &Landed,
-    owner: Option<(u32, u32)>,
+    owner: Option<&UnpackOwner>,
 ) -> io::Result<()> {
     if landed.name.as_os_str().is_empty() {
         return entry.unpack(dest).map(drop);
@@ -698,37 +705,74 @@ fn check_copy_destination(path: &Path, directory: bool) -> BoxliteResult<()> {
     }
 }
 
-/// Hand a freshly created object to `owner` through its path, never following
-/// a symlink in the name: a link entry keeps its own inode's owner and the
-/// link's target is untouched. Failure fails the copy — an object left to the
-/// extracting user is one the box user cannot use.
-fn hand_over(path: &Path, owner: Option<(u32, u32)>) -> io::Result<()> {
-    let Some((uid, gid)) = owner else {
+/// The guest rootfs stays pinned for the entire ownership handoff.
+struct UnpackOwner {
+    rootfs: PathBuf,
+    anchor: std::fs::File,
+    uid: u32,
+    gid: u32,
+}
+
+/// Resolve every parent inside the rootfs; do not follow the leaf symlink.
+fn hand_over(path: &Path, owner: Option<&UnpackOwner>) -> io::Result<()> {
+    let Some(owner) = owner else {
         return Ok(());
     };
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+        let relative = path
+            .strip_prefix(&owner.rootfs)
+            .map_err(|_| io::Error::from_raw_os_error(nix::libc::EXDEV))?;
+        let leaf = relative
+            .file_name()
+            .ok_or_else(|| io::Error::from_raw_os_error(nix::libc::EINVAL))?;
+        let parent = relative
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty());
+        let how = nix::fcntl::OpenHow::new()
+            .flags(
+                nix::fcntl::OFlag::O_PATH
+                    | nix::fcntl::OFlag::O_DIRECTORY
+                    | nix::fcntl::OFlag::O_CLOEXEC,
+            )
+            .resolve(
+                nix::fcntl::ResolveFlag::RESOLVE_IN_ROOT
+                    | nix::fcntl::ResolveFlag::RESOLVE_NO_MAGICLINKS,
+            );
+        let fd = nix::fcntl::openat2(
+            owner.anchor.as_raw_fd(),
+            parent.unwrap_or(Path::new(".")),
+            how,
+        )?;
+        // SAFETY: openat2 returns a fresh descriptor owned by this scope.
+        let parent = unsafe { OwnedFd::from_raw_fd(fd) };
         nix::unistd::fchownat(
-            None,
-            path,
-            Some(nix::unistd::Uid::from_raw(uid)),
-            Some(nix::unistd::Gid::from_raw(gid)),
+            Some(parent.as_raw_fd()),
+            Path::new(leaf),
+            Some(nix::unistd::Uid::from_raw(owner.uid)),
+            Some(nix::unistd::Gid::from_raw(owner.gid)),
             nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
         )
-        .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e))
+        .map_err(io::Error::from)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
-        let _ = path;
-        Ok(())
+        let _ = (path, &owner.rootfs, &owner.anchor, owner.uid, owner.gid);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "guest ownership requires Linux",
+        ))
     }
 }
 
 /// Create the directories missing above `dir` (up to and including it),
 /// outermost first, handing each one this creates to `owner`.
-fn create_parents_owned(dir: &Path, owner: Option<(u32, u32)>) -> io::Result<()> {
+fn create_parents_owned(dir: &Path, owner: Option<&UnpackOwner>) -> io::Result<()> {
     let missing: Vec<&Path> = dir
         .ancestors()
+        .take_while(|dir| !dir.as_os_str().is_empty())
         .take_while(|dir| dir.symlink_metadata().is_err())
         .collect();
     for dir in missing.into_iter().rev() {
@@ -743,7 +787,7 @@ fn create_parents_owned(dir: &Path, owner: Option<(u32, u32)>) -> io::Result<()>
 /// Create the directories missing down to `dir`, each once its parent
 /// resolves inside `dest`, as tar-rs's `ensure_dir_created` does, handing
 /// each one this creates to `owner`.
-fn create_dirs_inside(dest: &Path, dir: &Path, owner: Option<(u32, u32)>) -> io::Result<()> {
+fn create_dirs_inside(dest: &Path, dir: &Path, owner: Option<&UnpackOwner>) -> io::Result<()> {
     let missing: Vec<&Path> = dir
         .ancestors()
         .take_while(|dir| dir.symlink_metadata().is_err())
@@ -907,7 +951,7 @@ pub async fn unpack_stream_refusing<F>(
     stream: BoxByteStream,
     dest: PathBuf,
     opts: UnpackContext,
-    owner: Option<(u32, u32)>,
+    owner: Option<(PathBuf, u32, u32)>,
     refuse: F,
 ) -> BoxliteResult<UnpackReport>
 where
@@ -926,9 +970,27 @@ where
         }
     });
     let unpack = tokio::task::spawn_blocking(move || {
+        let owner = owner
+            .map(|(rootfs, uid, gid)| {
+                std::fs::File::open(&rootfs).map(|anchor| UnpackOwner {
+                    rootfs,
+                    anchor,
+                    uid,
+                    gid,
+                })
+            })
+            .transpose()
+            .map_err(copy_unpack_error)?;
         let mut reader = PipeReader { rx, pending: None };
         let mut report = UnpackReport::default();
-        land(&mut reader, &dest, &opts, owner, &refuse, Some(&mut report))?;
+        land(
+            &mut reader,
+            &dest,
+            &opts,
+            owner.as_ref(),
+            &refuse,
+            Some(&mut report),
+        )?;
         Ok(report)
     });
     let result = unpack.await;
@@ -939,21 +1001,22 @@ where
 }
 
 /// Upload into a guest's rootfs directory, handing every object this copy
-/// creates to the box user the moment it is created. Ordinary host unpacking
-/// keeps `unpack_stream`/`unpack`; guest uploads call this with the
-/// container's uid and gid. The caller holds its mount gate for the entire
+/// creates to the box user. Ownership resolves parents inside the pinned
+/// `rootfs`; ordinary host unpacking keeps `unpack_stream`/`unpack`. The
+/// caller supplies the container's uid and gid and holds its mount gate for the
 /// transfer; `refuse` receives each entry's landing path relative to `dest`.
 pub async fn unpack_stream_owned<F>(
     stream: BoxByteStream,
     dest: PathBuf,
     opts: UnpackContext,
+    rootfs: PathBuf,
     owner: (u32, u32),
     refuse: F,
 ) -> BoxliteResult<()>
 where
     F: Fn(&Path) -> BoxliteResult<()> + Send + Sync + 'static,
 {
-    unpack_stream_refusing(stream, dest, opts, Some(owner), refuse)
+    unpack_stream_refusing(stream, dest, opts, Some((rootfs, owner.0, owner.1)), refuse)
         .await
         .map(drop)
 }
@@ -2565,6 +2628,7 @@ mod tests {
             )])),
             dest.clone(),
             uc(true, true, true),
+            tmp.path().to_path_buf(),
             (
                 nix::unistd::Uid::current().as_raw(),
                 nix::unistd::Gid::current().as_raw(),
