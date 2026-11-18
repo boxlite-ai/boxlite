@@ -15,6 +15,13 @@ use crate::{
 };
 
 /// One request to let `count` vCPUs run, and where its answer goes.
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(
+        dead_code,
+        reason = "Only the x86_64 Vm::run serves vCPU control requests yet."
+    )
+)]
 pub(crate) struct Request {
     pub(crate) count: u8,
     pub(crate) reply: mpsc::SyncSender<Result<u8>>,
@@ -24,6 +31,13 @@ pub(crate) struct Request {
 /// receiver once the run ends answers every waiting caller.
 pub(crate) struct Requests {
     sender: mpsc::Sender<Request>,
+    #[cfg_attr(
+        not(target_arch = "x86_64"),
+        expect(
+            dead_code,
+            reason = "Only the x86_64 Vm::run serves vCPU control requests yet."
+        )
+    )]
     receiver: Mutex<Option<mpsc::Receiver<Request>>>,
 }
 
@@ -37,12 +51,26 @@ impl Requests {
     }
 
     /// The next waiting request, if the run still serves them.
+    #[cfg_attr(
+        not(target_arch = "x86_64"),
+        expect(
+            dead_code,
+            reason = "Only the x86_64 Vm::run serves vCPU control requests yet."
+        )
+    )]
     pub(crate) fn try_next(&self) -> Option<Request> {
         let receiver = self.receiver.lock().unwrap_or_else(PoisonError::into_inner);
         receiver.as_ref()?.try_recv().ok()
     }
 
     /// Stops serving: waiting and later callers get [`Error::VmNotRunning`].
+    #[cfg_attr(
+        not(target_arch = "x86_64"),
+        expect(
+            dead_code,
+            reason = "Only the x86_64 Vm::run serves vCPU control requests yet."
+        )
+    )]
     pub(crate) fn close(&self) {
         *self.receiver.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }

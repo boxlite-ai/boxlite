@@ -110,6 +110,13 @@ pub struct NetConfig {
 impl VmConfig {
     /// The command line the kernel gets: `cmdline`, plus `maxcpus=` when
     /// some listed vCPUs start parked, so Linux brings up only the online ones.
+    #[cfg_attr(
+        not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+        expect(
+            dead_code,
+            reason = "Only the Linux x86_64 boot path writes the command line yet."
+        )
+    )]
     pub(crate) fn kernel_cmdline(&self) -> Result<std::borrow::Cow<'_, str>> {
         if self.max_vcpus == self.vcpu_count {
             return Ok(self.cmdline.as_str().into());
