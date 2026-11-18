@@ -11,12 +11,10 @@
 //! [`GuestMemoryView`], load a snapshot for each piece of work, and go through
 //! vm-memory's volatile access API, never plain references.
 
-use std::{io, ptr::NonNull};
+use std::{io, ptr::NonNull, sync::Arc};
 
 use boxlite_hypervisor::{MemoryRegion, Vm};
-use vm_memory::{
-    GuestAddress, GuestAddressSpace, GuestMemoryBackend, GuestMemoryRegion, VolatileSlice,
-};
+use vm_memory::{GuestAddress, GuestMemoryBackend, GuestMemoryRegion, VolatileSlice};
 
 use crate::error::{Error, Result};
 
@@ -184,6 +182,9 @@ fn interior_pages(start: usize, len: usize, page_size: usize) -> (usize, usize) 
 #[derive(Debug)]
 pub(crate) struct GuestRam {
     memory: GuestMemoryView,
+    /// The boot RAM map. `GuestRam` registers and releases exactly these
+    /// regions, whatever later views add or remove.
+    boot: Arc<GuestMemoryMmap>,
     /// Regions `0..mapped`, in ascending address order, are registered with
     /// the host VM.
     mapped: usize,
@@ -206,8 +207,10 @@ impl GuestRam {
                 bytes,
                 source: io::Error::other(source),
             })?;
+        let boot = Arc::new(memory);
         Ok(Self {
-            memory: GuestMemoryView::new(memory),
+            memory: GuestMemoryView::from(Arc::clone(&boot)),
+            boot,
             mapped: 0,
         })
     }
@@ -217,10 +220,10 @@ impl GuestRam {
         &self.memory
     }
 
-    /// Each RAM range as the hypervisor registers it, in ascending guest order.
+    /// Each boot RAM range as the hypervisor registers it, in ascending guest
+    /// order.
     pub(crate) fn regions(&self) -> Vec<MemoryRegion> {
-        self.memory
-            .memory()
+        self.boot
             .iter()
             .map(|region| MemoryRegion {
                 guest_addr: region.start_addr().0,
@@ -273,7 +276,7 @@ impl Drop for GuestRam {
         if self.mapped > 0 {
             // The host VM may still reference the range; leaking beats freeing
             // memory the guest can still write.
-            std::mem::forget(self.memory.memory().into_inner());
+            std::mem::forget(Arc::clone(&self.boot));
         }
     }
 }
