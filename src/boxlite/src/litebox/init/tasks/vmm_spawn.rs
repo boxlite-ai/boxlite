@@ -204,20 +204,34 @@ async fn build_config(
     // Add user volumes via ContainerVolumeManager
     let mut container_mgr = ContainerVolumeManager::new(&mut volume_mgr);
     for vol in &user_volumes {
-        // The host-side share directory establishes the virtio-fs visibility
-        // boundary for both share kinds below.
-        // Single-file volume: stage the file into a dedicated dir under the box's
-        // shared tree (already granted to the VMM sandbox) and share that dir, so
-        // virtio-fs never exposes the file's host siblings. Directories share as-is.
-        // The later matches also pass the single-file name or managed-directory
-        // sub_path so the guest resolves the correct payload inside that share.
-        let share_dir = match &vol.kind {
+        // The share directory and payload describe one resolved mount kind.
+        // Single files get an isolated staged directory; managed subdirectories
+        // stay inside the volume payload and are pinned by the guest.
+        let (share_dir, payload) = match &vol.kind {
+            crate::litebox::init::types::ResolvedShareKind::Directory => (
+                vol.host_path.clone(),
+                crate::volumes::ContainerMountPayload::WholeDirectory,
+            ),
             crate::litebox::init::types::ResolvedShareKind::SingleFile { file_name } => {
                 let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
                 stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
-                staging_dir
+                (
+                    staging_dir,
+                    crate::volumes::ContainerMountPayload::SingleFile {
+                        file_name: file_name.clone(),
+                    },
+                )
             }
-            _ => vol.host_path.clone(),
+            crate::litebox::init::types::ResolvedShareKind::ManagedDirectory => (
+                vol.host_path.clone(),
+                crate::volumes::ContainerMountPayload::WholeDirectory,
+            ),
+            crate::litebox::init::types::ResolvedShareKind::ManagedSubDirectory { sub_path } => (
+                vol.host_path.clone(),
+                crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                    sub_path: sub_path.clone(),
+                },
+            ),
         };
         container_mgr.add_volume(
             container_id.as_str(),
@@ -228,18 +242,7 @@ async fn build_config(
             vol.read_only,
             vol.owner_uid,
             vol.owner_gid,
-            match &vol.kind {
-                crate::litebox::init::types::ResolvedShareKind::SingleFile { file_name } => {
-                    Some(file_name.clone())
-                }
-                _ => None,
-            },
-            match &vol.kind {
-                crate::litebox::init::types::ResolvedShareKind::ManagedDirectory { sub_path } => {
-                    sub_path.clone()
-                }
-                _ => None,
-            },
+            payload,
         );
     }
     let container_mounts = container_mgr.build_container_mounts();
@@ -273,7 +276,8 @@ async fn build_config(
         .filter(|volume| {
             matches!(
                 volume.kind,
-                crate::litebox::init::types::ResolvedShareKind::ManagedDirectory { .. }
+                crate::litebox::init::types::ResolvedShareKind::ManagedDirectory
+                    | crate::litebox::init::types::ResolvedShareKind::ManagedSubDirectory { .. }
             )
         })
         .map(|volume| crate::jailer::PathAccess {

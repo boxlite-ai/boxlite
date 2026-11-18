@@ -20,12 +20,18 @@ const STAGING_DIR: &str = ".staging";
 const TRASH_DIR: &str = ".trash";
 
 #[derive(Debug, Clone)]
+pub(crate) enum ResolvedLocalMountPayload {
+    WholeVolume,
+    SubDirectory { path: String },
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ResolvedLocalMount {
     pub volume_id: String,
     pub payload_root: PathBuf,
     pub target: String,
     pub read_only: bool,
-    pub sub_path: Option<String>,
+    pub payload: ResolvedLocalMountPayload,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -346,7 +352,7 @@ impl LocalVolumeStore {
                     volume_id: volume.id,
                     target: mount.guest_path.clone(),
                     read_only: mount.read_only,
-                    sub_path: None,
+                    payload: ResolvedLocalMountPayload::WholeVolume,
                 });
             }
             for mount in &options.mounts {
@@ -357,9 +363,15 @@ impl LocalVolumeStore {
                     BoxliteError::InvalidArgument("volume mount is missing a source".into())
                 })?;
                 let volume = self.resolve_selector(selector, VolumeReferenceMode::CanonicalId)?;
-                if let Some(sub_path) = mount.sub_path.as_deref() {
-                    validate_sub_path(&self.root.join(&volume.id).join(PAYLOAD_DIR), sub_path)?;
-                }
+                let payload = match mount.sub_path.as_deref() {
+                    None => ResolvedLocalMountPayload::WholeVolume,
+                    Some(path) => {
+                        validate_sub_path(&self.root.join(&volume.id).join(PAYLOAD_DIR), path)?;
+                        ResolvedLocalMountPayload::SubDirectory {
+                            path: path.to_owned(),
+                        }
+                    }
+                };
                 if !volume_ids.insert(volume.id.clone()) {
                     return Err(BoxliteError::InvalidArgument(format!(
                         "volume {} is mounted more than once",
@@ -371,7 +383,7 @@ impl LocalVolumeStore {
                     volume_id: volume.id,
                     target: mount.target.clone(),
                     read_only: mount.read_only,
-                    sub_path: mount.sub_path.clone(),
+                    payload,
                 });
             }
             Ok(resolved)
@@ -705,7 +717,10 @@ mod tests {
         assert_eq!(resolved[0].payload_root, expected_root);
         assert_eq!(resolved[0].target, "/workspace");
         assert!(resolved[0].read_only);
-        assert!(resolved[0].sub_path.is_none());
+        assert!(matches!(
+            resolved[0].payload,
+            ResolvedLocalMountPayload::WholeVolume
+        ));
         assert!(resolved[0].payload_root.is_dir());
     }
 
@@ -741,7 +756,11 @@ mod tests {
             .local_volume_store
             .resolve_for_boot(&options("team/backend"))
             .expect("accept an existing subdirectory");
-        assert_eq!(resolved[0].sub_path.as_deref(), Some("team/backend"));
+        assert!(matches!(
+            resolved[0].payload,
+            ResolvedLocalMountPayload::SubDirectory { ref path }
+                if path == "team/backend"
+        ));
         assert!(resolved[0].payload_root.ends_with("_data"));
 
         for invalid in [

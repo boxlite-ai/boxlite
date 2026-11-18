@@ -99,6 +99,15 @@ Confirm that the output contains all three test names:
 The lifecycle case creates a volume, writes and reads through separate real VMs using `--rm`,
 verifies that no boxes remain, removes the volume, and confirms that a subsequent get fails.
 
+When the mount protocol or guest bind dispatch changes, also verify the pre-existing single-file
+host-bind contract:
+
+```bash
+make test:integration:cli FILTER=test_run_with_single_file_volume
+```
+
+Confirm that `test_run_with_single_file_volume` ran and read the staged file through a real VM.
+
 Run an archive round trip:
 
 ```bash
@@ -207,6 +216,7 @@ not just the command's exit status. Use this compact format:
 | Rust units | `make test:unit:rust` | Pass/fail | Test totals or failing test |
 | Guest | `make test:unit:guest` | Pass/fail/not run | Linux result or platform blocker |
 | CLI VM | `make test:integration:cli FILTER=local_volume` | Pass/fail/not run | Three named tests |
+| CLI single-file VM | `make test:integration:cli FILTER=test_run_with_single_file_volume` | Pass/fail/not run | Required for mount protocol or guest bind dispatch changes |
 | Python VM | Standard target or fallback | Pass/fail/not run | Interpreter and named test |
 
 The runbook is complete when every applicable step has run, all intended tests are accounted for,

@@ -119,7 +119,7 @@ fn parse_guest_version(version: &str) -> Option<GuestVersion> {
     parts.next().is_none().then_some(parsed)
 }
 
-fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
+pub(crate) fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
     let (major, minor, patch) = minimum;
     let Some(reported) = parse_guest_version(version) else {
         return Err(BoxliteError::Unsupported(format!(

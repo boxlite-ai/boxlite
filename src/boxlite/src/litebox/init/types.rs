@@ -35,7 +35,8 @@ pub const USE_DISK_ROOTFS: bool = true;
 pub enum ResolvedShareKind {
     Directory,
     SingleFile { file_name: String },
-    ManagedDirectory { sub_path: Option<String> },
+    ManagedDirectory,
+    ManagedSubDirectory { sub_path: String },
 }
 
 /// User-specified volume with resolved paths and generated tag.
@@ -50,6 +51,19 @@ pub struct ResolvedVolume {
     /// Owner GID of host directory (for auto-idmap in guest).
     pub owner_gid: u32,
     pub kind: ResolvedShareKind,
+}
+
+fn managed_share_kind(mount: &crate::volumes::ResolvedLocalMount) -> ResolvedShareKind {
+    match &mount.payload {
+        crate::volumes::ResolvedLocalMountPayload::WholeVolume => {
+            ResolvedShareKind::ManagedDirectory
+        }
+        crate::volumes::ResolvedLocalMountPayload::SubDirectory { path } => {
+            ResolvedShareKind::ManagedSubDirectory {
+                sub_path: path.clone(),
+            }
+        }
+    }
 }
 
 pub fn resolve_user_volumes(
@@ -74,6 +88,7 @@ pub fn resolve_user_volumes(
             let mount = managed_by_id.remove(selector).ok_or_else(|| {
                 BoxliteError::Internal(format!("volume {selector} was not resolved for boot"))
             })?;
+            let kind = managed_share_kind(&mount);
             let resolved_path = mount.payload_root;
             let metadata = std::fs::metadata(&resolved_path).map_err(|error| {
                 BoxliteError::Config(format!("Failed to stat managed volume {selector}: {error}"))
@@ -86,9 +101,7 @@ pub fn resolve_user_volumes(
                 read_only: mount.read_only,
                 owner_uid: metadata.uid(),
                 owner_gid: metadata.gid(),
-                kind: ResolvedShareKind::ManagedDirectory {
-                    sub_path: mount.sub_path,
-                },
+                kind,
             });
             continue;
         }
@@ -171,6 +184,7 @@ pub fn resolve_user_volumes(
                 let managed = managed_by_id.remove(source).ok_or_else(|| {
                     BoxliteError::Internal(format!("volume {source} was not resolved for boot"))
                 })?;
+                let kind = managed_share_kind(&managed);
                 let resolved_path = managed.payload_root;
                 let metadata = std::fs::metadata(&resolved_path).map_err(|error| {
                     BoxliteError::Config(format!(
@@ -186,9 +200,7 @@ pub fn resolve_user_volumes(
                     read_only: managed.read_only,
                     owner_uid: metadata.uid(),
                     owner_gid: metadata.gid(),
-                    kind: ResolvedShareKind::ManagedDirectory {
-                        sub_path: managed.sub_path,
-                    },
+                    kind,
                 });
             }
             crate::runtime::options::MountType::Bind => {
@@ -541,7 +553,43 @@ mod tests {
         assert_eq!(resolved[0].host_path, expected);
         assert!(matches!(
             resolved[0].kind,
-            ResolvedShareKind::ManagedDirectory { sub_path: None }
+            ResolvedShareKind::ManagedDirectory
+        ));
+    }
+
+    #[test]
+    fn resolve_typed_mount_subdirectory_records_the_payload_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        std::fs::create_dir_all(
+            runtime
+                .layout
+                .volumes_dir()
+                .join(&volume.id)
+                .join("_data")
+                .join("team/backend"),
+        )
+        .unwrap();
+        let mount = crate::runtime::options::MountSpec {
+            sub_path: Some("team/backend".to_string()),
+            ..crate::runtime::options::MountSpec::volume_mount(&volume.id, "/workspace")
+        };
+
+        let resolved = resolve_user_volumes(&[], &[mount], &runtime.local_volume_store).unwrap();
+        assert!(matches!(
+            resolved[0].kind,
+            ResolvedShareKind::ManagedSubDirectory { ref sub_path }
+                if sub_path == "team/backend"
         ));
     }
 

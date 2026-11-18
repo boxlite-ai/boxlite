@@ -1,7 +1,7 @@
 //! Container service interface.
 
 use boxlite_shared::{
-    BindMount, BoxliteError, BoxliteResult, CaCert,
+    BindMount, BindMountKind, BoxliteError, BoxliteResult, CaCert,
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
@@ -173,14 +173,27 @@ impl ContainerInterface {
         // Uses convention-based paths - guest will construct full path from volume_name
         let proto_mounts: Vec<BindMount> = mounts
             .into_iter()
-            .map(|m| BindMount {
-                volume_name: m.volume_name,
-                destination: m.destination,
-                read_only: m.read_only,
-                owner_uid: m.owner_uid,
-                owner_gid: m.owner_gid,
-                subpath: m.subpath.unwrap_or_default(),
-                volume_sub_path: m.volume_sub_path.unwrap_or_default(),
+            .map(|m| {
+                let (kind, subpath) = match m.payload {
+                    crate::volumes::ContainerMountPayload::WholeDirectory => {
+                        (BindMountKind::WholeDirectory, String::new())
+                    }
+                    crate::volumes::ContainerMountPayload::SingleFile { file_name } => {
+                        (BindMountKind::SingleFile, file_name)
+                    }
+                    crate::volumes::ContainerMountPayload::ManagedSubDirectory { sub_path } => {
+                        (BindMountKind::ManagedSubDirectory, sub_path)
+                    }
+                };
+                BindMount {
+                    volume_name: m.volume_name,
+                    destination: m.destination,
+                    read_only: m.read_only,
+                    owner_uid: m.owner_uid,
+                    owner_gid: m.owner_gid,
+                    kind: kind as i32,
+                    subpath,
+                }
             })
             .collect();
 
@@ -480,6 +493,58 @@ mod tests {
     async fn container_start_ok_on_success() {
         let mut iface = interface_for(StartReply::Success).await;
         assert!(iface.start("box-ok").await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_init_sends_explicit_mount_kinds() {
+        let seen = Arc::new(Mutex::new(None));
+        let mut iface = interface_recording(StartReply::Success, Arc::clone(&seen)).await;
+        let mount = |payload| ContainerMount {
+            volume_name: "uservol0".to_string(),
+            destination: "/data".to_string(),
+            read_only: false,
+            owner_uid: 0,
+            owner_gid: 0,
+            payload,
+        };
+
+        iface
+            .init(ContainerInitConfig {
+                container_id: "container-1".to_string(),
+                image: crate::images::ContainerImageConfig::default(),
+                rootfs: ContainerRootfsInitConfig::Merged,
+                mounts: vec![
+                    mount(crate::volumes::ContainerMountPayload::WholeDirectory),
+                    mount(crate::volumes::ContainerMountPayload::SingleFile {
+                        file_name: "app.conf".to_string(),
+                    }),
+                    mount(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                        sub_path: "team/backend".to_string(),
+                    }),
+                ],
+                ca_certs: Vec::new(),
+                tty: false,
+                devices: Vec::new(),
+                resources: ContainerResources::default(),
+                advanced: ContainerAdvancedConfig::default(),
+            })
+            .await
+            .unwrap();
+
+        let request = seen.lock().unwrap().take().expect("guest saw Init");
+        let expected = [
+            (boxlite_shared::BindMountKind::WholeDirectory, ""),
+            (boxlite_shared::BindMountKind::SingleFile, "app.conf"),
+            (
+                boxlite_shared::BindMountKind::ManagedSubDirectory,
+                "team/backend",
+            ),
+        ];
+        assert_eq!(request.mounts.len(), expected.len());
+        for (mount, (kind, subpath)) in request.mounts.iter().zip(expected) {
+            assert_eq!(mount.kind, kind as i32);
+            assert_eq!(mount.subpath, subpath);
+        }
     }
 
     /// Devices are container-scoped, so they must reach the guest on the

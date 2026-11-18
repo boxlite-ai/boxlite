@@ -142,6 +142,15 @@ impl PipelineTask<InitCtx> for GuestInitTask {
     }
 }
 
+fn requires_safe_volume_sub_path(mounts: &[crate::volumes::ContainerMount]) -> bool {
+    mounts.iter().any(|mount| {
+        matches!(
+            mount.payload,
+            crate::volumes::ContainerMountPayload::ManagedSubDirectory { .. }
+        )
+    })
+}
+
 /// Initialize the guest and create the container (init is *not* run here).
 async fn run_guest_init(
     guest_session: GuestSession,
@@ -171,12 +180,7 @@ async fn run_guest_init(
             .require_min_version(MIN_DEVICE_GUEST_VERSION)
             .await?;
     }
-    if bootstrap.container.mounts.iter().any(|mount| {
-        mount
-            .volume_sub_path
-            .as_deref()
-            .is_some_and(|path| !path.is_empty())
-    }) {
+    if requires_safe_volume_sub_path(&bootstrap.container.mounts) {
         guest_interface
             .require_min_version(MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION)
             .await?;
@@ -275,5 +279,39 @@ mod tests {
             MIN_PRIVILEGED_CONTAINER_GUEST_VERSION <= MIN_CAPABILITY_GUEST_VERSION,
             "privileged floor {MIN_PRIVILEGED_CONTAINER_GUEST_VERSION:?} is newer than the capability floor {MIN_CAPABILITY_GUEST_VERSION:?}"
         );
+    }
+
+    #[test]
+    fn managed_sub_directories_require_a_safe_guest_before_init() {
+        let mount = |payload| crate::volumes::ContainerMount {
+            volume_name: "uservol0".to_string(),
+            destination: "/data".to_string(),
+            read_only: true,
+            owner_uid: 0,
+            owner_gid: 0,
+            payload,
+        };
+        let managed = mount(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+            sub_path: "team/backend".to_string(),
+        });
+        assert!(requires_safe_volume_sub_path(&[managed]));
+        assert!(!requires_safe_volume_sub_path(&[
+            mount(crate::volumes::ContainerMountPayload::WholeDirectory),
+            mount(crate::volumes::ContainerMountPayload::SingleFile {
+                file_name: "app.conf".to_string(),
+            }),
+        ]));
+
+        let error = crate::portal::interfaces::guest::ensure_guest_version(
+            "0.13.1",
+            MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION,
+        )
+        .expect_err("the pre-kind guest must be rejected");
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        crate::portal::interfaces::guest::ensure_guest_version(
+            "0.13.2",
+            MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION,
+        )
+        .expect("the first safe guest passes the gate");
     }
 }

@@ -11,6 +11,17 @@ use std::path::PathBuf;
 
 use super::guest_volume::GuestVolumeManager;
 
+/// The exact payload selected inside a container mount's shared directory.
+#[derive(Debug, Clone)]
+pub(crate) enum ContainerMountPayload {
+    /// Mount the shared directory itself.
+    WholeDirectory,
+    /// Bind one file from the staged share directory.
+    SingleFile { file_name: String },
+    /// Pin one relative directory from a managed volume payload.
+    ManagedSubDirectory { sub_path: String },
+}
+
 /// Container bind mount entry.
 ///
 /// Uses convention-based paths - guest constructs full path from volume_name:
@@ -27,11 +38,8 @@ pub struct ContainerMount {
     pub owner_uid: u32,
     /// Owner GID of host directory (for auto-idmap in guest)
     pub owner_gid: u32,
-    /// For a single-file mount, the file name to bind-mount from the staged
-    /// share dir; `None` for a whole-directory mount.
-    pub subpath: Option<String>,
-    /// Relative directory inside a managed volume, pinned by the guest.
-    pub volume_sub_path: Option<String>,
+    /// Payload selected from the shared directory.
+    pub(crate) payload: ContainerMountPayload,
 }
 
 /// Manages container-level volume configuration.
@@ -81,8 +89,7 @@ impl<'a> ContainerVolumeManager<'a> {
         read_only: bool,
         owner_uid: u32,
         owner_gid: u32,
-        subpath: Option<String>,
-        volume_sub_path: Option<String>,
+        payload: ContainerMountPayload,
     ) {
         // Add virtiofs share to guest with container_id
         // Guest will mount at convention path: /run/boxlite/shared/containers/{container_id}/volumes/{tag}
@@ -101,8 +108,7 @@ impl<'a> ContainerVolumeManager<'a> {
             read_only,
             owner_uid,
             owner_gid,
-            subpath,
-            volume_sub_path,
+            payload,
         });
     }
 
@@ -117,8 +123,7 @@ impl<'a> ContainerVolumeManager<'a> {
             read_only,
             owner_uid: 0,
             owner_gid: 0,
-            subpath: None,
-            volume_sub_path: None,
+            payload: ContainerMountPayload::WholeDirectory,
         });
     }
 
@@ -133,7 +138,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn add_volume_carries_subpath_for_single_file() {
+    fn add_volume_carries_the_selected_payload() {
         let mut guest = GuestVolumeManager::new();
         let mut mgr = ContainerVolumeManager::new(&mut guest);
         mgr.add_volume(
@@ -145,12 +150,17 @@ mod tests {
             true,
             0,
             0,
-            Some("app.conf".to_string()),
-            None,
+            ContainerMountPayload::SingleFile {
+                file_name: "app.conf".to_string(),
+            },
         );
 
         let mounts = mgr.build_container_mounts();
         assert_eq!(mounts.len(), 1);
-        assert_eq!(mounts[0].subpath, Some("app.conf".to_string()));
+        assert!(matches!(
+            mounts[0].payload,
+            ContainerMountPayload::SingleFile { ref file_name }
+                if file_name == "app.conf"
+        ));
     }
 }

@@ -12,9 +12,12 @@ mod share;
 mod staging;
 mod store;
 
+pub(crate) use container_volume::ContainerMountPayload;
 pub use container_volume::{ContainerMount, ContainerVolumeManager};
 pub use guest_volume::GuestVolumeManager;
-pub(crate) use local_store::{LocalVolumeStore, VolumeReferenceMode};
+pub(crate) use local_store::{
+    LocalVolumeStore, ResolvedLocalMount, ResolvedLocalMountPayload, VolumeReferenceMode,
+};
 pub use share::{VolumeShare, classify_volume_share};
 pub use staging::stage_single_file;
 pub use store::VolumeInfo;

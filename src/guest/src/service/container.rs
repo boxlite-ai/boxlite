@@ -7,12 +7,13 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::service::server::GuestServer;
 use crate::storage::attach::{validate_destination, Target};
-use boxlite_shared::errors::BoxliteError;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::{
-    container_init_response, container_start_response, rootfs_init, Container as ContainerService,
-    ContainerInitError, ContainerInitErrorKind, ContainerInitRequest, ContainerInitResponse,
-    ContainerInitSuccess, ContainerMountRequest, ContainerMountResponse, ContainerStartRequest,
-    ContainerStartResponse, ContainerStartSuccess, Filesystem, RootfsInit,
+    container_init_response, container_start_response, rootfs_init, BindMount, BindMountKind,
+    Container as ContainerService, ContainerInitError, ContainerInitErrorKind,
+    ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess, ContainerMountRequest,
+    ContainerMountResponse, ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess,
+    Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
@@ -44,6 +45,42 @@ fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
     ContainerInitError {
         reason: format!("{context}: {error}"),
         kind: kind as i32,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum BindMountSource<'a> {
+    WholeDirectory,
+    SingleFile { file_name: &'a str },
+    ManagedSubDirectory { sub_path: &'a str },
+}
+
+fn bind_mount_source(mount: &BindMount) -> BoxliteResult<BindMountSource<'_>> {
+    let kind = BindMountKind::try_from(mount.kind).map_err(|_| {
+        BoxliteError::Unsupported(format!("unknown bind mount kind {}", mount.kind))
+    })?;
+    match kind {
+        BindMountKind::Unspecified if mount.subpath.is_empty() => {
+            Ok(BindMountSource::WholeDirectory)
+        }
+        BindMountKind::Unspecified => Ok(BindMountSource::SingleFile {
+            file_name: &mount.subpath,
+        }),
+        BindMountKind::WholeDirectory if mount.subpath.is_empty() => {
+            Ok(BindMountSource::WholeDirectory)
+        }
+        BindMountKind::SingleFile if !mount.subpath.is_empty() => Ok(BindMountSource::SingleFile {
+            file_name: &mount.subpath,
+        }),
+        BindMountKind::ManagedSubDirectory if !mount.subpath.is_empty() => {
+            Ok(BindMountSource::ManagedSubDirectory {
+                sub_path: &mount.subpath,
+            })
+        }
+        _ => Err(BoxliteError::InvalidArgument(format!(
+            "subpath {:?} is invalid for {kind:?}",
+            mount.subpath
+        ))),
     }
 }
 
@@ -335,35 +372,43 @@ impl ContainerService for GuestServer {
         let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
         for m in &init_req.mounts {
             let volume_dir = container_layout.volume_dir(&m.volume_name);
-            // Managed volume with a sub_path: pin that subdirectory at its own
-            // mountpoint and use the pinned path as the mount source. A failed
-            // pin fails the container init outright.
-            let source = if !m.volume_sub_path.is_empty() {
-                match crate::storage::resolved_mount::ResolvedMount::pin(
-                    &volume_dir,
-                    &m.volume_sub_path,
-                    m.read_only,
-                ) {
-                    Ok(mount) => {
-                        let path = mount.path().to_path_buf();
-                        resolved_mounts.push(mount);
-                        path
-                    }
-                    Err(error) => {
-                        return Ok(Response::new(ContainerInitResponse {
-                            result: Some(container_init_response::Result::Error(init_error(
-                                "resolve managed volume sub_path",
-                                &error,
-                            ))),
-                        }));
+            let selected = match bind_mount_source(m) {
+                Ok(selected) => selected,
+                Err(error) => {
+                    return Ok(Response::new(ContainerInitResponse {
+                        result: Some(container_init_response::Result::Error(init_error(
+                            "resolve bind mount",
+                            &error,
+                        ))),
+                    }));
+                }
+            };
+            let source = match selected {
+                BindMountSource::WholeDirectory => volume_dir,
+                BindMountSource::SingleFile { file_name } => volume_dir.join(file_name),
+                BindMountSource::ManagedSubDirectory { sub_path } => {
+                    // Pin the selected directory at its own mountpoint. A failed
+                    // pin fails container init instead of exposing the whole volume.
+                    match crate::storage::resolved_mount::ResolvedMount::pin(
+                        &volume_dir,
+                        sub_path,
+                        m.read_only,
+                    ) {
+                        Ok(mount) => {
+                            let path = mount.path().to_path_buf();
+                            resolved_mounts.push(mount);
+                            path
+                        }
+                        Err(error) => {
+                            return Ok(Response::new(ContainerInitResponse {
+                                result: Some(container_init_response::Result::Error(init_error(
+                                    "resolve managed volume sub_path",
+                                    &error,
+                                ))),
+                            }));
+                        }
                     }
                 }
-            } else if m.subpath.is_empty() {
-                // Whole-volume mount: share the container's volume folder as-is.
-                volume_dir
-            } else {
-                // Single-file mount: bind just the one file within the shared dir.
-                volume_dir.join(&m.subpath)
             };
             user_mounts.push(UserMount {
                 source: source.to_string_lossy().to_string(),
@@ -845,6 +890,88 @@ mod tests {
         for request in [writable, relative] {
             let status = checked_mount(&request).unwrap_err();
             assert_eq!(status.code(), Code::InvalidArgument, "{}", status.message());
+        }
+    }
+
+    #[test]
+    fn legacy_bind_mounts_keep_their_original_subpath_semantics() {
+        let legacy_whole = BindMount::default();
+        let whole = bind_mount_source(&legacy_whole)
+            .expect("an old host's empty subpath selects the whole directory");
+        assert_eq!(whole, BindMountSource::WholeDirectory);
+
+        let file = BindMount {
+            subpath: "app.conf".to_string(),
+            ..Default::default()
+        };
+        let selected = bind_mount_source(&file)
+            .expect("an old host's non-empty subpath selects a single file");
+        assert_eq!(
+            selected,
+            BindMountSource::SingleFile {
+                file_name: "app.conf"
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_bind_mount_kinds_select_the_requested_payload() {
+        let cases = [
+            (
+                BindMountKind::WholeDirectory,
+                "",
+                BindMountSource::WholeDirectory,
+            ),
+            (
+                BindMountKind::SingleFile,
+                "app.conf",
+                BindMountSource::SingleFile {
+                    file_name: "app.conf",
+                },
+            ),
+            (
+                BindMountKind::ManagedSubDirectory,
+                "team/backend",
+                BindMountSource::ManagedSubDirectory {
+                    sub_path: "team/backend",
+                },
+            ),
+        ];
+        for (kind, subpath, expected) in cases {
+            let mount = BindMount {
+                kind: kind as i32,
+                subpath: subpath.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(bind_mount_source(&mount).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn bind_mount_rejects_unknown_kinds_and_invalid_subpaths() {
+        let unknown = BindMount {
+            kind: 99,
+            ..Default::default()
+        };
+        assert!(matches!(
+            bind_mount_source(&unknown),
+            Err(BoxliteError::Unsupported(_))
+        ));
+
+        for (kind, subpath) in [
+            (BindMountKind::WholeDirectory, "unexpected"),
+            (BindMountKind::SingleFile, ""),
+            (BindMountKind::ManagedSubDirectory, ""),
+        ] {
+            let mount = BindMount {
+                kind: kind as i32,
+                subpath: subpath.to_string(),
+                ..Default::default()
+            };
+            assert!(matches!(
+                bind_mount_source(&mount),
+                Err(BoxliteError::InvalidArgument(_))
+            ));
         }
     }
 
