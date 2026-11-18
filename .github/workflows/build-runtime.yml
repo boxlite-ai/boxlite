@@ -14,6 +14,7 @@
 #   to the GitHub Release, then publishes Rust crates to crates.io
 #   (requires CARGO_REGISTRY_TOKEN).
 # - workflow_dispatch on hotfix/runtime-v0.14.0: rebuild and publish v0.14.0.
+#   Recovery builds and publishes source from the original v0.14.0 commit.
 #   Other branches only build artifacts.
 #
 # Note: SDK workflows (build-wheels, build-node, build-c) also gate on
@@ -62,6 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && '089d4c3789842e19b974bad60813bd1450565af7' || github.sha }}
           submodules: recursive
 
       - uses: ./.github/actions/setup-rust
@@ -143,6 +145,8 @@ jobs:
     steps:
       - name: Checkout (for scripts/release/install.sh.template)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && '089d4c3789842e19b974bad60813bd1450565af7' || github.sha }}
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -261,6 +265,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && '089d4c3789842e19b974bad60813bd1450565af7' || github.sha }}
 
       - uses: ./.github/actions/setup-rust
 
