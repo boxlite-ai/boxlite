@@ -44,10 +44,10 @@ func dialThroughMITMH2(t *testing.T, ca *BoxCA, hostname, destAddr string, secre
 func dialThroughMITMWithProto(t *testing.T, ca *BoxCA, hostname, destAddr string, secrets []SecretConfig, forceProto string) *http.Client {
 	t.Helper()
 
-	caPool, _ := ca.CACertPool()
-
-	guest, proxy := net.Pipe()
-	go mitmAndForward(proxy, hostname, dialTo(destAddr), ca, secrets, &tls.Config{InsecureSkipVerify: true})
+	caPool, err := ca.CACertPool()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	nextProtos := []string{"http/1.1"}
 	if forceProto == "h2" {
@@ -55,45 +55,43 @@ func dialThroughMITMWithProto(t *testing.T, ca *BoxCA, hostname, destAddr string
 	}
 
 	tlsCfg := &tls.Config{
-		ServerName:         hostname,
-		RootCAs:            caPool,
-		NextProtos:         nextProtos,
-		InsecureSkipVerify: caPool == nil,
+		ServerName: hostname,
+		RootCAs:    caPool,
+		NextProtos: nextProtos,
+	}
+	dialTLS := func(ctx context.Context) (*tls.Conn, error) {
+		guest, proxy := net.Pipe()
+		go mitmAndForward(proxy, hostname, dialTo(destAddr), ca, secrets, &tls.Config{InsecureSkipVerify: true})
+		conn := tls.Client(guest, tlsCfg)
+		if err := conn.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return conn, nil
 	}
 
 	if forceProto == "h2" {
-		// For HTTP/2: do TLS handshake once, then use http2.Transport
-		// which natively multiplexes on a single connection.
-		tlsConn := tls.Client(guest, tlsCfg)
-		h2Transport := &http2.Transport{
+		// Every pool dial owns a fresh TLS connection; the transport manages
+		// connection sharing and concurrent HTTP/2 streams.
+		transport := &http2.Transport{
 			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-				return tlsConn, nil
+				return dialTLS(ctx)
 			},
 			TLSClientConfig: tlsCfg,
 		}
+		t.Cleanup(transport.CloseIdleConnections)
 		return &http.Client{
-			Transport: h2Transport,
+			Transport: transport,
 			Timeout:   10 * time.Second,
 		}
 	}
 
-	// For HTTP/1.1: single TLS connection over the pipe.
-	// We do TLS once; the transport reuses it for keep-alive.
-	var h1Once sync.Once
-	var h1Conn net.Conn
-	var h1Err error
 	transport := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			h1Once.Do(func() {
-				h1Conn = tls.Client(guest, tlsCfg)
-				// Don't handshake here — let transport do it
-			})
-			if h1Err != nil {
-				return nil, h1Err
-			}
-			return h1Conn, nil
+			return dialTLS(ctx)
 		},
 	}
+	t.Cleanup(transport.CloseIdleConnections)
 
 	return &http.Client{
 		Transport: transport,

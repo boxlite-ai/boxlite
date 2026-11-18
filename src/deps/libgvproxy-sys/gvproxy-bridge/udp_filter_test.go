@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,14 +74,14 @@ func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 
 // networkSeams carries what gvproxy_create fills from a box's secrets (the
 // MITM slots) and the two seams that would otherwise reach the outside world:
-// the host resolver and the socket dialer. Both default to refusing, so a
-// test that forgets to script them fails fast instead of touching live DNS
-// or the network.
+// the host resolver, socket dialer, and selected transport. DNS defaults to
+// refusing; unscripted sockets may reach only literal loopback addresses.
 type networkSeams struct {
 	ca            *BoxCA
 	secretMatcher *SecretHostMatcher
 	resolve       resolveFunc
 	dial          dialFunc
+	connect       connectFunc
 }
 
 func refuseResolve(_ context.Context, host string) ([]net.IP, error) {
@@ -101,7 +102,13 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 		seams.resolve = refuseResolve
 	}
 	if seams.dial == nil {
-		seams.dial = refuseDial
+		seams.dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil || !net.ParseIP(host).IsLoopback() {
+				return refuseDial(ctx, network, addr)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
 	}
 
 	tapConfig := buildTapConfig(cfg, types.QemuProtocol)
@@ -123,18 +130,21 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	if len(cfg.AllowNet) > 0 {
 		filter = newAllowNetFilter(cfg)
 	}
-	// Same condition as production: secrets alone are reason enough to
-	// replace the upstream forwarders.
+	dialer, err := newEgressDialer(filter, cfg.Subnet)
+	if err != nil {
+		t.Fatalf("newEgressDialer: %v", err)
+	}
+	dialer.resolve = seams.resolve
+	dialer.dial = seams.dial
+	dialer.connect = seams.connect
 	if len(cfg.AllowNet) > 0 || seams.secretMatcher != nil {
-		dialer, err := newEgressDialer(filter, cfg.Subnet)
-		if err != nil {
-			t.Fatalf("newEgressDialer: %v", err)
-		}
-		dialer.resolve = seams.resolve
-		dialer.dial = seams.dial
 		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, dialer, seams.ca, seams.secretMatcher); err != nil {
 			t.Fatalf("installAllowNetHandlers: %v", err)
 		}
+	} else {
+		var natLock sync.Mutex
+		forwarder := TCPWithFilter(policy.stack, natTable(tapConfig), &natLock, tapConfig.Ec2MetadataAccess, nil, dialer, seams.ca, seams.secretMatcher)
+		policy.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, forwarder.HandlePacket)
 	}
 
 	guestSide, stackSide := net.Pipe()
