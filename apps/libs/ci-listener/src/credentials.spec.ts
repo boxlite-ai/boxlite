@@ -247,6 +247,36 @@ describe('CI shared credential ownership', () => {
       rows.filter((row) => row.key.startsWith('credential/')).map((row) => (row.payload as { phase: string }).phase),
     ).toEqual(['requested'])
   })
+  it('retains issuance cooldown across replacement reader forks until its exact deadline', async () => {
+    const now = jest.spyOn(Date, 'now').mockImplementation(() => clock),
+      first = provider.fork('scope/read/first')
+    let replacement: ListenerCredentials | undefined
+    try {
+      failIssue = true
+      await expect(first.open({ kind: 'jobs', repository: 11 })).rejects.toMatchObject({ uncertain: true })
+      await first.close()
+      failIssue = false
+      replacement = provider.fork('scope/read/replacement')
+      await expect(replacement.open({ kind: 'jobs', repository: 11 })).rejects.toThrow('deferred')
+      expect(posts()).toHaveLength(1)
+      const otherRepository = await replacement.open({ kind: 'jobs', repository: 12 }),
+        otherPurpose = await replacement.open({ kind: 'repository-runners', repository: 11 })
+      expect(posts()).toHaveLength(3)
+      await otherRepository.close()
+      await otherPurpose.close()
+      clock += 59_999
+      await expect(replacement.open({ kind: 'jobs', repository: 11 })).rejects.toThrow('deferred')
+      expect(posts()).toHaveLength(3)
+      clock++
+      const resumed = await replacement.open({ kind: 'jobs', repository: 11 })
+      expect(resumed.credential.usable).toBe(true)
+      expect(posts()).toHaveLength(4)
+      await resumed.close()
+    } finally {
+      await Promise.all([first.close(), replacement?.close()])
+      now.mockRestore()
+    }
+  })
   it('retires a late token response after the provider was closed', async () => {
     let entered!: () => void, release!: () => void
     const entering = new Promise<void>((resolve) => {

@@ -317,6 +317,8 @@ export class WorkerPool {
         throw error
       }
       const supplied = new Map<string, number>()
+      const unissued = new Map<string, number>()
+      const unissuedLabels = new Map<string, string>()
       const idle = new Map<string, AllocationRow[]>()
       const retiring = new Set<string>()
       const active = new Set(allocations.map((row) => row.record.key))
@@ -370,6 +372,10 @@ export class WorkerPool {
         if (runner && !selection.labels.every((label) => runner.labels.includes(label.toLowerCase())))
           throw new StateCorrupt()
         supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
+        if (row.value.box.phase === 'none') {
+          unissued.set(selection.label, (unissued.get(selection.label) ?? 0) + 1)
+          unissuedLabels.set(row.record.key, selection.label)
+        }
         if (
           row.value.box.phase === 'none' ||
           (runner?.status === 'online' &&
@@ -432,8 +438,7 @@ export class WorkerPool {
         [...requested].some(([label, target]) => target.count > (supplied.get(label) ?? 0)) &&
         (await this.journal.hasCapacity(lease, this.scopeKey, policy))
       const missingClaims = [...requested].some(([label]) => unknownBusy.has(label))
-      if (verified === true) for (const id of newBusy) this.busyRefreshes.add(id)
-      if (verified === 'positive' && expanding && missingClaims && newBusy.size) {
+      if (verified && expanding && missingClaims && newBusy.size) {
         for (const id of newBusy) this.busyRefreshes.add(id)
         await this.reconcileAll(lease, allocations, backend, scope.scope, signal, retiring, false)
         throw new DemandUncertain('New busy supply requires fresh job observations', true)
@@ -472,13 +477,27 @@ export class WorkerPool {
             )
           } else retiring.add(row.record.key)
         }
+      const creationBudget = new Map<string, number>()
+      for (const [label, target] of requested)
+        creationBudget.set(label, Math.max(0, target.count - ((supplied.get(label) ?? 0) - (unissued.get(label) ?? 0))))
+      // Both dispatch passes use one selection, so retained reservations share the same demand budget.
+      const creationChecks = new Map<string, StateCheck[]>()
+      if (verified)
+        for (const row of allocations) {
+          if (row.value.box.phase !== 'none' || row.value.closing || (this.execution && !row.value.supply)) continue
+          const label = unissuedLabels.get(row.record.key)
+          if (!label) continue
+          const target = requested.get(label)
+          const remaining = creationBudget.get(label) ?? 0
+          if (!target || remaining <= 0) continue
+          creationChecks.set(row.record.key, [...(policy.checks ?? []), ...target.checks])
+          creationBudget.set(label, remaining - 1)
+        }
       const proof = (row: AllocationRow, retire: boolean): readonly StateCheck[] | undefined => {
-        if (retire) return queueChecks.length && queueChecks.length <= 100 ? queueChecks : undefined
+        if (retire)
+          return queueChecks.length <= 100 && (queueChecks.length || !this.execution) ? queueChecks : undefined
         if (row.value.box.phase !== 'none' || row.value.closing) return []
-        if (!verified || !row.value.supply) return undefined
-        const selection = selectRunnerLabels(row.value.supply.labels, this.settings.labels)
-        const target = selection && requested.get(selection.label)
-        return target ? [...(policy.checks ?? []), ...target.checks] : undefined
+        return creationChecks.get(row.record.key)
       }
       if (this.execution)
         for (const row of allocations) {
@@ -511,9 +530,11 @@ export class WorkerPool {
             break
           }
           allocations.push(row)
+          const checks = [...(policy.checks ?? []), ...target.checks]
+          creationChecks.set(row.record.key, checks)
           if (this.execution) {
             this.event(scope.scope, row, 'ci-worker-reserved', 'info')
-            this.dispatch(lease, row, backend, scope.scope, signal, false, [...(policy.checks ?? []), ...target.checks])
+            this.dispatch(lease, row, backend, scope.scope, signal, false, checks)
           }
           supplied.set(label, available + 1)
           pending = true
@@ -565,9 +586,12 @@ export class WorkerPool {
     const results = await Promise.allSettled(
       allocations.map(async (row) => {
         if (!allowCreate && row.value.box.phase === 'none' && !row.value.closing) return
+        const retire = retiring.has(row.record.key)
+        const checks = proof?.(row, retire)
+        if (proof && checks === undefined) return
         await backend.retire?.(row.value.name)
         try {
-          await this.reconcile(lease, row, backend, scope, signal, retiring.has(row.record.key))
+          await this.reconcile(lease, row, backend, scope, signal, retire, checks)
         } finally {
           await backend.retire?.(row.value.name)
         }

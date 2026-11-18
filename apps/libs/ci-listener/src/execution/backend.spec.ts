@@ -216,6 +216,31 @@ describe('CI shared execution authority', () => {
     expect(calls.filter((call) => call.path.endsWith('/access_tokens'))).toHaveLength(3)
     expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(3)
   })
+  it('defers minting on a replacement reader after an unknown issuance outcome', async () => {
+    const fetch = global.fetch
+    let failMint = true,
+      mints = 0
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname.endsWith('/access_tokens')) {
+        mints++
+        if (failMint) throw new Error('Unknown token issuance response')
+      }
+      return fetch(input, options)
+    }) as typeof fetch
+    const first = backend.reader()
+    let replacement: ReturnType<GitHubExecutionBackend['reader']> | undefined
+    try {
+      await expect(first.pending([notice])).rejects.toMatchObject({ uncertain: true })
+      await first.close()
+      failMint = false
+      replacement = backend.reader()
+      await expect(replacement.pending([notice])).rejects.toThrow('deferred')
+      expect(mints).toBe(1)
+      expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(0)
+    } finally {
+      await Promise.all([first.close(), replacement?.close()])
+    }
+  })
   afterEach(async () => {
     await backend.close().catch(() => {})
     global.fetch = originalFetch

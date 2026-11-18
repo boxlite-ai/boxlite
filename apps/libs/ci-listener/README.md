@@ -511,7 +511,10 @@ fairly submits at most 32 notices at a time, grouped by scope, repository and ru
 to an independent verification queue. It does not await a submitted batch. Different
 runs in the same scope can verify concurrently, and each completion wakes planning.
 A pending run lookup does not block another run from reserving and creating workers.
-Scope planning reads accumulated evidence without awaiting job-query HTTP.
+Verification tracks each notice version separately. For a run with 64 notices,
+verifying the second group of 32 preserves the first group's remaining lifetime.
+Scope planning reads accumulated evidence without awaiting job-query HTTP. Each
+planning pass uses a fixed starting cursor so it visits each scope at most once.
 Jobs in one run share its first jobs page; notified jobs missing from that page
 use direct job requests. Each repository batch owns one credential borrow and
 retains repository identity/visibility checks. Compatible backends without batch
@@ -527,6 +530,11 @@ observations through the same monotonic state rules as webhooks. Recorded progre
 or completion cannot be replaced by a stale queued response. Reservations and
 create intents check the resulting repository revision and earliest proof deadline.
 An owner restart rebuilds this evidence; persisted counters remain hints.
+
+For each label, the pool subtracts workers already starting or available from
+verified demand before choosing which unissued reservations may create a Box.
+With one queued job, two unissued reservations and no started workers, only one
+reservation may create. The other waits for new demand or a complete surplus check.
 
 Queued notices remain pending while their jobs are eligible. GitHub-confirmed
 non-queued jobs or complete background snapshots settle captured notice versions.
@@ -544,21 +552,26 @@ Background scans retain the five-minute cadence. New dirty counter versions can
 request immediate correction; uncertain surplus requests are bounded separately.
 The existing compensation scanner continues publishing missed-job notices on
 replicas. A complete scan rebuilds persisted counts behind captured wake and
-repository revisions. The scope publishes one complete cohort while every repository's
-30-second proof remains live; early completions retain their original deadlines.
+repository revisions. Snapshot correction and admission reads share a repository
+lock while invalidating cached demand and committing the corrected counts. GitHub
+requests run outside that lock. Planning uses database time to check whether
+every repository's 30-second proof remains live. Early completions retain their
+original deadlines.
 For example, three 35-second reads start together rather than requiring a second wave.
 When scan skew exceeds the freshness window, or a scope exceeds 100 proof checks,
 `surplus-retirement-deferred` reports the reason and retries at the periodic cadence.
 New dirty versions can request correction sooner. Admission and stopped-resource
-recovery continue while physical surplus retirement waits.
-Each newly unclaimed busy runner invalidates cached admission evidence once and
-fences in-flight reads with a repository generation and requests fresh job verification.
+recovery continue while physical surplus retirement waits. If both targeted
+verification and the background scan fail, the pool can still clean up stopped Boxes.
+If expansion would replace a newly busy runner without an assignment record,
+planning drops the cached snapshot and requests fresh job verification.
 Invalidated reads cannot repopulate evidence or publish a verification timestamp. This covers missed assignment notifications
 without treating an older queued observation as a new capacity grant.
 
-Each run verifier uses an isolated credential session. Many small runs therefore
-increase credential issuance/retirement traffic; deployment latency and shared
-GitHub rate limits still need workload measurements.
+Each run verifier owns its credential handles. If token issuance has an unknown
+outcome, replacement readers share a 60-second retry delay for that repository
+and purpose. Many small runs increase issuance and retirement traffic. Deployment
+latency and shared GitHub rate limits still need workload measurements.
 
 Every repository in a scope must have a matching proof before physical surplus
 retirement, including cancellation of an unissued reservation. Partial positive

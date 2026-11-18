@@ -48,7 +48,7 @@ interface QueueProof {
 }
 interface Session {
   verifying: WorkQueue
-  verifiedAt: Map<string, { revision: string; until: number }>
+  verifiedAt: Map<string, { version: string; until: number }>
   repairing: WorkQueue
   snapshots: Map<string, QueueProof>
   observed: Map<string, string>
@@ -584,20 +584,31 @@ export class Listener {
       groups.set(id, group)
     }
     for (const [id, group] of groups) {
-      const revision = JSON.stringify(group.notices.map((job) => [job.record.key, job.record.version]))
-      const verified = session.verifiedAt.get(id)
-      if (verified?.revision === revision && verified.until > Date.now()) continue
+      const needsVerification = (job: (typeof pending)[number]) => {
+        const verified = session.verifiedAt.get(`${id}/${job.record.key}`)
+        return verified?.version !== job.record.version || verified.until <= Date.now()
+      }
+      const notices = group.notices.filter(needsVerification)
+      if (!notices.length) continue
+      const revision = JSON.stringify(notices.map((job) => [job.record.key, job.record.version]))
       session.verifying.enqueue(id, revision, async () => {
         signal.throwIfAborted()
+        // Another queued batch may have verified these notices before this run starts.
+        const selected = notices.filter(needsVerification)
+        if (!selected.length) return
         const backend = group.runtime.backend
-        const verification = { revision, until: 0 }
-        session.verifiedAt.set(id, verification)
+        const verifications = selected.map((job) => {
+          const key = `${id}/${job.record.key}`,
+            entry = { version: job.record.version, until: 0 }
+          session.verifiedAt.set(key, entry)
+          return { key, entry }
+        })
         let observations: WorkflowJob[] = []
         const checkedAt = Date.now()
         await this.readWithSession(id, backend, async (reader) => {
           await session.positive.read(
             group.scope,
-            group.notices.map((job) => job.notice),
+            selected.map((job) => job.notice),
             async (jobs) => {
               const pending = reader?.pending?.bind(reader) ?? backend.pending?.bind(backend)
               observations = pending ? await pending(jobs, signal) : []
@@ -607,19 +618,21 @@ export class Listener {
             },
           )
           for (const job of observations.filter((job) => job.status !== 'queued' || job.runner !== null)) {
-            const notice = group.notices.find((notice) => notice.notice.job === job.job)
+            const notice = selected.find((notice) => notice.notice.job === job.job)
             if (notice) await this.settle(session.lease, notice.record)
           }
         })
-        if (session.verifiedAt.get(id) !== verification) return
-        verification.until = checkedAt + 30000
-        if (session.verifiedAt.size > 4096) session.verifiedAt.delete(session.verifiedAt.keys().next().value!)
+        for (const { key, entry } of verifications)
+          if (session.verifiedAt.get(key) === entry) entry.until = checkedAt + 30000
+        while (session.verifiedAt.size > 4096) session.verifiedAt.delete(session.verifiedAt.keys().next().value!)
         this.wake?.()
       })
     }
-    const entries = [...runtimes]
+    const entries = [...runtimes],
+      start = session.planningAfter
+    let after = start
     for (let offset = 0; offset < entries.length; offset++) {
-      const index = (session.planningAfter + offset) % entries.length
+      const index = (start + offset) % entries.length
       const [key, { scope, runtime }] = entries[index]
       const accepted = session.planning.enqueue(key, revision, async () => {
         signal.throwIfAborted()
@@ -652,15 +665,25 @@ export class Listener {
             : []
           ).map((row) => [row.key, row.version]),
         )
+        const proofNow =
+          current && checks.length === repos.length && checks.length <= 100
+            ? await this.options.state.now(session.lease)
+            : 0
         if (
           current &&
           checks.length === repos.length &&
-          checks.every((check) => check.expiresAt! > Date.now() && actual.get(check.key) === check.version)
+          checks.every((check) => check.expiresAt! > proofNow && actual.get(check.key) === check.version)
         ) {
           const demands = snapshots.flatMap((snapshot) =>
             snapshot!.demands.map((row) => ({ ...decodeDemand(row), expiresAt: snapshot!.check.expiresAt })),
           )
-          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true, checks)
+          try {
+            await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true, checks)
+          } catch (error) {
+            if (!(error instanceof DemandUncertain) || !error.requiresJobRefresh) throw error
+            await this.invalidateVerification(session, key, scope)
+            return
+          }
           for (const repository of repos) session.snapshots.delete(`${key}/${repository}`)
           return
         }
@@ -706,6 +729,11 @@ export class Listener {
         if (!current) return
         const demands = await session.positive.read(scope, [], async () => [])
         if (!demands.length && values.some((value) => value.queued > 0)) {
+          try {
+            await runtime.pool.balance(session.lease, closedCapacity, [], signal)
+          } catch (error) {
+            if (!(error instanceof DemandUncertain)) throw error
+          }
           for (const id of session.verifiedAt.keys()) if (id.startsWith(key + '/')) session.verifiedAt.delete(id)
           return
         }
@@ -718,11 +746,13 @@ export class Listener {
         }
         session.observed.set(key, signature)
       })
-      session.planningAfter = (index + 1) % entries.length
+      after = (index + 1) % entries.length
       if (!accepted) break
     }
+    session.planningAfter = after
   }
   private async invalidateVerification(session: Session, key: string, scope: ExecutionScope): Promise<void> {
+    for (const repository of repositories(scope)) session.snapshots.delete(`${key}/${repository}`)
     for (const repository of repositories(scope)) await session.positive.invalidate(scope.installation.id, repository)
     for (const id of session.verifiedAt.keys()) if (id.startsWith(key + '/')) session.verifiedAt.delete(id)
     this.wake?.()
@@ -799,20 +829,21 @@ export class Listener {
         const jobs = (await reader.queued(repository, signal)).filter((job) => jobMatches(job, this.worker.labels))
         signal.throwIfAborted()
         try {
-          const snapshot = await rebuildQueueSnapshot(
-            this.options.state,
-            session.lease,
-            {
-              installationId: scope.installation.id,
-              accountId: scope.installation.account.id,
-              repositoryId: repository,
-            },
-            records.filter((row) => row.key.startsWith(prefix)),
-            jobs,
-            before.get(wakeKey)?.version,
-            { version: before.get(revisionKey)?.version },
+          const snapshot = await session.positive.invalidate(scope.installation.id, repository, () =>
+            rebuildQueueSnapshot(
+              this.options.state,
+              session.lease,
+              {
+                installationId: scope.installation.id,
+                accountId: scope.installation.account.id,
+                repositoryId: repository,
+              },
+              records.filter((row) => row.key.startsWith(prefix)),
+              jobs,
+              before.get(wakeKey)?.version,
+              { version: before.get(revisionKey)?.version },
+            ),
           )
-          await session.positive.invalidate(scope.installation.id, repository)
           for (const id of session.verifiedAt.keys())
             if (id.startsWith(`${key}/${repository}/`)) session.verifiedAt.delete(id)
           proof = {

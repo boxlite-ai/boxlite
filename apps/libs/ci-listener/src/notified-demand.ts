@@ -157,15 +157,19 @@ export class NotifiedDemand {
     }
     return result
   }
-  async invalidate(installation: number, repository: number): Promise<void> {
+  async invalidate(installation: number, repository: number): Promise<void>
+  async invalidate<T>(installation: number, repository: number, correction: () => Promise<T>): Promise<T>
+  async invalidate<T>(installation: number, repository: number, correction?: () => Promise<T>): Promise<T | void> {
     const key = `${installation}/${repository}`
-    await this.serialize(key, async () => {
+    return this.serialize(key, async () => {
       const generation = this.generations.get(key)
       if (generation) generation.epoch++
       this.jobs.delete(key)
+      // Correction and cache reads share this gate, so stale facts cannot acquire its new revision.
+      return correction?.()
     })
   }
-  private async serialize(key: string, work: () => Promise<void>): Promise<void> {
+  private async serialize<T>(key: string, work: () => Promise<T>): Promise<T> {
     const previous = this.merging.get(key)
     let release!: () => void
     const held = new Promise<void>((resolve) => {
@@ -174,7 +178,7 @@ export class NotifiedDemand {
     this.merging.set(key, held)
     await previous
     try {
-      await work()
+      return await work()
     } finally {
       release()
       if (this.merging.get(key) === held) this.merging.delete(key)
