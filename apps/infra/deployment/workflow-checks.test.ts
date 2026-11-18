@@ -34,7 +34,6 @@ test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native p
   const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
   const jobs = [
     ['lint.yml', 'clippy', 64],
-    ['test.yml', 'rust', 64],
     ['test.yml', 'go', 64],
     ['test.yml', 'guest_artifacts', 64],
     ['test.yml', 'python', 30],
@@ -63,6 +62,7 @@ for (const [name, job, matrix] of [
   ['test.yml', 'api', false],
   ['test.yml', 'dashboard', false],
   ['test.yml', 'nix', false],
+  ['test.yml', 'rust', true],
 ] as const) {
   test(`${name}/${job} uses GitHub-hosted Ubuntu`, () => {
     const selection = workflow(name).jobs[job]['runs-on']
@@ -77,19 +77,10 @@ test('CodeQL places every language on its qualified runner and retains its build
     { language: 'actions', 'build-mode': 'none', runner: 'ubuntu-latest' },
     { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
     { language: 'go', 'build-mode': 'autobuild', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
-    { language: 'javascript-typescript', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'javascript-typescript', 'build-mode': 'none', runner: 'ubuntu-latest' },
     { language: 'python', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
     { language: 'rust', 'build-mode': 'none', runner: 'ubuntu-latest' },
   ])
-})
-
-test('CodeQL installs Node.js before initializing the TypeScript extractor', () => {
-  const { steps } = workflow('codeql.yml').jobs.analyze
-  const setup = steps.findIndex((step: any) => step.uses?.startsWith('actions/setup-node@'))
-  const init = steps.findIndex((step: any) => step.uses?.startsWith('github/codeql-action/init@'))
-  assert.ok(setup >= 0 && setup < init, 'TypeScript extraction needs node on PATH before CodeQL initialization')
-  assert.equal(steps[setup].if, "matrix.language == 'javascript-typescript'")
-  assert.equal(String(steps[setup].with['node-version']), '22')
 })
 
 function testSuites(paths: string[]) {

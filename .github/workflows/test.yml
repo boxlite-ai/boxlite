@@ -371,7 +371,7 @@ jobs:
     name: Rust Tests (${{ matrix.platform.target }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.rust == 'true' }}
-    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -383,12 +383,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-
-      - uses: ./.github/actions/setup-boxlite-runner
-        if: runner.environment == 'self-hosted'
-      - name: Install native build dependencies
-        if: runner.environment == 'self-hosted'
-        run: sudo apt-get install -y --no-install-recommends build-essential libssl-dev patchelf pkg-config
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -405,10 +399,7 @@ jobs:
       # them by default. This setting lasts only for the disposable runner.
       - name: Enable unprivileged user namespaces (Linux)
         if: runner.os == 'Linux'
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'

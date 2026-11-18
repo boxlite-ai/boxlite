@@ -12,7 +12,7 @@ support subdirectories under `.github/workflows/`, so composite actions are wher
 
 ## Runner placement
 
-Ubuntu x64 jobs use ephemeral workers through the
+Eligible Ubuntu x64 jobs use ephemeral workers through the
 [BoxLite CI connection](../../apps/github-ci-runner/README.md).
 The connection needs permission to register workers and quota for the requested
 [resources](../../apps/libs/ci-listener/README.md#resource-labels).
@@ -20,16 +20,17 @@ The connection needs permission to register workers and quota for the requested
 | Runner label | Jobs |
 | --- | --- |
 | `boxlite` | Lightweight lint, setup, status and release uploads using the default 10 GiB disk |
-| `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, and Go, Python and TypeScript CodeQL |
-| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, Rust and Go coverage, and standalone guest artifact builds |
-| GitHub-hosted Ubuntu | Service-container jobs, Docker image and SDK builds, Dashboard, Nix, and Actions, Rust and C/C++ CodeQL |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, and Go and Python CodeQL |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, Go coverage, and standalone guest artifact builds |
+| GitHub-hosted Ubuntu | Service-container jobs, Docker image and SDK builds, Dashboard, Rust coverage, Nix, and Actions, Rust, C/C++ and TypeScript CodeQL |
 
 The platform matrix controls check names and artifacts. Linux ARM64 and macOS
 legs run on their native platforms. BoxLite jobs install tools through the
 [runner setup action](../actions/setup-boxlite-runner/action.yml) where needed.
-TypeScript CodeQL installs Node.js before initialization. The x64 Rust and Go
-hardware tests require an organization with nested virtualization and usable
-`/dev/kvm`.
+
+Rust and Nix use GitHub-hosted Ubuntu for their AppArmor user-namespace setup.
+The x64 Go hardware tests require BoxLite workers with nested virtualization and
+usable `/dev/kvm`.
 
 The workers serving this repository must pass Docker startup before
 service-container and Docker build jobs can use BoxLite. GitHub-hosted
