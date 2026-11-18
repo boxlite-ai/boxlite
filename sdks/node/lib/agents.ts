@@ -229,11 +229,14 @@ function abortError(): Error {
 async function abortable<T>(
   promise: Promise<T>,
   signal?: AbortSignal,
+  canAbort: () => boolean = () => true,
 ): Promise<T> {
   if (!signal) return promise;
   if (signal.aborted) throw abortError();
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError());
+    const onAbort = () => {
+      if (canAbort()) reject(abortError());
+    };
     signal.addEventListener("abort", onAbort, { once: true });
     promise
       .then(resolve, reject)
@@ -259,6 +262,7 @@ class EventStream implements AgentEventStream {
     signal?: AbortSignal;
   }): Promise<IteratorResult<AgentEvent>> {
     const signal = options?.signal;
+    let delivered = false;
     const operation = this.tail.then(
       async (): Promise<IteratorResult<AgentEvent>> => {
         if (signal?.aborted) throw abortError();
@@ -268,12 +272,16 @@ class EventStream implements AgentEventStream {
           if (this.closed) return { done: true, value: undefined };
           this.pending ??= this.native.nextEvent();
           const item = await abortable(this.pending, signal);
+          if (signal?.aborted) throw abortError();
           this.pending = undefined;
           if (item === null) {
             this.closed = true;
+            delivered = true;
             return { done: true, value: undefined };
           }
-          return { done: false, value: event(item) };
+          const result = { done: false as const, value: event(item) };
+          delivered = true;
+          return result;
         } catch (error) {
           if (!signal?.aborted) {
             this.pending = undefined;
@@ -288,7 +296,7 @@ class EventStream implements AgentEventStream {
       () => undefined,
       () => undefined,
     );
-    return abortable(operation, signal);
+    return abortable(operation, signal, () => !delivered);
   }
   async return(): Promise<IteratorResult<AgentEvent>> {
     this.closed = true;

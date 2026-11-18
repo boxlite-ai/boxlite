@@ -1,6 +1,7 @@
 """Check agent errors and namespace access across Python and native bindings."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -35,6 +36,26 @@ async def test_simplebox_agent_calls_require_started_box():
     box._started = False
     with pytest.raises(RuntimeError, match="Box not started"):
         await box.agents.create("opencode")
+
+
+@pytest.mark.asyncio
+async def test_retained_agents_reject_calls_after_context_exit():
+    box = object.__new__(SimpleBox)
+    box._started = True
+    box._box = type("Box", (), {})()
+    box._box.__aexit__ = AsyncMock(return_value=True)
+    native_create = AsyncMock()
+    box._box.agents = SimpleNamespace(_native=SimpleNamespace(create=native_create))
+    agents = box.agents
+    assert await box.__aexit__(None, None, None) is True
+    with pytest.raises(RuntimeError, match="Box not started"):
+        await agents.create("opencode")
+    native_create.assert_not_awaited()
+    box._started = True
+    box._box.__aexit__ = AsyncMock(side_effect=RuntimeError("cleanup failed"))
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await box.__aexit__(None, None, None)
+    assert box._started
 
 
 @pytest.mark.parametrize("box_type", [SyncBox, SyncSimpleBox])

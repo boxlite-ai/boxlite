@@ -536,7 +536,7 @@ test\:integration\:c\:agents:
 
 # Run the same OpenCode scenario in Rust, Python and Node, comparing each SDK
 # result with the Rust result produced in this invocation.
-test\:integration\:agent-sdk-parity:
+test\:integration\:agent-sdk-parity: $(if $(SETUP_DONE),,runtime\:debug)
 	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { echo "Set BOXLITE_TEST_OPENCODE_BINARY" >&2; exit 1; }
 	@set -eu; parity_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/boxlite-agent-parity.XXXXXXXX")"; \
 	trap 'rm -rf "$$parity_dir"' EXIT; \

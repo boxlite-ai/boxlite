@@ -280,7 +280,9 @@ class SimpleBox:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - delegates to Box.__aexit__ (returns awaitable)."""
-        return await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        result = await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        self._started = False
+        return result
 
     @property
     def id(self) -> str:

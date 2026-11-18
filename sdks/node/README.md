@@ -4,9 +4,10 @@ Embeddable VM runtime for secure, isolated code execution environments.
 
 Access the [agent API](../../docs/reference/agents.md) through `JsBox.agents`
 and `SimpleBox.agents` for agent and turn methods, grouped options and error handling.
-On a local runtime, await `agent.events().opened()` before sending work when the
-first live event matters. Use `read({ signal })` to cancel one read and `return()`
-to close the stream.
+On a local runtime, retain the stream with `const events = agent.events()` and
+await `events.opened()` before sending work when the first live event matters.
+Read from that same `events` stream, use `read({ signal })` to cancel one read,
+and call `events.return()` to close it.
 
 **Think "SQLite for sandboxing"** - a lightweight library embedded directly in your application without requiring a daemon or root privileges.
 

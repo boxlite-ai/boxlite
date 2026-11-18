@@ -28,6 +28,59 @@ function setup() {
 }
 
 describe("agent event stream", () => {
+  test("abort near delivery never discards an event", async () => {
+    for (let delay = 0; delay < 16; delay++) {
+      let deliver!: (event: Record<string, unknown>) => void;
+      const stream = {
+        opened: vi.fn().mockResolvedValue(undefined),
+        nextEvent: vi
+          .fn()
+          .mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                deliver = resolve;
+              }),
+          )
+          .mockResolvedValue({ agent_id: "a", kind: "second", data: null }),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const native = {
+        create: vi.fn(),
+        get: async () => ({ events: () => stream }),
+      } as unknown as NativeAgents;
+      const events = (await wrapAgents(native).get("agent")).events();
+      const controller = new AbortController();
+      const first = events.read({ signal: controller.signal }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.waitFor(() => expect(stream.nextEvent).toHaveBeenCalledOnce());
+      deliver({ agent_id: "a", kind: "first", data: null });
+      for (let i = 0; i < delay; i++) await Promise.resolve();
+      controller.abort();
+      const outcome = await first;
+      if ("error" in outcome) {
+        expect(outcome.error).toMatchObject({ name: "AbortError" });
+        expect((await events.next()).value?.kind).toBe("first");
+      } else {
+        expect(outcome.value.value?.kind).toBe("first");
+        expect((await events.next()).value?.kind).toBe("second");
+      }
+      await events.return();
+    }
+
+    const { native, deliver, started } = setup();
+    const events = (await wrapAgents(native).get("agent")).events();
+    const first = events.next();
+    await started;
+    const controller = new AbortController();
+    const queued = events.read({ signal: controller.signal });
+    controller.abort();
+    await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+    deliver({ agent_id: "a", kind: "first", data: null });
+    await expect(first).resolves.toMatchObject({ value: { kind: "first" } });
+    await events.return();
+  });
   test("open failure reaches opened and the first read once", async () => {
     const stream = {
       opened: vi.fn().mockRejectedValue(new Error("open failed")),
