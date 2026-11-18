@@ -32,9 +32,3 @@ boxlite = { path = "../../src/boxlite", features = ["test-support"] }
 
 [build-dependencies]
 napi-build = "2.6.0"
-
-[profile.release]
-lto = true
-strip = true  # Strip symbols for smaller binaries
-codegen-units = 1
-opt-level = 3
