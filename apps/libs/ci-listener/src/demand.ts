@@ -226,6 +226,7 @@ export async function rebuildQueueSnapshot(
   jobs: readonly WorkflowJob[],
   wakeVersion?: string,
   expectedRevision?: { version: string | undefined },
+  signal?: AbortSignal,
 ): Promise<{ demands: StateRecord[]; revision: StateRecord }> {
   const prefix = `demand/${target.installationId}/${target.repositoryId}/`
   const wakeKey = `wake/${target.installationId}/${target.repositoryId}`
@@ -333,6 +334,7 @@ export async function rebuildQueueSnapshot(
       return { demands: result, revision: committed }
     },
     lease,
+    signal,
   )
 }
 

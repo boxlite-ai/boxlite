@@ -3,7 +3,7 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { decodeDemand, JobObservation, observeDemand, rebuildDemand } from './demand'
+import { decodeDemand, JobObservation, observeDemand, rebuildDemand, rebuildQueueSnapshot } from './demand'
 import { ListenerInbox, verifyWebhook } from './webhook'
 import { ListenerState, ExecutionLease } from './state/store'
 import { SqliteStateDatabase } from './state/sqlite'
@@ -87,6 +87,31 @@ describe('CI label demand counters and fallback', () => {
     expect(
       (await counters()).map(decodeDemand).find((row) => row.labels[0] === 'boxlite-4vcpu-8gbmem-20gbdisk')?.queued,
     ).toBe(1)
+  })
+  it('rolls back a scan invalidated after staging the repository revision', async () => {
+    const scan = new AbortController()
+    const ingress = state.ingress.bind(state)
+    jest.spyOn(state, 'ingress').mockImplementationOnce((target, work, lease, signal) =>
+      ingress(
+        target,
+        (tx) =>
+          work({
+            ...tx,
+            write: async (changes) => {
+              const result = await tx.write(changes)
+              if (changes.some((change) => change.key.startsWith('queue-revision/'))) scan.abort(new StateConflict())
+              return result
+            },
+          }),
+        lease,
+        signal,
+      ),
+    )
+    const snapshot = rebuildQueueSnapshot(state, lease, target, [], [job()], undefined, undefined, scan.signal)
+    await expect(snapshot).rejects.toBeInstanceOf(StateConflict)
+    expect(scan.signal.aborted).toBe(true)
+    expect(await counters()).toHaveLength(0)
+    expect(await state.read(['job-fact/1/55', 'queue-revision/1/21'])).toEqual([])
   })
   it('keeps unchanged authoritative snapshots stable so pending consumers are not invalidated by polling', async () => {
     await send('queued')
