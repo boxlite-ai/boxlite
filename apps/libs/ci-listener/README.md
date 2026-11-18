@@ -272,9 +272,11 @@ initialization through serialized bootstrap, which rereads the roots before
 creating or migrating them. Missing seeds in an existing journal fail validation.
 During a standby tick, acquisition reads the owner and deadline without a row
 lock. A live lease or a different deployment ends the probe immediately.
-Activation, takeover, bootstrap and renewal take the owner lock exclusively.
-An identity change therefore waits for guarded transactions to finish; renewal
-serializes deadline updates without upgrading a shared lock.
+Renewal shares the owner lock with workers and locks `@lease` for update before
+checking expiry against database time. A worker can hold its transaction open
+while the owner renews. Concurrent renewals serialize on the deadline row.
+Activation, takeover and bootstrap take the owner lock exclusively, so an
+identity change waits for guarded transactions and renewals to finish.
 Adapters without shared point reads fall back to the exclusive lock; SQLite
 serializes transactions at the file boundary.
 Renewal rejects an expired or replaced owner and never shortens its deadline,

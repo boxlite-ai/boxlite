@@ -942,6 +942,37 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           lease,
         )
       })
+      it('renews concurrent heartbeats while a guarded worker transaction is open', async () => {
+        const lease = await owner()
+        const before = await roots()
+        const now = await state.now(lease)
+        const heartbeat = new ListenerState(
+          new PostgresStateDatabase({
+            transaction: (isolation, work) =>
+              pg!.transaction(isolation, async (tx) => {
+                await tx.query("SET LOCAL lock_timeout='250ms'")
+                return work(tx)
+              }),
+          }),
+          namespace,
+        )
+        await state.ingress(
+          'busy-worker',
+          async (tx) => {
+            await tx.write([{ key: 'notice/busy-worker', expected: null, payload: true }])
+            const results = await Promise.allSettled([heartbeat.renew(lease, 60000), heartbeat.renew(lease, 20000)])
+            expect(results).toEqual([
+              { status: 'fulfilled', value: undefined },
+              { status: 'fulfilled', value: undefined },
+            ])
+          },
+          lease,
+        )
+        const after = await roots()
+        expect(after.owner).toEqual(before.owner)
+        expect((after.lease!.payload as { until: number }).until).toBeGreaterThanOrEqual(now + 60000)
+        expect(await state.read(['notice/busy-worker'], lease)).toHaveLength(1)
+      })
       it('rejects expired proof even when its record version still matches', async () => {
         const lease = await owner()
         const [proof] = await state.commit(lease, [{ key: 'notice/proof', expected: null, payload: true }])
