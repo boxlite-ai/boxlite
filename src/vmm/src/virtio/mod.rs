@@ -199,8 +199,8 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
 
 /// The resources a transport gives a device when the driver activates it.
 pub(crate) struct ActivationContext {
-    /// The guest memory view the queues address. Load one snapshot per
-    /// event and drop it before returning.
+    /// The guest memory view the queues address. Load one snapshot per unit
+    /// of work, drop it before returning, and never keep one across events.
     pub(crate) memory: GuestMemoryView,
     /// The prepared queues, one slot per `DeviceSpec::queue_max` entry, in
     /// queue-number order.

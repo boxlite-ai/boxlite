@@ -106,9 +106,13 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
 - Host-side users clone the shared `GuestMemoryView`, vm-memory's
   `GuestMemoryAtomic` over the region map, and access guest memory through
   vm-memory's volatile API, never through Rust references.
-- A user loads one snapshot per unit of work and drops it before returning.
-  `VirtQueues::drain` and `complete` load one per call; a device loads one per
-  `on_event`. No device keeps a snapshot across events.
+- A user loads one snapshot per unit of work and drops it before returning;
+  no device keeps one across events.
+- `VirtQueues::drain` and `complete` load one per call. Block, fs, console and
+  balloon load one per device callback, such as `on_event`, `activate` or
+  `quiesce`.
+- Net loads one per guest buffer read or write. Vsock loads one per TX intake
+  pass and one per RX buffer write.
 - The next event therefore sees a map that gained or lost a region. A
   descriptor naming a removed region fails translation like any other invalid
   address. A snapshot still held keeps its regions mapped until it drops.
