@@ -22,6 +22,8 @@ import { CiNativeState } from './ci-native-state'
 import { CiNativeWorkers } from './ci-native-workers'
 import { CiSettingsService } from './ci-settings.service'
 import { Box } from '../box/entities/box.entity'
+import { CheckpointOperation } from '../box/entities/checkpoint-operation.entity'
+import { BoxManager } from '../box/managers/box.manager'
 import { BoxCheckpointState } from '../box/entities/box-checkpoint-state.entity'
 import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
@@ -82,7 +84,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity, BoxCheckpointState],
+      entities: [Box, BoxLastActivity, BoxCheckpointState, CheckpointOperation],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       extra: { options: `-c search_path=${schema},public` },
@@ -108,6 +110,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as any,
     )
     const args = Array.from({ length: 21 }, () => ({}))
+    args[5] = { get: () => app }
     args[0] = repository
     args[7] = { emit: jest.fn() }
     args[8] = organizations
@@ -955,6 +958,47 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await db.getRepository(Box).delete(box.box_id)
     await expect(unknown.host.get(unknown.config.name)).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
   })
+  it.each(['original', 'wrong tenant', 'wrong ID', 'wrong name'] as const)(
+    'retries a failed soft deletion only for the original Hosted CI Box: %s',
+    async (scenario) => {
+      const { box, config } = await deleting()
+      const boxes = db.getRepository(Box)
+      const old = new Date(Date.now() - 8 * 86400000)
+      await boxes.update(box.box_id, {
+        state: BoxState.ERROR,
+        updatedAt: old,
+        ...(scenario === 'wrong tenant' && { organizationId: randomUUID() }),
+        ...(scenario === 'wrong name' && { name: 'DESTROYED_' + config.name + '_other' }),
+      })
+      if (scenario === 'wrong ID')
+        await db.query(
+          "UPDATE ci_listener_state SET payload = jsonb_set(payload, '{box}', to_jsonb('different'::text)) WHERE namespace=$1 AND record_key=$2",
+          [store.namespace, 'box-native/' + config.name.slice(7)],
+        )
+      const locks = { lock: async () => true, isLocked: async () => false, unlock: async () => {} }
+      const manager = new BoxManager(
+        new BoxRepository(db, {} as never, {} as never),
+        {} as never,
+        {} as never,
+        locks as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        { get: () => app } as never,
+      )
+      const dispatch = jest.spyOn(manager, 'syncInstanceState').mockResolvedValue()
+      await manager.syncStates()
+      await platform.cleanupStaleErrorBoxes()
+      if (scenario === 'original') {
+        expect(dispatch).toHaveBeenCalledWith(box.box_id)
+        expect(await boxes.existsBy({ id: box.box_id })).toBe(true)
+      } else {
+        expect(dispatch).not.toHaveBeenCalled()
+        expect(await boxes.existsBy({ id: box.box_id })).toBe(false)
+      }
+    },
+  )
   it('recognizes the original destroyed Box after production soft deletion renames it', async () => {
     const { host, config, box } = await deleting()
     const deleted = await platform.findOne(box.box_id, true)
