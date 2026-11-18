@@ -2056,7 +2056,7 @@ components:
       name: volume_id
       in: path
       required: true
-      description: Server-assigned managed volume identifier
+      description: Server-assigned managed volume identifier. Local servers require the lower-case canonical UUID.
       schema:
         type: string
         minLength: 1
@@ -2994,7 +2994,7 @@ components:
           description: >
             Last update timestamp. Local directory volumes use the creation time.
         size_bytes:
-          type: integer
+          type: [integer, "null"]
           format: int64
           minimum: 0
           description: >
@@ -3045,7 +3045,7 @@ components:
           type: string
           description: Failure detail when state is "error"
         size_bytes:
-          type: integer
+          type: [integer, "null"]
           format: int64
           minimum: 0
           description: >

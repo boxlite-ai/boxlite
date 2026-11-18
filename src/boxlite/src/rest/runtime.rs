@@ -456,14 +456,13 @@ impl RuntimeBackend for RestRuntime {
         if options.advanced.privileged {
             self.client.require_privileged_enabled().await?;
         }
-        if options.volumes.iter().any(|volume| volume.read_only) {
-            self.client.require_volume_read_only_enabled().await?;
-        }
-        if !options.mounts.is_empty() {
-            self.client.require_typed_mounts_enabled().await?;
-            if options.mounts.iter().any(|mount| mount.read_only) {
-                self.client.require_volume_read_only_enabled().await?;
-            }
+        let typed_mounts = !options.mounts.is_empty();
+        let read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+            || options.mounts.iter().any(|mount| mount.read_only);
+        if typed_mounts || read_only_mounts {
+            self.client
+                .require_mount_capabilities(typed_mounts, read_only_mounts)
+                .await?;
         }
 
         let req = CreateBoxRequest::from_options(&options, name);
@@ -486,6 +485,14 @@ impl RuntimeBackend for RestRuntime {
             ));
         }
         options.sanitize_remote()?;
+        let typed_mounts = !options.mounts.is_empty();
+        let read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+            || options.mounts.iter().any(|mount| mount.read_only);
+        if typed_mounts || read_only_mounts {
+            self.client
+                .require_mount_capabilities(typed_mounts, read_only_mounts)
+                .await?;
+        }
 
         if let Some(ref box_name) = name {
             let path = format!("/boxes/{box_name}");
@@ -1413,6 +1420,84 @@ mod tests {
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("read-only"), "{error}");
         assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn create_sends_typed_read_only_mount_after_both_capabilities() {
+        use crate::runtime::options::MountSpec;
+
+        let (port, server) = capture_server(vec![
+            (
+                200,
+                r#"{"capabilities":{"typed_mounts_enabled":true,"volume_read_only_enabled":true}}"#,
+            ),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("team/backend".into()),
+                ..MountSpec::volume_mount("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("both advertised capabilities permit the create");
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+        let body: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+        assert_eq!(
+            body["mounts"][0],
+            serde_json::json!({
+                "type": "volume",
+                "source": "workspace",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "team/backend",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_writable_mount_requires_only_typed_mount_capability() {
+        use crate::runtime::options::MountSpec;
+
+        let (port, server) = capture_server(vec![
+            (200, r#"{"capabilities":{"typed_mounts_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("writable typed mounts do not need the read-only capability");
+        assert_eq!(
+            server
+                .await
+                .unwrap()
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap().to_owned())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
     }
 
     #[test]

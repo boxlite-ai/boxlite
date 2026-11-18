@@ -1,8 +1,9 @@
 //! Named-volume handlers (`/v1/volumes`).
 //!
 //! These mirror the box handlers, delegating to `runtime.volumes()`. The
-//! concrete backend returns `Unsupported` for now, so every operation currently
-//! responds `400 UnsupportedError`.
+//! concrete backend can support, including the local runtime's named-volume
+//! store. A backend that does not implement the trait still surfaces its own
+//! `UnsupportedError`.
 
 use std::sync::Arc;
 
