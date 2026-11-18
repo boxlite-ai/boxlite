@@ -214,6 +214,13 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer) e
 // Every later entry must then lie under that directory, or the copy fails
 // with ErrInvalidArgument and keeps the entries written before it.
 func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) error {
+	return b.CopyInStreamWithOverwrite(ctx, guestDst, r, true)
+}
+
+// CopyInStreamWithOverwrite streams an archive with an explicit replacement
+// policy. False creates missing destinations but refuses existing files.
+// CopyInStream retains its original overwrite=true default.
+func (b *Box) CopyInStreamWithOverwrite(ctx context.Context, guestDst string, r io.Reader, overwrite bool) error {
 	if r == nil {
 		return &Error{Code: ErrInvalidArgument, Message: "copy-in reader must not be nil"}
 	}
@@ -235,7 +242,7 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) er
 	// Like copy_out_start, copy_in_start may implicitly boot the box and
 	// wait on guest file service under the guard; the returned stream is
 	// independent of the box handle.
-	stream := C.boxlite_copy_in_start(handle, cDst, C.cbCopy(), handleToPtr(h), &cerr)
+	stream := C.boxlite_copy_in_start_with_overwrite(handle, cDst, C.bool(overwrite), C.cbCopy(), handleToPtr(h), &cerr)
 	unlock()
 	if stream == nil {
 		deleteHandleForDispatch(h)
