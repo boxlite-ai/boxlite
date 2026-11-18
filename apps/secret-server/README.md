@@ -37,6 +37,11 @@ through the environment, then run `make run:apps:secret-server`. The role defaul
 to `write`; set `SECRET_SERVER_ROLE=fetch` to select fetch. Do not commit or print
 the key or token. The local database must use the same key across restarts.
 
+To exercise startup and readiness against a disposable PostgreSQL database, set
+`SECRET_SERVER_TEST_DATABASE_URL` and run `make test:apps:secret-server`. The
+integration test is skipped when this variable is absent; it does not verify the
+placeholder migration or durable-canary checks.
+
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
 
