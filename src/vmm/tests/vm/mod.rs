@@ -404,7 +404,6 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     use crate::{
         boot::{BOOT_LEAF, entry::long_mode_entry},
         cpu_features::{BOOT_MSRS, preflight_x86, vcpu_cpuid},
-        memory::MMIO_HOLE_START,
     };
 
     const ENTRY: u64 = 0x100_0000;
@@ -412,7 +411,16 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     const RESULTS: u64 = 0x6000;
     const PARAMS_MARKER: u64 = 0x0123_4567_89ab_cdef;
     const TOP_MARKER: u64 = 0xfedc_ba98_7654_3210;
-    let top = MMIO_HOLE_START - 8;
+
+    // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
+    let config = config(2, 4097);
+    // The marker occupies the last eight bytes of RAM, above 4 GiB.
+    let (start, len) = ram_ranges(config.memory_mib).pop().expect("high RAM range");
+    let top = start.0 + len as u64 - 8;
+    assert!(
+        top > 0x1_0000_0000,
+        "marker GPA {top:#x} is not above 4 GiB"
+    );
     let mut program = vec![
         0xb8, 0x18, 0x00, 0x00, 0x00, // mov eax, 0x18 (__BOOT_DS)
         0x8e, 0xd8, // mov ds, eax: each reload reads the GDT in RAM
@@ -427,9 +435,9 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         0x8f, 0x47, 0x10, // pop qword [rdi + 0x10]
         0x48, 0x8b, 0x06, // mov rax, [rsi]
         0x48, 0x89, 0x07, // mov [rdi], rax
-        0xbb, // mov ebx, top
+        0x48, 0xbb, // mov rbx, top
     ];
-    program.extend_from_slice(&(top as u32).to_le_bytes());
+    program.extend_from_slice(&top.to_le_bytes());
     program.extend_from_slice(&[
         0x48, 0x8b, 0x03, // mov rax, [rbx]
         0x48, 0x89, 0x47, 0x08, // mov [rdi + 0x08], rax
@@ -467,8 +475,6 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         0x0f, 0x0b, // ud2
     ]);
 
-    // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
-    let config = config(2, 3072);
     let probe = KvmVm::probe().unwrap();
     let leaf = preflight_x86(config.memory_mib, probe.supported_cpuid(), BOOT_LEAF).unwrap();
     let vm = bare(config, move || probe.create_vm()).unwrap();

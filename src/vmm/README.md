@@ -240,17 +240,20 @@ The boot tests need Linux x86_64, read/write `/dev/kvm` and the same
 make test:integration:vmm:linux
 ```
 
-Each builds a KVM `Vm` with `prepare` for 256 MiB of RAM on the
-[legacy devices](#legacy-devices-and-the-console) and runs it with
-`Vm::run`. The host VM is KVM behind a test wrapper that counts the edges
-devices raise on GSI 4 and can drop every interrupt. A watchdog stops a boot
-at its timeout, 30 seconds unless stated, so a failed boot reports the serial
-log so far.
+Each builds a KVM `Vm` with `prepare` on the
+[legacy devices](#legacy-devices-and-the-console) and runs it with `Vm::run`,
+with 256 MiB of RAM unless stated. The host VM is KVM behind a test wrapper
+that counts the edges devices raise on GSI 4 and can drop every interrupt. A
+watchdog stops a boot at its timeout, 30 seconds unless stated, so a failed
+boot reports the serial log so far.
 
 - With `earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, one
   vCPU and no initramfs, the log must show the kernel version, the exact
   command line, the two E820 entries, the memory total and
   `VFS: Unable to mount root fs`.
+- The same boot with 6144 MiB of RAM must show three E820 entries, with the
+  last one above 4 GiB, no reserved entry, and a memory total of nearly all
+  6 GiB: the kernel uses RAM on both sides of the 32-bit MMIO hole.
 - With the same command line, one vCPU and a generated archive whose
   `/init`, a 132-byte static ELF, calls `exit_group(42)`, the log must show
   the `RAMDISK:` range from the zero page, `Unpacking initramfs...`,
@@ -1070,16 +1073,18 @@ make fmt:check:rust
 ```
 
 On Linux x86_64 with read/write access to `/dev/kvm`,
-`make test:integration:vmm:kvm` also runs this crate's hardware tests. Two
-use 3072 MiB to fill the low RAM band. A flat 32-bit guest reads the last
-RAM byte and reports it on port `0x3f8`. A 64-bit guest entered through
-`long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS` applied, reloads its
-segments from the GDT in RAM, reads markers at RSI and at the top of RAM, and
-stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and 0xB, MISC_ENABLE and
-MTRRdefType for the test to compare. The RAM backing is a sparse anonymous
-`mmap`: the host needs virtual address space for the full mapping, and
-accessed pages still depend on available memory and host memory pressure. The
-[bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
+`make test:integration:vmm:kvm` also runs this crate's hardware tests. A flat
+32-bit guest uses 3072 MiB to fill the low RAM band, reads its last byte, and
+reports it on port `0x3f8`. A 64-bit guest uses 4097 MiB to place a marker above
+4 GiB. Entered through `long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS`
+applied, it reloads its segments from the GDT in RAM, reads markers at RSI and
+at the top of RAM, and stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and
+0xB, MISC_ENABLE and MTRRdefType for the test to compare. The RAM backing is
+sparse anonymous `mmap`: the host needs virtual address space for the full
+mapping, and accessed pages still depend on available memory and host memory
+pressure.
+
+The [bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
 modules need 2 MiB: a flat 32-bit guest writes and reads a test device on the
 port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through
 `KVM_IRQ_LINE`, skipping a repeated level. Another flat guest reads a claimed
@@ -1090,7 +1095,9 @@ ones, and runs no instruction after its i8042 reset. CI runs the same tests
 through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
 and weekly, it also runs the [boot tests](#boot-tests) on the kernel it builds
 with `make vmm:boot:host`, through `make coverage:vmm:boot`, which needs
-`VMM_KERNEL` like `make test:integration:vmm:linux`.
+`VMM_KERNEL` like `make test:integration:vmm:linux`. The Linux integration test
+`boots_linux_with_six_gib_of_ram` requires `VMM_KERNEL` and checks the E820 map
+and how much memory Linux takes over with 6144 MiB of guest RAM.
 
 With the corresponding Rust targets installed, the crate can also be compiled
 for each host with a backend module without booting a VM:

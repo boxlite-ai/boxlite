@@ -538,6 +538,73 @@ fn boots_linux_to_the_root_mount_panic() {
     assert!(log.contains("VFS: Unable to mount root fs"), "{log}");
 }
 
+/// Boots Linux with RAM on both sides of the MMIO hole and checks the memory
+/// map and the amount of memory Linux took over.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
+fn boots_linux_with_six_gib_of_ram() {
+    const SIX_GIB_MIB: u32 = 6144;
+    let log = SerialLog::default();
+    let mut config = linux_config(1, LINUX_CMDLINE, None);
+    config.memory_mib = SIX_GIB_MIB;
+    let vm = linux_vm_with_leaf(&config, true, Console::to(&log), PageSize::Mib);
+    let mut run = run_linux_vm(vm, BOOT_TIMEOUT);
+
+    run.console.finish();
+    let log = log.text();
+    assert_reset(&run, &log);
+    let lines: Vec<&str> = log.lines().collect();
+    let has_prefix = |prefix: &str| lines.iter().any(|line| line.starts_with(prefix));
+    assert!(has_prefix("Linux version "), "{log}");
+    assert!(
+        lines.contains(&format!("Command line: {LINUX_CMDLINE}").as_str()),
+        "{log}"
+    );
+
+    let e820: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("BIOS-e820:"))
+        .collect();
+    // 6144 MiB occupies [0, 3 GiB) and [4 GiB, 7 GiB), with
+    // [0x9_fc00, 0x10_0000) excluded from usable RAM in E820.
+    let usable_ranges: [(u64, u64); 3] = [
+        (0, 0x9_fc00),
+        (0x10_0000, 0xc000_0000),
+        (0x1_0000_0000, 0x1_c000_0000),
+    ];
+    let expected_e820 = usable_ranges
+        .map(|(start, end)| format!("BIOS-e820: [mem {start:#018x}-{:#018x}] usable", end - 1));
+    assert_eq!(e820, expected_e820, "{log}");
+
+    let memory = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("Memory: "))
+        .unwrap_or_else(|| panic!("missing Memory: line; log:\n{log}"));
+    let (first, second) = memory
+        .split_once(" available ")
+        .and_then(|(counts, _)| counts.split_once('/'))
+        .unwrap_or_else(|| panic!("invalid Memory: line; log:\n{log}"));
+    let [first, second] = [first, second].map(|count| {
+        count
+            .strip_suffix('K')
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("invalid Memory: count {count:?}; log:\n{log}"))
+    });
+    let available = first.min(second);
+    let total = first.max(second);
+    assert!(
+        available > (5 << 20),
+        "only {available}K available; log:\n{log}"
+    );
+    // Present pages exclude the page-aligned gap below 1 MiB and page 0.
+    assert!(
+        total >= (u64::from(SIX_GIB_MIB) << 10) - 512,
+        "only {total}K total; log:\n{log}"
+    );
+    assert!(log.contains("VFS: Unable to mount root fs"), "{log}");
+}
+
 /// Where `static_program` loads its one segment, and the length of the ELF
 /// and program headers in front of the code.
 const PROGRAM_BASE: u64 = 0x40_0000;
