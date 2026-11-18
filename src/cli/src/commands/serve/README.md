@@ -88,7 +88,9 @@ bounded wait, cgroup cleanup when available, and SIGKILL for survivors. This
 also releases gvproxy listeners when cgroup controller delegation is unavailable.
 If tracked processes survive a stop, BoxLite keeps their identities on disk.
 Later stop or removal attempts retry those processes even after the launcher
-exits. Removal preserves the box record and files until cleanup succeeds.
+exits. If the record cannot be written, BoxLite still attempts teardown and
+keeps any surviving identities in memory for retries in the same runtime.
+Removal preserves the box record and files until cleanup succeeds.
 Boxes created without `ports` have no mapping to recover; this API does not
 add publications to existing boxes. Preserve their data before explicitly
 recreating them with publication options.

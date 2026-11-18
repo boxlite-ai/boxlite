@@ -51,7 +51,7 @@ pub struct ShimHandler {
 /// Snapshot before stopping the launcher: detached bwrap descendants can enter
 /// another session and become reparented as soon as the launcher exits.
 #[cfg(target_os = "linux")]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct ShimProcessTree(Vec<crate::util::PidRecord>);
 
 #[cfg(target_os = "linux")]
@@ -62,17 +62,23 @@ struct PendingShimCleanup {
     tree: ShimProcessTree,
 }
 
+// If both publication and teardown fail, retain the survivors for another
+// handler in this runtime process. The lifecycle lock serializes each box.
+#[cfg(target_os = "linux")]
+static UNSAVED_CLEANUP: parking_lot::Mutex<std::collections::BTreeMap<PathBuf, ShimProcessTree>> =
+    parking_lot::Mutex::new(std::collections::BTreeMap::new());
+
 #[cfg(target_os = "linux")]
 impl PendingShimCleanup {
     fn path(layout: &BoxFilesystemLayout) -> PathBuf {
         layout.root().join("shim-cleanup.json")
     }
 
-    fn save(layout: &BoxFilesystemLayout, tree: ShimProcessTree) -> BoxliteResult<()> {
+    fn save(layout: &BoxFilesystemLayout, tree: &ShimProcessTree) -> BoxliteResult<()> {
         let pending = Self {
             boot_id: std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?,
             pid_namespace: std::fs::read_link("/proc/self/ns/pid")?,
-            tree,
+            tree: tree.clone(),
         };
         std::fs::create_dir_all(layout.root())?;
         let mut file = tempfile::NamedTempFile::new_in(layout.root())?;
@@ -81,14 +87,39 @@ impl PendingShimCleanup {
         Ok(())
     }
 
+    fn finish(
+        box_id: &BoxID,
+        layout: &BoxFilesystemLayout,
+        mut tree: ShimProcessTree,
+        publication: BoxliteResult<()>,
+    ) -> BoxliteResult<()> {
+        match (publication, tree.stop(box_id)) {
+            (Ok(()), Ok(())) => std::fs::remove_file(Self::path(layout)).map_err(Into::into),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(_), Ok(())) => Ok(()),
+            (Err(error), Err(cleanup_error)) => {
+                UNSAVED_CLEANUP.lock().insert(layout.root().into(), tree);
+                tracing::warn!(%box_id, %cleanup_error, "Unsaved shim cleanup is incomplete");
+                Err(error)
+            }
+        }
+    }
+
     fn retry(box_id: &BoxID, layout: &BoxFilesystemLayout) -> BoxliteResult<bool> {
+        let unsaved = UNSAVED_CLEANUP.lock().remove(layout.root());
+        if let Some(tree) = unsaved {
+            let publication = Self::save(layout, &tree);
+            Self::finish(box_id, layout, tree, publication)?;
+            return Ok(true);
+        }
+
         let path = Self::path(layout);
         let file = match std::fs::File::open(&path) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e.into()),
         };
-        let pending: Self = serde_json::from_reader(file)?;
+        let mut pending: Self = serde_json::from_reader(file)?;
         if pending.boot_id == std::fs::read_to_string("/proc/sys/kernel/random/boot_id")? {
             if pending.pid_namespace != std::fs::read_link("/proc/self/ns/pid")? {
                 return Err(BoxliteError::InvalidState(format!(
@@ -172,7 +203,7 @@ impl ShimProcessTree {
         }
     }
 
-    fn stop(mut self, box_id: &BoxID) -> BoxliteResult<()> {
+    fn stop(&mut self, box_id: &BoxID) -> BoxliteResult<()> {
         // Let the inner shim flush its disks before any hard tree kill.
         self.signal(libc::SIGTERM);
         self.wait();
@@ -344,16 +375,15 @@ impl VmmHandlerTrait for ShimHandler {
             // Publish the snapshot before the launcher can orphan its children.
             let tree = ShimProcessTree::capture(self.pid);
             if !tree.0.is_empty() {
-                PendingShimCleanup::save(&self.layout, tree)?;
+                let publication = PendingShimCleanup::save(&self.layout, &tree);
+                let graceful = self.graceful_stop();
+                PendingShimCleanup::finish(&self.box_id, &self.layout, tree, publication)?;
+                return graceful;
             }
         }
 
         self.graceful_stop()?;
-
-        // The saved process identities cover sandboxes without delegated cgroups.
-        if !Self::retry_cleanup(&self.box_id, &self.layout)? {
-            crate::jailer::reap_box(&self.box_id);
-        }
+        crate::jailer::reap_box(&self.box_id);
         Ok(())
     }
 
