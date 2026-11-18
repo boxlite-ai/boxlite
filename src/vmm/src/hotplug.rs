@@ -42,6 +42,32 @@ const BLOCKS_PER_SLOT: usize = (SLOT_SIZE / BLOCK_SIZE) as usize;
 /// every boot RAM range and E820 entry.
 pub(crate) const HOTPLUG_START: u64 = 1 << 32;
 
+/// Whether `capacity_mib` is a positive multiple of a slot whose window ends
+/// within the host's physical address width, which bounds the guest's.
+pub(crate) fn capacity_fits(capacity_mib: u32) -> bool {
+    let size = u64::from(capacity_mib) * MIB;
+    size != 0
+        && size.is_multiple_of(SLOT_SIZE)
+        && HOTPLUG_START
+            .checked_add(size)
+            .is_some_and(|end| end <= 1 << physical_address_bits())
+}
+
+/// CPUID 0x8000_0008 EAX[7:0], or 36 bits when the leaf is absent.
+#[cfg(target_arch = "x86_64")]
+fn physical_address_bits() -> u32 {
+    use std::arch::x86_64::__cpuid;
+    if __cpuid(0x8000_0000).eax < 0x8000_0008 {
+        return 36;
+    }
+    __cpuid(0x8000_0008).eax & 0xff
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn physical_address_bits() -> u32 {
+    36
+}
+
 /// Whether a block range is plugged, unplugged or both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlockState {
@@ -63,13 +89,13 @@ impl<V: Vm + ?Sized> HotplugMemory<V> {
     /// An empty window of `capacity_mib` at [`HOTPLUG_START`]. Nothing is
     /// mapped or registered until a plug.
     pub(crate) fn new(vm: Arc<V>, view: GuestMemoryView, capacity_mib: u32) -> io::Result<Self> {
-        let size = u64::from(capacity_mib) * MIB;
-        if size == 0 || !size.is_multiple_of(SLOT_SIZE) {
+        if !capacity_fits(capacity_mib) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "hotplug capacity must be a positive multiple of 128 MiB",
+                "hotplug capacity must be a positive multiple of 128 MiB within the address width",
             ));
         }
+        let size = u64::from(capacity_mib) * MIB;
         let slots = (size / SLOT_SIZE) as usize;
         Ok(Self {
             vm,

@@ -158,6 +158,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
             }
         }),
         virtio_console: true,
+        hotplug_mib: 0,
     })
 }
 
@@ -207,6 +208,7 @@ pub(crate) fn map_vmm_error(error: boxlite_vmm::Error) -> BoxliteError {
         error,
         Error::InvalidVcpuCount(_)
             | Error::InvalidMemorySize(_)
+            | Error::InvalidHotplugSize(_)
             | Error::InvalidCommandLine(_)
             | Error::InvalidDiskCount(_)
     ) {

@@ -216,3 +216,17 @@ fn unplug_after_a_poisoned_view_lock_still_removes_the_slot_everywhere() {
     assert_eq!(memory.mapped_bytes(), 0);
     assert!(!view.memory().address_in_range(GuestAddress(HOTPLUG_START)));
 }
+
+#[test]
+fn the_window_must_end_within_the_physical_address_width() {
+    let limit = 1u64 << physical_address_bits();
+    let fits = |end: u64| ((end - HOTPLUG_START) / MIB) as u32;
+    if let Ok(largest) = u32::try_from((limit - HOTPLUG_START) / MIB) {
+        let largest = largest - largest % 128;
+        assert!(capacity_fits(largest));
+        assert!(!capacity_fits(largest + 128));
+    }
+    assert!(capacity_fits(fits(HOTPLUG_START + SLOT_SIZE)));
+    assert!(!capacity_fits(0));
+    assert!(!capacity_fits(64));
+}

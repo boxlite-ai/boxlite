@@ -23,6 +23,9 @@ pub enum Error {
     Vsock(io::Error),
     /// The RAM size is outside `1..=memory::MAX_MEMORY_MIB`.
     InvalidMemorySize(u32),
+    /// A hotplug capacity or target in MiB is not a multiple of 128 MiB, or
+    /// does not fit the capacity or the host's physical address width.
+    InvalidHotplugSize(u32),
     /// Allocating the guest RAM failed.
     AllocateMemory { bytes: u64, source: io::Error },
     /// A host hypervisor operation failed.
@@ -83,6 +86,7 @@ impl fmt::Display for Error {
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
             Self::InvalidMemorySize(mib) => write!(f, "invalid memory size: {mib} MiB"),
+            Self::InvalidHotplugSize(mib) => write!(f, "invalid hotplug memory size: {mib} MiB"),
             Self::AllocateMemory { bytes, .. } => {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
             }
@@ -139,6 +143,7 @@ impl error::Error for Error {
         match self {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
+            | Self::InvalidHotplugSize(_)
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)
             | Self::VirtioSlotsExhausted
