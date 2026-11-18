@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,16 +11,17 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/boxlite-ai/secret-server/internal/database"
 	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/jackc/pgx/v5/pgconn"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/api/idtoken"
 	"google.golang.org/api/option"
 )
 
 type Server struct {
 	config Config
-	db     *sql.DB
+	db     *pgxpool.Pool
 	http   *http.Server
 }
 
@@ -50,34 +50,30 @@ func New(ctx context.Context, c Config) (*Server, error) {
 	if !bytes.Equal(value, plaintext) {
 		return nil, errors.New("encryption self-test mismatch")
 	}
-	db, err := sql.Open("pgx", c.DatabaseURL)
+	dbConfig, err := pgxpool.ParseConfig(c.DatabaseURL)
 	if err != nil {
 		return nil, errors.New("invalid DATABASE_URL")
 	}
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	if err := db.PingContext(ctx); err != nil {
+	dbConfig.MaxConns = 10
+	db, err := pgxpool.NewWithConfig(ctx, dbConfig)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	if err := db.Ping(ctx); err != nil {
 		db.Close()
 		return nil, databaseError(err)
 	}
-	// Migration and durable canary verification are integration stubs for #2571.
-	// Both must succeed before readiness once their implementations are wired in.
-	if err := migrationCheck(ctx, db); err != nil {
+	if err := database.Initialize(ctx, db, cipher); err != nil {
 		db.Close()
-		return nil, err
+		return nil, errors.New("database initialization failed")
 	}
-	if err := canaryCheck(ctx, db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	slog.Warn("migration and durable canary checks are not implemented")
 	validator, err := idtoken.NewValidator(ctx, option.WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	if err != nil {
 		db.Close()
 		return nil, errors.New("token validator initialization failed")
 	}
 	s := &Server{config: c, db: db}
-	s.http = &http.Server{Addr: net.JoinHostPort("", c.Port), Handler: routes(c, db.PingContext, validator.Validate), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	s.http = &http.Server{Addr: net.JoinHostPort("", c.Port), Handler: routes(c, db.Ping, validator.Validate), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	return s, nil
 }
 
@@ -142,10 +138,7 @@ func routes(c Config, ping func(context.Context) error, validate validateToken) 
 	return recoverRequests(mux)
 }
 
-func migrationCheck(context.Context, *sql.DB) error { return nil }
-func canaryCheck(context.Context, *sql.DB) error    { return nil }
-
-func (s *Server) Close() error { return s.db.Close() }
+func (s *Server) Close() error { s.db.Close(); return nil }
 
 func recoverRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -180,13 +173,13 @@ func (s *Server) Run(ctx context.Context, listener net.Listener) error {
 			_ = s.http.Close()
 		}
 		serveErr := <-result
-		dbErr := s.db.Close()
+		s.db.Close()
 		if err != nil {
 			return err
 		}
 		if !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr
 		}
-		return dbErr
+		return nil
 	}
 }

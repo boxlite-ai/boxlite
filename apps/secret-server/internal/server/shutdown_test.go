@@ -2,28 +2,17 @@ package server
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"io"
 	"net"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type testDriver struct{}
-
-func (testDriver) Open(string) (driver.Conn, error) { return testConn{}, nil }
-
-type testConn struct{}
-
-func (testConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
-func (testConn) Close() error                        { return nil }
-func (testConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
-
 func TestRunDrainsInflightRequest(t *testing.T) {
-	sql.Register("shutdown-test", testDriver{})
-	db, err := sql.Open("shutdown-test", "")
+	db, err := pgxpool.New(context.Background(), "postgres://localhost/test")
 	if err != nil {
 		t.Fatal(err)
 	}

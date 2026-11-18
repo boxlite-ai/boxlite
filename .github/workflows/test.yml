@@ -593,6 +593,45 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
 
+  secret-server-postgres:
+    name: Secret Server PostgreSQL integration
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: boxlite
+          POSTGRES_PASSWORD: boxlite
+          POSTGRES_DB: boxlite
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U boxlite -d boxlite"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-go
+      - name: Run Secret Server PostgreSQL integration tests
+        env:
+          SECRET_TEST_DATABASE_URL: postgresql://boxlite:boxlite@127.0.0.1:${{ job.services.postgres.ports[5432] }}/boxlite
+        run: make coverage:apps:secret-server:integration
+      - name: Upload Secret Server integration coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/secret-server-integration.out
+          flags: go
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
   # Go SDK unit tests
   go:
     name: Go Tests (${{ matrix.platform.target }})
@@ -641,7 +680,7 @@ jobs:
           BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS: '1'
         run: |
           mkdir -p target/coverage/full-go
-          for module in go-sdk gvproxy runner image-service; do
+          for module in go-sdk gvproxy runner image-service secret-server; do
             cp "target/coverage/$module.out" "target/coverage/full-go/$module.out"
           done
           sudo chmod a+rw /dev/kvm
@@ -649,7 +688,7 @@ jobs:
           make coverage:go GOTEST_FILTER='-count=1 -run NestedVirtualization'
           # Both passes instrument this checkout with the same atomic mode.
           # Keep the complete suite's blocks as well as the hardware pass.
-          for module in go-sdk gvproxy runner image-service; do
+          for module in go-sdk gvproxy runner image-service secret-server; do
             report="target/coverage/$module.out"
             full="target/coverage/full-go/$module.out"
             if [[ "$(head -n 1 "$report")" != 'mode: atomic' || "$(head -n 1 "$full")" != 'mode: atomic' ]]; then
@@ -973,7 +1012,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, python, node, go, secret-server-postgres, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

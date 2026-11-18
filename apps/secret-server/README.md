@@ -6,8 +6,8 @@ The internal encryption package protects secret values and routing policy with p
 
 This Go module contains `internal/encryption`, `internal/server`,
 `internal/attest` ([runner attestation](#runner-attestation)), and a Secret
-Server skeleton. Write and fetch business endpoints, persistence, and deployment
-resources are not yet implemented.
+Server skeleton with database initialization and a migration command. Write and
+fetch business endpoints and deployment resources are not yet implemented.
 The existing API encryption service and stored values remain unchanged.
 
 ## Server skeleton
@@ -24,9 +24,8 @@ on the allowlist. The reserved fetch path and all business handlers return 404
 until their separate implementations land. `/health` is liveness; `/ready`
 checks database connectivity. Startup also performs an encryption round trip.
 
-Migration and durable canary verification are placeholders. When #2571 is
-integrated, both must succeed before the service reports readiness. Until then,
-readiness does not prove that the database schema or persisted key matches.
+Startup applies migrations and verifies the durable encrypted canary before the
+server listens. A failed migration or key check prevents startup and readiness.
 
 Request logging and OpenTelemetry integration remain open under [#2570](https://github.com/boxlite-ai/boxlite/issues/2570);
 the current service emits only startup and recovery logs. Configuration uses explicit
@@ -40,8 +39,8 @@ the key or token. The local database must use the same key across restarts.
 
 To exercise startup and readiness against a disposable PostgreSQL database, set
 `SECRET_SERVER_TEST_DATABASE_URL` and run `make test:apps:secret-server`. The
-integration test is skipped when this variable is absent; it does not verify the
-placeholder migration or durable-canary checks.
+integration test is skipped when this variable is absent. The database must be
+disposable because initialization creates persistent state.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
@@ -165,6 +164,25 @@ A future change will add a rewrap API or a keyring provider that routes by key I
 The envelope format allows rewrapping a DEK without changing the value ciphertext,
 but KMS, provider routing, and migration jobs are not implemented here.
 
+## Database migrations
+
+Set `DATABASE_URL` to the separate PostgreSQL database and run
+`secret-server migrate`. The command applies embedded goose migrations under a
+PostgreSQL session lock, with a two-minute deadline. Run it with an account that
+can create schema objects. Migrations are forward-only; deployed application
+versions must tolerate compatible schema changes. The database must use UTF-8
+server encoding. SIGINT and SIGTERM cancel a running migration.
+
+Before serving requests, the service calls `database.Initialize`.
+It applies migrations and verifies a durable encrypted canary under a separate
+transaction advisory lock. If the canary is absent but secrets exist, it first
+decrypts an existing secret using AAD version 1.
+
+A wrong key or corrupt ciphertext prevents startup.
+
+Canary enrollment uses a read-committed transaction even when the database has a
+different default isolation level.
+
 ## Runner attestation
 
 Design: [runner attestation with gcp_iit](https://github.com/boxlite-ai/boxlite/issues/2623).
@@ -225,13 +243,23 @@ Run from the repository root with Go 1.25.4 or newer:
 
 ```sh
 make test:apps:secret-server
+make test:apps:secret-server:integration
+make coverage:apps:secret-server:integration
 make lint:apps:secret-server
 make fmt:apps:secret-server
 make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=5s -parallel=2'
 ```
 
-The test target runs with the race detector and `GOWORK=off`, so it needs no VM,
-native SDK library, Node installation, cloud permissions, or external Go modules.
+The unit test target runs with the race detector and `GOWORK=off`. The integration
+target requires infra-local PostgreSQL and permission to create a temporary database.
+It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
+creates a uniquely named database and drops it after the test.
+The coverage target runs the same tests and writes `target/coverage/secret-server-integration.out`.
+Database and command tests share the temporary database setup and cleanup helper.
+It also checks that SIGTERM cancels the migration command while it waits for a lock.
+CI runs the same integration target against a PostgreSQL 17 service on Ubuntu,
+including on draft PRs when Go-related files change. This checks database behavior;
+the infra-local BoxLite VM still needs separate local verification.
 The Nx test target delegates to the same make target for workspace test discovery.
 Nx caching is disabled for this target because the workspace default inputs exclude
 Go test files. Every invocation reaches Go, whose own test cache tracks test changes.
@@ -245,6 +273,10 @@ Boundary tests reject malformed UUID hex and non-AES-256 keys, and cancel at
 explicit context checkpoints after cryptographic operations to verify that no
 result is released. These checkpoints avoid timing-dependent sleeps.
 Fuzzing covers malformed envelope decoding; it is not a cryptographic proof.
+
+On Linux, CI preserves the full-suite report when it adds nested runtime coverage.
+Database rollback and migration lock cleanup have bounded waits; a connection
+with a failed migration unlock is discarded.
 
 Go reports statement coverage; Codecov also distinguishes partially covered source
 lines, so a passing statement percentage does not imply passing patch coverage.
