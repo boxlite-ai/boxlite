@@ -760,6 +760,7 @@ name = "boxlite-shared"
 version = "0.13.1"
 dependencies = [
  "futures",
+ "nix 0.29.0",
  "proptest",
  "prost",
  "serde",

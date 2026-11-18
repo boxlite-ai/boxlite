@@ -18,6 +18,9 @@ tokio-stream = "0.1"
 futures = "0.3"
 tar = "0.4"
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["fs", "user"] }
+
 [build-dependencies]
 tonic-build = "0.12"
 
