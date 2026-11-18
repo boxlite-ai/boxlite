@@ -1110,10 +1110,6 @@ Reading execution output may mint a short-lived attach ticket inside the existin
 The former mixed `invoke_api_endpoint` tool is removed. Clients must rediscover tools and use the catalog's `invocationTool` value;
 keeping a mixed compatibility alias would defeat the read/write boundary. REST operations and schemas are unchanged.
 
-Upload `overwrite` is transported through Runner, Go and the additive C streaming entry point to the existing guest extraction options.
-Omission keeps the existing `true` default; explicit `false` refuses replacement and preserves existing bytes.
-Empty, malformed or repeated overwrite parameters, including invalid URL encoding or separators, return HTTP 400 before reading the archive.
-
 The catalog is built at startup from [`openapi/box.openapi.yaml`](../../../../openapi/box.openapi.yaml),
 [`openapi/admin.openapi.yaml`](../../../../openapi/admin.openapi.yaml) and the product Swagger
 document. Tool names and argument schemas are the operations' own; the v1 specs win

@@ -39,7 +39,7 @@ Start the acceptance process with `BOXLITE_API_KEY` already supplied by a privat
 The cloud smoke test creates a small Python Box with inbound access and uploads a synthetic text file.
 It exposes a temporary public HTTP app, updates it, and removes the exact created Box.
 
-It also checks nonzero exits, absent IDs, overwrite refusal, and cleanup, and fails if any required check fails.
+It also checks nonzero exits, absent IDs, and cleanup, and fails if any required check fails.
 
 ```sh
 make plugin:boxlite:smoke:cloud
@@ -72,7 +72,7 @@ make plugin:boxlite:smoke:local PLUGIN_LOCAL_CLI=/absolute/path/to/verified/boxl
 ```
 
 This test invokes the packaged launcher with deliberately conflicting cloud environment settings and a fresh local runtime home.
-It runs a small Python VM and verifies a localhost HTTP app, overwrite refusal, and nonzero exits.
+It runs a small Python VM and verifies a localhost HTTP app, file roundtrips, and nonzero exits.
 It preserves data across updates and restart, then removes its recorded Box.
 
 The test saves a private command transcript in `target/plugins/evidence/local.json`; its runtime home and synthetic files stay under the recorded run directory for diagnosis.

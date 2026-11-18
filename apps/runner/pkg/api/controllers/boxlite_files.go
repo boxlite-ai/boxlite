@@ -4,8 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"strconv"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/runner"
@@ -13,24 +11,6 @@ import (
 )
 
 func BoxliteFileUpload(ctx *gin.Context) {
-	query, err := url.ParseQuery(ctx.Request.URL.RawQuery)
-	if err != nil {
-		respondError(ctx, http.StatusBadRequest, "invalid upload query", "InvalidArgumentError", "invalid_argument")
-		return
-	}
-	overwrite := true
-	if values, present := query["overwrite"]; present {
-		if len(values) != 1 {
-			respondError(ctx, http.StatusBadRequest, "overwrite must be a single boolean", "InvalidArgumentError", "invalid_argument")
-			return
-		}
-		var err error
-		overwrite, err = strconv.ParseBool(values[0])
-		if err != nil {
-			respondError(ctx, http.StatusBadRequest, "overwrite must be a boolean", "InvalidArgumentError", "invalid_argument")
-			return
-		}
-	}
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		respondError(ctx, http.StatusInternalServerError, err.Error(), "InternalError", "internal")
@@ -38,7 +18,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 
 	boxId := ctx.Param("boxId")
-	destPath := query.Get("path")
+	destPath := ctx.Query("path")
 	if destPath == "" {
 		respondError(ctx, http.StatusBadRequest, "path query parameter required", "InvalidArgumentError", "invalid_argument")
 		return
@@ -47,7 +27,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	// Stream straight into the guest, which lands the upload by the archive's
 	// first entry. No runner-side staging; an old client's source_is_dir
 	// query parameter is ignored.
-	if err := r.Boxlite.CopyInStreamWithOverwrite(ctx.Request.Context(), boxId, destPath, ctx.Request.Body, overwrite); err != nil {
+	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, ctx.Request.Body); err != nil {
 		respondCopyError(ctx, err)
 		return
 	}

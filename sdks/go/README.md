@@ -18,10 +18,6 @@ go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
 
 Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library and header into the module directory in your Go module cache (one-time). Set `GITHUB_TOKEN` to avoid API rate limits.
 
-For archive uploads, `CopyInStreamWithOverwrite` accepts an explicit replacement policy;
-`false` creates missing destinations and refuses replacing existing files.
-`CopyInStream` retains its existing overwrite-enabled default. The guest enforces the policy during extraction, without a host-side existence check.
-
 ## Usage
 
 ### Managed checkpoints

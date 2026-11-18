@@ -73,12 +73,6 @@ def exercise(cli, workspace, report):
         if downloaded.read_bytes() != b'version-one\n':
             raise RuntimeError('File roundtrip mismatch')
         report['checks'].append('file-roundtrip')
-        source.write_bytes(b'forbidden-overwrite\n')
-        command('cp', '--no-overwrite', str(source), destination, expected=None)
-        command('cp', destination, str(downloaded))
-        if downloaded.read_bytes() != b'version-one\n':
-            raise RuntimeError('Overwrite refusal did not preserve original data')
-        report['checks'].append('overwrite-refused-with-data-preserved')
         command('exec', box, '--', 'python3', '--version')
         command('exec', '-d', box, '--', 'python3', '-m', 'http.server', '8000', '--bind', '0.0.0.0', '--directory', directory)
         url = f'http://127.0.0.1:{port}/message.txt'
@@ -93,6 +87,7 @@ def exercise(cli, workspace, report):
                         if response.status == 200 and response.read(1024) == expected:
                             return
                 except OSError:
+                    # Detached execution can return before the guest listener is ready; keep the bounded retry.
                     pass
                 if time.monotonic() >= deadline:
                     command('top', box)

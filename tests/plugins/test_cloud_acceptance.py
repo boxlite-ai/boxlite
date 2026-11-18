@@ -1,7 +1,6 @@
 """Contract checks for the bounded MCP release-acceptance client."""
 import importlib.util
 import io
-import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch

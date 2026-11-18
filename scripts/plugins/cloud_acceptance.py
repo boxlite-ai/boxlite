@@ -121,23 +121,15 @@ def exercise(client, report):
         report['checks'] += ['hello-output-and-exit', 'nonzero-exit-reported']
         execute("from pathlib import Path; Path('/workspace/plugin-check').mkdir(exist_ok=True)")
         destination = '/workspace/plugin-check'
-        upload = {'box_id': box, 'path': destination, 'overwrite': False, 'body_base64': archive_bytes(b'version-one\n')}
+        upload = {'box_id': box, 'path': destination, 'body_base64': archive_bytes(b'version-one\n')}
         client.call('uploadFiles', upload)
-        refused = client.request('tools/call', {'name': 'uploadFiles', 'arguments': {
-            **upload, 'body_base64': archive_bytes(b'forbidden-overwrite\n')}})
         downloaded = client.call('downloadFiles', {'box_id': box, 'path': destination + '/message.txt'})
         with tarfile.open(fileobj=io.BytesIO(base64.b64decode(downloaded['base64']))) as archive:
             members = [member for member in archive if member.isfile()]
             if len(members) != 1:
                 raise RuntimeError('File roundtrip returned unexpected members')
             actual = archive.extractfile(members[0]).read()
-        if refused.get('isError') and actual == b'version-one\n':
-            report['checks'].append('overwrite-refused-with-data-preserved')
-        else:
-            report.setdefault('failures', []).append('overwrite-false-did-not-refuse-and-preserve-data')
-            # Restore only this test's file, explicitly allowing replacement, to exercise remaining contracts.
-            client.call('uploadFiles', {**upload, 'overwrite': True})
-        if actual not in (b'version-one\n', b'forbidden-overwrite\n'):
+        if actual != b'version-one\n':
             raise RuntimeError('File roundtrip returned unexpected content')
         report['checks'].append('archive-roundtrip')
         server = client.call('startExecution', {'box_id': box, 'body': {'command': 'python3',
@@ -160,6 +152,7 @@ def exercise(client, report):
                         if response.read(1024) == expected:
                             return
                 except (urllib.error.URLError, TimeoutError):
+                    # The guest server or tunnel may still be starting; retry until the deadline below.
                     pass
                 if time.monotonic() >= deadline:
                     raise RuntimeError('Public application content did not match before deadline')
@@ -168,7 +161,7 @@ def exercise(client, report):
         public_content(b'version-one\n')
         report['checks'].append('public-app-feature')
         execute("from pathlib import Path; Path('/workspace/plugin-check/persistent.txt').write_text('keep')")
-        client.call('uploadFiles', {**upload, 'overwrite': True, 'body_base64': archive_bytes(b'version-two\n')})
+        client.call('uploadFiles', {**upload, 'body_base64': archive_bytes(b'version-two\n')})
         if client.call('getBox', {'box_id': box})['box_id'] != box:
             raise RuntimeError('Box identity changed')
         if execute("from pathlib import Path; print(Path('/workspace/plugin-check/persistent.txt').read_text())").strip() != 'keep':

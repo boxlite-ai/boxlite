@@ -28,14 +28,12 @@ For incomplete output, retain the execution ID and inspect `getExecution`; never
 
 ## Files
 
-`uploadFiles` takes a base64 tar archive, destination, and overwrite choice; `downloadFiles` returns an archive.
+`uploadFiles` takes a base64 tar archive and destination; `downloadFiles` returns an archive.
 Exclude credentials, `.env*`, `.git`, private plugin state, caches, and persistent data unless explicitly requested.
 Reject unreviewed symlinks and special files in deployment sources.
 
 Stay within discovered limits, currently 8 MiB of archive bytes; do not echo large base64 payloads to the user.
-Upload into a fresh, uniquely named release directory rather than relying on `overwrite: false` to protect existing data.
-
-That flag's refusal and preservation behavior is a release acceptance gate; do not promise protection until verified on the deployed service.
+Upload into a fresh, uniquely named release directory to keep application releases separate from persistent data.
 Small text files can use bounded execution with explicit argv; `read_file`, `write_file`, and `list_dir` are not BoxLite MCP tools.
 
 ## Deploy and update

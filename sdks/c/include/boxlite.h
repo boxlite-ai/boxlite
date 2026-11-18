@@ -1231,16 +1231,6 @@ struct CBoxCopyInStream *boxlite_copy_in_start(CBoxHandle *handle,
                                                void *user_data,
                                                CBoxliteError *out_error);
 
-// Start an upload with an explicit overwrite policy. The original entry point
-// retains overwrite=true. With false, existing destination bytes are preserved.
-// Pointer, callback, stream and error ownership match `boxlite_copy_in_start`.
-struct CBoxCopyInStream *boxlite_copy_in_start_with_overwrite(CBoxHandle *handle,
-                                                              const char *guest_dst,
-                                                              bool overwrite,
-                                                              CBoxCopyCb copy_cb,
-                                                              void *user_data,
-                                                              CBoxliteError *out_error);
-
 // Push a chunk of archive bytes into the guest. Blocks when the guest is
 // slow (bounded-channel backpressure).
 enum BoxliteErrorCode boxlite_copy_in_write(struct CBoxCopyInStream *stream,

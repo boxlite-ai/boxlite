@@ -373,23 +373,6 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
     out_error: *mut CBoxliteError,
 ) -> *mut CBoxCopyInStream {
     unsafe {
-        boxlite_copy_in_start_with_overwrite(handle, guest_dst, true, copy_cb, user_data, out_error)
-    }
-}
-
-/// Start an upload with an explicit overwrite policy. The original entry point
-/// retains overwrite=true. With false, existing destination bytes are preserved.
-/// Pointer, callback, stream and error ownership match `boxlite_copy_in_start`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_copy_in_start_with_overwrite(
-    handle: *mut CBoxHandle,
-    guest_dst: *const c_char,
-    overwrite: bool,
-    copy_cb: CBoxCopyCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> *mut CBoxCopyInStream {
-    unsafe {
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
             return std::ptr::null_mut();
@@ -418,14 +401,7 @@ pub unsafe extern "C" fn boxlite_copy_in_start_with_overwrite(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = lite
-                .copy_in_stream(
-                    bytes,
-                    dst.as_str(),
-                    CopyOptions {
-                        overwrite,
-                        ..CopyOptions::default()
-                    },
-                )
+                .copy_in_stream(bytes, dst.as_str(), CopyOptions::default())
                 .await;
             push_event(
                 &queue,
@@ -567,26 +543,6 @@ pub unsafe extern "C" fn boxlite_copy_in_free(stream: *mut CBoxCopyInStream) {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn copy_in_overwrite_entry_rejects_null_handles() {
-        for overwrite in [false, true] {
-            let mut error = CBoxliteError::default();
-            let stream = unsafe {
-                super::boxlite_copy_in_start_with_overwrite(
-                    std::ptr::null_mut(),
-                    std::ptr::null(),
-                    overwrite,
-                    None,
-                    std::ptr::null_mut(),
-                    &mut error,
-                )
-            };
-            assert!(stream.is_null());
-            assert_error_contains(&error, BoxliteErrorCode::InvalidArgument, "handle is null");
-            unsafe { crate::error::boxlite_error_free(&mut error) };
-        }
-    }
-
     use super::*;
     use std::ffi::CStr;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
