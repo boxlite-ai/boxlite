@@ -31,7 +31,7 @@ import {
   ApiHeader,
   ApiBearerAuth,
 } from '@nestjs/swagger'
-import { BoxDto, BoxLabelsDto } from '../dto/box.dto'
+import { BoxDto } from '../dto/box.dto'
 import { UpdateBoxStateDto } from '../dto/update-box-state.dto'
 import { PaginatedBoxesDto } from '../dto/paginated-boxes.dto'
 import { RunnerService } from '../services/runner.service'
@@ -53,7 +53,7 @@ import { OrganizationResourcePermission } from '../../organization/enums/organiz
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
-import { Audit, AUDIT_TARGET_ID, TypedRequest } from '../../audit/decorators/audit.decorator'
+import { Audit, AUDIT_TARGET_ID } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 // import { UpdateBoxNetworkSettingsDto } from '../dto/update-box-network-settings.dto'
@@ -101,47 +101,6 @@ export class BoxController {
         return
       }
     })
-  }
-
-  @Get()
-  @ApiOperation({
-    summary: 'List all boxes',
-    operationId: 'listBoxes',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'List of all boxes',
-    type: [BoxDto],
-  })
-  @ApiQuery({
-    name: 'verbose',
-    required: false,
-    type: Boolean,
-    description: 'Include verbose output',
-  })
-  @ApiQuery({
-    name: 'labels',
-    type: String,
-    required: false,
-    example: '{"label1": "value1", "label2": "value2"}',
-    description: 'JSON encoded labels to filter by',
-  })
-  @ApiQuery({
-    name: 'includeErroredDeleted',
-    required: false,
-    type: Boolean,
-    description: 'Include errored and deleted boxes',
-  })
-  async listBoxes(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Query('verbose') verbose?: boolean,
-    @Query('labels') labelsQuery?: string,
-    @Query('includeErroredDeleted') includeErroredDeleted?: boolean,
-  ): Promise<BoxDto[]> {
-    const labels = labelsQuery ? JSON.parse(labelsQuery) : undefined
-    const boxes = await this.boxService.findAllDeprecated(authContext.organizationId, labels, includeErroredDeleted)
-
-    return this.boxService.toBoxDtos(boxes)
   }
 
   @Get('paginated')
@@ -332,44 +291,6 @@ export class BoxController {
     return boxDto
   }
 
-  @Put(':boxIdOrName/labels')
-  @UseInterceptors(ContentTypeInterceptor)
-  @ApiOperation({
-    summary: 'Replace box labels',
-    operationId: 'replaceLabels',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Labels have been successfully replaced',
-    type: BoxLabelsDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.REPLACE_LABELS,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      body: (req: TypedRequest<BoxLabelsDto>) => ({
-        labels: req.body?.labels,
-      }),
-    },
-  })
-  async replaceLabels(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Body() labelsDto: BoxLabelsDto,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.replaceLabels(boxIdOrName, labelsDto.labels, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
-  }
-
   @Put(':boxId/state')
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
@@ -427,91 +348,6 @@ export class BoxController {
       return
     }
     await this.boxService.updateLastActivityAt(boxId, new Date())
-  }
-
-  @Post(':boxIdOrName/autostop/:interval')
-  @ApiOperation({
-    summary: 'Set box auto-stop interval',
-    operationId: 'setAutostopInterval',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'interval',
-    description: 'Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Auto-stop interval has been set',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.SET_AUTO_STOP_INTERVAL,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      params: (req) => ({
-        interval: req.params.interval,
-      }),
-    },
-  })
-  async setAutostopInterval(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('interval') interval: number,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.setAutostopInterval(boxIdOrName, interval, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
-  }
-
-  @Post(':boxIdOrName/autodelete/:interval')
-  @ApiOperation({
-    summary: 'Set box auto-delete interval',
-    operationId: 'setAutoDeleteInterval',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'interval',
-    description:
-      'Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Auto-delete interval has been set',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.SET_AUTO_DELETE_INTERVAL,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      params: (req) => ({
-        interval: req.params.interval,
-      }),
-    },
-  })
-  async setAutoDeleteInterval(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('interval') interval: number,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.setAutoDeleteInterval(boxIdOrName, interval, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
   }
 
   // TODO: Network settings endpoint will not be enabled for now

@@ -24,6 +24,7 @@ import { API_GROUP, serviceSecretsFrom, splitServiceChannels, type Environment, 
 import { API_PORT, publicHostsFor, type PublicHosts } from '../stack/api.ts'
 import { SECRET_GROUP } from 'mstage/secret-address'
 import type { Cloud } from 'mstage/config'
+import { FilestoreConfigurationError, parseFilestoreInstances } from '../../../shared/filestore-instances.ts'
 
 export class ApiEnvironmentError extends Error {
   constructor(message: string) {
@@ -57,6 +58,69 @@ const flag = (environment: Environment, key: string): boolean => {
  * secret moves from one to the other.
  */
 const held = (delivered: Record<string, string>, key: string): boolean => (delivered[key]?.trim() ?? '') !== ''
+
+const CI_SECRET_KEYS = ['CI_GITHUB_APP_PRIVATE_KEY', 'CI_GITHUB_WEBHOOK_SECRET', 'CI_SECRET_ENCRYPTION_KEY']
+
+/** CI is optional; once selected, every credential must use the workload secret channel. */
+const validateCiChannels = (values: Record<string, string>, addresses: Record<string, string>): void => {
+  for (const key of ['CI_GITHUB_APP_PRIVATE_KEY_FILE', 'CI_GITHUB_WEBHOOK_SECRET_FILE', 'CI_GITHUB_APPS_FILE'])
+    if (key in values || key in addresses)
+      throw new ApiEnvironmentError(`${key} is a self-hosted file input; hosted CI uses mstage secret refs`)
+  const orgClient = 'CI_GITHUB_ORG_APP_CLIENT_ID',
+    orgSlug = 'CI_GITHUB_ORG_APP_SLUG'
+  const orgSecrets = ['CI_GITHUB_ORG_APP_PRIVATE_KEY', 'CI_GITHUB_ORG_WEBHOOK_SECRET']
+  const orgKeys = [orgClient, orgSlug, ...orgSecrets, 'CI_GITHUB_ORG_APP_CLIENT_SECRET']
+  if (orgKeys.some((key) => held(values, key) || held(addresses, key))) {
+    if (!held(values, 'CI_GITHUB_APP_CLIENT_ID'))
+      throw new ApiEnvironmentError('Personal App identity is required as the shared CI storage anchor')
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(values[orgClient] || '') || values[orgClient] === values.CI_GITHUB_APP_CLIENT_ID)
+      throw new ApiEnvironmentError('Organization App requires a distinct client ID')
+    if (!/^[A-Za-z0-9-]+$/.test(values[orgSlug] || ''))
+      throw new ApiEnvironmentError('Organization App slug is required')
+    for (const key of orgSecrets)
+      if (!held(addresses, key)) throw new ApiEnvironmentError(`${key} requires a mstage secret ref`)
+  }
+  for (const [webSecret, clientKey] of [
+    ['CI_GITHUB_APP_CLIENT_SECRET', 'CI_GITHUB_APP_CLIENT_ID'],
+    ['CI_GITHUB_ORG_APP_CLIENT_SECRET', orgClient],
+  ]) {
+    if (held(values, webSecret) || held(addresses, webSecret)) {
+      if (!held(addresses, webSecret)) throw new ApiEnvironmentError(`${webSecret} requires a mstage secret ref`)
+      if (!held(values, clientKey)) throw new ApiEnvironmentError(`${clientKey} is required for browser connect`)
+    }
+  }
+  const oauthClient = 'CI_GITHUB_OAUTH_CLIENT_ID',
+    oauthSecret = 'CI_GITHUB_OAUTH_CLIENT_SECRET'
+  if ([oauthClient, oauthSecret].some((key) => held(values, key) || held(addresses, key))) {
+    if (
+      !/^[A-Za-z0-9_-]{1,128}$/.test(values[oauthClient] || '') ||
+      held(addresses, oauthClient) ||
+      [values.CI_GITHUB_APP_CLIENT_ID, values.CI_GITHUB_ORG_APP_CLIENT_ID].includes(values[oauthClient])
+    )
+      throw new ApiEnvironmentError('Identity OAuth requires a distinct plain client ID')
+    if (!held(addresses, oauthSecret) || held(values, oauthSecret))
+      throw new ApiEnvironmentError(`${oauthSecret} requires a mstage secret ref`)
+    if (!held(values, 'CI_GITHUB_APP_CLIENT_ID'))
+      throw new ApiEnvironmentError('Identity OAuth requires the hosted CI storage anchor')
+  }
+  const client = values.CI_GITHUB_APP_CLIENT_ID,
+    slug = values.CI_GITHUB_APP_SLUG
+  if (
+    !client &&
+    !slug &&
+    !addresses.CI_GITHUB_APP_CLIENT_ID &&
+    !addresses.CI_GITHUB_APP_SLUG &&
+    !CI_SECRET_KEYS.some((key) => held(values, key) || held(addresses, key))
+  )
+    return
+  if (!client || !/^[A-Za-z0-9_.-]{1,200}$/.test(client))
+    throw new ApiEnvironmentError('CI_GITHUB_APP_CLIENT_ID is required for hosted CI')
+  if (!slug || !/^[A-Za-z0-9-]+$/.test(slug))
+    throw new ApiEnvironmentError('CI_GITHUB_APP_SLUG is required for hosted CI')
+  for (const key of CI_SECRET_KEYS)
+    if (!held(addresses, key))
+      throw new ApiEnvironmentError(`${key} requires a mstage secret ref in both api and secret groups`)
+}
 
 /**
  * The names the billing read path only means anything as a set.
@@ -120,7 +184,8 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
   if (management && !audience) {
     throw new ApiEnvironmentError('OIDC_MANAGEMENT_API_AUDIENCE is required when OIDC_MANAGEMENT_API_ENABLED=true')
   }
-  const passthrough = (key: string) => (optional(environment, key) ? { [key]: optional(environment, key) as string } : {})
+  const passthrough = (key: string) =>
+    optional(environment, key) ? { [key]: optional(environment, key) as string } : {}
   return {
     OIDC_ISSUER_BASE_URL: issuer,
     OIDC_AUDIENCE: optional(environment, 'OIDC_AUDIENCE') ?? 'boxlite',
@@ -235,6 +300,42 @@ const systemImagesFrom = (environment: Environment): Record<string, string> => {
 }
 
 /**
+ * The online disk-expansion switch and its cap, delivered only when the stage
+ * set them.
+ *
+ * A key absent from the container's environment is the API's own default: the
+ * switch off and the cap unset, which is exactly the behavior of every stage
+ * before this mechanism existed. Delivering `false` unconditionally would
+ * read the same but say more than the stage did — and the cap's absence is
+ * load-bearing, because the controller skips uncapped runners loudly rather
+ * than silently growing disks to wherever the default lands. A value that is
+ * neither true nor false is refused here rather than left for the API to read
+ * as off, which is how a typo'd switch would stay closed forever.
+ */
+const runnerDiskExpansionFrom = (environment: Environment): Record<string, string> => {
+  const enabled = optional(environment, 'RUNNER_DISK_EXPANSION_ENABLED')
+  const cap = optional(environment, 'RUNNER_DISK_EXPANSION_CAP_GIB')
+  if (enabled !== null) flag(environment, 'RUNNER_DISK_EXPANSION_ENABLED')
+  return {
+    ...(enabled ? { RUNNER_DISK_EXPANSION_ENABLED: enabled } : {}),
+    ...(cap ? { RUNNER_DISK_EXPANSION_CAP_GIB: cap } : {}),
+  }
+}
+
+function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {
+  if (home !== 'gcp' || !raw) return []
+
+  try {
+    return [...new Set(parseFilestoreInstances({ FILESTORE_INSTANCES: raw }).map((entry) => entry.projectId))].sort()
+  } catch (error) {
+    if (error instanceof FilestoreConfigurationError) {
+      throw new ApiEnvironmentError(error.message)
+    }
+    throw error
+  }
+}
+
+/**
  * The two channels the API reads, assembled from one stage's configuration.
  *
  * `region` is here because the object-storage endpoints are regional and the
@@ -254,7 +355,7 @@ export const apiEnvironmentFrom = ({
   region: string
   stage: string
   home: Cloud
-}): { environment: Record<string, string>; secrets: Record<string, string> } => {
+}): { environment: Record<string, string>; secrets: Record<string, string>; filestoreProjects: string[] } => {
   const domain = optional(environment, 'STACK_DOMAIN')
   if (!domain) throw new ApiEnvironmentError('STACK_DOMAIN is required — every URL the API composes starts with it')
   const hosts = publicHostsFor({ domain, dashboardDomain: optional(environment, 'DASHBOARD_DOMAIN') })
@@ -263,9 +364,27 @@ export const apiEnvironmentFrom = ({
   // below asks whether a credential arrived, and asking the raw environment
   // would miss one delivered as an address.
   const delivered = serviceSecretsFrom({ group: API_GROUP, declaration, environment })
+  if (delivered.TURNSTILE_SITEKEY) {
+    for (const key of ['TURNSTILE_SECRET_KEY', 'TURNSTILE_EXPECTED_HOSTNAMES']) {
+      if (!delivered[key]) throw new ApiEnvironmentError(`${key} is required when TURNSTILE_SITEKEY is set`)
+    }
+  } else {
+    for (const key of Object.keys(delivered)) {
+      if (key.startsWith('TURNSTILE_')) delete delivered[key]
+    }
+  }
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
+  validateCiChannels(values, addresses)
+  const configuredFilestoreInstances = environment.FILESTORE_INSTANCES?.trim()
+  const filestoreInstances = configuredFilestoreInstances ?? (home === 'gcp' ? '[]' : undefined)
+  const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home)
+  const apiValues =
+    home === 'gcp'
+      ? values
+      : Object.fromEntries(Object.entries(values).filter(([key]) => key !== 'FILESTORE_INSTANCES'))
 
   return {
+    filestoreProjects,
     environment: {
       // Constant on every deployed stage. The per-stage identity is the stage
       // name, which is what the status sync's dedup prefix uses.
@@ -307,6 +426,8 @@ export const apiEnvironmentFrom = ({
        * it, and every file a box touches becomes a cross-region read.
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
+      FILESTORE_SUPPORTED: home === 'gcp' ? 'true' : 'false',
+      ...(home === 'gcp' && filestoreInstances !== undefined ? { FILESTORE_INSTANCES: filestoreInstances } : {}),
       // On unless the stage says otherwise, and it says so through the api
       // group's own `OTEL_ENABLED`, which `...values` below lets win. There is
       // no second switch: an inverted one read here would come from whatever
@@ -317,7 +438,10 @@ export const apiEnvironmentFrom = ({
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),
-      ...(optional(environment, 'POSTHOG_HOST') ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string } : {}),
+      ...runnerDiskExpansionFrom(environment),
+      ...(optional(environment, 'POSTHOG_HOST')
+        ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string }
+        : {}),
       ...(optional(environment, 'SVIX_SERVER_URL')
         ? { SVIX_SERVER_URL: optional(environment, 'SVIX_SERVER_URL') as string }
         : {}),
@@ -346,7 +470,7 @@ export const apiEnvironmentFrom = ({
       // The API's own group, as values. Last, so a name the store holds wins
       // over a default composed above — and `stack/index.ts` refuses any name
       // that a module also decides.
-      ...values,
+      ...apiValues,
     },
     secrets: addresses,
   }

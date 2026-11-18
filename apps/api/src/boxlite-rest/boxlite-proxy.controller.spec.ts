@@ -56,6 +56,30 @@ function makeHarness() {
 }
 
 describe('BoxliteProxyController', () => {
+  it('refuses stopped exec when auto-resume is disabled', async () => {
+    const { controller, boxService, autoResume } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'stopped',
+      desiredState: 'stopped',
+    } as never)
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+
+    await expect(
+      controller.proxyExec(
+        activeAuth as never,
+        'mybox',
+        { method: 'POST' } as never,
+        new EventEmitter() as never,
+        jest.fn(),
+      ),
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('auto-resume is disabled') })
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
+  })
+
   it('passes the private choice and returns only the URI and access descriptor', async () => {
     const { controller, tunnelService } = makeHarness()
     tunnelService.prepare.mockResolvedValue({ isPublic: false, token: 'blt_first-secret' })
@@ -172,43 +196,6 @@ describe('BoxliteProxyController', () => {
     const execOptions = jest.mocked(createProxyMiddleware).mock.calls[1][0]
     expect(fileOptions.proxyTimeout).toBe(0)
     expect(execOptions.proxyTimeout).toBe(300000)
-  })
-
-  // This hook is the only hop carrying the archive-shape hint through the
-  // hosted API. If it stops forwarding, every hosted copy_out silently
-  // degrades to Unknown and the client re-peeks the archive instead of
-  // trusting the guest — a correctness loss with no error to notice.
-  it('forwards the archive-shape hint from the runner response', async () => {
-    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
-    const { controller } = makeHarness()
-
-    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
-
-    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
-    const proxyRes = proxyOptions.on?.proxyRes as (p: unknown, q: unknown, r: unknown) => void
-    const res = { setHeader: jest.fn() }
-
-    proxyRes({ headers: { 'x-boxlite-source-is-dir': 'true' } }, {}, res)
-
-    expect(res.setHeader).toHaveBeenCalledWith('x-boxlite-source-is-dir', 'true')
-  })
-
-  // A runner that predates the hint sends no header. Forwarding a fabricated
-  // one would tell the client "single file" for a directory stream, so absence
-  // must stay absence rather than become a default.
-  it('sets no shape header when the runner sends none', async () => {
-    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
-    const { controller } = makeHarness()
-
-    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
-
-    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
-    const proxyRes = proxyOptions.on?.proxyRes as (p: unknown, q: unknown, r: unknown) => void
-    const res = { setHeader: jest.fn() }
-
-    proxyRes({ headers: {} }, {}, res)
-
-    expect(res.setHeader).not.toHaveBeenCalled()
   })
 
   it('returns the public endpoint for JSON tunnel requests', async () => {
@@ -527,6 +514,7 @@ describe('BoxliteProxyController business events', () => {
       runnerId: 'runner-1',
       autoResume: false,
       state: 'started',
+      desiredState: 'started',
       inboundEnabled: true,
     })
     return built
@@ -720,6 +708,7 @@ describe('BoxliteProxyController business events', () => {
       runnerId: 'runner-1',
       autoResume: false,
       state: 'started',
+      desiredState: 'started',
       inboundEnabled: false,
     })
 

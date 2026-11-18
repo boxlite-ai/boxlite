@@ -1,145 +1,163 @@
 ## TL;DR
 
-Tag a stable version and publish its GitHub Release, which builds the application images into `dev`; then roll that tag out to `prod` with `mdeploy-all`.
+Publish a stable release to build its artifacts, validate dev, and receive a Slack link to approve that version's prod deployment.
 
-# Release runbook
+## Release runbook
 
-This is a short runbook for releasing a stable version to `prod`. The examples use `v0.10.3`;
-replace it with the version you are releasing. The version must have the form `vX.Y.Z`;
-pre-release suffixes are not supported.
+The examples use `v0.10.3`; replace it with your stable `vX.Y.Z` release tag.
+Pre-release suffixes are unsupported.
 
-## Before you start
+### Before you start
 
-- The release commit is merged into `main`, and the version numbers in the repository are already
-  updated to this release.
-- All required checks on `main` have passed.
-- You can run GitHub Actions workflows and approve the `dev` and `prod` Environments.
+- Merge the version bump into `main` and pass its required checks.
+- Configure repository Actions secret `SLACK_WEBHOOK_URL` with a Slack incoming webhook.
+- Configure required reviewers on the `prod` GitHub Environment.
+- Ensure the dev/prod stage declarations, cloud credentials, and cloud E2E credentials are configured.
+- Have permission to start workflows and approve the deployment Environments.
 
-## 1. Tag the version and publish the GitHub Release
+Publication needs package write permission; orchestration needs Actions write permission.
+Neither job binds a cloud Environment; the existing deployment and E2E workflows retain their own approvals.
 
-Sync `main`, then create and push the tag on the commit being released:
+### 1. Publish the GitHub Release
+
+Sync `main`, then create and push the release tag:
 
 ```bash
 git switch main
-git pull --ff-only origin main
+git pull --rebase origin main
 
 TAG=v0.10.3
 git tag "$TAG"
 git push origin "$TAG"
-```
-
-Then publish a GitHub Release with the same name:
-
-```bash
 gh release create "$TAG" \
   --repo boxlite-ai/boxlite \
   --verify-tag \
   --generate-notes
 ```
 
-Pushing the tag alone starts no release build; publishing the Release does:
+Pushing the tag starts no release build; publishing the Release starts the SDK/runtime builds and
+`Publish Release Images`. The latter dispatches `mbuild-release` from `main` with `build-only=false` by default.
+The successful release C SDK build starts `Build Go SDK` and `Build Runner Binary`.
 
-- Its `published` event starts `Build Runtime`, `Build C SDK`, `Build Node.js`, `Build Wheels` and
-  `Publish Release Images`.
-- A successful `Build C SDK` run for the Release then starts `Build Go SDK` and
-  `Build Runner Binary`, which attaches the Runner files below.
+### 2. Follow the dev acceptance pipeline
 
-`Publish Release Images` dispatches `mbuild-release` from `main`, which publishes the application
-images for this tag to `dev`.
-
-Wait for the release workflows to finish, and check that the Release has at least these assets:
+Open **Actions → mbuild-release**:
 
 ```text
-boxlite-runner-vX.Y.Z-linux-amd64.tar.gz
-boxlite-runner-vX.Y.Z-linux-amd64.tar.gz.sha256
+Publish all declared images to GHCR
+  → Wait for required GitHub Release assets
+  → dispatch mdeploy-all: dev, this tag → wait for success
+  → dispatch e2e-cloud: dev, this tag → wait for success
+  → verify dev deployment history and prod reviewers
+  → dispatch mdeploy-all: prod, this tag (approval pending)
+  → report results to Slack and the GitHub job summary
 ```
 
-`mdeploy-all` checks for both Runner files again before it deploys; the rollout cannot proceed
-until they exist.
+The publisher reads the tagged commit's artifact declaration and builds its current four images:
+`api`, `proxy`, `otel-collector`, and `registry-proxy`.
+Their address is `ghcr.io/boxlite-ai/boxlite/<artifact>:vX.Y.Z-<full-commit-sha>`.
+Publication logs manifest digests and reuses existing images without overwriting them.
+Dependency audit failures stop publication; receiving cloud registries enforce image scans after import.
 
-## 2. Wait for mbuild-release to publish the application images
+Asset readiness checks the Release API for uploaded, nonempty files, rather than waiting for every SDK workflow:
 
-Open **Actions → Publish Release Images** and confirm that it dispatched **mbuild-release**.
-Approve the `dev` Environment for `mbuild-release`, then wait for the workflow to finish. It reads
-the artifact declarations from the tagged commit, then builds the three current images in parallel
-and publishes them to `dev`:
-
-- `api`
-- `proxy`
-- `otel-collector` (the collector)
-
-Published images are tagged `vX.Y.Z-<commit-sha>`. Deploy to production only after all three
-matrix jobs have succeeded.
-
-If the automatic dispatch failed and you need to recover by hand, open
-**Actions → mbuild-release → Run workflow** and enter:
-
-| Input | Value |
+| Consumer | Required release assets |
 | --- | --- |
-| Run workflow from | `main` |
-| `command` | `publish` |
-| `tag` | The release tag, such as `v0.10.3` |
+| Runner | `boxlite-runner-vX.Y.Z-linux-amd64.tar.gz` and its `.sha256` |
+| Python E2E | `boxlite-X.Y.Z-cp312-cp312-manylinux_2_28_x86_64.whl` |
+| Node E2E | `boxlite-ai-boxlite-X.Y.Z.tgz`, `boxlite-ai-boxlite-linux-x64-gnu-X.Y.Z.tgz` |
+| C E2E | `boxlite-c-vX.Y.Z-linux-x64-gnu.tar.gz` |
+| CLI E2E | `boxlite-cli-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, `install.sh` |
 
-Or dispatch the same recovery with the GitHub CLI:
+The existing installer and deployment workflow verify/download these assets when they consume them.
+Asset waiting is limited to three hours; dev deployment to three hours; E2E to one hour.
+Approve dev/E2E Environment requests within those limits.
+
+All child workflows run from `main`, with these fixed inputs:
+
+| Workflow | Inputs |
+| --- | --- |
+| Dev `mdeploy-all.yml` | `stage=dev`, `ref=<release tag>`, `components=api+runner`, `apply=true`, `confirm=true` |
+| `e2e-cloud.yml` | `stage=dev`, `tag=<release tag>`; retain all other defaults |
+| Prod `mdeploy-all.yml` | `stage=prod`, `ref=<release tag>`, `components=api+runner`, `apply=true`, `confirm=true` |
+
+The pipeline waits for the exact run IDs returned by GitHub dispatch.
+A failed, cancelled, or timed-out dev/E2E run prevents the prod request.
+Slack reports each stage and links to its specific runs; failed pipelines have no prod approval button.
+
+### 3. Approve the prod request
+
+After successful dev acceptance, Slack's **Review prod deployment** button opens the already-created prod run.
+Check the release tag and approve its `prod` Environment in GitHub.
+Each release deployment run has one protected job covering artifact checks, import and apply.
+The run actor is the Actions bot; GitHub records the human reviewer separately.
+Clicking the Slack link opens GitHub; deployment proceeds only after approval.
+
+A successful `mbuild-release` means dev acceptance passed and the prod request was created.
+The release is live only when that prod `mdeploy-all` run succeeds.
+It imports the selected GHCR digests directly into prod's AR/ECR registry, verifies them, scans, and deploys.
+Dev uses its own independent GHCR import.
+
+### Manual runs and publication recovery
+
+`mbuild-release` accepts:
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `command` | `publish` | Publish the declared release images |
+| `tag` | Required | Stable tag whose commit is on `main` |
+| `build-only` | `false` | `false`: full pipeline; `true`: image build/upload only |
+
+For publication recovery, choose `build-only=true` to fill missing GHCR images without starting deployment, E2E, or Slack reporting:
 
 ```bash
 TAG=v0.10.3
-
 gh workflow run mbuild-release.yml \
   --repo boxlite-ai/boxlite \
   --ref main \
   -f command=publish \
-  -f tag="$TAG"
+  -f tag="$TAG" \
+  -f build-only=true
 ```
 
-## 3. Roll out to prod with mdeploy-all
+Omit `build-only` or set it to `false` to request the full pipeline.
+The publication-only path does not wait for release assets and needs no Slack secret.
+For an intentional manual deployment, use the [deployment runbook](deployment.md#deploy-through-github-actions).
 
-Open **Actions → mdeploy-all → Run workflow** and enter:
+### Validation and recovery boundaries
 
-| Input | Value |
+Keep release tags and assets immutable.
+The pipeline compares the tag's commit with the publisher's resolved commit before every dispatch.
+Changes after the prod request is created remain an operator responsibility.
+
+Full pipelines share one dev validation concurrency group.
+Before requesting prod, the pipeline checks for overlapping dev applies, including failed/cancelled attempts and manual reruns.
+It inspects at most 500 `mdeploy-all` runs and 50 attempts per run.
+Missing timing, unknown overlapping applies, or truncated history prevents the prod request.
+This check covers `mdeploy-all`; avoid other deployment paths during acceptance.
+
+GitHub's native concurrency queues can replace older pending runs with newer requests.
+This applies to queued release pipelines and prod deployments awaiting approval.
+A Slack link identifies an exact prod run; it does not reserve a permanent queue position.
+Inspect that run's current state before approving or recovering it.
+
+Parent timeouts/cancellation leave dispatched children under GitHub's control.
+Inspect their exact run links before retrying; an interrupted apply may still be running.
+An uncertain dispatch response is never retried automatically because GitHub may already have created the run.
+If only Slack delivery failed, use the GitHub report summary and rerun only the report job.
+Rerunning the whole pipeline can create another deployment request.
+
+### Common failures
+
+| Failure | Response |
 | --- | --- |
-| Run workflow from | `main` |
-| `stage` | `prod` |
-| `components` | `api+runner` |
-| `ref` | The release tag, such as `v0.10.3` |
-| `apply` | `true` |
-| `confirm` | `true` |
+| Missing GitHub Release | Publish the Release matching the tag |
+| Missing required assets | Inspect the runtime/C/Node/wheels/Runner builds; the Runner build follows the C SDK build |
+| Invalid or missing webhook | Configure repository secret `SLACK_WEBHOOK_URL`; full mode refuses deployment without it |
+| Missing GHCR image | Recover with `build-only=true`, then inspect downstream runs before restarting |
+| Invalid tag or tag moved | Use an immutable stable release tag whose commit is on `main` |
+| Overlapping dev apply | Finish deployment activity and repeat dev acceptance for the intended release |
+| Missing prod reviewers | Configure required reviewers on the `prod` Environment before retrying |
 
-Approve the `prod` Environment. `mdeploy-all` then:
-
-1. Checks the tag, the GitHub Release and the Runner artifacts.
-2. Calls `mbuild-release` to promote the images already published in `dev` to `prod`, without
-   rebuilding them.
-3. Verifies the images in `prod` and deploys the version to production.
-
-Or start it with the GitHub CLI:
-
-```bash
-TAG=v0.10.3
-
-gh workflow run mdeploy-all.yml \
-  --repo boxlite-ai/boxlite \
-  --ref main \
-  -f stage=prod \
-  -f components=api+runner \
-  -f ref="$TAG" \
-  -f apply=true \
-  -f confirm=true
-```
-
-The release is live only once every `mdeploy-all` job has succeeded. Check that the version,
-commit, image tags and deployment results in the workflow summary match this release.
-
-## Common failures
-
-- **No GitHub Release**: only the tag was pushed. Publish a Release with the same name, then retry.
-- **No mbuild-release run appeared**: check `Publish Release Images` first. Fix that run and
-  retry, or dispatch `mbuild-release` from `main` by hand as in step 2.
-- **Missing Runner artifact**: `Build Runner Binary` attaches the tarball and its `.sha256`, but
-  only after `Build C SDK` succeeds. Wait for or fix whichever of the two has not succeeded.
-- **Invalid tag, or tag not on main**: use a stable `vX.Y.Z` tag whose commit is on `main`.
-- **Image already published or promoted**: do not move or reuse the release tag. Check the earlier
-  workflow runs and the registry state before deciding whether to continue with `mdeploy-all`.
-
-The full build, promotion and deployment mechanics are in
-[Deploy through GitHub Actions](deployment.md#deploy-through-github-actions).
+See [deployment mechanics](deployment.md#deploy-through-github-actions) for digest conflicts,
+registry authentication, and manual rollout diagnostics.

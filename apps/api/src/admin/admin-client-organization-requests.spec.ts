@@ -141,6 +141,38 @@ describe('generated AdminApi organization requests', () => {
     })
   })
 
+  it.each(surfaces)('%s sends member emails only when the list includes them', async (surface) => {
+    await invoke(surface, [undefined, undefined, 20])
+    expect(sent()).toEqual({ method: 'GET', path: '/api/admin/organizations', query: { limit: '20' } })
+
+    await invoke(surface, [
+      undefined,
+      undefined,
+      20,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'memberEmails',
+      { headers: { 'X-Request-Test': 'emails' } },
+    ])
+    expect(requests[0]?.headers?.['x-request-test']).toBe('emails')
+    expect(sent()).toEqual({
+      method: 'GET',
+      path: '/api/admin/organizations',
+      query: { limit: '20', include: 'memberEmails' },
+    })
+  })
+
+  // ts-jest type-checks this file, so a wider generated include type fails the suite.
+  it('types include as the one value the list accepts', () => {
+    type Include = Parameters<AdminApi['adminListOrganizationsOverview']>[7]
+    const accepted: Include = 'memberEmails'
+    // @ts-expect-error The API rejects every other include value with 400.
+    const rejected: Include = '11184809'
+    void [accepted, rejected]
+  })
+
   it('sends include only when the detail selects optional sections', async () => {
     const organizationId = '00000000-0000-4000-8000-000000000011'
     const path = `/api/admin/organizations/${organizationId}`

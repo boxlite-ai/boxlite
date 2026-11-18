@@ -15,7 +15,10 @@ use crate::{
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
-    virtio::{DeviceContext, worker::VirtioWorkers},
+    virtio::{
+        DeviceContext,
+        worker::{ShutdownError, VirtioWorkers},
+    },
 };
 
 /// The registers the boot vCPU starts with.
@@ -269,7 +272,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         });
         // No vCPU notifies a queue any more. Stop the virtio devices before the
         // console finishes, so a device's last output still reaches the sink.
-        let shutdown = self.workers.shutdown();
+        let shutdown = self.workers.shutdown().map_err(Error::from);
         let console = self
             .console
             .get_mut()
@@ -293,11 +296,11 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         match (ended, shutdown) {
             (ended, Ok(())) => ended,
             (Ok(exit), Err(error)) => {
-                tracing::warn!(?exit, "the VM ended, but its virtio workers did not stop");
+                tracing::warn!(?exit, "the VM ended, but virtio shutdown failed");
                 Err(error)
             }
             (Err(ended), Err(error)) => {
-                tracing::warn!(%error, "the virtio workers did not stop");
+                tracing::warn!(%error, "virtio shutdown failed");
                 Err(ended)
             }
         }
@@ -308,12 +311,13 @@ impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
         // A device event that outlived the shutdown may still touch guest
         // RAM, so the registrations stay and `GuestRam` leaks the backing.
-        if let Err(error) = self.workers.shutdown() {
+        if let Err(ShutdownError::Join(error)) = self.workers.shutdown() {
             tracing::warn!(%error, "the virtio workers did not stop; leaking guest RAM");
             return;
         }
-        // A VM that never ran still holds its registrations. Remove them so
-        // the backing can be released; `GuestRam` leaks it on failure.
+        // Quiesce failure after joining cannot leave a live callback. A VM
+        // that never ran also holds registrations; remove them so the backing
+        // can be released. `GuestRam` leaks it on unmap failure.
         let _ = self.ram.unmap(&*self.host_vm);
     }
 }

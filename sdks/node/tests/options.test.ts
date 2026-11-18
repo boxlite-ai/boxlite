@@ -330,11 +330,12 @@ describe("SimpleBoxOptions", () => {
     ]);
   });
 
-  test("accepts secrets", () => {
+  test("accepts secrets with explicit header templates", () => {
     const secret: Secret = {
       name: "openai",
       value: "sk-test",
       hosts: ["api.openai.com"],
+      headers: { Authorization: "Bearer {value}" },
     };
     const opts: SimpleBoxOptions = {
       secrets: [secret],
@@ -349,6 +350,7 @@ describe("SimpleBoxOptions", () => {
         {
           name: "anthropic",
           value: "test-value",
+          headers: { "X-Api-Key": "{value}" },
           placeholder: "<CUSTOM_SECRET>",
         },
       ],

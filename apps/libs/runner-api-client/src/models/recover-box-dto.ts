@@ -21,6 +21,9 @@ import type { DtoSecretDTO } from './dto-secret-dto';
 import type { DtoVolumeDTO } from './dto-volume-dto';
 
 export interface RecoverBoxDTO {
+    /**
+     * CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.
+     */
     'cpuQuota'?: number;
     'env'?: { [key: string]: string; };
     'errorReason': string;

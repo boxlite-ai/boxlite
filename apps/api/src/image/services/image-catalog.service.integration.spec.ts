@@ -7,6 +7,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 // Box relates to both, so mapping Box without them leaves TypeORM unable to
 // resolve its inverse sides. Neither is read here.
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
@@ -50,7 +51,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent, Box, BoxLastActivity, BoxMigration],
+      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent, Box, BoxLastActivity, BoxMigration, Checkpoint],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,

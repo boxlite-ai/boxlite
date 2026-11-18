@@ -35,7 +35,7 @@ export function ResourceChip({ resource, value, unit, icon, className }: Props) 
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 whitespace-nowrap rounded-[4px] border border-border/70 bg-muted/25 px-1.5 py-0.5 text-xs leading-none text-foreground dark:border-white/10 dark:bg-muted/20',
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-[4px] border border-border/70 bg-muted/25 px-1.5 py-0.5 text-meta leading-none text-foreground dark:border-white/10 dark:bg-muted/20',
         className,
       )}
     >

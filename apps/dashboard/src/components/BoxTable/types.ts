@@ -23,6 +23,7 @@ export interface BoxTableProps {
   handleStart: (id: string) => void
   handleStop: (id: string) => void
   handleDelete: (id: string) => void
+  onCreateCheckpoint?: (box: Box) => void
   handleBulkDelete: (ids: string[]) => void
   handleBulkStart: (ids: string[]) => void
   handleBulkStop: (ids: string[]) => void

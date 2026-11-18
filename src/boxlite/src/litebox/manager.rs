@@ -35,6 +35,11 @@ impl BoxManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> &BoxStore {
+        &self.store
+    }
+
     /// Get a reference to the underlying database.
     #[allow(dead_code)] // Used by snapshots (temporarily disabled)
     pub(crate) fn db(&self) -> crate::db::Database {

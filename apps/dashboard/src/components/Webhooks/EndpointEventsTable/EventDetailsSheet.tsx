@@ -59,7 +59,7 @@ export function EventDetailsSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-dvw sm:w-[520px] p-0 flex flex-col gap-0 [&>button]:hidden" side="right">
         <SheetHeader className="flex flex-row items-center justify-between p-4 px-5 space-y-0">
-          <SheetTitle className="text-lg font-medium">Event Details</SheetTitle>
+          <SheetTitle className="text-section font-medium">Event Details</SheetTitle>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon-sm" disabled={!hasPrev} onClick={() => onNavigate('prev')}>
               <ChevronUp className="size-4" />
@@ -79,41 +79,41 @@ export function EventDetailsSheet({
         <Separator />
         <ScrollArea fade="mask" className="flex-1 min-h-0">
           <div className="flex flex-col px-5 py-4 gap-3">
-            <span className="text-base font-medium">Overview</span>
+            <span className="text-em font-medium">Overview</span>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Message ID</span>
+              <span className="text-body text-muted-foreground">Message ID</span>
               <div className="flex items-center gap-1 group/copy-button">
-                <span className="text-sm font-mono">{event.id}</span>
+                <span className="text-body font-mono">{event.id}</span>
                 <CopyButton value={event.id} size="icon-xs" tooltipText="Copy Message ID" />
               </div>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Status</span>
+              <span className="text-body text-muted-foreground">Status</span>
               <Badge variant={event.status === 0 ? 'success' : event.status === 1 ? 'secondary' : 'destructive'}>
                 {event.status === 0 ? 'Success' : event.status === 1 ? 'Pending' : 'Failed'}
               </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Event Type</span>
+              <span className="text-body text-muted-foreground">Event Type</span>
               <Badge variant="secondary">{event.eventType}</Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Sent</span>
+              <span className="text-body text-muted-foreground">Sent</span>
               <TimestampTooltip
                 timestamp={event.timestamp instanceof Date ? event.timestamp.toISOString() : String(event.timestamp)}
               >
-                <span className="text-sm cursor-default">{relativeTimeString}</span>
+                <span className="text-body cursor-default">{relativeTimeString}</span>
               </TimestampTooltip>
             </div>
             {event.nextAttempt && (
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Next Attempt</span>
+                <span className="text-body text-muted-foreground">Next Attempt</span>
                 <TimestampTooltip
                   timestamp={
                     event.nextAttempt instanceof Date ? event.nextAttempt.toISOString() : String(event.nextAttempt)
                   }
                 >
-                  <span className="text-sm cursor-default">
+                  <span className="text-body cursor-default">
                     {getRelativeTimeString(event.nextAttempt).relativeTimeString}
                   </span>
                 </TimestampTooltip>
@@ -121,10 +121,10 @@ export function EventDetailsSheet({
             )}
             {event.channels && event.channels.length > 0 && (
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Channels</span>
+                <span className="text-body text-muted-foreground">Channels</span>
                 <div className="flex items-center gap-1 flex-wrap justify-end">
                   {event.channels.map((channel) => (
-                    <Badge key={channel} variant="outline" className="font-normal text-xs">
+                    <Badge key={channel} variant="outline" className="font-normal text-meta">
                       {channel}
                     </Badge>
                   ))}
@@ -133,10 +133,10 @@ export function EventDetailsSheet({
             )}
             {event.tags && event.tags.length > 0 && (
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Tags</span>
+                <span className="text-body text-muted-foreground">Tags</span>
                 <div className="flex items-center gap-1 flex-wrap justify-end">
                   {event.tags.map((tag) => (
-                    <Badge key={tag} variant="outline" className="font-normal text-xs">
+                    <Badge key={tag} variant="outline" className="font-normal text-meta">
                       {tag}
                     </Badge>
                   ))}
@@ -145,9 +145,9 @@ export function EventDetailsSheet({
             )}
             {event.eventId && (
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Event ID</span>
+                <span className="text-body text-muted-foreground">Event ID</span>
                 <div className="flex items-center gap-1 group/copy-button">
-                  <span className="text-sm font-mono">{event.eventId}</span>
+                  <span className="text-body font-mono">{event.eventId}</span>
                   <CopyButton value={event.eventId} size="icon-xs" tooltipText="Copy Event ID" />
                 </div>
               </div>
@@ -162,15 +162,15 @@ export function EventDetailsSheet({
 
           <div className="flex flex-col px-5 py-4">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-base font-medium">Payload</span>
+              <span className="text-em font-medium">Payload</span>
               {hasPayload && <CopyButton value={payload} size="icon-xs" tooltipText="Copy Payload" />}
             </div>
             {hasPayload ? (
-              <pre className="text-sm font-mono bg-muted/80 p-3 rounded-md overflow-auto whitespace-pre-wrap break-all">
+              <pre className="text-body font-mono bg-muted/80 p-3 rounded-md overflow-auto whitespace-pre-wrap break-all">
                 {payload}
               </pre>
             ) : (
-              <div className="text-sm bg-muted/80 p-3 rounded-md">
+              <div className="text-body bg-muted/80 p-3 rounded-md">
                 <span className="italic text-muted-foreground">This event has no payload</span>
               </div>
             )}

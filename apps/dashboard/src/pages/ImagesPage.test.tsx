@@ -85,4 +85,11 @@ describe('the images page', () => {
       '/dashboard/images/registries?connect=ghcr.io',
     )
   })
+  it('links image-creation help directly to the Cloud image task guide', async () => {
+    await renderPage('images')
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-controls="image-add-guide"]')?.click())
+    const link = document.querySelector<HTMLAnchorElement>('#image-add-guide a[target="_blank"]')
+    expect(link?.href).toBe('https://docs.boxlite.ai/cloud/use-your-image')
+    expect(link?.textContent).toBe('Use your own image ↗')
+  })
 })

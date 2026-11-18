@@ -26,6 +26,7 @@ import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archiv
 import { AdminOrganizationActivationService } from './services/organization-activation.service'
 import { AdminUsageController } from './controllers/usage.controller'
 import { AdminUsageService } from './services/usage.service'
+import { AdminOrganizationNestedVirtualizationController } from './controllers/organization-nested-virtualization.controller'
 
 @Module({
   imports: [
@@ -49,7 +50,13 @@ import { AdminUsageService } from './services/usage.service'
       BoxUsagePeriodArchive,
     ]),
   ],
-  controllers: [AdminRunnerController, AdminBoxController, AdminProviderController, AdminUsageController],
+  controllers: [
+    AdminRunnerController,
+    AdminBoxController,
+    AdminProviderController,
+    AdminUsageController,
+    AdminOrganizationNestedVirtualizationController,
+  ],
   providers: [
     AdminOrganizationOverviewService,
     AdminPlatformOverviewService,

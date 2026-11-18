@@ -54,7 +54,7 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-dvw sm:w-[800px] p-0 flex flex-col gap-0 [&>button]:hidden">
         <SheetHeader className="space-y-0 flex flex-row justify-between items-center p-6">
-          <SheetTitle className="text-2xl font-medium">Region Details</SheetTitle>
+          <SheetTitle className="text-page font-medium">Region Details</SheetTitle>
           <div className="flex gap-2 items-center">
             {writePermitted && isCustomRegion && (
               <Button variant="outline" className="w-8 h-8" onClick={() => onUpdate(region)} disabled={isLoading}>
@@ -75,9 +75,9 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
         <div className="flex-1 p-6 space-y-10 overflow-y-auto min-h-0">
           <div className="grid grid-cols-2 gap-6">
             <div>
-              <h3 className="text-sm text-muted-foreground">Name</h3>
+              <h3 className="text-body text-muted-foreground">Name</h3>
               <div className="mt-1 flex items-center gap-2">
-                <p className="text-sm font-medium truncate">{region.name}</p>
+                <p className="text-body font-medium truncate">{region.name}</p>
                 <button
                   onClick={() => copyToClipboard(region.name)}
                   className="text-muted-foreground hover:text-foreground transition-colors"
@@ -88,9 +88,9 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
               </div>
             </div>
             <div>
-              <h3 className="text-sm text-muted-foreground">ID</h3>
+              <h3 className="text-body text-muted-foreground">ID</h3>
               <div className="mt-1 flex items-center gap-2">
-                <p className="text-sm font-medium truncate">{region.id}</p>
+                <p className="text-body font-medium truncate">{region.id}</p>
                 <button
                   onClick={() => copyToClipboard(region.id)}
                   className="text-muted-foreground hover:text-foreground transition-colors"
@@ -104,18 +104,18 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
 
           <div className="grid grid-cols-2 gap-6">
             <div>
-              <h3 className="text-sm text-muted-foreground">Created</h3>
-              <p className="mt-1 text-sm font-medium">{formatTimestamp(region.createdAt)}</p>
+              <h3 className="text-body text-muted-foreground">Created</h3>
+              <p className="mt-1 text-body font-medium">{formatTimestamp(region.createdAt)}</p>
             </div>
           </div>
 
           <div>
-            <h3 className="text-lg font-medium">URLs</h3>
+            <h3 className="text-section font-medium">URLs</h3>
             <div className="mt-3 space-y-4">
               <div>
-                <h4 className="text-sm text-muted-foreground">Proxy URL</h4>
+                <h4 className="text-body text-muted-foreground">Proxy URL</h4>
                 <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{region.proxyUrl || '-'}</p>
+                  <p className="text-body font-medium truncate">{region.proxyUrl || '-'}</p>
                   {region.proxyUrl && (
                     <button
                       onClick={() => copyToClipboard(region.proxyUrl || '')}
@@ -132,7 +132,7 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
 
           {isCustomRegion && writePermitted && region.proxyUrl && (
             <div>
-              <h3 className="text-lg font-medium">Credentials</h3>
+              <h3 className="text-section font-medium">Credentials</h3>
               <div className="mt-3 space-y-3">
                 {region.proxyUrl && (
                   <Button

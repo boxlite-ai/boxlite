@@ -24,17 +24,16 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from cli_process import run
 from images import default_image
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = default_image()
-CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 
@@ -43,17 +42,6 @@ def cli():
     if not BOXLITE_BIN or not Path(BOXLITE_BIN).exists():
         pytest.skip(f"boxlite CLI not found at {BOXLITE_BIN!r}")
     return BOXLITE_BIN
-
-
-def _cli_env() -> dict[str, str]:
-    return {**os.environ, "BOXLITE_PROFILE": CLI_PROFILE}
-
-
-def run(cli, *args, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [cli, *args], timeout=timeout, text=True, capture_output=True, check=check,
-        env=_cli_env(),
-    )
 
 
 def test_detached_box_survives_cli_exit_and_is_reusable(cli):
@@ -66,7 +54,7 @@ def test_detached_box_survives_cli_exit_and_is_reusable(cli):
     subsequent `exec` proves it's still usable. Add a per-box info
     command and we'll extend the contract."""
     # 1) detach run in one CLI process
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
     box_id = m.group(0)
@@ -107,7 +95,7 @@ def test_detached_box_exec_propagates_exit_code_on_fresh_cli(cli):
     """A non-zero exit from a command exec'd into a detached box must
     still propagate when the exec is launched from a fresh CLI process
     (i.e. no in-memory SDK state to lean on)."""
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m
     box_id = m.group(0)

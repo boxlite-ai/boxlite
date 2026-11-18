@@ -20,6 +20,8 @@ const valid = {
     apiServerErrors: { threshold: 1, periods: 1 },
     proxyUnhealthyTargets: { threshold: 1, periods: 2 },
     runnersUnreachable: { threshold: 1, periods: 3 },
+    runnersDiskExpansionFailing: { threshold: 3, periods: 1 },
+    runnersDiskPressureCritical: { threshold: 1, periods: 2 },
   },
 }
 
@@ -185,4 +187,48 @@ test('the stages differ where they are meant to, and each says so in full', () =
   assert.equal(blockFor('dev').storage.versioning, true)
   assert.equal(blockFor('dev').runners.rootDiskGb, 100)
   assert.equal(blockFor('dev').runners.size, 'large', 'a runner has to be a machine family that can nest')
+})
+
+/*
+ * The disk alarms are the only notice a failing expansion or a runner at
+ * critical pressure gets, and the threshold a person tunes lives in every
+ * stage's block. A key in the type but missing from a stage is not a default
+ * — it is a deploy-time refusal, which is the loud version of the trap the
+ * committed example exists to prevent.
+ */
+test('the runner disk alarms parse, and a stage without them is refused', () => {
+  assert.deepEqual(parse().alarms, valid.alarms)
+  for (const [name, alarm] of Object.entries({
+    runnersDiskExpansionFailing: { threshold: 3, periods: 1 },
+    runnersDiskPressureCritical: { threshold: 1, periods: 2 },
+  })) {
+    assert.deepEqual((parse().alarms as any)[name], alarm, name)
+    const tightened = { ...valid.alarms, [name]: { threshold: 5, periods: 4 } }
+    assert.deepEqual(parse({ alarms: tightened }).alarms, tightened)
+  }
+  for (const name of ['runnersDiskExpansionFailing', 'runnersDiskPressureCritical']) {
+    const alarms = { ...valid.alarms } as Record<string, unknown>
+    delete alarms[name]
+    assert.throws(() => parse({ alarms }), new RegExp(`must set ${name}`))
+  }
+  for (const bad of [{ threshold: 0, periods: 1 }, { threshold: 1, periods: 0 }]) {
+    assert.throws(
+      () => parse({ alarms: { ...valid.alarms, runnersDiskExpansionFailing: bad } }),
+      /must be a whole number/,
+    )
+  }
+  assert.throws(() => parse({ alarms: { ...valid.alarms, runnersDiskExpansionFailing: { threshold: 1 } } }), /must set periods/)
+})
+
+test('the committed example carries the disk alarms every stage must now set', () => {
+  // The example is the template a new stage copies, so it is where the
+  // defaults live — and the stage-completeness test beside this one holds
+  // every committed stage file against the same requirement.
+  const example = JSON.parse(readFileSync(new URL('../../.mstage.config.example.json', import.meta.url), 'utf8'))
+  for (const [stage, block] of Object.entries<any>(example.stages)) {
+    assert.equal(block.deploy.alarms.runnersDiskExpansionFailing.threshold, 3, stage)
+    assert.equal(block.deploy.alarms.runnersDiskExpansionFailing.periods, 1, stage)
+    assert.equal(block.deploy.alarms.runnersDiskPressureCritical.threshold, 1, stage)
+    assert.equal(block.deploy.alarms.runnersDiskPressureCritical.periods, 2, stage)
+  }
 })

@@ -7,7 +7,6 @@ All URIs are relative to *http://localhost:3000*
 |[**createVolume**](#createvolume) | **POST** /volumes | Create a new volume|
 |[**deleteVolume**](#deletevolume) | **DELETE** /volumes/{volumeId} | Delete volume|
 |[**getVolume**](#getvolume) | **GET** /volumes/{volumeId} | Get volume details|
-|[**getVolumeByName**](#getvolumebyname) | **GET** /volumes/by-name/{name} | Get volume details by name|
 |[**listVolumes**](#listvolumes) | **GET** /volumes | List all volumes|
 
 # **createVolume**
@@ -147,59 +146,6 @@ const { status, data } = await apiInstance.getVolume(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **volumeId** | [**string**] | ID of the volume | |
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**VolumeDto**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Volume details |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getVolumeByName**
-> VolumeDto getVolumeByName()
-
-
-### Example
-
-```typescript
-import {
-    VolumesApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new VolumesApi(configuration);
-
-let name: string; //Name of the volume
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.getVolumeByName(
-    name,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **name** | [**string**] | Name of the volume | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

@@ -5,7 +5,7 @@
 
 import { PaymentBrand } from './PaymentBrand'
 import type { PaymentMethod } from '@/billing-api'
-import { AsciiButton, BRAND, Panel, SectionTitle } from '@/components/ascii'
+import { AsciiButton, BRAND, Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 
@@ -92,7 +92,7 @@ export function PaymentMethodsPanel({
         </Panel>
       ) : isError ? (
         <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
-          <span className="font-mono text-[13px] text-muted-foreground">Payment methods unavailable</span>
+          <span className="font-sans text-body text-muted-foreground">Payment methods unavailable</span>
           <SetupButton connected={actionConnected} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
       ) : hasPaymentMethods ? (
@@ -108,16 +108,14 @@ export function PaymentMethodsPanel({
                   <div className="min-w-0">
                     <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3">
                       <PaymentBrand brand={display.brand} />
-                      <span className="font-mono text-[20px] tracking-[2px] tabular-nums text-foreground">
+                      <span className="font-mono text-section tracking-[2px] tabular-nums text-foreground">
                         {display.cardNumber}
                       </span>
                       {display.expiry && (
-                        <span className="font-mono text-[12px] tabular-nums text-muted-foreground">
-                          {display.expiry}
-                        </span>
+                        <span className="font-mono text-meta tabular-nums text-muted-foreground">{display.expiry}</span>
                       )}
                     </div>
-                    <p className="mt-3 font-mono text-[11px] text-muted-foreground">
+                    <p className="mt-3 font-sans text-meta text-muted-foreground">
                       {method.isDefault ? (
                         <>
                           <span style={{ color: BRAND }}>▸</span> Used for subscription renewal and top-up charges
@@ -139,10 +137,13 @@ export function PaymentMethodsPanel({
         </Panel>
       ) : (
         <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
-          <span className="font-mono text-[13px] text-muted-foreground">Payment method not connected</span>
+          <span className="font-sans text-body text-muted-foreground">Payment method not connected</span>
           <SetupButton connected={false} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
       )}
+      <PanelNote>
+        Connecting or updating a card places a temporary $0.50 hold, which is released automatically after verification.
+      </PanelNote>
     </section>
   )
 }

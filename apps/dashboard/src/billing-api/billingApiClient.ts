@@ -105,6 +105,13 @@ export class BillingApiClient {
       cycleFrom: new Date(plan.cycleFrom),
       cycleTo: new Date(plan.cycleTo),
       ...(plan.dueAt && { dueAt: new Date(plan.dueAt) }),
+      ...(plan.trial && {
+        trial: {
+          ...plan.trial,
+          startedAt: new Date(plan.trial.startedAt),
+          endsAt: new Date(plan.trial.endsAt),
+        },
+      }),
     }
   }
 

@@ -4,6 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { turnstileConfig } from './turnstile-config'
+import { parseFilestoreInstances } from './filestore-instances'
+import { checkpointConfig } from './checkpoint-config'
+import { customDomainConfig } from './custom-domain-config'
+
 /**
  * A whole number at least 1, or a hard failure.
  *
@@ -26,6 +31,13 @@ function requiredCount(value: string | undefined, fallback: number, name: string
     throw new Error(`${name} must be a whole number of at least 1, got "${value}"`)
   }
   return parsed
+}
+
+function databaseAcquisitionTimeout(): number {
+  const name = 'DB_POOL_CONNECTION_TIMEOUT_MS'
+  const timeout = requiredCount(process.env[name], 5000, name)
+  if (timeout > 2_147_483_647) throw new Error(`${name} exceeds the Node.js timer limit`)
+  return timeout
 }
 
 function organizationInvitationTtlSeconds(): number {
@@ -390,6 +402,164 @@ export const DEFAULT_PLATFORM_SUBDOMAIN_MIN_LENGTH = 5
 export const DNS_LABEL_MAX_LENGTH = 63
 
 /**
+ * A decimal setting that must sit in a range. `parseFloat` reads "abc" as NaN
+ * and "10%" as 10; a NaN compares false everywhere, so the setting it controls
+ * would silently stop applying. Refused at boot instead.
+ */
+function boundedNumber(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+  isValid: (n: number) => boolean,
+  range: string,
+): number {
+  const raw = value?.trim()
+  if (!raw) {
+    return fallback
+  }
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || !isValid(parsed)) {
+    throw new Error(`${name} must be ${range}, got "${value}"`)
+  }
+  return parsed
+}
+
+/**
+ * Online expansion of the runner data disks, plus the disk settings the
+ * placement and heartbeat paths read.
+ *
+ * The `expansion` block drives the runner-disk-expansion cron: it grows a
+ * GCP runner's data disk through `disks.update` when free space falls below a
+ * water level, rate-limited to GCP's own budget (2 expansions per 4 hours)
+ * and a configured cap. `enabled` defaults to true; only an explicit
+ * `RUNNER_DISK_EXPANSION_ENABLED=false` keeps the cron dormant. The cap is its
+ * own key rather than reusing `expandLimitGiB` because that key feeds the
+ * placement admission formula: sharing it would widen the admission ceiling
+ * the moment expansion is enabled. Resolution order:
+ * `expansion.capGiB ?? expandLimitGiB ?? twice the disk's baseline size` —
+ * both unset means no cap, which the controller treats as a configuration
+ * gap (skip + gauge) rather than an unbounded ceiling.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function runnerDiskConfig(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    // Hard disk admission for runner selection; see RunnerService.findAvailableRunners.
+    overcommitRatio: boundedNumber(
+      env.RUNNER_DISK_OVERCOMMIT_RATIO,
+      1,
+      'RUNNER_DISK_OVERCOMMIT_RATIO',
+      (n) => n > 0,
+      'a number above 0',
+    ),
+    // What a runner's data disk can grow to. Unset means its reported diskGiB.
+    expandLimitGiB: env.RUNNER_DISK_EXPAND_LIMIT_GIB?.trim()
+      ? requiredCount(env.RUNNER_DISK_EXPAND_LIMIT_GIB, 0, 'RUNNER_DISK_EXPAND_LIMIT_GIB')
+      : undefined,
+    minFreePercentage: boundedNumber(
+      env.RUNNER_DISK_MIN_FREE_PERCENTAGE,
+      10,
+      'RUNNER_DISK_MIN_FREE_PERCENTAGE',
+      (n) => n >= 0 && n < 100,
+      'a percentage from 0 up to (not including) 100',
+    ),
+    expansion: {
+      // Master switch. Off stops the controller and sampling.
+      // Existing disk_expand_exhausted marks are not lifted while off.
+      enabled: env.RUNNER_DISK_EXPANSION_ENABLED?.trim().toLowerCase() !== 'false',
+      // Expansion ceiling. Unset resolves at evaluation time to the admission
+      // expand limit, then to a per-runner default of twice the disk's
+      // baseline size — the size at its first expansion attempt, fixed across
+      // expansions so the ceiling bounds total growth (clamped to the
+      // Hyperdisk Balanced maximum). ENABLED alone turns the feature on with
+      // a sane ceiling.
+      capGiB: env.RUNNER_DISK_EXPANSION_CAP_GIB?.trim()
+        ? requiredCount(env.RUNNER_DISK_EXPANSION_CAP_GIB, 0, 'RUNNER_DISK_EXPANSION_CAP_GIB')
+        : undefined,
+      // Trigger when free space drops below this share of capacity, or the
+      // growth-derived headroom H, whichever is larger.
+      triggerPercentage: boundedNumber(
+        env.RUNNER_DISK_EXPANSION_TRIGGER_PERCENT,
+        20,
+        'RUNNER_DISK_EXPANSION_TRIGGER_PERCENT',
+        (n) => n > 0 && n <= 100,
+        'a percentage above 0 up to 100',
+      ),
+      // Lower bound for H when history cannot derive one (new runner, cold disk).
+      headroomFloorGiB: requiredCount(
+        env.RUNNER_DISK_EXPANSION_HEADROOM_FLOOR_GIB,
+        20,
+        'RUNNER_DISK_EXPANSION_HEADROOM_FLOOR_GIB',
+      ),
+      // Grow by at least this share of capacity per expansion.
+      stepPercentage: boundedNumber(
+        env.RUNNER_DISK_EXPANSION_STEP_PERCENT,
+        25,
+        'RUNNER_DISK_EXPANSION_STEP_PERCENT',
+        (n) => n > 0 && n <= 100,
+        'a percentage above 0 up to 100',
+      ),
+      // H = worst-window growth × this factor; 2.0 buys two growth windows
+      // per expansion, matching the 4h/2-expansion budget.
+      safetyFactor: boundedNumber(
+        env.RUNNER_DISK_EXPANSION_SAFETY_FACTOR,
+        2.0,
+        'RUNNER_DISK_EXPANSION_SAFETY_FACTOR',
+        (n) => n > 0,
+        'a number above 0',
+      ),
+      // Any window this long inside the retained samples counts for growth;
+      // aligned with GCP's per-disk resize budget window.
+      growthWindowHours: requiredCount(
+        env.RUNNER_DISK_EXPANSION_GROWTH_WINDOW_HOURS,
+        4,
+        'RUNNER_DISK_EXPANSION_GROWTH_WINDOW_HOURS',
+      ),
+      // Local count of accepted expansions per trailing window. GCP's hard
+      // limit is 2 per ~4h (a third returns 400); this is the conservative
+      // local mirror that avoids hitting it.
+      maxExpansionsPerWindow: requiredCount(
+        env.RUNNER_DISK_EXPANSION_MAX_PER_WINDOW,
+        2,
+        'RUNNER_DISK_EXPANSION_MAX_PER_WINDOW',
+      ),
+      // Usage-sample bucket size for the growth calculation.
+      sampleIntervalMinutes: requiredCount(
+        env.RUNNER_DISK_EXPANSION_SAMPLE_INTERVAL_MIN,
+        10,
+        'RUNNER_DISK_EXPANSION_SAMPLE_INTERVAL_MIN',
+      ),
+      // Samples older than this are deleted by the expansion cron.
+      sampleRetentionHours: requiredCount(
+        env.RUNNER_DISK_EXPANSION_SAMPLE_RETENTION_HOURS,
+        48,
+        'RUNNER_DISK_EXPANSION_SAMPLE_RETENTION_HOURS',
+      ),
+      // A pending expansion older than this without filesystem confirmation
+      // fails as unconfirmed and alerts.
+      confirmTimeoutMinutes: requiredCount(
+        env.RUNNER_DISK_EXPANSION_CONFIRM_TIMEOUT_MIN,
+        10,
+        'RUNNER_DISK_EXPANSION_CONFIRM_TIMEOUT_MIN',
+      ),
+      // Lift the exhausted mark only below this usage line. It mirrors the
+      // scheduler's usage penalty brake (RUNNER_DISK_PENALTY_THRESHOLD, also
+      // 75 by default) -- the controller re-trusts a runner exactly when
+      // scheduling stops penalizing it -- as a separate knob, so a stage can
+      // keep the two lines aligned when it retunes the brake.
+      liftPercentage: boundedNumber(
+        env.RUNNER_DISK_EXPANSION_LIFT_PERCENT,
+        75,
+        'RUNNER_DISK_EXPANSION_LIFT_PERCENT',
+        (n) => n > 0 && n < 100,
+        'a percentage above 0 up to 100',
+      ),
+    },
+  }
+}
+
+/**
  * Platform subdomains: `<name>.<appDomain>` routes to one box port.
  *
  * `appDomain` is unset where the deployment has no wildcard certificate and
@@ -436,7 +606,21 @@ export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
   return { appDomain, appHost, platformSubdomainMinLength }
 }
 
+function ciWorkerResources() {
+  const cpus = Number(process.env.CI_WORKER_CPUS ?? '2')
+  const memoryGB = Number(process.env.CI_WORKER_MEMORY_GB ?? '2')
+  const memoryMiB = memoryGB * 1024
+  if (!Number.isInteger(cpus) || cpus < 1 || cpus > 16)
+    throw new Error('CI_WORKER_CPUS must be an integer between 1 and 16')
+  if (!Number.isInteger(memoryMiB) || memoryMiB < 128 || memoryMiB > 131072)
+    throw new Error('CI_WORKER_MEMORY_GB must convert to whole MiB between 128 MiB and 128 GiB')
+  return { workerCPUs: cpus, workerMemoryGB: memoryGB }
+}
+
 const configuration = {
+  turnstile: turnstileConfig(),
+  checkpoint: checkpointConfig(),
+  customDomains: customDomainConfig(),
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,
@@ -457,8 +641,7 @@ const configuration = {
       max: process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10),
       min: process.env.DB_POOL_MIN && parseInt(process.env.DB_POOL_MIN, 10),
       idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS && parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10),
-      connectionTimeoutMillis:
-        process.env.DB_POOL_CONNECTION_TIMEOUT_MS && parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 10),
+      connectionTimeoutMillis: databaseAcquisitionTimeout(),
     },
   },
   redis: {
@@ -528,6 +711,13 @@ const configuration = {
     // Which object store backs volume buckets. Must match the runner's
     // VOLUME_STORAGE_BACKEND: the API creates the bucket the runner mounts.
     storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
+    // Filestore is a GCP deployment feature. The deployment turns it off on
+    // other clouds; local APIs default to enabled so an explicit instance list
+    // keeps working without hosted deployment metadata.
+    filestoreSupported: process.env.FILESTORE_SUPPORTED !== 'false',
+    // The Filestore instances a create may select or dispatch may resolve;
+    // invalid configuration refuses to start the API.
+    filestoreInstances: parseFilestoreInstances(),
   },
   gcs: {
     // Credentials come from Application Default Credentials, never a key file,
@@ -673,6 +863,7 @@ const configuration = {
       },
     },
   },
+  runnerDisk: runnerDiskConfig(),
   rateLimit: {
     anonymous: {
       ttl: process.env.RATE_LIMIT_ANONYMOUS_TTL ? parseInt(process.env.RATE_LIMIT_ANONYMOUS_TTL, 10) : undefined,
@@ -766,6 +957,25 @@ const configuration = {
     // a backstop for a lost job-completion callback, not a fast path: raise it
     // if legitimate startups ever get closed out ahead of their own callback.
     startConfirmationStallSeconds: parseInt(process.env.BOX_SYNC_START_CONFIRMATION_STALL_SECONDS || '60', 10),
+  },
+  ci: {
+    schedulerGeneration: process.env.CI_SCHEDULER_GENERATION,
+    workerGroup: process.env.CI_WORKER_GROUP_NAME || 'boxlite-ci-runner',
+    workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
+    ...ciWorkerResources(),
+    githubOAuthClientId: process.env.CI_GITHUB_OAUTH_CLIENT_ID,
+    githubOAuthClientSecret: process.env.CI_GITHUB_OAUTH_CLIENT_SECRET,
+    githubWebhookSecret: process.env.CI_GITHUB_WEBHOOK_SECRET,
+    githubClientId: process.env.CI_GITHUB_APP_CLIENT_ID,
+    githubClientSecret: process.env.CI_GITHUB_APP_CLIENT_SECRET,
+    githubAppSlug: process.env.CI_GITHUB_APP_SLUG,
+    githubPrivateKey: process.env.CI_GITHUB_APP_PRIVATE_KEY,
+    githubOrgClientId: process.env.CI_GITHUB_ORG_APP_CLIENT_ID,
+    githubOrgClientSecret: process.env.CI_GITHUB_ORG_APP_CLIENT_SECRET,
+    githubOrgAppSlug: process.env.CI_GITHUB_ORG_APP_SLUG,
+    githubOrgPrivateKey: process.env.CI_GITHUB_ORG_APP_PRIVATE_KEY,
+    githubOrgWebhookSecret: process.env.CI_GITHUB_ORG_WEBHOOK_SECRET,
+    secretEncryptionKey: process.env.CI_SECRET_ENCRYPTION_KEY,
   },
   encryption: {
     key: process.env.ENCRYPTION_KEY,

@@ -197,22 +197,7 @@ export function WebhooksEndpointTable({
                 colSpan={columns.length}
                 message="No webhook endpoints found."
                 icon={<Mail className="size-8" />}
-                description={
-                  <div className="space-y-2">
-                    <p>Create an endpoint to start receiving webhook events.</p>
-                    <p>
-                      <a
-                        href="https://docs.boxlite.ai"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline font-medium"
-                      >
-                        Check out the Docs
-                      </a>{' '}
-                      to learn more.
-                    </p>
-                  </div>
-                }
+                description="Create an endpoint to start receiving webhook events."
               />
             )}
           </TableBody>
@@ -227,7 +212,7 @@ export function WebhooksEndpointTable({
             <AlertDialogDescription>
               Are you sure you want to delete this webhook endpoint? This action cannot be undone.
               {deleteEndpoint && (
-                <div className="mt-2 text-sm">
+                <div className="mt-2 text-body">
                   <strong>URL:</strong> {deleteEndpoint.url}
                 </div>
               )}
@@ -249,7 +234,7 @@ export function WebhooksEndpointTable({
             <AlertDialogDescription>
               Are you sure you want to {disableEndpoint?.disabled ? 'enable' : 'disable'} this webhook endpoint?
               {disableEndpoint && (
-                <div className="mt-2 text-sm">
+                <div className="mt-2 text-body">
                   <strong>URL:</strong> {disableEndpoint.url}
                 </div>
               )}

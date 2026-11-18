@@ -17,8 +17,8 @@
  */
 
 import { loadConfig as loadStageConfig, type StageConfig } from 'mstage/config'
-import { loadBuildConfig, onlyArtifact, registryFor, type BuildConfig } from '../src/config.ts'
-import { assertTag, releaseTagFor, resolveRegistry } from '../src/address.ts'
+import { loadArtifactConfig, loadBuildConfig, onlyArtifact, registryFor, type BuildConfig } from '../src/config.ts'
+import { assertTag, ghcrRegistryFor, releaseTagFor, resolveRegistry } from '../src/address.ts'
 import { assertPromotable, coordinatesOf, type Coordinates } from '../src/coordinates.ts'
 import {
   AuditFailedError,
@@ -68,6 +68,8 @@ const USAGE = [
   '       npm run mbuild promote -- --tag <commit-sha> --from <stage> --to <stage> [--artifact <name>] [--version v<X.Y.Z>]',
   '       npm run mbuild verify -- --tag <commit-sha> --stage <stage> [--artifact <name>] [--version v<X.Y.Z>]',
   '       npm run mbuild inspect -- --stage <stage>',
+  '       npm run mbuild publish|verify -- --tag <sha> --ghcr <owner/repository> --version v<X.Y.Z>',
+  '       npm run mbuild import-release -- --tag <sha> --ghcr <owner/repository> --stage <stage> --version v<X.Y.Z>',
   '',
   '--artifact narrows the command to one declared artifact. Absent means every',
   'one, which is what a deploy asks about.',
@@ -174,7 +176,30 @@ const coordinates = (config: BuildConfig, stage: string): Promise<Coordinates> =
 
 const main = async (): Promise<number> => {
   const [command, ...argv] = process.argv.slice(2)
-  const config = loadBuildConfig()
+  const ghcr = option(argv, 'ghcr')
+  const config = ghcr !== undefined && command !== 'import-release' ? loadArtifactConfig() : loadBuildConfig()
+
+  if (ghcr !== undefined) {
+    if (!['publish', 'verify', 'import-release'].includes(command ?? '')) throw new Error('--ghcr requires publish, verify or import-release')
+    if (!option(argv, 'version') || !/^[0-9a-f]{40}$/.test(required(argv, 'tag'))) throw new Error('--ghcr requires --version and a full commit SHA')
+    const registry = ghcrRegistryFor(ghcr)
+    const tag = tagOf(argv)
+    const selected = narrowed(config, argv)
+    if (command === 'import-release') {
+      const stage = required(argv, 'stage')
+      const target = resolveRegistry({ config, stage, region: regionOf(stage), ...(await coordinates(config, stage)) })
+      for (const outcome of await promote({ config: selected, tag, from: { stage: 'ghcr', registry }, to: { stage, registry: target }, run, log })) {
+        console.log(`${outcome.artifact}=${outcome.address}`)
+      }
+    } else {
+      const operation = command === 'publish' ? publish : verifyPublished
+      for (const outcome of await operation({ config: selected, stage: 'ghcr', registry, tag, run, log })) {
+        console.log(`${outcome.artifact}=${outcome.address}`)
+      }
+    }
+    return 0
+  }
+  if (command === 'import-release') throw new Error('import-release requires --ghcr <owner/repository>')
 
   if (command === 'inspect') {
     const stage = required(argv, 'stage')

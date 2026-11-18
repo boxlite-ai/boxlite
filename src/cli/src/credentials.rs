@@ -126,6 +126,10 @@ struct CredentialsFile {
 /// Virtual context representing the pre-context default configuration.
 pub const DEFAULT_PROFILE: &str = "default";
 
+/// Virtual context that always selects the embedded runtime. Login cannot
+/// store credentials under it, so it stays reachable after a `default` login.
+pub const EMBEDDED_CONTEXT: &str = "embedded";
+
 /// Credential file access rooted at the effective BoxLite home directory.
 ///
 /// Keeping the path and all reads/writes together prevents `--home` from

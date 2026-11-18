@@ -2,6 +2,7 @@
 
 mod advanced_options;
 mod box_handle;
+mod checkpoints;
 mod domains;
 mod exec;
 mod executions;
@@ -80,6 +81,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageUsage>()?;
     m.add_class::<PyVolumeHandle>()?;
     m.add_class::<PyVolumeInfo>()?;
+    m.add_class::<crate::checkpoints::PyCheckpointHandle>()?;
+    m.add_class::<crate::checkpoints::PyCheckpointInfo>()?;
     m.add_class::<PyRegistryHandle>()?;
     m.add_class::<PyRegistryCredential>()?;
     m.add_class::<PyBoxInfo>()?;

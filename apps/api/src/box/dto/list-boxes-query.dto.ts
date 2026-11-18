@@ -5,7 +5,7 @@
  */
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
-import { IsBoolean, IsInt, IsOptional, IsString, IsArray, IsEnum, IsDate, Min } from 'class-validator'
+import { IsBoolean, IsNumber, IsInt, IsOptional, IsString, IsArray, IsEnum, IsDate, Min } from 'class-validator'
 import { Type } from 'class-transformer'
 import { BoxState } from '../enums/box-state.enum'
 import { ToArray } from '../../common/decorators/to-array.decorator'
@@ -117,12 +117,12 @@ export class ListBoxesQueryDto {
     description: 'Minimum CPU',
     required: false,
     type: Number,
-    minimum: 1,
+    minimum: 0.01,
   })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0.01)
   minCpu?: number
 
   @ApiProperty({
@@ -130,12 +130,12 @@ export class ListBoxesQueryDto {
     description: 'Maximum CPU',
     required: false,
     type: Number,
-    minimum: 1,
+    minimum: 0.01,
   })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0.01)
   maxCpu?: number
 
   @ApiProperty({
@@ -143,12 +143,12 @@ export class ListBoxesQueryDto {
     description: 'Minimum memory in GiB',
     required: false,
     type: Number,
-    minimum: 1,
+    minimum: 0.125,
   })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsNumber()
+  @Min(0.125)
   minMemoryGiB?: number
 
   @ApiProperty({
@@ -156,12 +156,12 @@ export class ListBoxesQueryDto {
     description: 'Maximum memory in GiB',
     required: false,
     type: Number,
-    minimum: 1,
+    minimum: 0.125,
   })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsNumber()
+  @Min(0.125)
   maxMemoryGiB?: number
 
   @ApiProperty({

@@ -40,7 +40,7 @@ export function BoxState({ state, errorReason, recoverable, className, iconOnly,
     const badge = (
       <span
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta font-medium',
           getStateTint(state, recoverable),
           className,
         )}

@@ -56,6 +56,14 @@ type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
 
+// The runner can implicitly boot a stopped box on exec, so disabled cloud
+// auto-resume must be enforced before forwarding the request.
+function requireExecReady(box: Box, boxId: string): void {
+  if (!box.autoResume && (reportedBoxState(box) !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED)) {
+    throw new ConflictException(`Box ${boxId} is not running and auto-resume is disabled; start it first`)
+  }
+}
+
 // SSH configure may wake a box only the way auto-resume would, and only onto
 // the image's default command: a box with an explicit cmd/entrypoint must be
 // started first, as the SDKs require (openapi `configureSsh`). Joining a start
@@ -136,7 +144,10 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
-      { operation: req.method === 'POST' ? 'box.exec' : undefined },
+      {
+        operation: req.method === 'POST' ? 'box.exec' : undefined,
+        admit: req.method === 'POST' ? requireExecReady : undefined,
+      },
     )
   }
 
@@ -574,14 +585,6 @@ export class BoxliteProxyController {
         proxyReq: (proxyReq: any, originalReq: any) => {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
-        },
-        proxyRes: (proxyRes: any, _req: any, res: any) => {
-          // Carry the file-download archive-shape hint through the proxy so the
-          // client's copy_out can distinguish single-file vs directory streams.
-          const shape = proxyRes.headers?.['x-boxlite-source-is-dir']
-          if (shape) {
-            res.setHeader('x-boxlite-source-is-dir', shape)
-          }
         },
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,

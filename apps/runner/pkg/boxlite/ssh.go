@@ -37,7 +37,7 @@ func (c *Client) SSHEnable(ctx context.Context, boxID string) (*boxlite.SSHStatu
 // intent. Return disabled without fetching a handle, which would be evicted
 // and leaked on every observation of an idle box (see evictBox).
 func (c *Client) SSHStatus(ctx context.Context, boxID string) (*boxlite.SSHStatus, error) {
-	info, err := c.runtime.GetInfo(ctx, boxID)
+	info, err := c.nativeBoxInfo(ctx, boxID)
 	if err != nil {
 		return nil, fmt.Errorf("read state of box %s: %w", boxID, err)
 	}

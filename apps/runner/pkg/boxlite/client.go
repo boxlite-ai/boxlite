@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,8 @@ type Client struct {
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
 
+	nestedVirtualizationAllowed bool
+
 	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
 	// check, before it fetches a handle. Tests use it to land a stop in that
 	// window; nil in production.
@@ -68,6 +71,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	KernelPath                   string
+	ExperimentalFeatures         string
 	InsecureRegistries           []string
 	RegistryProxy                RegistryProxy
 	AWSRegion                    string
@@ -151,6 +155,7 @@ func secretSpecs(secrets []dto.SecretDTO) []boxlite.Secret {
 			Value:       secret.Value,
 			Hosts:       secret.Hosts,
 			Placeholder: secret.Placeholder,
+			Headers:     secret.Headers,
 		})
 	}
 	return specs
@@ -324,10 +329,17 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir)}
-	if config.KernelPath != "" {
-		opts = append(opts, boxlite.WithExperimentalFeatures("custom-kernel"))
+	var features []string
+	if raw := strings.TrimSpace(config.ExperimentalFeatures); raw != "" {
+		features = strings.Split(raw, ",")
+		for i := range features {
+			features[i] = strings.TrimSpace(features[i])
+		}
 	}
+	if config.KernelPath != "" && !slices.Contains(features, "custom-kernel") {
+		features = append(features, "custom-kernel")
+	}
+	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir), boxlite.WithExperimentalFeatures(features...)}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -346,6 +358,8 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
+		nestedVirtualizationAllowed: slices.Contains(features, "nested-virtualization"),
+
 		runtime:             rt,
 		logger:              logger,
 		homeDir:             homeDir,
@@ -407,37 +421,70 @@ func (c *Client) Shutdown(ctx context.Context, timeout time.Duration) error {
 // so boxes get a graceful stop before the C handle is freed.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	boxes := make([]*boxlite.Box, 0, len(c.boxes))
 	for id, bx := range c.boxes {
-		bx.Close()
+		boxes = append(boxes, bx)
 		delete(c.boxes, id)
 	}
+	c.mu.Unlock()
+
+	// Close outside the cache lock: each Close waits for in-flight native
+	// calls on its box, and one box's drain must not block the others.
+	for _, bx := range boxes {
+		bx.Close()
+	}
 	return c.runtime.Close()
+}
+
+// NestedVirtualizationEnabled combines startup ENV authorization and current host support.
+func (c *Client) NestedVirtualizationEnabled() bool {
+	return c.nestedVirtualizationAllowed && nestedVirtualizationAvailable()
 }
 
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
+	if err != nil {
+		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
+	memoryMiB, err := dto.MemoryMiB(boxDto.MemoryQuota)
+	if err != nil {
+		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
 	// Before any side effect: a request without a policy must not leave
 	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
 	if err != nil {
 		return "", "", err
 	}
+	if err := validateRecreatableSecrets(boxDto.Secrets); err != nil {
+		return "", "", err
+	}
+	operation, err := c.checkpointOperations().Lock(ctx, boxDto.Id)
+	if err != nil {
+		return "", "", err
+	}
+	defer operation.Close()
+	if err := operation.CheckIdle(); err != nil {
+		return "", "", err
+	}
+	candidate, err := operation.UnpublishedCandidate()
+	if err != nil {
+		return "", "", err
+	}
+	if candidate != "" {
+		if err := c.runtime.ForceRemove(ctx, candidate); err != nil && !boxlite.IsNotFound(err) {
+			return "", "", err
+		}
+	}
+	if err := operation.Invalidate(); err != nil {
+		return "", "", err
+	}
 
-	// API sends cores / GB / GB as small integers (see apps/api Box entity).
-	cpus := int(boxDto.CpuQuota)
-	if cpus < 1 {
-		cpus = 1
-	}
-	memoryMiB := int(boxDto.MemoryQuota * 1024)
-	if memoryMiB < 128 {
-		memoryMiB = 128
-	}
 	opts := []boxlite.BoxOption{
 		boxlite.WithName(boxDto.Id),
-		boxlite.WithCPUs(float64(cpus)),
+		boxlite.WithCPUs(cpus),
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),
 		boxlite.WithDetach(true),
@@ -476,12 +523,24 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
-	if boxDto.Privileged || c.kernelPath != "" {
+	nested := boxDto.NestedVirtualization && c.NestedVirtualizationEnabled()
+	if nested {
+		// Replay must adopt the saved choice rather than request an upgrade.
+		if _, lookupErr := c.runtime.GetInfo(ctx, boxDto.Id); lookupErr == nil {
+			nested = false
+		} else if !boxlite.IsNotFound(lookupErr) {
+			return "", "", lookupErr
+		}
+	}
+	if nested || boxDto.Privileged || c.kernelPath != "" {
 		advanced, advancedErr := boxlite.NewAdvancedBoxOptions()
 		if advancedErr != nil {
 			return "", "", advancedErr
 		}
 		defer advanced.Close()
+		if advancedErr = advanced.SetNestedVirtualization(nested); advancedErr != nil {
+			return "", "", advancedErr
+		}
 		if advancedErr = advanced.SetPrivileged(boxDto.Privileged); advancedErr != nil {
 			return "", "", advancedErr
 		}
@@ -510,6 +569,19 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 
 	opts = append(opts, boxlite.WithNetwork(network))
+	if err := ctx.Err(); err != nil {
+		if len(volumeMounts) > 0 {
+			cleanupCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, boxDto.Id); cleanupErr != nil {
+				c.logger.WarnContext(cleanupCtx, "failed to remove cancelled box volume mount record", "box", boxDto.Id, "error", cleanupErr)
+			}
+		}
+		return "", "", err
+	}
+	// Native creation cannot be cancelled after admission. Keep the target
+	// lease until it finishes; preparation above still obeys caller cancellation.
+	ctx = context.WithoutCancel(ctx)
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if
@@ -519,7 +591,20 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// failing with "already exists", which the API would surface as a 400.
 	// The created flag (new vs adopted) is irrelevant here: either way the box
 	// now exists locally and the job can proceed, so it is discarded.
-	bx, _, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	id, err := c.nativeBoxID(boxDto.Id)
+	if err != nil {
+		return "", "", err
+	}
+	var bx *boxlite.Box
+	if id != boxDto.Id {
+		bx, err = c.runtime.Get(ctx, id)
+	}
+	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
+		if err := operation.ClearPublished(); err != nil {
+			return "", "", err
+		}
+		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
@@ -603,6 +688,12 @@ func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfo
 
 // Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return "", err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
@@ -622,6 +713,12 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 
 // Stop stops a running box.
 func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
@@ -636,10 +733,25 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	operation, err := c.checkpointOperations().Lock(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	if err := operation.Invalidate(); err != nil {
+		return err
+	}
+	ctx = context.WithoutCancel(ctx)
 	c.forgetBox(boxId)
 
-	if err := c.runtime.ForceRemove(ctx, boxId); err != nil {
+	ids, err := operation.NativeTargets()
+	if err != nil {
 		return err
+	}
+	for _, id := range ids {
+		if err := c.runtime.ForceRemove(ctx, id); err != nil && !boxlite.IsNotFound(err) {
+			return err
+		}
 	}
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
@@ -692,11 +804,10 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 //
 // It reads through the runtime rather than the handle cache: a state read
 // needs no bootable handle, only the persisted record. Routing it through
-// getOrFetchBox would evict and re-fetch a handle for every non-running box,
-// and eviction cannot free the old one (see evictBox), so the runner would
-// accumulate dead handles for as long as it ran.
+// getOrFetchBox would evict, close and re-fetch a handle for every
+// non-running box, paying a full handle round-trip per read.
 func (c *Client) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error) {
-	info, err := c.runtime.GetInfo(ctx, boxId)
+	info, err := c.nativeBoxInfo(ctx, boxId)
 	if err != nil {
 		if boxlite.IsNotFound(err) {
 			return models.BoxInfo{BoxState: enums.BoxStateUnknown}, nil
@@ -761,21 +872,21 @@ func (c *Client) CopyOut(ctx context.Context, boxId string, guestSrc, hostDst st
 }
 
 // CopyInStream streams raw tar bytes from r into guestDst without staging.
-func (c *Client) CopyInStream(ctx context.Context, boxId, guestDst string, sourceKind boxlite.CopySourceKind, r io.Reader) error {
+func (c *Client) CopyInStream(ctx context.Context, boxId, guestDst string, r io.Reader) error {
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
 	}
-	return bx.CopyInStream(ctx, guestDst, sourceKind, r)
+	return bx.CopyInStream(ctx, guestDst, r)
 }
 
 // CopyOutStream streams a tar of guestSrc to w without staging.
-func (c *Client) CopyOutStream(ctx context.Context, boxId, guestSrc string, w io.Writer, onMeta func(bool)) error {
+func (c *Client) CopyOutStream(ctx context.Context, boxId, guestSrc string, w io.Writer) error {
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
 	}
-	return bx.CopyOutStream(ctx, guestSrc, w, onMeta)
+	return bx.CopyOutStream(ctx, guestSrc, w)
 }
 
 // ListImages returns all locally cached images.
@@ -810,7 +921,7 @@ func (c *Client) BoxMetrics(ctx context.Context, boxId string) (*boxlite.BoxMetr
 
 // ListInfo returns info for all boxes managed by this runtime.
 func (c *Client) ListInfo(ctx context.Context) ([]boxlite.BoxInfo, error) {
-	return c.runtime.ListInfo(ctx)
+	return c.listPublicBoxes(ctx)
 }
 
 // GetBox retrieves a box handle from cache or fetches it from the runtime.
@@ -852,7 +963,11 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 		c.evictBox(boxId, cached)
 	}
 
-	bx, err := c.runtime.Get(ctx, boxId)
+	id, err := c.nativeBoxID(boxId)
+	if err != nil {
+		return nil, err
+	}
+	bx, err := c.runtime.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("box %s not found: %w", boxId, err)
 	}
@@ -870,31 +985,37 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 // only on the push that says the box started, so one still owed for a box that
 // no longer exists can never be delivered, and left behind it would accumulate
 // one entry per box this runner ever destroyed.
+// forgetBox drops everything this client still holds for a box that is being
+// destroyed: the cached handle, and any image report the box never got to
+// deliver. The report has to go with it — the control plane records an image
+// only on the push that says the box started, so one still owed for a box that
+// no longer exists can never be delivered, and left behind it would accumulate
+// one entry per box this runner ever destroyed.
+//
+// The close runs outside the cache lock: it waits for in-flight native calls
+// on that one box, and no other box's lookup should queue behind the wait.
 func (c *Client) forgetBox(boxId string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if bx, ok := c.boxes[boxId]; ok {
-		bx.Close()
-		delete(c.boxes, boxId)
-	}
+	bx := c.boxes[boxId]
+	delete(c.boxes, boxId)
 	delete(c.pendingImageReports, boxId)
+	c.mu.Unlock()
+
+	if bx != nil {
+		bx.Close()
+	}
 }
 
 // evictBox unmaps a handle so the next lookup fetches a fresh one, and only
 // while it is still the cached one — a concurrent Create or fetch may already
 // have replaced it, and unmapping the winner would drop a live entry.
 //
-// It deliberately does not Close the handle. getOrFetchBox hands the same
-// *boxlite.Box to every caller and the runner serializes nothing per box, so
-// freeing here would pull the FFI handle out from under a goroutine mid-call.
-// An unmapped handle is instead leaked for the process lifetime — Close only
-// frees what is still in the map. The cost is one handle per request that finds
-// its box down: calls that go on to boot it stop there, while ones that refuse a
-// stopped box (metrics) pay it again on every retry. That is
-// affordable only because it tracks request volume — which is why GetBoxInfo
-// reads through the runtime rather than coming through here.
-// Ref-counting the wrapper is the real fix, and it belongs in the SDK.
+// It deliberately does not Close the handle: an evicted handle may still be
+// referenced by callers that have not finished their requests, and closing it
+// here would turn those calls into ErrInvalidState. That ownership hand-off
+// is its own change, tracked in Linear BUI-1747 — until it lands, the
+// unmapped handle is leaked for the process lifetime, bounded by the request
+// volume that finds its box down.
 func (c *Client) evictBox(boxId string, stale *boxlite.Box) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

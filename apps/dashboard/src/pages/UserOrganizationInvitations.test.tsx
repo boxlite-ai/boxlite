@@ -54,8 +54,15 @@ vi.mock('@/components/PageLayout', () => ({
 }))
 
 function SelectedOrganization() {
-  const { selectedOrganization } = useSelectedOrganization()
-  return <output data-default={selectedOrganization?.isDefaultForAuthenticatedUser}>{selectedOrganization?.id}</output>
+  const { selectedOrganization, organizationMembers } = useSelectedOrganization()
+  return (
+    <output
+      data-members={organizationMembers.map((member) => member.userId).join(',')}
+      data-default={selectedOrganization?.isDefaultForAuthenticatedUser}
+    >
+      {selectedOrganization?.id}
+    </output>
+  )
 }
 
 function CurrentLocation() {
@@ -81,6 +88,7 @@ describe('review regressions: UserOrganizationInvitations', () => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     clear()
     vi.resetAllMocks()
+    sessionStorage.clear()
     localStorage.clear()
     localStorage.setItem(LocalStorageKey.SelectedOrganizationId, 'org-1')
     const own = { id: 'org-1', name: 'Personal', isDefaultForAuthenticatedUser: true }
@@ -205,6 +213,7 @@ describe('review regressions: UserOrganizationInvitations', () => {
 
     expect(document.querySelector('output')?.textContent).toBe('org-1')
     expect(localStorage.getItem(LocalStorageKey.SelectedOrganizationId)).toBe('org-1')
+    expect(document.querySelector('output')?.getAttribute('data-members')).toBe('invitee')
     expect(toast.success).toHaveBeenCalledWith('You joined Acme')
     expect(toast.error).not.toHaveBeenCalledWith('Failed to accept invitation', expect.anything())
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('You joined the organization')

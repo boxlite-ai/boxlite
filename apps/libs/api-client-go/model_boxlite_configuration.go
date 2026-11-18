@@ -21,6 +21,7 @@ var _ MappedNullable = &BoxliteConfiguration{}
 
 // BoxliteConfiguration struct for BoxliteConfiguration
 type BoxliteConfiguration struct {
+	Turnstile *TurnstileConfig `json:"turnstile,omitempty"`
 	// BoxLite version
 	Version string `json:"version"`
 	// PostHog configuration
@@ -75,6 +76,38 @@ func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnab
 func NewBoxliteConfigurationWithDefaults() *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	return &this
+}
+
+// GetTurnstile returns the Turnstile field value if set, zero value otherwise.
+func (o *BoxliteConfiguration) GetTurnstile() TurnstileConfig {
+	if o == nil || IsNil(o.Turnstile) {
+		var ret TurnstileConfig
+		return ret
+	}
+	return *o.Turnstile
+}
+
+// GetTurnstileOk returns a tuple with the Turnstile field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *BoxliteConfiguration) GetTurnstileOk() (*TurnstileConfig, bool) {
+	if o == nil || IsNil(o.Turnstile) {
+		return nil, false
+	}
+	return o.Turnstile, true
+}
+
+// HasTurnstile returns a boolean if a field has been set.
+func (o *BoxliteConfiguration) HasTurnstile() bool {
+	if o != nil && !IsNil(o.Turnstile) {
+		return true
+	}
+
+	return false
+}
+
+// SetTurnstile gets a reference to the given TurnstileConfig and assigns it to the Turnstile field.
+func (o *BoxliteConfiguration) SetTurnstile(v TurnstileConfig) {
+	o.Turnstile = &v
 }
 
 // GetVersion returns the Version field value
@@ -439,6 +472,9 @@ func (o BoxliteConfiguration) MarshalJSON() ([]byte, error) {
 
 func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.Turnstile) {
+		toSerialize["turnstile"] = o.Turnstile
+	}
 	toSerialize["version"] = o.Version
 	if !IsNil(o.Posthog) {
 		toSerialize["posthog"] = o.Posthog
@@ -512,6 +548,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "turnstile")
 		delete(additionalProperties, "version")
 		delete(additionalProperties, "posthog")
 		delete(additionalProperties, "oidc")

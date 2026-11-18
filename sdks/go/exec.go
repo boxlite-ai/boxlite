@@ -270,7 +270,16 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 
 	var handle *C.CExecutionHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_exec(b.handle, &cCommand, &handle, &cerr)
+	// boxlite_box_exec holds the box handle for its whole call and may
+	// implicitly boot the box while waiting on the guest's exec service,
+	// so the guard spans the entire call — potentially seconds. Close
+	// waits for it by contract.
+	boxHandle, unlock, err := b.acquire()
+	if err != nil {
+		return nil, err
+	}
+	code := C.boxlite_box_exec(boxHandle, &cCommand, &handle, &cerr)
+	unlock()
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

@@ -45,7 +45,16 @@ describe('requiresFreshBox', () => {
   it('forces a fresh box when secrets are requested', () => {
     expect(
       requiresFreshBox(
-        { secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }] },
+        {
+          secrets: [
+            {
+              name: 'openai',
+              value: 'sk-test',
+              hosts: ['api.openai.com'],
+              headers: { Authorization: 'Bearer {value}' },
+            },
+          ],
+        },
         NO_ORG_EGRESS_LIMIT,
         CURATED,
       ),

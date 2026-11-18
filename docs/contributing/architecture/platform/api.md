@@ -1,5 +1,53 @@
 # BoxLite application API catalog
 
+## Organization nested virtualization allowlist (RC)
+
+System administrators control this Cloud creation rollout through the organization
+allowlist. Runner captures `BOXLITE_EXPERIMENTAL` at startup and reports nesting
+only when authorized and supported by the host. Local runtime and start behavior
+retain main's contract.
+
+| Current organization policy | Current Runner capability | New Box |
+| --- | --- | --- |
+| Disabled | Any | Ordinary; no capability request |
+| Enabled | Confirmed true | Configure nested virtualization at creation |
+| Enabled | False, missing, stale, invalid, failed or timed out | Ordinary |
+
+`GET` and `PUT /api/admin/organizations/{organizationId}/nested-virtualization`
+read or replace `{ "enabled": true }`. Both require a system administrator JWT
+or Admin API key. Organization owners and ordinary organization keys cannot grant
+permission. PUT requires a strict boolean and rejects unknown properties.
+Unknown organizations return 404; audit records identify the target organization
+and administrator. Other organization writers update only their owned fields.
+
+At actual create dispatch, including UNKNOWN-state creation replay, the API reads
+current uncached organization policy and checks the selected Runner under the
+health deadline. Failed organization reads remain errors; capability discovery
+failures choose an ordinary creation. Allowlisted creates bypass ordinary warm VMs.
+
+V0 reads live `/info`; V2 reads the uncached authenticated heartbeat and requires
+READY state with a report at most 60 seconds old. Runner rechecks authorization
+and Linux KVM support before selecting new-box options. Guest privilege is independent.
+
+The standard C/Go AdvancedBoxOptions setter configures the existing runtime
+`advanced.nested_virtualization` option. Runtime create already persists BoxConfig;
+no new persistence interface or Cloud Box column is added. Creation replay adopts
+saved configuration without requesting a nesting upgrade; runtime's general reuse
+compatibility rules remain unchanged.
+
+Start takes no new options or nesting parameter. It uses the saved Box configuration
+without querying organization policy. For example, enabling the organization does
+not upgrade an existing ordinary Box on stop/start; disabling it does not downgrade
+an existing nested Box. Future creates use the new policy. A previously nested Box
+may fail to start if its assigned host later cannot provide the saved capability.
+
+The C start ABI, Rust default start, Go Start(ctx), CLI and other SDKs retain their
+original behavior. Recovery and migration gain no new nesting guarantee; archive
+migration remains incomplete. Deploy organization and Runner capability migrations
+before the compatible API and workers, then enable selected organizations.
+
+## Interface inventory
+
 This catalog lists the interfaces registered by the applications in this
 directory. It covers HTTP, WebSocket, CONNECT, OTLP, health, static-asset, and
 outbound event interfaces; each entry names the owning service and what the
@@ -36,10 +84,12 @@ The inventory is implementation-grounded:
   [`local-dex-env.mjs`](../../../../apps/scripts/local-dex-env.mjs).
 
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
-service does not currently register, including snapshots, clone, export,
-import, and runtime-wide metrics. They are intentionally absent below;
-`GET /v1/config` reports snapshots, clone, export, and import as disabled,
-and private tunnels as enabled; clients check that before every private prepare.
+service does not currently register, including clone, binary archive import/export,
+and runtime-wide metrics. `GET /v1/config` reports those archive capabilities as
+disabled. Checkpoint capture and box creation from a checkpoint are a separate capability:
+`checkpoints_enabled` requires both `CHECKPOINTS_ENABLED=true` and a configured
+checkpoint archive prefix. Private tunnels are enabled; clients check that
+capability before every private prepare.
 
 ## Services at a glance
 
@@ -102,8 +152,10 @@ enabling consumers of this contract.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads. |
+| `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads; `include=memberEmails` adds up to 200 emails per organization. |
 | `GET` | `/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
+
+The [removal-release notes](../../../../apps/api/README.md#retired-cloud-operations) list retired operations and their remaining alternatives.
 
 ## Control-plane API
 
@@ -145,7 +197,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Users and authentication</b> · 11 routes</summary>
+<summary><b>Users and authentication</b> · 10 routes</summary>
 
 | Method   | Path                                                     | What it does                                   |
 | -------- | -------------------------------------------------------- | ---------------------------------------------- |
@@ -153,7 +205,6 @@ organization boundaries.
 | `GET`    | `/users`                                             | Lists users.                                   |
 | `POST`   | `/users`                                             | Creates a user.                                |
 | `GET`    | `/users/{id}`                                        | Gets a user by ID.                             |
-| `POST`   | `/users/{id}/regenerate-key-pair`                    | Regenerates a user's key pair.                 |
 | `GET`    | `/users/account-providers`                           | Lists account providers available for linking. |
 | `POST`   | `/users/linked-accounts`                             | Links an external account to the user.         |
 | `DELETE` | `/users/linked-accounts/{provider}/{providerUserId}` | Unlinks an external account.                   |
@@ -199,6 +250,12 @@ organization boundaries.
 <details>
 <summary><b>Roles and regions</b> · 10 routes</summary>
 
+All four organization-role routes require OWNER membership, subject to the existing
+system administrator exemption. Custom-role mutations require the role ID to belong
+to the authorized organization; foreign or unknown roles return 404. Global roles
+are listed but reject mutations with 403. See [role authorization and tests](../../../../apps/api/README.md#organization-role-authorization)
+for metadata precedence and membership-cache timing.
+
 | Method   | Path                                                 | What it does                                 |
 | -------- | ---------------------------------------------------- | -------------------------------------------- |
 | `GET`    | `/organizations/{organizationId}/roles`          | Lists organization roles.                    |
@@ -215,34 +272,30 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 18 routes</summary>
+<summary><b>Boxes and preview access</b> · 14 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
-| `GET`  | `/box`                                                              | Lists all boxes visible to the caller.                |
 | `GET`  | `/box/paginated`                                                    | Lists boxes with pagination.                          |
 | `GET`  | `/box/for-runner`                                                   | Lists boxes assigned to the authenticated runner.     |
 | `GET`  | `/box/{boxIdOrName}`                                                | Gets a box by ID or name.                             |
 | `POST` | `/box/{boxIdOrName}/recover`                                        | Requests recovery of a box in an error state.         |
-| `PUT`  | `/box/{boxIdOrName}/labels`                                         | Replaces a box's labels.                              |
 | `PUT`  | `/box/{boxId}/state`                                                | Updates the control plane's recorded box state.       |
 | `POST` | `/box/{boxId}/last-activity`                                        | Records the box's latest activity time.               |
-| `POST` | `/box/{boxIdOrName}/autostop/{interval}`                            | Sets the box auto-stop interval.                      |
-| `POST` | `/box/{boxIdOrName}/autodelete/{interval}`                          | Sets the box auto-delete interval.                    |
 | `POST` | `/box/{boxIdOrName}/attach-tickets`                                 | Issues a 30-second, single-use ticket for one `/v1` attach upgrade. |
 | `GET`  | `/preview/{boxId}/inbound`                                          | Reports a box's inbound mode (`enabled` or `disabled`) to the proxy. |
 | `GET`  | `/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
 | `POST` | `/preview/{boxId}/tunnels/{port}/access`                            | Proxy-only active tunnel policy, token verification and browser-user revalidation; returns no token verifier. |
 | `GET`  | `/preview/{boxId}/tunnels/{port}/session`                            | Checks a user JWT and returns the tunnel grant and user ID for browser login. |
 | `POST` | `/preview/tunnel-handoff`                                          | Proxy-only issue or single-use consumption of a 30-second browser login handoff. |
-| `GET`  | `/preview/domains/{hostname}`                                       | Resolves a platform hostname to `{boxId, port}` for the proxy; `404` unless it may be forwarded now. |
+| `GET`  | `/preview/domains/{hostname}`                                       | Resolves a platform or eligible custom hostname to `{boxId, port}` for the proxy; `404` unless it may be forwarded now. |
 | `POST` | `/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 
 </details>
 
 <details>
-<summary><b>Volumes and object storage</b> · 6 routes</summary>
+<summary><b>Volumes</b> · 4 routes</summary>
 
 | Method   | Path                              | What it does                                       |
 | -------- | --------------------------------- | -------------------------------------------------- |
@@ -250,8 +303,6 @@ organization boundaries.
 | `POST`   | `/volumes`                    | Creates a volume.                                  |
 | `GET`    | `/volumes/{volumeId}`         | Gets a volume by ID.                               |
 | `DELETE` | `/volumes/{volumeId}`         | Deletes a volume.                                  |
-| `GET`    | `/volumes/by-name/{name}`     | Gets a volume by name.                             |
-| `GET`    | `/object-storage/push-access` | Returns temporary credentials for pushing objects. |
 
 </details>
 
@@ -312,7 +363,7 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 | `DELETE` | `/runners/{id}`                    | Deletes a runner.                                              |
 | `PATCH`  | `/runners/{id}/scheduling`         | Enables or disables scheduling onto a runner.                  |
 | `PATCH`  | `/runners/{id}/draining`           | Enables or disables runner draining.                           |
-| `POST`   | `/runners/healthcheck`             | Records or checks runner health.                               |
+| `POST`   | `/runners/healthcheck`             | Records or checks runner health; the optional `dataDiskRef` field refreshes the runner's data-disk identity (never cleared when omitted). |
 | `GET`    | `/jobs`                            | Lists jobs assigned to the authenticated runner.               |
 | `GET`    | `/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
 | `GET`    | `/jobs/{jobId}`                    | Gets a job by ID.                                              |
@@ -353,14 +404,10 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 </details>
 
 <details>
-<summary><b>Box telemetry</b> · 5 routes</summary>
+<summary><b>Box telemetry configuration</b> · 1 route</summary>
 
 | Method | Path                                                           | What it does                                                             |
 | ------ | -------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `GET`  | `/box/{boxId}/telemetry/logs`                              | Queries logs for a box.                                                  |
-| `GET`  | `/box/{boxId}/telemetry/traces`                            | Queries traces for a box.                                                |
-| `GET`  | `/box/{boxId}/telemetry/traces/{traceId}`                  | Gets spans for one trace.                                                |
-| `GET`  | `/box/{boxId}/telemetry/metrics`                           | Queries metrics for a box.                                               |
 | `GET`  | `/organizations/otel-config/by-box-auth-token/{authToken}` | Resolves a box token to its organization telemetry export configuration. |
 
 </details>
@@ -438,6 +485,64 @@ them.
 
 </details>
 
+## Experimental GitHub CI webhook
+
+`POST /api/v1/ci/github/webhook` (Personal App) and
+`POST /api/v1/ci/github/webhook/organization` (Organization App) use their respective
+GitHub HMAC-SHA256 secrets to authenticate the raw
+request body, not platform API-key authentication. Only supported, verified notifications
+matching an established installation binding persist a wake hint. Success is 204;
+invalid signatures are 401, conflicting delivery bodies 409, unsupported media/compression
+415, bodies above 1 MiB 413, and unavailable persistence/capacity 503. See the
+[ingress contract and recovery limitations](../../../../apps/api/README.md#github-ci-webhook-ingress-in-development).
+
+## Experimental GitHub CI connect
+
+Registered by `apps/api/src/ci/ci-connect.controller.ts`; excluded from generated
+clients while the scheduler integration is in development. The same handlers are
+also registered without `{prefix}`, using the authenticated organization.
+
+| Method      | Path                                                               | Behavior                                                                                          |
+| ----------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `POST`      | `/api/v1/{prefix}/ci/connect`                                      | Starts GitHub device authorization for an installation binding.                                   |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/poll`                            | Polls authorization and atomically establishes verified installation ownership.                   |
+| `DELETE`    | `/api/v1/{prefix}/ci/connect/{id}`                                 | Cancels pending authorization; preserves an already completed binding.                            |
+| `GET`       | `/api/v1/{prefix}/ci/connect/configuration`                        | Returns the public App installation link and browser-connect availability.                        |
+| `POST`      | `/api/v1/{prefix}/ci/connect/web`                                  | Starts five-minute browser authorization with independent state and S256 PKCE.                    |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/complete`                        | Validates original actor/state, claims one code exchange and uses the shared binding transaction. |
+| `GET`       | `/api/v1/{prefix}/ci/connect/{id}`                                 | Resumes an authenticated browser grant without exchanging its code again.                         |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/accounts`                        | Selects a verified owned account; connects or returns the matching CI App install URL.            |
+| `GET`       | `/api/v1/{prefix}/ci/connect/{id}/accounts/{account}/repositories` | Reads one authorized installation repository page under the original active owned-account grant.  |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/select`                          | Legacy installation selection under an authenticated browser grant; rechecks current ownership.   |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/installation`                    | Verifies installation state, original target/App and current ownership before binding.            |
+| `GET/PATCH` | `/api/v1/{prefix}/ci/settings`                                     | Reads/updates the account-wide CI maximum; null inherits Commerce and zero pauses new workers.    |
+
+Every operation requires an organization owner or the explicit platform-admin exception;
+API keys also need `write:boxes` and `delete:boxes`. A connected binding reports
+its durable `listener_status`; authorization success can precede runner setup. See [API behavior and limits](../../../../apps/api/README.md#github-ci-installation-connect-in-development).
+
+## Experimental GitHub CI management
+
+Registered by `ci-management.controller.ts`; these routes also accept the
+authenticated-organization form without `{prefix}` and are excluded from generated clients.
+
+| Method   | Path                                                | Behavior                                                                                    |
+| -------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1/{prefix}/ci/runners`                       | Lists original JIT Boxes with name filtering, pagination and organization-wide capacity.    |
+| `PATCH`  | `/api/v1/{prefix}/ci/connections/{id}`              | Updates explicit Private-repository consent; installed Public repositories remain eligible. |
+| `GET`    | `/api/v1/{prefix}/ci/connections/{id}/repositories` | Reads one authorized installation repository page under the original connected binding.     |
+| `DELETE` | `/api/v1/{prefix}/ci/connections/{id}`              | Disables a connection while retaining original worker cleanup identities.                   |
+
+Runner reads use existing organization Box access. Connection operations, including repository metadata reads, require the
+current owner and both Box write/delete key scopes. Policy updates retain delivered
+jobs; workers awaiting JIT may retire under the new policy. Connection deletion is
+separate from cancelling a pending authorization attempt above. Repository reads
+default to 25 entries and reject limits above 100. They recheck current ownership
+and captured binding generation or grant validity after GitHub responds, before
+returning Private metadata. Results include selection mode and the matching existing
+GitHub installation settings URL. See
+[management contracts](../../../../apps/api/README.md#hosted-ci-management).
+
 ## Hosted BoxLite-compatible API
 
 **Service:** `apps/api` · **Base URL:** `https://api.<domain>/v1` · **Port:** `3000` in
@@ -447,6 +552,11 @@ Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /v1/me`. Except for configuration discovery, these routes use
 combined bearer authentication, then organization authorization.
+
+Box listing filters by the response's public status before taking an ID-ascending
+page. REST and MCP share scoped continuation tokens and live-read semantics; see
+[hosted Box inventory](../../../../apps/api/README.md#hosted-box-inventory) for
+query bounds, transition mappings and consistency limits.
 
 Image and registry management routes also consume the organization's authenticated
 request quota, shared with `/images`, `/images/registries`, and other routes using
@@ -505,6 +615,36 @@ organization membership.
 </details>
 
 <details>
+<summary><b>Checkpoints</b> · 5 routes</summary>
+
+| Method | Path | What it does |
+| ------ | ---- | ------------ |
+| `POST` | `/v1[/{prefix}]/checkpoints` | Captures an independent disk archive from `source_box_id`, with an optional `name`; returns `201`. |
+| `GET` | `/v1[/{prefix}]/checkpoints` | Lists organization checkpoints; accepts `pageToken` or `page_token`, and returns `next_page_token`. |
+| `GET` | `/v1[/{prefix}]/checkpoints/{key}` | Gets checkpoint metadata by ID or name, including state and optional `error_reason`. |
+| `DELETE` | `/v1[/{prefix}]/checkpoints/{key}` | Deletes an unused checkpoint; `force=true` tolerates an already absent checkpoint, but active capture/use returns `409`; returns `204`. |
+| `POST` | `/v1[/{prefix}]/boxes` | With `checkpoint_id`, creates a Box from a checkpoint; returns `201`. |
+
+Ordinary Box creation takes the checkpoint: `{"checkpoint_id":"base","name":"child"}`
+creates a Box that inherits the saved settings. `checkpoint_id` excludes `image` and
+`rootfs_path`, and any field other than `name` returns `400`. There is no
+`/boxes/import` route on the hosted service and no way to replace an existing Box
+from a checkpoint.
+
+Capture requires a stopped, idle source; callers stop the Box and wait for
+`stopped` first. Other states return `409`; capture never automatically stops a Box.
+The runner checks again under its source-operation lock before native export.
+
+Capture, creation from a checkpoint, and deletion require `write:boxes`; reads require
+organization membership. Turning off checkpoint admission leaves reads, deletion, and
+already accepted work available. Creation waits for the Box to start; a failure after
+admission includes `boxId`, which clients query before considering another create.
+See [checkpoint capture and use](../../../../apps/api/README.md#checkpoint-capture)
+for storage and lifecycle details.
+
+</details>
+
+<details>
 <summary><b>Execution, files, metrics, networking, and SSH</b> · 16 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
@@ -521,7 +661,7 @@ organization membership.
 | `GET`    | `/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Prepares a tunnel with optional `isPublic` (default true); returns `uri`, `isPublic`, `token`. Private tokens are complete once, then masked. |
 | `DELETE` | `/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes either access mode; `204`, idempotent. |
-| `GET`    | `/v1[/{prefix}]/domains`                                  | Lists full hostnames, URLs, typed targets and the organization's allowance; no short `name` field. |
+| `GET`    | `/v1[/{prefix}]/domains`                                  | Lists all full hostnames, URLs, typed targets and the platform-only allowance; no short `name` field. |
 | `PUT`    | `/v1[/{prefix}]/domains/{domain}/target`                  | Routes an owned full hostname to a box port using `{"type":"box","box":"<id-or-name>","port":3000}`; replaces any existing binding without declaring the port public. |
 | `DELETE` | `/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
@@ -537,6 +677,50 @@ The response is `{ "executions": [...] }`, with `execution_id`, `argv`,
 Use the returned guest ID with the status, attach, signal, resize, and kill
 routes, including for the main session; terminating main can stop the box.
 Listing a stopped box returns an empty inventory and never starts it.
+
+The domain list includes `kind: platform | custom` on each entry so clients can
+separate managed and custom names without inferring ownership from hostname suffixes.
+The collection includes both kinds; only platform entries consume its allowance.
+Claim and bind responses keep their hostname, URL and target fields.
+
+Custom-domain bind checks persisted readiness and refreshes subscription eligibility through Redis and, when needed, Commerce;
+it performs no DNS challenge. Its fields are unchanged, with new failures `403 subscription_required`,
+`409 subscription_not_ready` and `409 domain_not_ready`. Unbind keeps ownership
+and remains available after subscription expiry; only platform names occupy quota.
+
+Dashboard setup is separate from the portable API and requires organization membership plus Box write permission.
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/organizations/{organizationId}/custom-domains` | Read-only saved configurations and cached subscription status |
+| POST | same collection | Creates/reuses one live draft, checks subscription, and prepares all three records |
+| GET | `…/custom-domains/{id}` | Read-only progress, DNS records and observations |
+| POST | `…/custom-domains/{id}/prepare` | One bounded authorization preparation round; no DNS check or certificate request |
+| POST | `…/custom-domains/{id}/verify` | Checks all records, claims ownership and attempts certificate submission; returns progress with 202 |
+| POST | `…/custom-domains/{id}/advance` | Continues confirmed setup; never treats an unconfirmed draft as verified |
+| DELETE | `…/custom-domains/{id}` | Revokes routing immediately, then attempts a bounded cleanup round |
+| POST | `/admin/custom-domains/maintain` | Admin-only awaited maintenance round for one due tombstone or ready observation; also expires abandoned drafts |
+
+Each organization can retain one live configuration; a different hostname returns `400 custom_domain_count_limit_reached` until it is deleted.
+Responses expose setup `phase`, `progress`, `ready`, `errorCode`, `confirmed`, `submissionStatus`, `retryAfter`, DNS records/checks and certificate/TLS observation times.
+`challengeExpiresAt` is null; the ownership challenge remains stable, and `dnsRecords` is empty until all three records are available.
+A 202 response does not establish certificate submission: `accepted` confirms it, while `unknown` requires recovery of the existing operation.
+
+External work has a 25-second budget, SQL statements have two-second timeouts, and execution leases last 45 seconds.
+The API task runs at startup and every minute, advancing up to three due confirmed setups alongside one maintenance round.
+Hostname leases coordinate requests and replicas; incomplete unconfirmed drafts require explicit verification.
+Dashboard status reads do not advance setup or refresh Commerce; explicit HTTPS Retry invokes advance.
+
+Successful verification transfers ownership, clears the old target and supersedes other live applications; the winner's repeated verification preserves its target.
+Superseded configurations remain viewable until explicitly deleted and cannot be verified or advanced again.
+Deletion hides them while retaining provider identities for cleanup; Ready publication requires current ownership, generation and an unexpired lease.
+
+Subscription grants last at most sixty seconds or the paid-cycle end, whichever comes first; denied/unavailable results last thirty seconds.
+Concurrent cache misses wait up to three seconds for the refresh owner's result, including Redis read time;
+they never extend an expired grant, and a wait timeout returns unavailable.
+Binding rechecks the grant deadline after lock waits; routing rereads ownership and target after subscription refresh.
+Setup readiness persists independently of certificate observation deadlines.
+See the [DNS guide](../../../concepts/networking.md#bring-your-own-domain) and [deployment requirements](../../../../apps/infra/docs/gcp/deployment.md#customer-domain-https).
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
@@ -694,16 +878,22 @@ curl --get "https://api.<domain>/admin/runner-cpu-incidents" \
 
 ```json
 {
-  "items": [{
-    "id": "42", "runnerId": "11111111-1111-4111-8111-111111111111",
-    "eventId": "22222222-2222-4222-8222-222222222222",
-    "highCpuSince": "2026-10-29T00:00:00.000Z",
-    "windowStartedAt": "2026-10-29T00:05:00.000Z",
-    "windowEndedAt": "2026-10-29T00:07:00.000Z",
-    "runnerCpuPercent": 85, "boxId": "example-box", "image": "ubuntu:24.04",
-    "cpuSeconds": 240, "samplingComplete": true,
-    "receivedAt": "2026-10-29T00:12:01.000Z"
-  }]
+  "items": [
+    {
+      "id": "42",
+      "runnerId": "11111111-1111-4111-8111-111111111111",
+      "eventId": "22222222-2222-4222-8222-222222222222",
+      "highCpuSince": "2026-10-29T00:00:00.000Z",
+      "windowStartedAt": "2026-10-29T00:05:00.000Z",
+      "windowEndedAt": "2026-10-29T00:07:00.000Z",
+      "runnerCpuPercent": 85,
+      "boxId": "example-box",
+      "image": "ubuntu:24.04",
+      "cpuSeconds": 240,
+      "samplingComplete": true,
+      "receivedAt": "2026-10-29T00:12:01.000Z"
+    }
+  ]
 }
 ```
 
@@ -972,16 +1162,16 @@ runtime and its microVMs.
 <details>
 <summary><b>Box lifecycle</b> · 8 routes</summary>
 
-| Method | Path                               | What it does                                                                                    |
-| ------ | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `POST` | `/boxes`                           | Creates a box in the embedded BoxLite runtime.                                                  |
-| `GET`  | `/boxes/{boxId}`                   | Gets local box information.                                                                     |
-| `POST` | `/boxes/{boxId}/destroy`           | Destroys a local box.                                                                           |
-| `POST` | `/boxes/{boxId}/start`             | Starts a local box.                                                                             |
-| `POST` | `/boxes/{boxId}/stop`              | Stops a local box.                                                                              |
-| `POST` | `/boxes/{boxId}/recover`           | Recovers a local box.                                                                           |
-| `POST` | `/boxes/{boxId}/is-recoverable`    | Checks whether a local box can be recovered.                                                    |
-| `POST` | `/boxes/{boxId}/network-settings`  | Changes a local box's network settings.                                                         |
+| Method | Path                              | What it does                                   |
+| ------ | --------------------------------- | ---------------------------------------------- |
+| `POST` | `/boxes`                          | Creates a box in the embedded BoxLite runtime. |
+| `GET`  | `/boxes/{boxId}`                  | Gets local box information.                    |
+| `POST` | `/boxes/{boxId}/destroy`          | Destroys a local box.                          |
+| `POST` | `/boxes/{boxId}/start`            | Starts a local box.                            |
+| `POST` | `/boxes/{boxId}/stop`             | Stops a local box.                             |
+| `POST` | `/boxes/{boxId}/recover`          | Recovers a local box.                          |
+| `POST` | `/boxes/{boxId}/is-recoverable`   | Checks whether a local box can be recovered.   |
+| `POST` | `/boxes/{boxId}/network-settings` | Changes a local box's network settings.        |
 
 </details>
 
@@ -1026,15 +1216,15 @@ and tunnels them to guest ports is in [`proxy/README.md`](../../../../apps/proxy
 <details>
 <summary><b>Proxy routes</b> · 7 routes</summary>
 
-| Method    | Host and path                                              | What it does                                                                                     |
-| --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `GET`     | `proxy.<domain>/health`                                    | Reports proxy health and version.                                                                |
-| `GET`     | `proxy.<domain>/login`                                     | Starts OIDC login with a host-only PKCE cookie and signed target state. |
-| `GET`     | `proxy.<domain>/callback`                                  | Completes the OIDC preview authentication flow.                                                  |
-| `GET`     | `<port>-<box>.proxy.<domain>/__boxlite/auth/callback`       | Consumes the login handoff and issues a host-only tunnel session cookie. |
-| `POST`    | `<any host>/accept-boxlite-preview-warning`                | Records preview-warning acceptance and redirects to the `redirect` form field (the query form is still accepted). |
-| `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
-| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a TCP stream after inbound and tunnel authorization; SDK/CLI sends its organization bearer. |
+| Method    | Host and path                                         | What it does                                                                                                      |
+| --------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `GET`     | `proxy.<domain>/health`                               | Reports proxy health and version.                                                                                 |
+| `GET`     | `proxy.<domain>/login`                                | Starts OIDC login with a host-only PKCE cookie and signed target state.                                           |
+| `GET`     | `proxy.<domain>/callback`                             | Completes the OIDC preview authentication flow.                                                                   |
+| `GET`     | `<port>-<box>.proxy.<domain>/__boxlite/auth/callback` | Consumes the login handoff and issues a host-only tunnel session cookie.                                          |
+| `POST`    | `<any host>/accept-boxlite-preview-warning`           | Records preview-warning acceptance and redirects to the `redirect` form field (the query form is still accepted). |
+| `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`               | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks.                  |
+| `CONNECT` | `<port>-<box>.proxy.<domain>`                         | Opens a TCP stream after inbound and tunnel authorization; SDK/CLI sends its organization bearer.                 |
 
 </details>
 
@@ -1057,12 +1247,12 @@ which upstreams are reachable, and how redirects are judged is in
 <details>
 <summary><b>Registry proxy routes</b> · 4 routes</summary>
 
-| Method       | Path                                                  | What it does                                                                             |
-| ------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `GET`        | `/health`                                             | Reports registry proxy health and version.                                               |
-| `GET` `HEAD` | `/v2/`                                                | The distribution version check; answers an unauthenticated caller with a Basic challenge. |
-| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/manifests/{ref}`    | Relays the upstream manifest unmodified, with its digest and media type.                 |
-| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/blobs/{digest}`     | Streams the upstream blob, following a registry's redirect to a permitted address.        |
+| Method       | Path                                               | What it does                                                                              |
+| ------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `GET`        | `/health`                                          | Reports registry proxy health and version.                                                |
+| `GET` `HEAD` | `/v2/`                                             | The distribution version check; answers an unauthenticated caller with a Basic challenge. |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/manifests/{ref}` | Relays the upstream manifest unmodified, with its digest and media type.                  |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/blobs/{digest}`  | Streams the upstream blob, following a registry's redirect to a permitted address.        |
 
 </details>
 

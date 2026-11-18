@@ -66,8 +66,26 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
         .connect_with_connector(service_fn(move |_: Uri| {
             let socket_path = socket_path.clone();
             async move {
-                let stream = tokio::net::UnixStream::connect(socket_path).await?;
-                Ok::<_, std::io::Error>(TokioIo::new(stream))
+                // Guest-ready can precede libkrun's host listener. Retry only
+                // connection establishment; tonic's connect_timeout bounds
+                // this entire future, including every asynchronous backoff.
+                let mut retry_delay = Duration::from_millis(10);
+                loop {
+                    match tokio::net::UnixStream::connect(&socket_path).await {
+                        Ok(stream) => return Ok::<_, std::io::Error>(TokioIo::new(stream)),
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::NotFound
+                                    | std::io::ErrorKind::ConnectionRefused
+                            ) =>
+                        {
+                            tokio::time::sleep(retry_delay).await;
+                            retry_delay = (retry_delay * 2).min(Duration::from_millis(100));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
             }
         }))
         .await?;
@@ -86,3 +104,6 @@ async fn connect_tcp(port: u16) -> BoxliteResult<Channel> {
     tracing::debug!("Connected via TCP");
     Ok(channel)
 }
+
+#[cfg(test)]
+mod tests;

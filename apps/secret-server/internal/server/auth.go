@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,6 +33,14 @@ func writeAuth(c Config, validate validateToken, next http.Handler) http.Handler
 				return
 			}
 		} else {
+			// idtoken v0.247.0 slices ES256 signatures at 32 bytes without a length check.
+			segments := strings.Split(token, ".")
+			if len(segments) == 3 {
+				if signature, err := base64.RawURLEncoding.DecodeString(segments[2]); err == nil && len(signature) < 32 {
+					problem(w, http.StatusUnauthorized, "unauthorized")
+					return
+				}
+			}
 			p, err := validate(r.Context(), token, c.Audience)
 			if err != nil || p == nil || (p.Issuer != "accounts.google.com" && p.Issuer != "https://accounts.google.com") {
 				problem(w, 401, "unauthorized")

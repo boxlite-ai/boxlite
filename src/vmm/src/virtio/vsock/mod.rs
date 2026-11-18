@@ -21,7 +21,7 @@ use source::Reschedule;
 use std::{
     collections::{HashSet, VecDeque},
     io,
-    os::unix::net::UnixListener,
+    os::unix::{fs::MetadataExt, net::UnixListener},
     path::PathBuf,
     sync::Arc,
 };
@@ -53,6 +53,7 @@ pub(crate) struct Vsock {
     mappings: Arc<Mappings>,
     features_set: bool,
     active: Option<Active>,
+    paths: Vec<BoundPath>,
 }
 
 struct Active {
@@ -65,7 +66,53 @@ struct Active {
     rx: VecDeque<Buffer>,
 }
 
+// Only remove the socket we bound, not a replacement at the same pathname.
+struct BoundPath {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+impl Drop for BoundPath {
+    fn drop(&mut self) {
+        if std::fs::symlink_metadata(&self.path)
+            .is_ok_and(|metadata| metadata.dev() == self.device && metadata.ino() == self.inode)
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 impl Vsock {
+    pub(crate) fn bind(config: &crate::config::VsockConfig) -> io::Result<Self> {
+        let mut paths = Vec::new();
+        let mut mappings = Vec::new();
+        for (port, path) in &config.listen {
+            let listener = UnixListener::bind(path)?;
+            let metadata = std::fs::symlink_metadata(path)?;
+            paths.push(BoundPath {
+                path: path.clone(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            });
+            mappings.push(PortMapping::Listen {
+                port: *port,
+                listener,
+            });
+        }
+        mappings.extend(
+            config
+                .connect
+                .iter()
+                .map(|(port, path)| PortMapping::Connect {
+                    port: *port,
+                    path: path.clone(),
+                }),
+        );
+        let mut device = Self::new(config.cid, mappings)?;
+        device.paths = paths;
+        Ok(device)
+    }
+
     pub(crate) fn new(cid: u64, ports: Vec<PortMapping>) -> io::Result<Self> {
         if !(3..u32::MAX as u64).contains(&cid) {
             return Err(io::Error::new(
@@ -108,6 +155,7 @@ impl Vsock {
             mappings: Arc::new(mappings),
             features_set: false,
             active: None,
+            paths: Vec::new(),
         })
     }
 }
@@ -302,3 +350,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/vsock/mod.rs"]
 mod device_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/vsock/binding.rs"]
+mod binding_tests;

@@ -55,14 +55,14 @@ export const CreateOrganizationInvitationDialog: React.FC<CreateOrganizationInvi
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="default" size="default" className={className} title="Invite Member">
+        <Button variant="default" size="default" className={className} title="Invite member">
           <Plus className="w-4 h-4" />
-          Invite Member
+          Invite member
         </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Invite Member</DialogTitle>
+          <DialogTitle>Invite member</DialogTitle>
           <DialogDescription>
             Members have full access to the organization. The invitee accepts after signing in with this email.
           </DialogDescription>

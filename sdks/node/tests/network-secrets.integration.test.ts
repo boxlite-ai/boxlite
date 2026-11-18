@@ -97,6 +97,7 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
           name: "testkey",
           value: "super-secret-value",
           hosts: ["httpbingo.org"],
+          headers: { Authorization: "Bearer {value}" },
         },
       ],
       autoRemove: true,

@@ -2,7 +2,6 @@
 //!
 //! Provides tar-based upload/download to the guest container rootfs.
 
-use crate::litebox::CopySourceKind;
 use boxlite_shared::{
     BoxByteStream, BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk,
 };
@@ -26,7 +25,7 @@ impl FilesInterface {
         }
     }
 
-    /// Upload a tar file to the guest and extract at dest_path.
+    /// Stream a tar file to the guest and extract at `dest_path`.
     pub async fn upload_tar(
         &mut self,
         tar_path: &std::path::Path,
@@ -35,60 +34,37 @@ impl FilesInterface {
         mkdir_parents: bool,
         overwrite: bool,
     ) -> BoxliteResult<()> {
-        let dest = dest_path.to_string();
-        let cid = container_id.unwrap_or_default().to_string();
-
-        // Read entire tar file and build chunks
-        // Note: For very large files, consider streaming with async_stream crate
         let mut file = File::open(tar_path)
             .await
             .map_err(|e| BoxliteError::Storage(format!("Failed to open tar file: {}", e)))?;
-
-        let mut chunks = Vec::new();
-        let mut buf = vec![0u8; CHUNK_SIZE];
-        let mut first = true;
-
-        loop {
-            match file.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = UploadChunk {
-                        dest_path: if first { dest.clone() } else { String::new() },
-                        container_id: cid.clone(),
-                        data: buf[..n].to_vec(),
-                        mkdir_parents,
-                        overwrite,
-                        source_is_dir: None,
-                    };
-                    first = false;
-                    chunks.push(chunk);
-                }
-                Err(e) => {
-                    return Err(BoxliteError::Storage(format!(
-                        "Failed to read tar file: {}",
-                        e
-                    )));
+        // Keep file-read failures classified as Storage, including when the
+        // guest accepts the prefix it received before the read failed.
+        let read_error = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let read_error_slot = read_error.clone();
+        let stream = async_stream::stream! {
+            let mut buf = vec![0u8; CHUNK_SIZE];
+            loop {
+                match file.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => yield Ok(buf[..n].to_vec()),
+                    Err(error) => {
+                        *read_error_slot.lock().await = Some(error.to_string());
+                        yield Err(error);
+                        break;
+                    }
                 }
             }
+        };
+        let result = self
+            .upload_stream(stream, dest_path, container_id, mkdir_parents, overwrite)
+            .await;
+
+        if let Some(error) = read_error.lock().await.take() {
+            return Err(BoxliteError::Storage(format!(
+                "Failed to read tar file: {error}"
+            )));
         }
-
-        // Use futures::stream::iter for the upload stream
-        let stream = futures::stream::iter(chunks);
-
-        let response = self
-            .client
-            .upload(stream)
-            .await
-            .map_err(map_tonic_err)?
-            .into_inner();
-
-        if response.success {
-            Ok(())
-        } else {
-            Err(BoxliteError::Internal(
-                response.error.unwrap_or_else(|| "Upload failed".into()),
-            ))
-        }
+        result
     }
 
     /// Download a path from guest into a local tar file.
@@ -135,12 +111,8 @@ impl FilesInterface {
         Ok(())
     }
 
-    /// Upload a byte stream to the guest and extract at `dest_path`.
-    ///
-    /// `source` is the archive shape (dir tree vs single file);
-    /// [`CopySourceKind::Unknown`] when the caller cannot tell — the guest then
-    /// peeks the archive to decide extraction mode. It is attached to the first
-    /// chunk only.
+    /// Upload a byte stream to the guest and extract at `dest_path`, landed
+    /// by the archive's first entry.
     pub async fn upload_stream<S>(
         &mut self,
         stream: S,
@@ -148,7 +120,6 @@ impl FilesInterface {
         container_id: Option<&str>,
         mkdir_parents: bool,
         overwrite: bool,
-        source: CopySourceKind,
     ) -> BoxliteResult<()>
     where
         S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
@@ -165,7 +136,6 @@ impl FilesInterface {
         let stream_err: std::sync::Arc<tokio::sync::Mutex<Option<std::io::Error>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let stream_err_slot = stream_err.clone();
-        let source_is_dir = source.to_wire();
         let chunks = async_stream::stream! {
             futures::pin_mut!(stream);
             let mut first = true;
@@ -178,7 +148,6 @@ impl FilesInterface {
                             data,
                             mkdir_parents,
                             overwrite,
-                            source_is_dir: if first { source_is_dir } else { None },
                         };
                         first = false;
                     }
@@ -215,17 +184,15 @@ impl FilesInterface {
         }
     }
 
-    /// Download a path from the guest as a byte stream.
-    ///
-    /// Returns the stream plus the source shape read from the guest's first
-    /// chunk. [`CopySourceKind::Unknown`] means the guest predates the hint
-    /// (older peer).
+    /// Download a path from the guest as a byte stream. The guest's first
+    /// chunk is read before returning, so a refused or missing source fails
+    /// here rather than mid-stream.
     pub async fn download_stream(
         &mut self,
         container_src: &str,
         container_id: Option<&str>,
         follow_symlinks: bool,
-    ) -> BoxliteResult<(BoxByteStream, CopySourceKind)> {
+    ) -> BoxliteResult<BoxByteStream> {
         let request = download_request(container_src, container_id, follow_symlinks);
 
         let mut stream = self
@@ -236,7 +203,6 @@ impl FilesInterface {
             .into_inner();
 
         let first = stream.message().await.map_err(map_tonic_err)?;
-        let source = CopySourceKind::from_wire(first.as_ref().and_then(|c| c.source_is_dir));
         let mut first_data = first.map(|c| c.data);
 
         let out = async_stream::stream! {
@@ -259,7 +225,7 @@ impl FilesInterface {
             }
         };
 
-        Ok((Box::pin(out), source))
+        Ok(Box::pin(out))
     }
 }
 
@@ -357,7 +323,7 @@ mod tests {
         assert_eq!(error.http().0, 400);
     }
 
-    /// The guest caps an upload at 512 MiB and says so with `ResourceExhausted`.
+    /// Older guests cap an upload at 512 MiB and report `ResourceExhausted`.
     /// Flattened to `Internal` it reaches the caller as a 500 — the server
     /// blaming itself for a payload the caller chose.
     #[test]

@@ -59,7 +59,7 @@ function Calendar({
           defaultClassNames.month_caption,
         ),
         dropdowns: cn(
-          'flex h-[--cell-size] w-full items-center justify-center gap-1.5 text-sm font-medium',
+          'flex h-[--cell-size] w-full items-center justify-center gap-1.5 text-body font-medium',
           defaultClassNames.dropdowns,
         ),
         dropdown_root: cn(
@@ -70,8 +70,8 @@ function Calendar({
         caption_label: cn(
           'select-none font-medium',
           captionLayout === 'label'
-            ? 'text-sm'
-            : '[&>svg]:text-muted-foreground flex h-8 items-center gap-1 pl-2 pr-1 text-sm [&>svg]:size-3.5',
+            ? 'text-body'
+            : '[&>svg]:text-muted-foreground flex h-8 items-center gap-1 pl-2 pr-1 text-body [&>svg]:size-3.5',
           defaultClassNames.caption_label,
         ),
         table: 'w-full border-collapse',
@@ -144,7 +144,7 @@ function CalendarDayButton({ className, day, modifiers, ...props }: React.Compon
       data-range-end={modifiers.range_end}
       data-range-middle={modifiers.range_middle}
       className={cn(
-        'data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground data-[range-middle=true]:bg-accent data-[range-middle=true]:text-accent-foreground data-[range-start=true]:bg-primary data-[range-start=true]:text-primary-foreground data-[range-end=true]:bg-primary data-[range-end=true]:text-primary-foreground group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-ring/50 flex aspect-square h-auto w-full min-w-[--cell-size] flex-col gap-1 font-normal leading-none data-[range-middle=true]:rounded-none group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-[3px] [&>span]:text-xs [&>span]:opacity-70',
+        'data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground data-[range-middle=true]:bg-accent data-[range-middle=true]:text-accent-foreground data-[range-start=true]:bg-primary data-[range-start=true]:text-primary-foreground data-[range-end=true]:bg-primary data-[range-end=true]:text-primary-foreground group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-ring/50 flex aspect-square h-auto w-full min-w-[--cell-size] flex-col gap-1 font-normal leading-none data-[range-middle=true]:rounded-none group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-[3px] [&>span]:text-meta [&>span]:opacity-70',
         defaultClassNames.day,
         className,
       )}

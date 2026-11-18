@@ -163,7 +163,7 @@ const getColumns = (): ColumnDef<AuditLog>[] => {
         return (
           <div className="space-y-1">
             <div className="font-medium truncate">{relativeTimeString}</div>
-            <div className="text-sm text-muted-foreground truncate">{localeString}</div>
+            <div className="text-body text-muted-foreground truncate">{localeString}</div>
           </div>
         )
       },
@@ -220,7 +220,7 @@ const getColumns = (): ColumnDef<AuditLog>[] => {
         return (
           <div className="space-y-1">
             {targetType && <div className="font-medium truncate">{targetType}</div>}
-            {targetId && <div className="text-sm text-muted-foreground truncate">{targetId}</div>}
+            {targetId && <div className="text-body text-muted-foreground truncate">{targetId}</div>}
           </div>
         )
       },
@@ -237,11 +237,11 @@ const getColumns = (): ColumnDef<AuditLog>[] => {
           <div className="space-y-1">
             <div className={`font-medium ${outcomeInfo.colorClass}`}>{outcomeInfo.label}</div>
             {!errorMessage ? (
-              <div className="text-sm text-muted-foreground truncate">{statusCode || '204'}</div>
+              <div className="text-body text-muted-foreground truncate">{statusCode || '204'}</div>
             ) : (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div className="text-sm text-muted-foreground truncate">
+                  <div className="text-body text-muted-foreground truncate">
                     {statusCode || '500'}
                     {` - ${errorMessage}`}
                   </div>

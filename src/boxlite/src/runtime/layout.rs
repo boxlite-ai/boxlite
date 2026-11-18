@@ -181,6 +181,11 @@ impl FilesystemLayout {
         self.home_dir.join(dirs::LOCKS_DIR)
     }
 
+    /// Disk-operation locks, separate from lifecycle admission.
+    pub fn disk_locks_dir(&self) -> PathBuf {
+        self.locks_dir().join("disk")
+    }
+
     /// Temporary directory for transient files: ~/.boxlite/tmp
     /// Used for disk image creation and other operations that need
     /// temp files on the same filesystem as the final destination.

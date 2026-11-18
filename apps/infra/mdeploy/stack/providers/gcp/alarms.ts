@@ -21,8 +21,8 @@
 import type { AlarmProvider, AlarmRequest, AlarmSubjects, AlarmThreshold } from '../../alarms.ts'
 import { instanceFor } from 'naming'
 
-/** One minute, matching the AWS side's period. */
-const PERIOD = '60s'
+/** The default window: one minute, matching the AWS side's. */
+const DEFAULT_WINDOW_SECONDS = 60
 
 /*
  * Resource types, and the trap that they are two vocabularies rather than one.
@@ -63,7 +63,14 @@ const NETWORK_ENDPOINT_GROUP = {
 export const alertPolicyFilter = ({ metricName, resourceType }: { metricName: string; resourceType: string }): string =>
   `metric.type="logging.googleapis.com/user/${metricName}" AND resource.type="${resourceType}"`
 
-/** One metric and the policy that watches it. */
+/**
+ * One metric and the policy that watches it.
+ *
+ * The window is a per-alarm answer, not a module constant: an alarm's three
+ * numbers (threshold, periods, window) only mean something together, and the
+ * disk alarms watch processes whose failure cadence is set by the control
+ * plane's own cron rather than by request traffic.
+ */
 const watch = ({
   resourceName,
   project,
@@ -73,6 +80,8 @@ const watch = ({
   threshold,
   description,
   notificationChannels,
+  windowSeconds = DEFAULT_WINDOW_SECONDS,
+  durationSeconds,
 }: {
   resourceName: string
   project: string
@@ -88,6 +97,23 @@ const watch = ({
   threshold: AlarmThreshold
   description: string
   notificationChannels: string[]
+  /**
+   * How long one aggregation window runs, in seconds. The default is the one
+   * minute every request-driven alarm here shares; an alarm whose signal is
+   * paced by the control plane's cron — at most one failure line per runner
+   * per round — states its own longer window, because "three strikes" has to
+   * be counted over the stretch those strikes actually arrive in.
+   */
+  windowSeconds?: number
+  /**
+   * How long the aligned value must stay above the threshold before the
+   * policy fires. Defaults to `periods * windowSeconds`, which suits
+   * request-driven alarms whose metric arrives continuously. An alarm whose
+   * signal is paced — one failure line per cron round — cannot sustain that
+   * duration; it needs `"0s"` so a single aligned period crossing the
+   * threshold is enough to trigger.
+   */
+  durationSeconds?: number
 }): any[] => {
   const metric = new gcp.logging.Metric(`${resourceName}Metric`, {
     name: metricName,
@@ -108,8 +134,8 @@ const watch = ({
           // One below the threshold with a strict comparison, so "at least N"
           // means the same thing here as CloudWatch's GreaterThanOrEqual.
           thresholdValue: threshold.threshold - 1,
-          duration: `${threshold.periods * 60}s`,
-          aggregations: [{ alignmentPeriod: PERIOD, perSeriesAligner: 'ALIGN_DELTA' }],
+          duration: `${durationSeconds ?? threshold.periods * windowSeconds}s`,
+          aggregations: [{ alignmentPeriod: `${windowSeconds}s`, perSeriesAligner: 'ALIGN_DELTA' }],
         },
       },
     ],
@@ -177,6 +203,66 @@ export const gcpAlarmProvider =
       ),
       threshold: request.runnersUnreachable,
       description: 'A registered runner has stopped answering the control plane',
+      notificationChannels,
+    })
+
+    /*
+     * Disk expansion failing, logged by the control plane at error level: a
+     * rate-limit refusal, an operation that FAILED, a grow whose filesystem
+     * never confirmed. The alarm is the only notice a quiet failure gets —
+     * the resize itself succeeds or silences, and neither reports anywhere.
+     *
+     * The attributes travel as pino-merged keys, so the event name and the
+     * result are dotted keys inside the JSON payload, quoted as the logging
+     * query language requires.
+     */
+    watch({
+      resourceName: 'RunnerDiskExpansionFailingAlarm',
+      project,
+      metricName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-disk-expansion-failing' }),
+      resourceType: CLOUD_RUN,
+      filter: subjects.api.metricTarget.apply(
+        (service: string) =>
+          `resource.type="${CLOUD_RUN.logging}" AND resource.labels.service_name="${service}" ` +
+          'AND jsonPayload."event.name"="runner.disk_expansion" AND severity>=ERROR',
+      ),
+      threshold: request.runnersDiskExpansionFailing,
+      description: 'Runner data-disk expansions are failing',
+      notificationChannels,
+      durationSeconds: 0,
+      /*
+       * A quarter-hour window, not the default minute. The expansion loop is
+       * paced by the control plane's cron: at most one attempt — so one
+       * failure line — per runner per round. Over the default minute a single
+       * runner failing on every round never reaches the threshold, which is
+       * exactly the steady failure this alarm exists to announce. Three
+       * failures inside one quarter-hour window is the design's own sentence
+       * (≈15min 内 ≥3 次), and {threshold: 3, periods: 1} over 900s spells it.
+       */
+      windowSeconds: 900,
+    })
+
+    /*
+     * A runner at critical disk pressure, logged by the control plane from
+     * every healthcheck that reports one — the stage before the expansion
+     * that was supposed to have caught it. Each critical runner contributes
+     * one line per heartbeat, so a count over one minute answers "is any
+     * runner critical right now", and the threshold is the fewest lines that
+     * can say yes.
+     */
+    watch({
+      resourceName: 'RunnerDiskPressureCriticalAlarm',
+      project,
+      metricName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-disk-pressure-critical' }),
+      resourceType: CLOUD_RUN,
+      filter: subjects.api.metricTarget.apply(
+        (service: string) =>
+          `resource.type="${CLOUD_RUN.logging}" AND resource.labels.service_name="${service}" ` +
+          'AND jsonPayload."event.name"="runner.disk_pressure" ' +
+          'AND jsonPayload."disk.pressure_level"="critical"',
+      ),
+      threshold: request.runnersDiskPressureCritical,
+      description: 'A runner is at critical data-disk usage',
       notificationChannels,
     })
   }

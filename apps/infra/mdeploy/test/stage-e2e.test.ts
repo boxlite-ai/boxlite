@@ -1,0 +1,138 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import test from 'node:test'
+import { Lexer, Parser, Evaluator, data } from '@actions/expressions'
+import { load } from 'js-yaml'
+
+const workflow = load(
+  readFileSync(new URL('../../../../.github/workflows/e2e-cloud.yml', import.meta.url), 'utf8'),
+) as any
+const steps = workflow.jobs.e2e.steps
+const configure = steps.find((step: any) => step.name === 'Configure pytest profiles')
+const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev and stage)')
+const sweep = steps.find((step: any) => step.name === 'Sweep stranded boxes')
+const names = Object.keys(configure.env)
+
+const evaluate = (
+  expression: string,
+  stage: string,
+  sweepRequested = true,
+  variables: Record<string, string> = {},
+  apiUrl = '',
+  tag = '',
+): data.ExpressionData => {
+  const contexts = new data.Dictionary(
+    {
+      key: 'inputs',
+      value: new data.Dictionary(
+        { key: 'stage', value: new data.StringData(stage) },
+        { key: 'sweep', value: new data.BooleanData(sweepRequested) },
+        { key: 'api_url', value: new data.StringData(apiUrl) },
+        { key: 'tag', value: new data.StringData(tag) },
+      ),
+    },
+    {
+      key: 'secrets',
+      value: new data.Dictionary(...names.map((name) => ({ key: name, value: new data.StringData(`secret-${name}`) }))),
+    },
+    {
+      key: 'vars',
+      value: new data.Dictionary(
+        ...Object.entries(variables).map(([key, value]) => ({ key, value: new data.StringData(value) })),
+      ),
+    },
+  )
+  const tokens = new Lexer(expression.slice(3, -2)).lex().tokens
+  return new Evaluator(new Parser(tokens, ['inputs', 'secrets', 'vars'], []).parse(), contexts).evaluate()
+}
+
+test('cloud E2E selects only the requested stage credentials and keeps prod narrow', () => {
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.stage.options, ['dev', 'stage', 'prod'])
+  const healthIndex = steps.findIndex((step: any) => step.name === 'Probe API health')
+  assert.ok(healthIndex >= 0 && healthIndex < steps.indexOf(configure))
+  for (const stage of ['dev', 'stage', 'prod', 'typo']) {
+    const selected = names.filter((name) => evaluate(configure.env[name], stage).coerceString() !== '')
+    assert.deepEqual(
+      selected,
+      names.filter((name) => name.startsWith(`BOXLITE_${stage.toUpperCase()}_`)),
+    )
+    for (const name of selected) assert.equal(workflow.on.workflow_call.secrets[name].required, false)
+    assert.equal(evaluate(identity.if, stage).coerceString(), String(['dev', 'stage'].includes(stage)))
+    assert.equal(evaluate(sweep.if, stage).coerceString(), String(stage === 'dev'))
+    assert.equal(evaluate(sweep.if, stage, false).coerceString(), 'false')
+  }
+  assert.deepEqual(workflow.permissions, { contents: 'read' })
+  const suite = steps.find((step: any) => step.name === 'Run E2E suite')
+  assert.match(suite.run, /if \[ "\$STAGE" = prod \]; then[\s\S]*-m smoke/)
+})
+
+test('stage uses the same URL override, variable and default precedence as dev', () => {
+  for (const [stage, fallback] of [
+    ['dev', 'https://api.dev.boxlite.ai'],
+    ['stage', 'https://api.stage.boxlite.ai'],
+    ['prod', 'https://api.boxlite.ai'],
+  ]) {
+    const expression = workflow.jobs.e2e.env.API_URL
+    const variables = { [`BOXLITE_${stage.toUpperCase()}_API_URL`]: 'https://configured.example.test' }
+    assert.equal(evaluate(expression, stage).coerceString(), fallback)
+    assert.equal(
+      evaluate(expression, stage, true, variables).coerceString(),
+      variables[`BOXLITE_${stage.toUpperCase()}_API_URL`],
+    )
+    assert.equal(
+      evaluate(expression, stage, true, variables, 'https://override.example.test').coerceString(),
+      'https://override.example.test',
+    )
+  }
+})
+
+test('catalog cases use independent quota in a separate dev/stage process', () => {
+  const main = steps.find((step: any) => step.name === 'Run E2E suite')
+  assert.match(main.env.PYTEST_ADDOPTS, /--ignore=cases\/test_images_catalog.py/)
+  const catalog = steps.find((step: any) => step.name === 'Run image catalog E2E (dev and stage)')
+  assert.equal(catalog.env.BOXLITE_E2E_PROFILE, 'p2')
+  assert.match(catalog.run, /unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX/)
+  assert.match(catalog.run, /make test:rest:e2e AUTH=api-key FILTER=images_catalog/)
+  assert.equal(catalog['continue-on-error'], undefined)
+  for (const stage of ['', 'dev', 'stage', 'prod', 'typo']) {
+    assert.equal(evaluate(catalog.if, stage).coerceString(), String(['', 'dev', 'stage'].includes(stage)))
+  }
+  assert.ok(steps.indexOf(catalog) < steps.indexOf(main))
+  assert.match(catalog.env.PYTEST_ADDOPTS, /--junit-xml=.*pytest-catalog.xml/)
+  const upload = steps.find((step: any) => step.name === 'Upload pytest junit XML')
+  assert.match(upload.with.path, /pytest-catalog.xml/)
+})
+
+test('cloud release clients preserve source defaults and stage coverage', () => {
+  for (const trigger of ['workflow_call', 'workflow_dispatch']) {
+    assert.equal(workflow.on[trigger].inputs.tag.type, 'string')
+    assert.equal(workflow.on[trigger].inputs.tag.required, false)
+  }
+  const enabled = (name: string, stage: string, tag: string) => {
+    const step = steps.find((step: any) => step.name === name)
+    assert.ok(step, name)
+    return !step.if || evaluate(step.if, stage, true, {}, '', tag).coerceString() === 'true'
+  }
+  for (const stage of ['', 'dev', 'stage', 'prod']) {
+    const dev = stage === '' || stage === 'dev'
+    const prod = stage === 'prod'
+    for (const tag of ['', 'v0.13.1']) {
+      assert.equal(enabled('Build CLI', stage, tag), !tag && !prod)
+      assert.equal(enabled('Build Node SDK (napi + tsc)', stage, tag), !tag && !prod)
+      assert.equal(enabled('Build & install Python SDK', stage, tag), !tag)
+      assert.equal(enabled('Build C, Go and Rust subdomain clients', stage, tag), !tag && dev)
+      assert.equal(enabled('Install release CLI', stage, tag), !!tag && !prod)
+      assert.equal(enabled('Install release Node SDK', stage, tag), !!tag && !prod)
+      assert.equal(enabled('Install release Python SDK', stage, tag), !!tag)
+      assert.equal(enabled('Build release C, Go and Rust subdomain clients', stage, tag), !!tag && dev)
+      assert.equal(enabled('Checkout release SDK sources for subdomain clients', stage, tag), !!tag && dev)
+      assert.equal(enabled('Setup Rust toolchain', stage, tag), !tag || dev)
+    }
+  }
+  const validate = steps.find((step: any) => step.name === 'Validate client release')
+  assert.ok(steps.indexOf(validate) < steps.indexOf(configure))
+  const checkout = steps.find((step: any) => step.name === 'Checkout release SDK sources for subdomain clients')
+  assert.equal(checkout.with.ref, '${{ inputs.tag }}')
+  assert.equal(checkout.with['persist-credentials'], false)
+  assert.equal(checkout.with.path, 'target/e2e-release')
+})

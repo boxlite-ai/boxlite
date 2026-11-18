@@ -189,6 +189,9 @@ impl Zygote {
         // The child process inherits a clean, single-threaded address space.
         match unsafe { fork() } {
             Ok(ForkResult::Child) => {
+                // The inherited init hook must not reset the VM if libcontainer
+                // later makes this child PID 1 in a new PID namespace.
+                crate::lifecycle::install_panic_hook();
                 // Child: close parent's end, enter serve loop (never returns)
                 drop(parent_sock);
                 sanitize_ambient_runtime_environment();

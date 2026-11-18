@@ -1262,8 +1262,11 @@ callback convention.
 | `boxlite_box_ssh_status` | None | `CBoxSshStatusCb` |
 | `boxlite_box_ssh_disable` | None | `CBoxSshDisableCb` |
 
-Enable requires a running box and saved configuration, preserves healthy
-connections, and never starts the box. It works locally and over REST.
+Enable requires saved configuration and preserves healthy connections. Enable
+and disable work locally and over REST, require a running box, and never start
+it. A valid handle to a configured or stopped box fails the callback with
+`InvalidState` (HTTP 409 over REST), without changing saved SSH intent. Disable is
+safe to repeat while running; call it while running to persist the disabled switch.
 
 All four callbacks receive `CSshStatus*`. Its corresponding release function
 is `boxlite_free_ssh_status()`; the existing [memory management rules](#memory-management)

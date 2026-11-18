@@ -93,6 +93,137 @@ with the box and rechecked on every local start. The VMM exposes virtualization
 extensions to the guest, then the guest agent grants only its `/dev/kvm` device
 to the OCI workload.
 
+### Reader/writer locks
+
+`LockGuard::new_async` and `ReadLockGuard::new_async` first await a shared per-ID
+Tokio reader/writer gate within their manager, then retry nonblocking kernel
+acquisition every 10ms with Tokio sleep. Local waiters queue fairly and wake on
+gate release; fairness does not extend across managers or processes. Cancelling a
+pending waiter releases only its own admission, not the current owner's lock.
+Dropping an acquired guard releases its lock; process exit also releases file
+locks when the last owning descriptor closes.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=lock::` for the lock contract
+checks. Blocking tests acknowledge a failed acquisition before checking that the
+waiter cannot acquire until release. Cancellation checks probe read and write
+exclusion before releasing the owner. Reexecuted child processes independently
+open the manager and verify shared readers, writer exclusion, and exit release;
+control messages and deadlines bound the scenario, and cleanup kills/reaps children.
+
+The errno fixtures exercise real fatal kernel errors. Separate child-process tests
+interrupt blocking read/write acquisition with handled signals without `SA_RESTART`,
+verify that waiters remain excluded, then release the owner and verify acquisition.
+This covers blocking `EINTR` retries, not nonblocking `EINTR` injection: no
+deterministic local-filesystem trigger for the latter is established on macOS or
+Linux.
+See the [Linux error contract](https://man7.org/linux/man-pages/man2/flock.2.html#ERRORS)
+and [Darwin blocking semantics](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/flock.2).
+
+### Per-box lifecycle ownership
+
+`BoxImpl::with_operation` acquires the box's lifecycle write lock and refreshes
+persisted state before start/stop, implicit boot/adoption, outbound updates, and
+watcher reports. Internal boot and attach helpers reuse that admission; they never
+acquire a second lifecycle lock. An initialized handle cannot attach its old live
+resources to a different PID or `started_at`.
+
+Guards acquire the manager's per-ID local gate before `flock` and release `flock`
+before the gate; existing handles retain their gate even if removal frees the ID.
+Synchronous removal/shutdown use nonblocking `try_*` admission: a busy local gate
+or kernel lock returns `None`, so removal requests a retry and shutdown defers cleanup.
+The blocking constructors wait on the kernel lock alone, so they never queue behind
+the local gate.
+
+Implicit operations recheck whether booting may run a user-specified command after
+this refresh, under the same admission as boot. For example, `metrics()` waiting
+behind a stop must not restart a job whose command already ran. Explicit `start()`
+still permits a restart; attach-before-start still permits preparing a fresh box.
+
+Watcher observes processes and probes health without holding admission. It reports
+events through `RuntimeImpl::apply_box_observation` using a weak runtime reference;
+resolving an event does not arm another watcher. Successful observation resolution
+reuses the in-process handle cache without reading config/state; a cache miss loads them.
+For cached lookup failures, `None` confirms the box row is gone; other lookup errors
+remain retryable by health reporting. In particular, a missing entity lock while
+the row still exists leaves health probing enabled; a later tick can persist its
+report after the lock is restored. A missing row stops health reporting instead.
+The state refresh under lifecycle admission remains the sole authority.
+`BoxImpl::apply_observation` acquires lifecycle write admission, checks
+PID/`started_at`, and applies the report:
+health persistence or shared stop finalization (exit records, cache invalidation,
+and the configured cleanup decision). The name distinguishes this state-changing commit phase
+from the watcher's process observation and health probing outside admission.
+Successful automatic removal is recorded on that handle, so a later `stop()` remains
+idempotent even after its row and lock are gone. Unrelated missing state is not
+treated as completed automatic removal.
+
+Stop finalization publishes its in-memory terminal state only after persistence
+succeeds (or the row is already gone). A failed write leaves the run identity
+retryable instead of making the handle appear to belong to an earlier VM.
+
+Natural exit commits the stopped state and releases lifecycle admission before
+waiting for disk admission to complete remove-on-stop cleanup. Under both admissions,
+it rechecks persisted stopped status, absent PID, remove-on-stop policy, incomplete
+removal, and lock identity before deletion. The watcher ignores `NotFound` and
+`Stopped` cleanup errors and warns on other errors, without retries. Cleanup runs
+in the exit callback's future; aborting the watcher can cancel it, with startup
+`recover_boxes` remaining the fallback.
+
+Explicit start keeps `Container.Start` background and cancellable. Outbound updates
+use the host network backend without awaiting that RPC: a pending container start
+cannot hold lifecycle admission and prevent stop. Returning live resources releases
+admission before subsequent executions, streams, or tunnels; metadata reads retain
+their short state lock.
+
+Explicit removal uses nonblocking lifecycle and disk write attempts and returns
+`InvalidState` when either is busy; callers can retry `remove()` after the operation
+finishes. If automatic removal during `stop()` fails, a subsequent `stop()` or
+`remove()` can complete deletion. A missing disk lock returns `InvalidState`;
+restore the lock or restart the runtime for recovery before retrying removal.
+`stop()` treats `NotFound` as completed cleanup only after confirming that the box
+row is absent.
+
+Synchronous shutdown skips detached boxes and defers busy cleanup or lock-retrieval
+failures, including a missing lock file. A missing box row is already gone; a missing
+lock is not proof of completed cleanup. Async shutdown marks cleanup pending before
+awaiting stops and clears it only after every stop succeeds. Timeout, failure, or
+cancellation leaves a later synchronous shutdown or runtime Drop able to retry.
+
+Disk APIs use the runtime's shared lock manager with persisted box lock IDs in
+an independent `<home>/locks/disk/` namespace, serializing operations across handles.
+Blocking acquisition follows disk → lifecycle → short state guard order, with
+box existence rechecked after disk admission and before disk side effects.
+Clone, export, and snapshot mutations share `with_disk_admission` for acquisition
+and existence rechecks, keeping new entry points on the same admission path.
+If a batch clone fails after staging begins, every unprovisioned staging
+directory is cleaned up, while successfully provisioned clones are retained.
+Snapshot restore queues for disk → lifecycle admission, rechecks that the box is
+inactive after the lifecycle state refresh, and holds both admissions through disk
+replacement.
+The quiesce bracket holds lifecycle write admission through freeze, pause, disk
+work, resume, and thaw.
+Explicit stop/removal already holding lifecycle admission only tries disk admission
+and returns `InvalidState` when busy, allowing retry without a deadlock. Natural-exit
+cleanup instead waits in disk → lifecycle order, then uses the shared removal core
+with both admissions held.
+Final archive writing releases lifecycle admission but retains disk exclusion
+while its caller awaits it.
+Disk operations execute in the caller's future, so cancellation does not guarantee
+completion of disk work or resume/thaw cleanup: a blocking worker may continue
+after the caller drops its guards.
+Lifecycle-read/disk-write composition is not provided.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` for host
+admission and cleanup checks. Stand-in processes and loopback guest RPCs are not
+VM evidence. For real boot/stop races and implicit-job restart prevention, leave
+dependency stubs unset and run `make test:integration:lifecycle-race` with
+`BOXLITE_REPRO_ROOTFS` pointing to a local OCI image layout, not an unpacked rootfs.
+The image must provide `/bin/sh` and `/bin/sleep`, which both VM test suites invoke.
+This target explicitly runs the ignored tests. The implicit-operation regression
+counts guest-written markers before cleanup and checks that explicit restart still
+works.
+
+
 ### ShimController
 
 Universal subprocess-based Box controller. Spawns `boxlite-shim` binary in a subprocess to isolate
@@ -124,6 +255,16 @@ gRPC-based communication layer between host and guest.
 - `Connection`: Lazy gRPC channel management
 - Service interfaces: `GuestInterface`, `ContainerInterface`, `ExecutionInterface`
 
+Guest-ready confirms the guest agent's listener, while libkrun initializes the
+host Unix listener asynchronously. The portal attempts to connect immediately,
+then retries missing or refused sockets with asynchronous backoff from 10 ms to
+100 ms, bounded by the existing 30-second connection timeout.
+
+Other connection errors return immediately. A socket that never becomes
+connectable reaches the timeout; the retry covers connection establishment and
+does not replay RPCs. Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=portal::connection`
+for delayed-listener, timeout, and permanent-error regressions.
+
 ### Guest agent
 
 Runs inside the Box, receives commands from host via gRPC.
@@ -143,6 +284,14 @@ Runs inside the Box, receives commands from host via gRPC.
   through a link, so no image content is hidden. File copies into the container
   wait for a `Mount` in progress.
 - `Execution`: Command execution with streaming I/O
+- `Files`: Copies in and out as tar streams. An upload streams straight into extraction, landed
+  by the archive's first entry (see `tar` under [Shared library](#shared-library)); an entry
+  that would land under a container mount is refused before it is written, and the entries
+  before it stay. Successful uploads hand only written files and newly created directories
+  to the container user. An empty archive preserves existing destination contents and
+  ownership, even with overwrite disabled; it creates no destination or parent directories.
+  An archive containing an empty directory can create a destination directory, which is
+  handed to the container user.
 
 **Guest-side modules:**
 
@@ -384,6 +533,34 @@ host runtime, the shim, and the guest agent.
 - `BoxliteError`: Centralized error type.
 - `Constants`: Shared constants (e.g. socket paths, default ports).
 - `Transport`: gRPC transport utilities.
+- `tar`: Packs and unpacks the archives that copies carry between host and guest. Extraction
+  decides where each entry lands and writes it there with tar-rs's `Entry::unpack`, or creates the
+  hard link itself. tar-rs's `unpack_in` would take the place from the entry's own name, so
+  extraction repeats its checks: missing parents are created only inside the destination, a parent
+  that resolves outside it is refused, and a hard link's target is looked up in the destination.
+  The archive's first entry decides where a copy lands, as `docker cp` lands it, so no side channel
+  has to say whether the source was a directory:
+
+  | Destination | First entry | Lands |
+  | --- | --- | --- |
+  | An existing directory | anything | every entry inside it, under its own name |
+  | Missing, with or without a trailing `/` | directory `X/` | `X` as the destination: `X/a` lands as `a` (`./` roots nothing) |
+  | An existing non-directory | directory | nothing: the copy is refused |
+  | Missing, or an existing directory, with a trailing `/` | file or symlink | inside it, under its own name |
+  | Missing, or an existing non-directory, without a trailing `/` | file or symlink with a one-part name | that entry as the destination |
+  | Missing | file with a nested name (`app/main.py`) | every entry inside it, under its own name |
+
+  An existing non-directory destination fails the copy when the path ends in `/` or the
+  archive's leading file has a nested name. Records about other entries (PAX headers, GNU
+  long names) never decide. Entries are written as
+  they are read, so an entry the first one rules out fails the copy as the caller's error, keeping
+  what was written: one outside `X/`, anything after a file that became the destination, or a hard
+  link leading the archive. An empty archive lands nothing.
+
+  After upload, the guest transfers ownership of copied files and newly created paths to the
+  container user. A new destination symlink is handed over as the link itself, without selecting
+  children through its target. An existing directory symlink remains a valid copy destination;
+  only the copied children are handed over.
 
 ## Concurrency model
 
@@ -394,13 +571,47 @@ host runtime, the shim, and the guest agent.
 - Single `RwLock` protects all mutable runtime state
 - Metrics use `AtomicU64` for lock-free updates
 
-### Single lock design
+### Runtime state lock
 
-BoxLite uses one `RwLock` for all mutable state:
+BoxLite uses an `RwLock` for shared runtime state:
 
 - Eliminates nested locking complexity
 - Simplifies reasoning about concurrency
 - Filesystem lock prevents multiple runtimes using same `BOXLITE_HOME`
+
+### Per-entity reader/writer locks
+
+`src/boxlite/src/lock/` provides locks identified by persisted `LockId` values.
+`FileLockManager` uses shared/exclusive `flock` locks across processes;
+`InMemoryLockManager` supplies the same read/write compatibility for tests within
+one process. Different lock IDs are independent.
+
+| Mode | Manual acquisition/release | RAII guard | Compatibility |
+| --- | --- | --- | --- |
+| Read | `read_lock` / `read_unlock`; `try_read_lock` | `ReadLockGuard` | Multiple readers may coexist. |
+| Write | `lock` / `unlock`; `try_lock` | `LockGuard` | Excludes readers and other writers. |
+
+Retrieve a separate handle for every concurrent acquisition, even for the same
+ID: cloning an `Arc<dyn Locker>` shares the file descriptor and lock ownership.
+For example, retrieve two handles to hold two read guards; dropping either guard
+then leaves the other reader protected. Nested acquisition and read-to-write
+upgrades are unsupported. Blocking guard acquisition is synchronous and waits on
+the kernel lock alone; it bypasses the local gate, as do the manual `Locker`
+methods. FIFO fairness covers queued async acquisitions on the manager-local
+per-ID gate, not kernel contention. Try acquisition takes no queue position: it
+respects existing admission reservations and fails fast while a queued async writer
+owns the gate.
+
+Blocking and nonblocking file-lock acquisition retry interrupted calls (`EINTR`)
+without changing the requested mode. Nonblocking acquisition returns `false` only
+for contention (`EWOULDBLOCK`/`EAGAIN`); other OS errors panic with their details.
+Async guards propagate those failures instead of treating them as a reason to keep
+polling.
+
+Existing boot and outbound-policy changes still acquire exclusive guards. Shared
+read support alone does not coordinate lifecycle and disk operations that use
+other locks. Custom `Locker` implementations inherit exclusive fallback read
+methods unless they implement shared reads themselves.
 
 ### Async design
 

@@ -58,7 +58,7 @@ func TestIntegrationRunnerDocker(t *testing.T) {
 	}
 	t.Logf("Runner Client.Create name=%s image=docker:27.5.1-dind privileged=true kernel=%s home=%s", marker, kernel, home)
 	id, _, err := client.Create(ctx, dto.CreateBoxDTO{
-		Id: marker, Image: "docker:27.5.1-dind", CpuQuota: 2, MemoryQuota: 2, StorageQuota: 5,
+		Id: marker, Image: "docker:27.5.1-dind", CpuQuota: cpuQuota(2), MemoryQuota: 2, StorageQuota: 5,
 		Privileged: true, OutboundEnabled: boolPtr(true), Env: env,
 		Entrypoint: []string{"sh", "-c"}, Cmd: []string{"exec sleep infinity"},
 	})

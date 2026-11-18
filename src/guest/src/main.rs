@@ -8,11 +8,15 @@ compile_error!("BoxLite guest is Linux-only; build with a Linux target");
 mod mount_test_init;
 
 #[cfg(target_os = "linux")]
+mod bootstrap;
+#[cfg(target_os = "linux")]
 mod ca_trust;
 #[cfg(target_os = "linux")]
 mod container;
 #[cfg(target_os = "linux")]
 mod layout;
+#[cfg(target_os = "linux")]
+mod lifecycle;
 #[cfg(target_os = "linux")]
 mod mounts;
 #[cfg(target_os = "linux")]
@@ -27,6 +31,9 @@ mod service;
 mod storage;
 #[cfg(target_os = "linux")]
 mod sysctl;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/syscalls.rs"]
+mod test_syscalls;
 
 #[cfg(target_os = "linux")]
 use boxlite_shared::errors::BoxliteResult;
@@ -76,22 +83,28 @@ struct GuestArgs {
 }
 
 #[cfg(target_os = "linux")]
-fn main() -> BoxliteResult<()> {
+fn main() {
     #[cfg(all(feature = "integration-test-init", not(test)))]
     {
         mount_test_init::run();
     }
+
+    lifecycle::install_panic_hook();
+    if let Err(error) = run() {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "Error: {error:?}");
+        lifecycle::exit(1);
+    }
+    lifecycle::exit(0);
+}
+
+#[cfg(target_os = "linux")]
+fn run() -> BoxliteResult<()> {
     let t0 = Instant::now();
     BOOT_T0.set(t0).expect("BOOT_T0 already initialized");
 
     // Early diagnostic - visible even if tracing fails
     eprintln!("[guest] T+0ms: agent starting");
-
-    // Set panic hook to ensure we see panics
-    std::panic::set_hook(Box::new(|panic_info| {
-        eprintln!("[PANIC] Guest agent panicked: {}", panic_info);
-        std::process::exit(1);
-    }));
 
     // Initialize tracing subscriber - respects RUST_LOG env var
     // Default to "info" level if RUST_LOG is not set (for visibility)
@@ -111,8 +124,9 @@ fn main() -> BoxliteResult<()> {
 
     info!("BoxLite Guest Agent starting");
 
-    // libkrun's minimal init mounts /proc but does not apply a distro's sysctl
-    // defaults. Harden the guest before it can spawn any workload processes.
+    // Native init supplies the mounts and defaults that init.krun provides
+    // when the same binary runs as an ordinary process under libkrun.
+    bootstrap::prepare()?;
     sysctl::apply_boot_hardening()?;
     eprintln!(
         "[guest] T+{}ms: kernel hardening applied",
@@ -148,11 +162,17 @@ async fn async_main() -> BoxliteResult<()> {
     let _ = reaper::REAPER.set(reaper::Reaper::install());
 
     // Parse command-line arguments with clap
-    let args = GuestArgs::parse();
+    let args = GuestArgs::try_parse().unwrap_or_else(|error| {
+        let _ = error.print();
+        lifecycle::exit(error.exit_code());
+    });
     info!(
         "Arguments parsed: listen={}, notify={:?}",
         args.listen, args.notify
     );
+
+    network::configure_loopback().await?;
+    eprintln!("[guest] T+{}ms: loopback ready", boot_elapsed_ms());
 
     // Prepare guest layout directories
     let layout = layout::GuestLayout::new();
@@ -160,7 +180,7 @@ async fn async_main() -> BoxliteResult<()> {
     layout.prepare_base()?;
 
     // Start server in uninitialized state
-    // All initialization (mounts, rootfs, network) will happen via Guest.Init RPC
+    // Shared storage and external networking are configured by Guest.Init.
     info!("Starting guest server on: {}", args.listen);
     let server = GuestServer::new(layout);
     server.run(args.listen, args.notify).await

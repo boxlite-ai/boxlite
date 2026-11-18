@@ -329,17 +329,19 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
        * rather than cast, because an unresolved one renders as Pulumi's
        * `[toString]` refusal text and the fleet is converged onto that.
        */
-      const payload = $resolve([request.apiUrl, request.otlpUrl]).apply(([apiUrl, otlpUrl]) =>
-        encodeUpgradePayload({
-          identity: request.binary.identity,
-          binary: request.binary,
-          port: RUNNER_PORT,
-          // Only a build-mode binary needs it, and only because it is read from
-          // S3 with the host's own role rather than fetched publicly.
-          region,
-          apiUrl: apiUrl as string,
-          otlpUrl: otlpUrl as string,
-        }),
+      const payload = $resolve([request.apiUrl, request.otlpUrl, request.environment.BOXLITE_RUNNER_ENV ?? '']).apply(
+        ([apiUrl, otlpUrl, runnerEnv]) =>
+          encodeUpgradePayload({
+            identity: request.binary.identity,
+            binary: request.binary,
+            port: RUNNER_PORT,
+            // Only a build-mode binary needs it, and only because it is read from
+            // S3 with the host's own role rather than fetched publicly.
+            region,
+            apiUrl: apiUrl as string,
+            otlpUrl: otlpUrl as string,
+            runnerEnv: runnerEnv as string,
+          }),
       )
       previousUpgrade = new command.local.Command(
         upgradeResourceName(slot),

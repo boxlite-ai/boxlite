@@ -327,7 +327,7 @@ fn ordered_chains_preserve_payload_complete_once_and_leave_rx_untouched() {
     let interrupts = guest.interrupts();
     assert!(interrupts > 0);
     kick(&mut device).unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     assert_eq!(guest.used_count(), 3);
     assert_eq!(guest.interrupts(), interrupts);
     assert_eq!(guest.bytes(DATA, 8192), payload_before);
@@ -365,7 +365,7 @@ fn protocol_shape_is_output_only() {
 }
 
 #[test]
-fn quiesce_stops_kicks_but_finish_still_scans_pending_tx() {
+fn quiesce_drains_pending_tx_and_stops_kicks() {
     let guest = Guest::new();
     let taken = Taken::default();
     let (writer, mut worker) = ConsoleWorker::spawn(Box::new(taken.clone()), 64).unwrap();
@@ -376,13 +376,39 @@ fn quiesce_stops_kicks_but_finish_still_scans_pending_tx() {
         .activate(guest.activation(false, true, false))
         .unwrap();
     device.quiesce().unwrap();
+    assert_eq!(guest.used_count(), 1);
+    guest.payload(1, 100, b"too late", 0, 0);
+    guest.publish(1);
     kick(&mut device).unwrap();
-    assert_eq!(guest.used_count(), 0);
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     assert_eq!(guest.used_count(), 1);
     assert_eq!(guest.used(0), (0, 0));
     worker.finish();
     assert_eq!(taken.bytes(), b"pending");
+}
+
+#[test]
+fn resume_processes_new_tx_after_quiesce() {
+    let guest = Guest::new();
+    let taken = Taken::default();
+    let (writer, mut worker) = ConsoleWorker::spawn(Box::new(taken.clone()), 64).unwrap();
+    let mut device = VirtioConsole::new(writer);
+    device
+        .activate(guest.activation(false, true, false))
+        .unwrap();
+    device.quiesce().unwrap();
+    guest.payload(0, 0, b"resumed", 0, 0);
+    guest.publish(0);
+    kick(&mut device).unwrap();
+    assert_eq!(guest.used_count(), 0);
+
+    device.resume().unwrap();
+    kick(&mut device).unwrap();
+
+    assert_eq!(guest.used_count(), 1);
+    device.quiesce().unwrap();
+    worker.finish();
+    assert_eq!(taken.bytes(), b"resumed");
 }
 
 /// A writable, out-of-RAM or overflowing segment rejects the whole head.
@@ -488,7 +514,7 @@ fn a_later_broken_head_preserves_prior_completion_and_interrupt() {
     assert_eq!(guest.used(0), (0, 0));
     assert!(guest.interrupts() > 0);
     let interrupts = guest.interrupts();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     assert_eq!(guest.used_count(), 1);
     assert_eq!(guest.interrupts(), interrupts);
     worker.finish();
@@ -556,7 +582,7 @@ fn a_blocked_sink_does_not_delay_completion_and_overflow_drops_oldest() {
     let dropped_while_blocked = worker.dropped_bytes();
     gate.open();
     let mut device = callback.join().unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     worker.finish();
     assert_eq!(completed_while_blocked.unwrap(), Ok(()));
     assert_eq!(used_while_blocked, 1);
@@ -581,7 +607,7 @@ fn a_failing_sink_counts_loss_without_stopping_guest_completion() {
     guest.payload(1, 100, b"still writing\n", 0, 0);
     guest.publish(1);
     kick(&mut device).unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     worker.finish();
     assert_eq!(guest.used_count(), 2);
     assert_eq!(guest.used(0), (0, 0));
@@ -620,7 +646,7 @@ fn reset_recovers_a_broken_device_and_keeps_the_shared_writer() {
         .unwrap();
     kick(&mut device).unwrap();
     serial_writer.write_all(b"serial-after").unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     worker.finish();
     assert_eq!(second.used_count(), 1);
     assert_eq!(second.used(0), (0, 0));
@@ -645,7 +671,7 @@ fn activation_is_single_use_until_reset() {
     device
         .activate(guest.activation(false, true, false))
         .unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     worker.finish();
     assert_eq!(guest.used_count(), 0);
 }
@@ -667,7 +693,7 @@ fn activation_requires_tx_even_when_rx_is_ready() {
             device.activate(activation),
             Err(DeviceError::NeedsReset(_))
         ));
-        device.finish_tx().unwrap();
+        device.quiesce().unwrap();
         worker.finish();
         assert_eq!(guest.used_count(), 0);
         assert_eq!(guest.interrupts(), 0);
@@ -676,7 +702,7 @@ fn activation_requires_tx_even_when_rx_is_ready() {
 }
 
 #[test]
-fn finish_scans_unkicked_tx_once_detaches_ram_and_keeps_the_writer_open() {
+fn quiesce_scans_unkicked_tx_once_retains_activation_and_keeps_the_writer_open() {
     let guest = Guest::new();
     let taken = Taken::default();
     let (writer, mut worker) = ConsoleWorker::spawn(Box::new(taken.clone()), 64).unwrap();
@@ -687,7 +713,7 @@ fn finish_scans_unkicked_tx_once_detaches_ram_and_keeps_the_writer_open() {
     device
         .activate(guest.activation(false, true, false))
         .unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     assert_eq!(guest.used_count(), 1);
     assert_eq!(guest.used(0), (0, 0));
     let interrupts = guest.interrupts();
@@ -695,17 +721,19 @@ fn finish_scans_unkicked_tx_once_detaches_ram_and_keeps_the_writer_open() {
     guest.payload(1, 100, b"too late", 0, 0);
     guest.publish(1);
     kick(&mut device).unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     serial_writer.write_all(b"|serial").unwrap();
     worker.finish();
     assert_eq!(guest.used_count(), 1);
     assert_eq!(guest.interrupts(), interrupts);
     assert_eq!(taken.bytes(), b"unkicked|serial");
+    assert!(Arc::strong_count(&guest.memory) > 1);
+    device.reset().unwrap();
     assert_eq!(Arc::strong_count(&guest.memory), 1);
 }
 
 #[test]
-fn finish_skips_a_broken_device_instead_of_retrying_repaired_descriptors() {
+fn quiesce_skips_a_broken_device_instead_of_retrying_repaired_descriptors() {
     let guest = Guest::new();
     let taken = Taken::default();
     let (writer, mut worker) = ConsoleWorker::spawn(Box::new(taken.clone()), 64).unwrap();
@@ -721,17 +749,19 @@ fn finish_skips_a_broken_device_instead_of_retrying_repaired_descriptors() {
     assert!(matches!(kick(&mut device), Err(DeviceError::NeedsReset(_))));
     assert_eq!(guest.used_count(), 0);
     assert!(taken.bytes().is_empty());
-    device.finish_tx().unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
+    device.quiesce().unwrap();
     worker.finish();
     assert_eq!(guest.used_count(), 0);
     assert_eq!(guest.interrupts(), 0);
     assert!(taken.bytes().is_empty());
+    assert!(Arc::strong_count(&guest.memory) > 1);
+    device.reset().unwrap();
     assert_eq!(Arc::strong_count(&guest.memory), 1);
 }
 
 #[test]
-fn finish_reports_a_scan_error_but_still_detaches_the_activation() {
+fn quiesce_reports_a_scan_error_without_retrying_or_detaching_activation() {
     let guest = Guest::new();
     let taken = Taken::default();
     let (writer, mut worker) = ConsoleWorker::spawn(Box::new(taken.clone()), 64).unwrap();
@@ -743,10 +773,7 @@ fn finish_reports_a_scan_error_but_still_detaches_the_activation() {
     device
         .activate(guest.activation(false, true, false))
         .unwrap();
-    assert!(matches!(
-        device.finish_tx(),
-        Err(DeviceError::NeedsReset(_))
-    ));
+    assert!(matches!(device.quiesce(), Err(DeviceError::NeedsReset(_))));
     assert_eq!(guest.used_count(), 1);
     assert_eq!(guest.used(0), (0, 0));
     let interrupts = guest.interrupts();
@@ -755,11 +782,13 @@ fn finish_reports_a_scan_error_but_still_detaches_the_activation() {
     guest.payload(2, 200, b"must remain unconsumed", 0, 0);
     guest.publish(2);
     kick(&mut device).unwrap();
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     worker.finish();
     assert_eq!(guest.used_count(), 1);
     assert_eq!(guest.interrupts(), interrupts);
     assert_eq!(taken.bytes(), b"completed");
+    assert!(Arc::strong_count(&guest.memory) > 1);
+    device.reset().unwrap();
     assert_eq!(Arc::strong_count(&guest.memory), 1);
 }
 
@@ -779,7 +808,7 @@ fn a_duplicate_deferred_head_does_not_emit_or_complete_twice() {
     assert_eq!(guest.used_count(), 1);
     assert_eq!(guest.used(0), (0, 0));
     assert!(guest.interrupts() > 0);
-    device.finish_tx().unwrap();
+    device.quiesce().unwrap();
     worker.finish();
     assert_eq!(guest.used_count(), 1);
     assert_eq!(taken.bytes(), b"once");

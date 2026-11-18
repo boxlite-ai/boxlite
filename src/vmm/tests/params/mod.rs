@@ -153,6 +153,9 @@ fn agrees_with_validate_on_command_line_limits() {
             initramfs: None,
             disks: Vec::new(),
             filesystem: None,
+            vsock: None,
+            network: None,
+            virtio_console: false,
         };
         assert_eq!(config.validate().is_ok(), accepted, "{config:?}");
     }

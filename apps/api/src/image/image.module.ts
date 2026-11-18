@@ -6,6 +6,7 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Box } from '../box/entities/box.entity'
+import { Checkpoint } from '../box/entities/checkpoint.entity'
 import { OrganizationModule } from '../organization/organization.module'
 import { RegistryModule } from '../registry/registry.module'
 import { RegistriesController } from '../registry/controllers/registries.controller'
@@ -42,7 +43,7 @@ import { ImageResolverService } from './services/image-resolver.service'
   imports: [
     OrganizationModule,
     RegistryModule,
-    TypeOrmModule.forFeature([Image, ImageVersion, ImageAlias, ImageAliasEvent, Box]),
+    TypeOrmModule.forFeature([Image, ImageVersion, ImageAlias, ImageAliasEvent, Box, Checkpoint]),
   ],
   // The static nested resource must match before /images/:idOrRef.
   controllers: [RegistriesController, ImageController],

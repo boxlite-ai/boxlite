@@ -26,8 +26,10 @@ const state = vi.hoisted(() => ({
   byId: new Map<string, unknown>(),
   canWrite: true,
   loading: false,
+  cached: false,
 }))
 const mocks = vi.hoisted(() => ({
+  refetch: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   resetUpdate: vi.fn(),
@@ -41,7 +43,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/error-handling', () => ({ handleApiError: mocks.handleApiError }))
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }))
 vi.mock('@/hooks/queries/useRegistriesQuery', () => ({
-  useRegistriesQuery: () => ({ data: state.credentials, error: state.listError, isLoading: state.loading }),
+  useRegistriesQuery: () => ({
+    data: state.loading || (state.listError && !state.cached) ? undefined : state.credentials,
+    error: state.listError,
+    isLoading: state.loading,
+    isFetching: state.loading,
+    refetch: mocks.refetch,
+  }),
 }))
 vi.mock('@/hooks/queries/useBoxesByImageQuery', () => ({
   useBoxesByImageQuery: () => ({ byId: state.byId }),
@@ -87,6 +95,7 @@ beforeEach(() => {
   state.listError = null
   state.byId = new Map()
   state.canWrite = true
+  state.cached = false
   state.loading = false
   vi.resetAllMocks()
   mocks.create.mockResolvedValue({})
@@ -180,8 +189,9 @@ describe('the credential list', () => {
     state.listError = failure
     await renderPanel()
 
-    expect(mocks.handleApiError).toHaveBeenCalledWith(failure, 'Failed to fetch registry credentials')
-    expect(host.textContent).toContain('could not be loaded')
+    expect(mocks.handleApiError).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Filter registries"]')?.disabled).toBe(true)
+    expect(document.querySelector('[role="alert"] h2')?.textContent).toBe('Could not load private registries')
     expect(host.textContent).not.toContain('No private registry connected')
   })
 
@@ -414,4 +424,27 @@ describe('removing a credential', () => {
       expect.objectContaining({ description: expect.stringContaining('agile-otter') }),
     )
   })
+})
+
+it('retries an initial registry failure without displaying transport details or an empty inventory', async () => {
+  state.listError = new Error('Cannot GET /private-internal-route')
+  await renderPanel()
+  expect(button('Retry')).toBeDefined()
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not load private registries')
+  expect(document.body.textContent).not.toContain('/private-internal-route')
+  expect(document.body.textContent).not.toContain('No private registries connected')
+  await act(async () => button('Retry')?.click())
+  expect(mocks.refetch).toHaveBeenCalledTimes(1)
+})
+
+it('preserves cached registry records and offers recovery after a refresh fails', async () => {
+  state.cached = true
+  state.listError = new Error('Connection lost')
+  await renderPanel()
+  expect(document.querySelectorAll('.resource-list-row')).toHaveLength(1)
+  expect(button('Retry')).toBeDefined()
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Showing previously loaded data')
+  expect(document.body.textContent).toContain('acme-bot')
+  await act(async () => button('Retry')?.click())
+  expect(mocks.refetch).toHaveBeenCalledTimes(1)
 })

@@ -211,22 +211,6 @@ export class VolumeService {
     })
   }
 
-  async findByName(organizationId: string, name: string): Promise<Volume> {
-    const volume = await this.volumeRepository.findOne({
-      where: {
-        organizationId,
-        name,
-        state: Not(VolumeState.DELETED),
-      },
-    })
-
-    if (!volume) {
-      throw new NotFoundException(`Volume with name ${name} not found`)
-    }
-
-    return volume
-  }
-
   /**
    * Resolve each selector to the volume it names, or throw.
    *

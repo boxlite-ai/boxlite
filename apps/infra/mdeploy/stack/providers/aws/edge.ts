@@ -59,6 +59,7 @@ export const awsEdgeProvider =
           ...request.environment,
           PROXY_PORT: String(PROXY_PORT),
           PROXY_PROTOCOL: request.protocol,
+          PROXY_DOMAIN: request.domain,
           // api-client-go appends paths like `/config` directly, so the `/api`
           // prefix belongs here rather than at every call site inside the proxy.
           BOXLITE_API_URL: $interpolate`${request.apiUrl}/api`,

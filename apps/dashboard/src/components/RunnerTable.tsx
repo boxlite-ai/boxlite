@@ -121,7 +121,7 @@ export function RunnerTable({
         />
         {onAutoRefreshChange && (
           <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Auto-refresh</span>
+            <span className="text-body text-muted-foreground">Auto-refresh</span>
             <Switch checked={autoRefresh} onCheckedChange={onAutoRefreshChange} />
           </div>
         )}
@@ -264,7 +264,7 @@ const getColumns = ({
       size: 240,
       cell: ({ row }) => (
         <div className="w-full truncate flex items-center gap-2">
-          <span className="truncate block text-sm">{row.original.id}</span>
+          <span className="truncate block text-body">{row.original.id}</span>
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -284,7 +284,7 @@ const getColumns = ({
       size: 240,
       cell: ({ row }) => (
         <div className="w-full truncate flex items-center gap-2">
-          <span className="truncate block text-sm">{row.original.name}</span>
+          <span className="truncate block text-body">{row.original.name}</span>
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -304,7 +304,7 @@ const getColumns = ({
       size: 180,
       cell: ({ row }) => (
         <div className="w-full truncate flex items-center gap-2">
-          <span className="truncate block text-sm">{getRegionName(row.original.region) ?? row.original.region}</span>
+          <span className="truncate block text-body">{getRegionName(row.original.region) ?? row.original.region}</span>
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -324,7 +324,7 @@ const getColumns = ({
     //   size: 180,
     //   cell: ({ row }) => (
     //     <div className="w-full truncate flex items-center gap-2">
-    //       <span className="truncate block text-sm">{row.original.domain || '/'}</span>
+    //       <span className="truncate block text-body">{row.original.domain || '/'}</span>
     //       {row.original.domain && (
     //         <button
     //           onClick={(e) => {

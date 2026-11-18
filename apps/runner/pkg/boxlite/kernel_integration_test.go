@@ -83,7 +83,7 @@ func TestIntegrationRunnerExternalKernel(t *testing.T) {
 			var err error
 			if seed {
 				_, _, err = client.Create(ctx, dto.CreateBoxDTO{
-					Id: name, Image: "alpine:3.21", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 2,
+					Id: name, Image: "alpine:3.21", CpuQuota: cpuQuota(1), MemoryQuota: 1, StorageQuota: 2,
 					Entrypoint: []string{"sleep"}, Cmd: []string{"infinity"},
 					Privileged: privileged, OutboundEnabled: boolPtr(true),
 				})

@@ -49,7 +49,7 @@ export const TimestampTooltip = ({ children, timestamp, time = true }: Timestamp
   return (
     <Tooltip>
       <TooltipTrigger>{children}</TooltipTrigger>
-      <TooltipContent className="flex flex-col gap-1.5 text-xs">
+      <TooltipContent className="flex flex-col gap-1.5 text-meta">
         <div className="font-medium first-letter:capitalize">{relativeTimeString}</div>
         <Separator className="-mx-3 w-[calc(100%+1.5rem)]" />
         <table className="border-collapse border-0">

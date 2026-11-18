@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable-4.001.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Commit Mono';
+  src: url('/fonts/CommitMono-1.143.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+}
+
 html {
   /* Keep short and scrolling routes on the same horizontal grid. */
   scrollbar-gutter: stable;
@@ -20,9 +36,6 @@ html {
   }
 }
 
-/* ASCII / terminal restyle — IBM Plex Mono is loaded from Google Fonts in index.html
-   (same source the design prototypes use), so the console matches them 1:1. */
-
 body {
   margin: 0;
   min-height: 100vh;
@@ -35,6 +48,9 @@ body {
      HSL triples the shadcn primitives already consume, so re-skinning is a token swap.
      Verified exact: hsl(196 100% 47%) === #00B0F0 (the accent/brand blue). */
   :root {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'Commit Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', Menlo, Consolas, monospace;
+
     /* light theme — bg #FFFFFF, card #F3F4F6, fg #13161B, dim #6B7079, border #E2E5EA */
     --background: 0 0% 100%;
     --foreground: 218 17% 9%;
@@ -47,14 +63,15 @@ body {
     --secondary: 220 14% 96%;
     --secondary-foreground: 218 17% 9%;
     --muted: 220 14% 96%;
-    --muted-foreground: 219 6% 45%;
+    --muted-foreground: 219 6% 42%;
     --accent: 220 14% 93%;
     --accent-foreground: 218 17% 9%;
 
     /* brand accent (the design's --accent blue) — kept distinct from shadcn's neutral
        hover "accent" so hovers stay neutral and the blue stays intentional. */
     --brand: 196 100% 47%;
-    --brand-foreground: 0 0% 100%;
+    --link: #0077a3;
+    --brand-foreground: 218 17% 9%;
 
     --border: 218 16% 90%;
     --border-hover: 218 10% 75%;
@@ -93,16 +110,17 @@ body {
     --warning-separator: 43 55% 84%;
 
     --destructive: 5 71% 50%;
+    --destructive-solid: 5 71% 50%;
     --destructive-background: 5 60% 95%;
     --destructive-foreground: 5 66% 46%;
     --destructive-separator: 5 48% 85%;
 
-    --sidebar-background: 0 0% 100%;
-    --sidebar-foreground: 218 17% 9%;
+    --sidebar-background: var(--background);
+    --sidebar-foreground: 0 0% 35%;
     --sidebar-primary: 218 17% 9%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 14% 93%;
-    --sidebar-accent-foreground: 218 17% 9%;
+    --sidebar-accent: 0 0% 94%;
+    --sidebar-accent-foreground: var(--selection-foreground);
     --sidebar-border: 218 16% 90%;
     --sidebar-ring: 196 100% 47%;
 
@@ -111,6 +129,11 @@ body {
     --scrollbar-track: 220 14% 96%;
     --scrollbar-thumb: 218 16% 74%;
     --scrollbar-thumb-hover: 196 100% 47%;
+    --control-hover: 0 0% 96%;
+    --selection: 0 0% 84%;
+    --selection-foreground: var(--foreground);
+    --sidebar-muted-foreground: 0 0% 42%;
+    --sidebar-hover: var(--control-hover);
   }
 
   .dark {
@@ -131,7 +154,8 @@ body {
     --accent-foreground: 0 0% 100%;
 
     --brand: 196 100% 47%;
-    --brand-foreground: 0 0% 100%;
+    --link: #49bde8;
+    --brand-foreground: 218 17% 9%;
 
     --border: 0 0% 16%;
     --border-hover: 0 0% 23%;
@@ -166,16 +190,17 @@ body {
     --warning-separator: 38 30% 18%;
 
     --destructive: 5 71% 58%;
+    --destructive-solid: 5 71% 50%;
     --destructive-background: 5 34% 12%;
     --destructive-foreground: 5 85% 72%;
     --destructive-separator: 5 29% 18%;
 
-    --sidebar-background: 0 0% 4%;
-    --sidebar-foreground: 0 0% 100%;
+    --sidebar-background: var(--background);
+    --sidebar-foreground: 0 0% 68%;
     --sidebar-primary: 0 0% 100%;
     --sidebar-primary-foreground: 0 0% 4%;
-    --sidebar-accent: 0 0% 12%;
-    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 13%;
+    --sidebar-accent-foreground: var(--selection-foreground);
     --sidebar-border: 0 0% 16%;
     --sidebar-ring: 196 100% 47%;
 
@@ -184,6 +209,11 @@ body {
     --scrollbar-track: 0 0% 3%;
     --scrollbar-thumb: 0 0% 24%;
     --scrollbar-thumb-hover: 196 100% 47%;
+    --control-hover: 0 0% 10%;
+    --selection: 0 0% 24%;
+    --selection-foreground: var(--foreground);
+    --sidebar-muted-foreground: 0 0% 68%;
+    --sidebar-hover: var(--control-hover);
   }
 
   html {
@@ -194,17 +224,25 @@ body {
     @apply border-border outline-ring/50;
   }
 
+  /* One focus indicator for anything that does not draw its own: keyboard focus must
+     always be visible, including on scroll containers and tab panels. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
   body {
-    @apply bg-background text-foreground;
-    font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace;
+    @apply bg-background font-sans text-foreground;
     font-size: 13px;
     line-height: 1.45;
   }
 
   code,
   pre,
-  kbd {
-    font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace;
+  kbd,
+  samp {
+    @apply font-mono;
+    font-variant-ligatures: none;
   }
 
   button,
@@ -502,7 +540,7 @@ body {
 /* Code is reading material, not a tracked uppercase label. Keep this scoped to
    the walkthrough so other compact console code blocks retain their scale. */
 .quickstart-code {
-  font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 400;
   line-height: 24px;
@@ -532,37 +570,61 @@ body {
     @apply flex h-9 w-full min-w-0 items-center gap-3 border border-border bg-card px-3 transition-colors focus-within:border-foreground sm:w-[380px] sm:flex-none;
   }
   .resource-empty {
-    @apply flex min-h-[280px] flex-col items-center justify-start gap-3 px-6 py-12 text-center;
+    @apply flex min-h-[280px] flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center;
+  }
+  .resource-content {
+    @apply flex min-h-0 flex-1 flex-col overflow-auto;
   }
   .resource-empty-icon {
-    @apply mb-2 flex size-12 items-center justify-center border border-border bg-card text-muted-foreground;
+    @apply mb-2 flex size-12 items-center justify-center text-muted-foreground [&>svg]:size-9 [&>svg]:stroke-1;
   }
   .resource-list-head {
-    @apply min-h-11 border-b border-border px-4 py-3 font-mono text-meta font-medium normal-case tracking-normal text-muted-foreground;
+    @apply min-h-11 border-b border-border px-4 py-3 font-sans text-meta font-medium normal-case tracking-normal text-muted-foreground;
   }
   .resource-list-row {
-    @apply min-h-14 border-b border-border/60 px-4 py-3 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
+    @apply min-h-12 border-b border-border/60 px-4 py-2 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
+  }
+  .resource-object-icon {
+    @apply flex size-5 shrink-0 items-center justify-center text-muted-foreground [&>svg]:size-5;
+  }
+  .resource-table th {
+    @apply h-11 whitespace-nowrap px-4 text-meta font-medium text-muted-foreground;
+  }
+  .resource-table tbody tr {
+    @apply h-12 border-border/60;
+  }
+  .resource-table tbody tr:last-child {
+    @apply border-b;
+  }
+  .resource-table td {
+    @apply px-4 py-2 text-meta;
+  }
+  .resource-table tbody tr:has(.resource-empty) {
+    @apply border-0;
+  }
+  .resource-table td:has(.resource-empty) {
+    @apply p-0;
   }
   .resource-name {
-    @apply truncate text-sm font-semibold text-foreground;
+    @apply truncate font-mono text-body font-semibold text-foreground;
   }
   .resource-link {
     @apply resource-name outline-none underline-offset-4 hover:underline focus-visible:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground;
   }
   .resource-status {
-    @apply inline-flex items-center gap-2 whitespace-nowrap font-mono text-meta font-normal normal-case tracking-normal text-foreground;
+    @apply inline-flex items-center gap-2 whitespace-nowrap font-sans text-meta font-normal normal-case tracking-normal text-foreground;
   }
   .resource-footer {
-    @apply flex flex-wrap items-center justify-between gap-3 px-4 py-4 font-mono text-meta normal-case tracking-normal text-muted-foreground;
+    @apply flex flex-wrap items-center justify-between gap-3 px-4 py-4 font-sans text-meta normal-case tracking-normal text-muted-foreground;
   }
   .form-dialog-body {
     @apply min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-6;
   }
   .form-dialog [data-slot='dialog-title'] {
-    @apply font-display text-lg font-semibold tracking-normal;
+    @apply font-display text-section font-semibold tracking-normal;
   }
   .form-field-label {
-    @apply mb-2 block font-mono text-meta font-medium normal-case tracking-normal text-foreground;
+    @apply mb-2 block font-sans text-meta font-medium normal-case tracking-normal text-foreground;
   }
   .form-field-input {
     @apply h-10 w-full border border-border bg-background px-3 text-body text-foreground outline-none transition-colors focus:border-foreground/50 focus:ring-2 focus:ring-foreground/10 aria-[invalid=true]:border-destructive;
@@ -570,17 +632,22 @@ body {
 }
 
 .resource-guide-link {
-  @apply text-body text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand;
+  @apply underline underline-offset-4 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand;
+  color: var(--link);
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
 }
 
-/* Quickstart code needs its own boundary on the near-black page. */
+.resource-guide-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Code boundaries use the same quiet structural border as the rest of the console. */
 .quickstart-code-surface {
-  --quickstart-code-border: 0 0% 72%;
+  --quickstart-code-border: var(--border);
   border: 1px solid hsl(var(--quickstart-code-border));
   background: hsl(0 0% 98%);
 }
 .dark .quickstart-code-surface {
-  --quickstart-code-border: 0 0% 30%;
   background: hsl(0 0% 7%);
 }
 @media (min-width: 768px) and (min-height: 800px) {
@@ -589,5 +656,130 @@ body {
     top: 84px;
     max-height: calc(100svh - 108px);
     overflow-y: auto;
+  }
+}
+
+/* Surface roles stay neutral; input shadows compose with Tailwind's focus rings. */
+:root {
+  --field-surface: 0 0% 99%;
+  --field-inset: inset 0 1px 2px rgb(16 24 40 / 0.035);
+  --shadow-floating: 0 2px 4px rgb(16 24 40 / 0.04), 0 8px 24px -8px rgb(16 24 40 / 0.14);
+  --shadow-dialog: 0 4px 8px rgb(16 24 40 / 0.05), 0 24px 64px -20px rgb(16 24 40 / 0.25);
+  --scroll-edge-color: 0 0% 0% / 0.09;
+}
+.dark {
+  --field-surface: 0 0% 5%;
+  --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.24);
+  --shadow-floating: 0 2px 4px rgb(0 0 0 / 0.2), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.24), 0 24px 64px -20px rgb(0 0 0 / 0.65);
+  --scroll-edge-color: 0 0% 100% / 0.065;
+}
+.console-input-surface:not([data-slot='input-group-control']),
+.form-field-input {
+  background-color: hsl(var(--field-surface));
+  --tw-shadow: var(--field-inset);
+  --tw-shadow-colored: var(--field-inset);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.console-floating-surface {
+  box-shadow: var(--shadow-floating);
+}
+.console-dialog-surface {
+  box-shadow: var(--shadow-dialog);
+}
+
+/* Local covers disappear with the scroll; shallow edge backgrounds never cover content.
+   Use only on solid native scroll surfaces, not on masked Radix viewports. */
+.scroll-edge {
+  --scroll-surface: var(--background);
+  background-image:
+    linear-gradient(hsl(var(--scroll-surface)) 35%, hsl(var(--scroll-surface) / 0)),
+    linear-gradient(hsl(var(--scroll-surface) / 0), hsl(var(--scroll-surface)) 65%),
+    linear-gradient(hsl(var(--scroll-edge-color)), transparent),
+    linear-gradient(transparent, hsl(var(--scroll-edge-color)));
+  background-position:
+    center top,
+    center bottom,
+    center top,
+    center bottom;
+  background-size:
+    100% 28px,
+    100% 28px,
+    100% 8px,
+    100% 8px;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+.code-scroll-edge {
+  --scroll-surface: var(--code-background);
+}
+.quickstart-code-surface .code-scroll-edge {
+  --scroll-surface: 0 0% 98%;
+}
+.dark .quickstart-code-surface .code-scroll-edge {
+  --scroll-surface: 0 0% 7%;
+}
+
+.quota-ticks {
+  display: inline-grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  width: 64px;
+  height: 8px;
+  flex: none;
+  vertical-align: middle;
+}
+.quota-tick {
+  position: relative;
+  background: hsl(var(--border));
+}
+.quota-tick > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+/* Resource icon animations affect their accents only; existing row feedback is independent. */
+.resource-state-accent,
+.resource-state-trace {
+  stroke: var(--resource-state-color);
+}
+.resource-state-face,
+.resource-state-light {
+  fill: var(--resource-state-color);
+  stroke: none;
+}
+.resource-state-face {
+  opacity: 0.07;
+}
+.resource-state-trace {
+  stroke-dasharray: 8 44;
+  animation: resource-state-trace 2.8s linear infinite;
+}
+.resource-state-breathe {
+  animation: resource-state-breathe 2.6s ease-in-out infinite;
+}
+@keyframes resource-state-trace {
+  to {
+    stroke-dashoffset: -52;
+  }
+}
+@keyframes resource-state-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .resource-state-trace,
+  .resource-state-breathe {
+    animation: none;
+  }
+  .resource-state-trace {
+    stroke-dashoffset: -7;
   }
 }

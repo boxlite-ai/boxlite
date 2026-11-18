@@ -6,12 +6,12 @@
 
 mod common;
 
-use boxlite::BoxliteRuntime;
 use boxlite::litebox::BoxCommand;
 use boxlite::runtime::id::BoxID;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
 use boxlite::util::PidFileReader;
+use common::TestRuntime as BoxliteRuntime;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 

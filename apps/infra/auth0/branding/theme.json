@@ -65,7 +65,7 @@
   "widget": {
     "header_text_alignment": "center",
     "logo_position": "center",
-    "logo_height": 36,
+    "logo_height": 96,
     "logo_url": "/auth0/boxlite-light-e912d3c8.png",
     "social_buttons_layout": "top"
   }

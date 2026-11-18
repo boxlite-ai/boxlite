@@ -20,6 +20,7 @@
  * there would read whatever that shell happened to hold.
  */
 
+import { renderRunnerEnvironment } from '../stack/runner-environment.ts'
 import { apiEnvironmentFrom } from './api-environment.ts'
 import { clickHouseRetentionHours } from '../stack/clickhouse-retention.ts'
 import {
@@ -86,7 +87,11 @@ export const userDomainFrom = (environment: NodeJS.ProcessEnv): UserDomain | nul
   }
   return {
     domain,
-    dnsZoneId: required(environment, 'CLOUDFLARE_USER_ZONE_ID', `the records for *.${domain} go into the zone that holds it`),
+    dnsZoneId: required(
+      environment,
+      'CLOUDFLARE_USER_ZONE_ID',
+      `the records for *.${domain} go into the zone that holds it`,
+    ),
   }
 }
 
@@ -105,7 +110,7 @@ const RUNNER_NAME = /^[a-zA-Z0-9_.-]{2,255}$/
  * on and what an existing stage's state already calls its first host, so
  * renaming it would replace a machine rather than update one.
  */
-const fleetFrom = ({
+export const runnerFleetFrom = ({
   environment,
   app,
   stage,
@@ -245,6 +250,7 @@ export type StackEnvironment = {
    */
   mailRelayHost: string | null
   apiEnvironment: Record<string, string>
+  filestoreProjects: string[]
   /** Addresses rather than values, for the keys `env.selectGroup.secret` marks. */
   apiSecrets: Record<string, string>
   proxyEnvironment: Record<string, string>
@@ -276,6 +282,14 @@ const channels = ({
   home: Cloud
 }) => {
   const api = apiEnvironmentFrom({ environment, declaration, region, stage, home })
+  // Invocation metadata bypasses stored stage groups, like the image tag.
+  const generationKey = environment.CI_SCHEDULER_GENERATION === undefined ? 'GITHUB_RUN_ID' : 'CI_SCHEDULER_GENERATION'
+  const generation = environment[generationKey]
+  if (generation !== undefined) {
+    if (!/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation)))
+      throw new StackEnvError(`${generationKey} must be a canonical positive safe integer`)
+    api.environment.CI_SCHEDULER_GENERATION = generation
+  }
   const split = (group: string) =>
     splitServiceChannels({
       delivered: serviceSecretsFrom({ group, declaration, environment }),
@@ -285,8 +299,14 @@ const channels = ({
   const proxy = split(PROXY_GROUP)
   const collector = split(OTEL_GROUP)
   const runner = split(RUNNER_GROUP)
+  renderRunnerEnvironment(runner.values.BOXLITE_RUNNER_ENV, [
+    ...Object.keys(runner.values),
+    ...Object.keys(runner.addresses),
+    ...Object.keys(runner.addresses).map((name) => `${name}_ARN`),
+  ])
   return {
     apiEnvironment: api.environment,
+    filestoreProjects: api.filestoreProjects,
     apiSecrets: api.secrets,
     proxyEnvironment: proxy.values,
     proxySecrets: proxy.addresses,
@@ -360,7 +380,7 @@ export const readStackEnvironment = ({
     // that holds the key with nothing in it.
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
     userDomain: userDomainFrom(environment),
-    runnerFleet: fleetFrom({ environment, app, stage }),
+    runnerFleet: runnerFleetFrom({ environment, app, stage }),
     managedClickHouse: managedClickHouseFrom(environment),
     clickHouseRetentionHours:
       optional(environment, 'CLICKHOUSE_RETENTION_HOURS') === null ? null : clickHouseRetentionHours(environment),

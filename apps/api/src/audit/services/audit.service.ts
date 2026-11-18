@@ -4,7 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Inject, Injectable, Logger, NotFoundException, OnApplicationBootstrap, Optional } from '@nestjs/common'
+import {
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnApplicationBootstrap,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule'
 import { LessThan, Repository, IsNull, Not } from 'typeorm'
@@ -21,6 +29,7 @@ import { AuditLogFilter } from '../interfaces/audit-filter.interface'
 import { DistributedLock } from '../../common/decorators/distributed-lock.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
+import { AUDIT_WRITE_TIMEOUT_MS, remainingAuditTime } from '../audit-write-deadline'
 
 export interface PendingAuditLease {
   signal: AbortSignal
@@ -30,7 +39,6 @@ export interface PendingAuditLease {
 @Injectable()
 export class AuditService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AuditService.name)
-  private pendingBoundedWrites = 0
 
   constructor(
     @InjectRepository(AuditLog)
@@ -116,10 +124,10 @@ export class AuditService implements OnApplicationBootstrap {
     return updated
   }
 
-  async keepPendingLogAlive(id: string): Promise<PendingAuditLease> {
+  async keepPendingLogAlive(id: string, initialTimeoutMs = AUDIT_WRITE_TIMEOUT_MS): Promise<PendingAuditLease> {
     const controller = new AbortController()
     const renew = async (initial = false) => {
-      await this.writeWithDeadline(5000, async (repository) => {
+      await this.writeWithDeadline(initial ? initialTimeoutMs : AUDIT_WRITE_TIMEOUT_MS, async (repository) => {
         const [rows] = await repository.query(
           `UPDATE audit_log SET "leaseExpiresAt" = clock_timestamp() + interval '5 minutes'
            WHERE id = $1 AND "statusCode" IS NULL
@@ -158,7 +166,7 @@ export class AuditService implements OnApplicationBootstrap {
         clearTimeout(timer)
         completion = (async () => {
           await renewal
-          const row = await this.writeWithDeadline(5000, async (repository) => {
+          const row = await this.writeWithDeadline(AUDIT_WRITE_TIMEOUT_MS, async (repository) => {
             // A late response must neither replace reconciliation nor recreate a published row.
             const [rows] = await repository.query(
               `UPDATE audit_log SET "statusCode" = $2, "errorMessage" = $3,
@@ -193,17 +201,15 @@ export class AuditService implements OnApplicationBootstrap {
   ): Promise<T> {
     if (timeoutMs === undefined) return operation(this.auditLogRepository)
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid audit write deadline')
-    if (this.pendingBoundedWrites >= 8) throw new Error('Audit write capacity exhausted')
-
+    const deadlineAt = performance.now() + timeoutMs
     const runner = this.auditLogRepository.manager.connection.createQueryRunner()
     const controller = new AbortController()
     // pg's end() marks the client unusable; destroy also closes an idle transport.
     let client: { end(): Promise<void>; connection: { stream: { destroy(): void } } } | undefined
     let timer: ReturnType<typeof setTimeout>
-    this.pendingBoundedWrites++
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        const error = new Error('Audit write deadline exceeded')
+        const error = new ServiceUnavailableException('Audit write deadline exceeded')
         controller.abort(error)
         if (client) {
           void client.end().catch(() => undefined)
@@ -214,34 +220,45 @@ export class AuditService implements OnApplicationBootstrap {
     })
     const work = (async () => {
       try {
-        client = await runner.connect()
+        try {
+          client = await runner.connect()
+        } catch (cause) {
+          throw new ServiceUnavailableException('Audit database connection unavailable', { cause })
+        }
         controller.signal.throwIfAborted()
+        remainingAuditTime(deadlineAt)
         await runner.startTransaction()
         controller.signal.throwIfAborted()
+        const remainingMs = remainingAuditTime(deadlineAt)
         await runner.query("SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)", [
-          `${timeoutMs}ms`,
-          `${Math.min(timeoutMs, 1000)}ms`,
+          `${remainingMs}ms`,
+          `${Math.min(remainingMs, 1000)}ms`,
         ])
         controller.signal.throwIfAborted()
+        remainingAuditTime(deadlineAt)
         const result = await operation(runner.manager.getRepository(AuditLog), controller.signal)
         controller.signal.throwIfAborted()
+        remainingAuditTime(deadlineAt)
         await runner.commitTransaction()
         controller.signal.throwIfAborted()
         return result
       } catch (error) {
         if (!controller.signal.aborted && runner.isTransactionActive) await runner.rollbackTransaction()
+        const code = error?.driverError?.code ?? error?.code
+        if (code === '57014' || code === '55P03') {
+          throw new ServiceUnavailableException('Audit database operation timed out', { cause: error })
+        }
         throw error
       } finally {
         // Releasing before connect settles makes TypeORM's later release a no-op.
-        try {
-          if (client) await runner.release()
-        } finally {
-          this.pendingBoundedWrites--
-        }
+        // The pool's finite acquisition timeout removes waiters even if no connection returns.
+        if (client) await runner.release()
       }
     })()
     try {
-      return await Promise.race([work, deadline])
+      const result = await Promise.race([work, deadline])
+      remainingAuditTime(deadlineAt)
+      return result
     } finally {
       clearTimeout(timer)
     }

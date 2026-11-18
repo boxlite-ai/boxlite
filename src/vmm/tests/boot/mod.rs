@@ -75,6 +75,9 @@ fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
         initramfs: None,
         disks: Vec::new(),
         filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
     }
 }
 
@@ -206,6 +209,9 @@ fn linux_config(vcpu_count: u8, cmdline: &str, initramfs: Option<PathBuf>) -> Vm
         initramfs,
         disks: Vec::new(),
         filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
     };
     config.validate().unwrap();
     config

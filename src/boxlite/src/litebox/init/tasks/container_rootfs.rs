@@ -145,6 +145,7 @@ async fn run_container_rootfs(
                     .load_from_local(bundle_dir.to_path_buf(), format!("local:{}", path))
                     .await?
             }
+            RootfsSpec::Checkpoint(_) => return Err(checkpoint_unsupported()),
         };
         let image_config = image.load_config().await?;
         let mut container_image_config = ContainerImageConfig::from_oci_config(&image_config)?;
@@ -184,6 +185,7 @@ async fn run_container_rootfs(
                 .load_from_local(bundle_dir.to_path_buf(), format!("local:{}", path))
                 .await?
         }
+        RootfsSpec::Checkpoint(_) => return Err(checkpoint_unsupported()),
     };
 
     // Prepare rootfs from image
@@ -400,6 +402,11 @@ fn resolved_image_of(
 ///
 /// And only for a registry pull. A local bundle's manifest digest is computed on
 /// this host and names nothing a registry could resolve.
+/// Local create refuses a checkpoint source, so no local box carries one.
+fn checkpoint_unsupported() -> BoxliteError {
+    BoxliteError::Unsupported(crate::runtime::checkpoints::UNSUPPORTED_ON_LOCAL.into())
+}
+
 fn records_resolved_image(rootfs_spec: &RootfsSpec, reuse_rootfs: bool) -> bool {
     matches!(rootfs_spec, RootfsSpec::Image(_)) && !reuse_rootfs
 }

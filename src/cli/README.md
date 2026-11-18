@@ -8,6 +8,10 @@ For CLI development (build, test, adding commands), see [CLI Development Guide](
 
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
 ## Overview
 
 The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from the terminal. It targets quick testing, shell scripting and automation, debugging, and demos.
@@ -32,6 +36,34 @@ including steering. BOX is positional; creation uses `--agent IMPLEMENTATION`.
 Other commands use `--agent ID` and `--turn TURN` to select existing work.
 See the [agent CLI reference](../../docs/reference/cli/README.md#boxlite-agent)
 for commands, grouped options and error behavior.
+
+## GitHub CI connect (in development)
+
+`boxlite --context dev ci connect GITHUB_ACCOUNT` binds a GitHub App installation
+using the selected remote BoxLite context and a browser device authorization.
+Public repositories are enabled by default. Use `--allow-private-repositories` to include private repositories, and `--no-browser`
+to print the authorization URL without opening it. The account may be a personal
+GitHub account or organization.
+
+The command requires BoxLite organization ownership and GitHub installation ownership.
+An API key needs `write:boxes` and `delete:boxes`. Current and future App-selected
+repositories follow the binding. A conflicting binding is rejected rather than replaced.
+
+The authorization poll is a POST without a body, so the CLI declares `Content-Length: 0` on it.
+Some gateways answer a POST without a length with HTTP 411 before it reaches the API.
+
+After connecting, use `runs-on: boxlite` for the configured worker defaults or
+`runs-on: boxlite-2vcpu-4gbmem-10gbdisk` for 2 vCPU, 4 GiB RAM and 10 GiB disk.
+Both hosted and standalone execution enforce the backend's resource and quota
+checks. See [resource labels](../../apps/libs/ci-listener/README.md#resource-labels)
+for accepted quantities and conflicting-label rules.
+
+The current API reports `provisioning` after binding; runner capacity is not ready yet.
+The API deployment also needs the CI Login OAuth App credentials for authenticated GitHub account-type lookup; user authorization still uses the matching Personal or Organization CI App.
+
+See the [Listener README](../../apps/github-ci-runner/README.md#hosted-connect)
+for deployment status and authentication requirements. CI logs and results remain in GitHub
+Actions; running jobs use ordinary Box management commands.
 
 ## Installation
 
@@ -126,6 +158,48 @@ boxlite pull alpine:latest
 boxlite images
 ```
 
+## Checkpoint management
+
+Only `--name` may accompany `create --checkpoint` among creation flags.
+Explicit defaults such as `--auto-delete 0` and `--network enabled` also reject;
+global connection options remain available.
+
+Checkpoints are managed by the selected REST server. Local runtimes return
+an unsupported-operation error. Each checkpoint captures a stopped box's disk
+and execution configuration, survives source deletion, and can create multiple
+boxes. It does not capture memory or running processes.
+
+```bash
+# Use a REST context, or pass --url with the selected server.
+boxlite --url https://api.example.com stop source
+boxlite --url https://api.example.com checkpoint create source --name dev-base
+boxlite --url https://api.example.com checkpoint list
+boxlite --url https://api.example.com checkpoint get dev-base
+
+# Saved execution settings are inherited; only --name may accompany --checkpoint.
+boxlite --url https://api.example.com create --checkpoint dev-base --name worker
+boxlite --url https://api.example.com checkpoint delete dev-base
+```
+
+A capture can initially report `creating`; wait for `ready` before use.
+Capture never automatically stops a Box. `create --checkpoint` refuses an image,
+`--rootfs` and every other create option before sending a request. Deleting a
+checkpoint leaves boxes created from it intact; `--force` tolerates absence and
+never bypasses active use.
+
+A checkpoint is a rootfs source for `create`, beside an image or `--rootfs`, so
+the `checkpoint` subcommands only manage checkpoints. The CLI and SDKs do not
+replace an existing box from a checkpoint; remove the box and create a new one.
+
+Storage and capture coordination belong to the server.
+The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
+The separate `import ARCHIVE` command keeps the native archive workflow unchanged.
+Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
+management routes. Existing binary archive export/import remains available.
+The cloud runner verifies the downloaded artifact SHA before ordinary native
+import, which owns archive validation; this creates no local
+checkpoint catalog or recovery records.
+
 ## Connecting to a remote server
 
 To target a remote BoxLite REST server instead of the local runtime, sign in
@@ -175,7 +249,9 @@ remain supported. Login saves credentials but does not change the current contex
 
 `boxlite context use default` restores the pre-context configuration: a URL
 override or existing `default` credentials select REST; otherwise commands use
-the embedded runtime. Context selection is stored separately in
+the embedded runtime. `boxlite context use embedded` always selects the embedded
+runtime, including after a `default` login; `auth login` cannot store
+credentials under that name. Context selection is stored separately in
 `<BOXLITE_HOME>/cli.toml`. See [context selection and precedence](../../docs/reference/cli/README.md#boxlite-context)
 for URL overrides and missing contexts.
 
@@ -225,29 +301,50 @@ for runtime support, connection lifetime and persistence.
 ```bash
 boxlite run -d --name dev alpine:latest tail -f /dev/null
 boxlite ssh dev
-# Copy and execute the complete ssh command printed by setup.
 ```
 
-With no operation flag, `boxlite ssh dev` generates client and host keys on this
-machine, enables `box` on guest port 22, and prints a command using `ssh --proxy` as ProxyCommand. It takes
-no key flags and reuses both saved keys on subsequent calls. Setup replaces the
-whole guest SSH configuration, including any previously configured host key.
-The summary includes the server's SSH host-key fingerprint for host verification.
-Choose one operation with `--configure`, `--status`, `--enable`, `--disable`,
-`--tunnel`, or `--proxy`; all support local boxes and cloud contexts.
+With no operation flag, `boxlite ssh dev` prepares CLI-managed Ed25519 keys and
+logs in as `box` using system OpenSSH. Both `ssh` and `ssh-keygen` must be on PATH.
+Saved keys are reused; healthy SSH with a matching host identity is not
+reconfigured. Changed host identities are rejected rather than overwritten.
+Choose one operation with `--install-ssh-config`, `--configure`, `--status`,
+`--enable`, `--disable`, `--tunnel`, or `--proxy`; all support local and remote boxes.
 `--configure` retains full configuration control and prints status JSON.
+
+To connect later with plain OpenSSH, install an alias once:
+
+```bash
+boxlite ssh dev --install-ssh-config
+ssh dev
+boxlite --context cloud ssh dev --install-ssh-config --alias dev-cloud
+ssh dev-cloud
+```
+
+Installation prepares SSH and exits without logging in. The default alias is the
+resolved box name, or its full ID for unnamed boxes. Reinstalling the same target
+updates its entry; a different target requires `--alias NAME` or `--overwrite`.
+Overwrite replaces only BoxLite-managed entries, never handwritten Host blocks.
+The CLI adds one Include to `~/.ssh/config` and keeps its entries separately in
+`~/.boxlite/ssh/config`. Installed aliases pin home, backend, endpoint, context and
+routing, while credentials remain in the existing store. User and system SSH
+settings still participate, including personal identities and Match conditions;
+installation does not guarantee complete configuration isolation. See the
+[installation guide](../../docs/guides/ssh.md#managed-openssh-aliases) for safety
+checks and lifecycle behavior.
 
 `--proxy` forwards only stdin/stdout; `--tunnel` remains available for a local TCP
 listener. Both require enabled SSH. `--enable` restores saved SSH configuration;
 `--disable` stops SSH while retaining credentials. Both require a running box.
 All SSH operations accept cloud contexts, for example
-`boxlite --context cloud ssh dev`. The printed command preserves the
-selected context or explicit URL and routing prefix; credentials are loaded normally
-when it runs. An empty prefix is pinned with `--path-prefix=''`, so later changes
-to the saved context cannot add a routing segment to that command.
-Cloud proxy requires SSH control, tunnel support and inbound access.
-An active local proxy/tunnel holds the
-runtime home lock; stop it before issuing another local CLI command on that home.
+`boxlite --context cloud ssh dev`. Default login uses the resolved context,
+authentication, endpoint and routing prefix for its entire session.
+It pins the local managed host key in a private `known_hosts` file and ignores
+user OpenSSH configuration without modifying it.
+Cloud login requires SSH control, tunnel support and inbound access;
+`boxlite serve` supports explicit controls but has no tunnel endpoint.
+A local login, proxy or tunnel holds the runtime home lock until it ends.
+The default command returns the SSH exit code; non-detached boxes remain alive
+until the session ends, then stop when the CLI exits.
 See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
 [SSH guide](../../docs/guides/ssh.md#cli) for lifecycle rules.
 
@@ -646,12 +743,18 @@ List cached images.
 
 ### `boxlite cp`
 
+Native copies stream tar chunks while packing or extracting, without staging a
+complete archive. Transfers can leave partial destination files on failure;
+failed uploads can also leave root-owned files because ownership is adjusted
+after successful extraction. Older remote peers may buffer transfers.
+
 Copy files or directories between host and box.
 
 **Usage:** `boxlite cp [OPTIONS] SRC DST`
 
-- **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`). End a directory
-  `SRC` with `/.` to copy its contents rather than the directory itself, as `docker cp` does.
+- **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`). A directory `SRC` lands as
+  `docker cp` lands it: it becomes a `DST` that does not exist, and lands under its own name in
+  one that does. End `SRC` with `/.` to copy its contents either way.
 
 | Option | Description |
 |--------|-------------|
@@ -663,7 +766,7 @@ Copy files or directories between host and box.
 ```bash
 boxlite cp ./local.txt mybox:/workspace/
 boxlite cp mybox:/app/out ./output
-boxlite cp ./dist/. mybox:/srv/www        # the contents of ./dist, not dist/ itself
+boxlite cp ./dist/. mybox:/srv            # the contents of ./dist, not dist/ itself
 ```
 
 Paths at or under a mount inside the box are refused in both directions — `/tmp`,

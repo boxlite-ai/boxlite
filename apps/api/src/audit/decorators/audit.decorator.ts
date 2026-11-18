@@ -22,6 +22,7 @@ export interface AuditContext {
   // Override only the audit error text when upstream failures may contain secrets.
   errorMessage?: string
   targetType?: AuditTarget
+  organizationIdFromRequest?: (req: Request) => AuditTargetId
   targetIdFromRequest?: (req: Request) => AuditTargetId
   targetIdFromResult?: (result: any) => AuditTargetId
   requestMetadata?: Record<string, (req: Request) => any>

@@ -309,6 +309,33 @@ test('the file source discovers one complete prompt document per language and pr
   }
 })
 
+test('the checked-in stage source resolves its own tenant and branding assets', async () => {
+  const source = await new FileBrandingSource().load('stage')
+  assert.deepEqual(source.target, {
+    stage: 'stage',
+    stackOrigin: 'https://stage.boxlite.ai',
+    apiOrigin: 'https://api.stage.boxlite.ai',
+    publicOidcIssuer: 'https://auth.stage.boxlite.ai/',
+    auth0TenantDomain: 'boxlite-stage.us.auth0.com',
+  })
+  assert.ok(source.assetUrls.length > 0)
+  for (const url of source.assetUrls) assert.equal(new URL(url).origin, source.target.stackOrigin)
+  const dev = await new FileBrandingSource().load('dev')
+  assert.deepEqual(source.prompts, dev.prompts)
+  assert.deepEqual(
+    source.assetUrls.map((url) => new URL(url).pathname),
+    dev.assetUrls.map((url) => new URL(url).pathname),
+  )
+  const prod = await new FileBrandingSource().load('prod')
+  assert.deepEqual(prod.target, {
+    stage: 'prod',
+    stackOrigin: 'https://app.boxlite.ai',
+    apiOrigin: 'https://api.boxlite.ai',
+    publicOidcIssuer: 'https://auth.boxlite.ai/',
+    auth0TenantDomain: 'boxlite.us.auth0.com',
+  })
+})
+
 test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and copy', async () => {
   const source = await new FileBrandingSource().load('dev')
   assert.deepEqual(source.target, {
@@ -325,13 +352,14 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   const copy = new Map(source.prompts.map((prompt) => [prompt.prompt, prompt.text]))
   assert.deepEqual([...copy.keys()].sort(), ['login', 'login-id', 'signup', 'signup-id'])
   // Identifier First serves login-id/signup-id, so both variants of each screen carry the same copy.
-  for (const [prompt, title, description] of [
-    ['login-id', 'Start building on BoxLite', '$100 in free credits with your new account.'],
-    ['login', 'Start building on BoxLite', '$100 in free credits with your new account.'],
-    ['signup-id', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
-    ['signup', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
+  for (const [prompt, text] of [
+    // A zero-width space keeps Auth0 from rendering its default subtitle on the login screens.
+    ['login-id', { title: 'Start building on BoxLite', description: '\u200b' }],
+    ['login', { title: 'Start building on BoxLite', description: '\u200b' }],
+    ['signup-id', { title: 'Welcome to BoxLite', description: 'Boxes your agents build in, and ship from.' }],
+    ['signup', { title: 'Welcome to BoxLite', description: 'Boxes your agents build in, and ship from.' }],
   ] as const) {
-    assert.deepEqual(copy.get(prompt), { [prompt]: { title, description } })
+    assert.deepEqual(copy.get(prompt), { [prompt]: text })
   }
   assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-3f7875da.png')
   assert.equal('_comment' in source.theme, false)

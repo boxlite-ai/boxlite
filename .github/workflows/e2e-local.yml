@@ -9,12 +9,12 @@
 #     Start stopped VM                Build + run tests             Stop VM
 #     Wait for runner online           50-min timeout               if: always()
 #
-# Concurrency: only ONE e2e run at a time (single persistent VM).
+# Concurrency: only ONE e2e run at a time, selecting one persistent VM.
 # A newer push queues behind the in-progress run instead of cancelling it.
 #
 # Authentication:
 #   GCP: GitHub OIDC → workload identity pool ci-gha-e2e → service account
-#        ci-gha-e2e-ctl, which can only get/start/stop/set metadata on the VM
+#        ci-gha-e2e-ctl, which can only get/start/stop/set metadata on the two VMs
 #   GitHub: GitHub App → short-lived installation token (no PAT)
 #
 # Registration: every start hands the VM a fresh runner registration token
@@ -86,8 +86,8 @@ on:
           - upstream
         default: local
 
-# Single global concurrency group — only one e2e run at a time (the
-# persistent VM can only serve one job). A newer push queues behind
+# Single global concurrency group — only one e2e run selects from the
+# persistent VM pool at a time. A newer push queues behind
 # the in-progress run instead of cancelling it, so an in-flight run keeps
 # its VM work and the earlier commit still gets a result. GitHub keeps only
 # the newest pending run, so intermediate queued pushes are superseded.
@@ -105,6 +105,8 @@ env:
   GCP_PROJECT: boxlite-dev-project
   GCP_ZONE: us-east5-a
   GCP_INSTANCE: ci-gha-e2e-1
+  GCP_FALLBACK_ZONE: us-east4-a
+  GCP_FALLBACK_INSTANCE: ci-gha-e2e-2
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/929248348760/locations/global/workloadIdentityPools/ci-gha-e2e/providers/github
   GCP_SERVICE_ACCOUNT: ci-gha-e2e-ctl@boxlite-dev-project.iam.gserviceaccount.com
   RUNNER_LABEL: gcp-e2e
@@ -159,6 +161,7 @@ jobs:
       contents: read
     outputs:
       instance: ${{ steps.start.outputs.instance }}
+      zone: ${{ steps.start.outputs.zone }}
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -190,12 +193,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-        run: |
-          # Set first, so stop-runner still stops a VM this step left booting.
-          echo "instance=$GCP_INSTANCE" >> "$GITHUB_OUTPUT"
-          scripts/ci/gcp-e2e-vm.sh start
+        run: scripts/ci/gcp-e2e-vm.sh start-pool
 
       - name: Wait for runner to come online
+        env:
+          SELECTED_INSTANCE: ${{ steps.start.outputs.instance }}
         run: |
           # A boot re-registers the runner; the very first boot also
           # installs it (~1 min).
@@ -203,14 +205,14 @@ jobs:
           ELAPSED=0
           INTERVAL=10
 
-          echo "Waiting for runner '${{ env.RUNNER_LABEL }}' to come online..."
+          echo "Waiting for runner '$SELECTED_INSTANCE' to come online..."
 
           while [ $ELAPSED -lt $TIMEOUT ]; do
             STATUS=$(curl -sf \
               -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
-              | jq -r '.runners[] | select(.labels[].name == "${{ env.RUNNER_LABEL }}") | .status // empty' \
+              | jq -r --arg name "$SELECTED_INSTANCE" '.runners[] | select(.name == $name) | .status // empty' \
               2>/dev/null || echo "")
 
             if [ "$STATUS" = "online" ]; then
@@ -230,9 +232,11 @@ jobs:
       # code cannot read it from the metadata server and register its own
       # runner.
       - name: Remove the registration token from VM metadata
-        if: always() && steps.auth.outcome == 'success'
+        if: always() && steps.auth.outcome == 'success' && steps.start.outputs.instance != ''
         env:
           REPO: ${{ github.repository }}
+          GCP_INSTANCE: ${{ steps.start.outputs.instance }}
+          GCP_ZONE: ${{ steps.start.outputs.zone }}
         run: scripts/ci/gcp-e2e-vm.sh clear-token
 
   # =========================================================================
@@ -244,6 +248,7 @@ jobs:
     runs-on:
       - self-hosted
       - gcp-e2e
+      - ${{ needs.start-runner.outputs.instance }}
     timeout-minutes: 50
     env:
       CARGO_TERM_COLOR: always
@@ -499,6 +504,8 @@ jobs:
         if: ${{ !(needs.e2e-tests.result == 'failure' && inputs.debug) }}
         env:
           REPO: ${{ github.repository }}
+          GCP_INSTANCE: ${{ needs.start-runner.outputs.instance }}
+          GCP_ZONE: ${{ needs.start-runner.outputs.zone }}
         run: |
           scripts/ci/gcp-e2e-vm.sh stop \
             && echo "VM stopping" \

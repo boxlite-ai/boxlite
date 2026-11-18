@@ -27,8 +27,13 @@ func countSSHStatusFrees() (freed <-chan struct{}, restore func()) {
 // submitSSHStatus queues a native status read whose callback receives
 // userData unchanged, bypassing SSH.Status's own handle registration.
 func submitSSHStatus(box *Box, userData unsafe.Pointer) error {
+	handle, unlock, err := box.acquire()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	var cerr C.CBoxliteError
-	if code := C.boxlite_box_ssh_status(box.handle, C.cbSSHStatus(), userData, &cerr); code != C.Ok {
+	if code := C.boxlite_box_ssh_status(handle, C.cbSSHStatus(), userData, &cerr); code != C.Ok {
 		return freeError(&cerr)
 	}
 	return nil

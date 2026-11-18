@@ -111,20 +111,31 @@ if (existing.test(config)) {
 
 writeFileSync(configPath, config)
 
-// Preserve the original sixth-position Axios options as new list filters are added.
+// Preserve the original sixth- and eighth-position Axios options as new list filters are added.
 const adminPath = `${srcDir}/api/admin-api.ts`
 if (existsSync(adminPath)) {
   let admin = readFileSync(adminPath, 'utf8')
   const scopeParameter = 'boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum,'
+  const includeParameter = 'include?: AdminListOrganizationsOverviewIncludeEnum,'
   const requestEntry = /(adminListOrganizationsOverview: async \([^\n]+\): Promise<RequestArgs> => \{\n)/g
-  if (admin.split(scopeParameter).length - 1 !== 4 || [...admin.matchAll(requestEntry)].length !== 1) {
+  // The API rejects the generator's unknown-value member, so include offers only memberEmails.
+  const unknownInclude =
+    "export const AdminListOrganizationsOverviewIncludeEnum = {\n    MEMBER_EMAILS: 'memberEmails',\n    UNKNOWN_DEFAULT_OPEN_API: '11184809',\n"
+  if (
+    admin.split(scopeParameter).length - 1 !== 4 ||
+    admin.split(includeParameter).length - 1 !== 4 ||
+    admin.split(unknownInclude).length - 1 !== 1 ||
+    [...admin.matchAll(requestEntry)].length !== 1
+  ) {
     throw new Error(`Unexpected organization-list signatures in ${adminPath}; review request-options compatibility`)
   }
   admin = admin
+    .replace(unknownInclude, unknownInclude.replace("    UNKNOWN_DEFAULT_OPEN_API: '11184809',\n", ''))
     .replaceAll(
       scopeParameter,
       'boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig,',
     )
+    .replaceAll(includeParameter, 'include?: AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig,')
     .replace(
       requestEntry,
       `$1            // Legacy callers pass Axios options before the optional inventory filters.
@@ -132,11 +143,19 @@ if (existsSync(adminPath)) {
                 options = boxCountScope;
                 boxCountScope = undefined;
             }
+            if (typeof include === 'object' && include !== null) {
+                options = include;
+                include = undefined;
+            }
 `,
     )
     .replaceAll(
       '@param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope]',
       '@param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or:',
+    )
+    .replaceAll(
+      '@param {AdminListOrganizationsOverviewIncludeEnum} [include]',
+      '@param {AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig} [include] Legacy Axios options, or:',
     )
     .replace(/\/\*\*[\s\S]*?\*\//g, (block) =>
       block.includes('boxCountScope') ? block.replace(/[ \t]+$/gm, '') : block,

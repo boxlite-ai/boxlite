@@ -14,7 +14,8 @@
 mod common;
 
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec, VolumeSpec};
-use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
+use boxlite::{BoxCommand, LiteBox};
+use common::TestRuntime as BoxliteRuntime;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio_stream::StreamExt;

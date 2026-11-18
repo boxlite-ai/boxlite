@@ -21,7 +21,7 @@ const columns: ColumnDef<MessageOut>[] = [
       const msgId = row.original.id
       return (
         <div className="w-full truncate flex items-center gap-2 group/copy-button">
-          <span className="truncate block font-mono text-sm hover:underline focus:underline cursor-pointer">
+          <span className="truncate block font-mono text-body hover:underline focus:underline cursor-pointer">
             {msgId ?? '-'}
           </span>
           {msgId && (
@@ -43,7 +43,7 @@ const columns: ColumnDef<MessageOut>[] = [
     cell: ({ row }) => {
       const eventType = row.original.eventType
       return (
-        <Badge variant="secondary" className="font-normal text-xs">
+        <Badge variant="secondary" className="font-normal text-meta">
           {eventType}
         </Badge>
       )

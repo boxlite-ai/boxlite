@@ -38,20 +38,21 @@ upstream, which needs a repository under our control.
 from __future__ import annotations
 
 import os
-import warnings
+import uuid
 
 import pytest
 import pytest_asyncio
-
-import boxlite
 from catalog_boxes import (
     WINDOW_REMAINING,
     create_box,
     hold_through_report_window,
     until_reported,
 )
+from conftest import wait_until_unlisted
 from e2e_auth import auth_context, request_json
 from images import repository_name
+
+import boxlite
 
 # Small, public, and on a host the built-in allowlist admits
 # (`docker.io` / `quay.io` / `gcr.io` / `public.ecr.aws` — `ghcr.io` is held
@@ -85,7 +86,9 @@ async def images(rt):
         await rt.images.list()
     except boxlite.NotFoundError:
         if os.environ.get("BOXLITE_E2E_ALLOW_MISSING_CATALOG") == "1":
-            pytest.skip("BOXLITE_E2E_ALLOW_MISSING_CATALOG=1 and this stack has no image routes")
+            pytest.skip(
+                "BOXLITE_E2E_ALLOW_MISSING_CATALOG=1 and this stack has no image routes"
+            )
         pytest.fail(
             "rt.images.list() was answered 404. If this stack predates the catalog, say so "
             "with BOXLITE_E2E_ALLOW_MISSING_CATALOG=1; otherwise the routes have regressed."
@@ -103,25 +106,45 @@ async def _listed_or_none(images, name: str) -> list | None:
     return await _listed(images, name) or None
 
 
+async def _remove_catalog_entry(images, name: str) -> None:
+    """Wait for queued Box destruction to release an entry owned by this module."""
+    held = None
+
+    async def drop() -> bool | None:
+        nonlocal held
+        try:
+            await images.remove(name)
+        except boxlite.NotFoundError:
+            # An absent entry already satisfies catalog cleanup.
+            pass
+        except boxlite.InvalidStateError as failure:
+            held = failure
+            return None
+        return True
+
+    assert await until_reported(drop), (
+        f"catalog cleanup could not release {name}: {held}"
+    )
+
+
+async def _clean_catalog_entries(images) -> None:
+    failures = []
+    for name in (CATALOG_NAME, UNPULLABLE_NAME):
+        try:
+            await _remove_catalog_entry(images, name)
+        except (boxlite.BoxliteError, AssertionError) as failure:
+            failures.append(f"{name}: {failure}")
+    assert not failures, "catalog cleanup failed: " + "; ".join(failures)
+
+
 @pytest_asyncio.fixture(scope="module", autouse=True)
 async def clean_catalog(images):
-    """Clear our test entries before and after, so a re-run starts where the first did."""
-
-    async def drop() -> None:
-        for name in (CATALOG_NAME, UNPULLABLE_NAME):
-            try:
-                await images.remove(name)
-            except boxlite.NotFoundError:
-                pass
-            except boxlite.InvalidStateError as held:
-                # A box from an earlier, interrupted run still holds it. This
-                # fixture cannot remove that box; say so, or the step that
-                # expects the image absent fails without naming the cause.
-                warnings.warn(f"{name} stays in the catalog: {held}", stacklevel=1)
-
-    await drop()
-    yield
-    await drop()
+    """Clear only our entries; attempt both and report cleanup failures."""
+    await _clean_catalog_entries(images)
+    try:
+        yield
+    finally:
+        await _clean_catalog_entries(images)
 
 
 @pytest.mark.asyncio
@@ -149,7 +172,9 @@ async def test_using_it_is_what_records_it(rt, images):
     registered it — which is the whole shape of this release.
     """
     listed = await _listed(images, CATALOG_NAME)
-    assert listed, f"{CATALOG_NAME} never entered the catalog after a box booted from it"
+    assert listed, (
+        f"{CATALOG_NAME} never entered the catalog after a box booted from it"
+    )
 
     detail = await images.get(CATALOG_NAME)
     assert detail.versions, "the image is recorded but carries no version"
@@ -218,7 +243,7 @@ async def test_removal_frees_the_name_and_the_quota(rt, images):
     """Step 5. With nothing holding it, the entry goes and the count falls."""
     before = (await images.usage()).count
 
-    await images.remove(CATALOG_NAME)
+    await _remove_catalog_entry(images, CATALOG_NAME)
 
     assert not await _listed(images, CATALOG_NAME)
     assert (await images.usage()).count == before - 1
@@ -245,17 +270,26 @@ async def test_a_pull_that_fails_records_nothing(rt, images):
     organization's slots forever.
     """
     assert not await _listed(images, UNPULLABLE_NAME)
+    # Step 5 leaves this module's successful pull recorded. Free that slot
+    # without touching other users' images, after its Box finishes destruction.
+    await _remove_catalog_entry(images, CATALOG_NAME)
+    usage = await images.usage()
+    assert usage.count < usage.limit, (
+        f"image capacity precondition failed: {usage.count}/{usage.limit} slots used; "
+        "the failed-pull case requires a free slot in its isolated organization"
+    )
 
     box = None
+    box_name = f"e2e-catalog-failed-{uuid.uuid4().hex[:10]}"
     try:
-        box = await create_box(rt, UNPULLABLE_IMAGE)
+        box = await create_box(rt, UNPULLABLE_IMAGE, name=box_name)
         # The premise is that this reference cannot resolve. If it booted, the
         # pull succeeded and this test is no longer testing what it says.
         pytest.fail(
             f"{UNPULLABLE_IMAGE} booted a box, so it is pullable and this test "
             f"can no longer show what a failed pull does"
         )
-    except Exception as failure:
+    except boxlite.BoxliteError as failure:
         message = str(failure)
         # A stack with nothing to schedule onto never reaches the pull, so the
         # assertion below would hold for a reason that has nothing to do with
@@ -285,16 +319,26 @@ async def test_a_pull_that_fails_records_nothing(rt, images):
             f"create failed before the pull was attempted, so an empty catalog "
             f"proves nothing here: {message}"
         )
+
+        async def never_recorded() -> None:
+            assert not await _listed(images, UNPULLABLE_NAME), (
+                f"{UNPULLABLE_NAME} entered the catalog even though it never pulled"
+            )
+
+        # Keep any partially created Box alive while a late report could land.
+        await hold_through_report_window(never_recorded)
     finally:
-        if box is not None:
-            await rt.remove(box.id, force=True)
-
-    async def never_recorded() -> None:
-        assert not await _listed(images, UNPULLABLE_NAME), (
-            f"{UNPULLABLE_NAME} entered the catalog even though it never pulled"
-        )
-
-    await hold_through_report_window(never_recorded)
+        # REST create may persist a Box and then raise while waiting for the
+        # pull, before the session runtime can track a returned handle.
+        created = box if box is not None else await rt.get_info(box_name)
+        if created is not None:
+            try:
+                await rt.remove(created.id, force=True)
+            except boxlite.NotFoundError:
+                # The Box is already gone; still verify it is absent from listings.
+                pass
+            leaked = await wait_until_unlisted(rt, [created.id])
+            assert not leaked, f"failed-pull Box cleanup timed out: {leaked}"
 
 
 @pytest.mark.asyncio
@@ -344,4 +388,6 @@ class TestAdmission:
         assert status == 400, f"expected a refusal, got {status}: {body}"
         # Without this the test passes on any 400 the create path happens to
         # raise, which would not show the gate saw the address at all.
-        assert "169.254.169.254" in str(body), f"the refusal never named the address: {body}"
+        assert "169.254.169.254" in str(body), (
+            f"the refusal never named the address: {body}"
+        )

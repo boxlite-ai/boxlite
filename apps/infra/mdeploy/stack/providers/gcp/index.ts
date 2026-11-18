@@ -179,6 +179,8 @@ export const gcpStackProviders = ({
         dependencies,
         project,
         region,
+        // The zone the runner data disks live in, which bounds the disk grant.
+        zone,
         domain,
         dashboardDomain,
         // The proxy resolves a box through it; a runner registers itself with
@@ -209,6 +211,9 @@ export const gcpStackProviders = ({
     // Served here: the edge above writes the wildcard record and issues its
     // certificate beside the box domain's.
     servesUserDomain: () => true,
+    // The disks live here: every runner carries a Hyperdisk data disk the
+    // control plane grows online, so the API is granted the resize capability.
+    resizeRunnerDisks: () => true,
     registryProxy: ({ network, dependsOn, registryCredentials }) =>
       gcpRegistryProxyProvider({
         project,

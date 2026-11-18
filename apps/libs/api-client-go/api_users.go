@@ -94,21 +94,6 @@ type UsersAPI interface {
 	ListUsersExecute(r UsersAPIListUsersRequest) (*http.Response, error)
 
 	/*
-	RegenerateKeyPair Regenerate user key pair
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id
-	@return UsersAPIRegenerateKeyPairRequest
-
-	Deprecated
-	*/
-	RegenerateKeyPair(ctx context.Context, id string) UsersAPIRegenerateKeyPairRequest
-
-	// RegenerateKeyPairExecute executes the request
-	// Deprecated
-	RegenerateKeyPairExecute(r UsersAPIRegenerateKeyPairRequest) (*http.Response, error)
-
-	/*
 	UnlinkAccount Unlink account
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -650,99 +635,6 @@ func (a *UsersAPIService) ListUsersExecute(r UsersAPIListUsersRequest) (*http.Re
 	}
 
 	localVarPath := localBasePath + "/users"
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarHTTPResponse, newErr
-	}
-
-	return localVarHTTPResponse, nil
-}
-
-type UsersAPIRegenerateKeyPairRequest struct {
-	ctx context.Context
-	ApiService UsersAPI
-	id string
-}
-
-func (r UsersAPIRegenerateKeyPairRequest) Execute() (*http.Response, error) {
-	return r.ApiService.RegenerateKeyPairExecute(r)
-}
-
-/*
-RegenerateKeyPair Regenerate user key pair
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param id
- @return UsersAPIRegenerateKeyPairRequest
-
-Deprecated
-*/
-func (a *UsersAPIService) RegenerateKeyPair(ctx context.Context, id string) UsersAPIRegenerateKeyPairRequest {
-	return UsersAPIRegenerateKeyPairRequest{
-		ApiService: a,
-		ctx: ctx,
-		id: id,
-	}
-}
-
-// Execute executes the request
-// Deprecated
-func (a *UsersAPIService) RegenerateKeyPairExecute(r UsersAPIRegenerateKeyPairRequest) (*http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodPost
-		localVarPostBody     interface{}
-		formFiles            []formFile
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "UsersAPIService.RegenerateKeyPair")
-	if err != nil {
-		return nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/users/{id}/regenerate-key-pair"
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

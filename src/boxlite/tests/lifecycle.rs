@@ -2,10 +2,10 @@
 
 mod common;
 
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::id::{BoxID, BoxIDMint};
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
 use boxlite::runtime::types::BoxStatus;
+use common::TestRuntime as BoxliteRuntime;
 
 // ============================================================================
 // RUNTIME INITIALIZATION TESTS

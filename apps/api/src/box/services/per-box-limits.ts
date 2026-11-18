@@ -6,10 +6,11 @@
 
 import { BadRequestException } from '@nestjs/common'
 
-/** Most vCPUs the guest kernel (libkrunfw, `CONFIG_NR_CPUS=16`) brings online.
- * A larger box still boots but silently runs on 16 CPUs, so no org limit may
- * exceed it. Mirrors the runtime's `vm_defaults::MAX_CPUS`. */
-export const MAX_CPU_PER_BOX = 16
+import { assertCpuAllocation, MAX_CPU_PER_BOX } from '../utils/cpu-allocation'
+export { MAX_CPU_PER_BOX } from '../utils/cpu-allocation'
+
+/** A deterministic resource denial before any Box persistence. */
+export class PerBoxResourceLimitExceededError extends BadRequestException {}
 
 /** Per-box resource ceilings carried on the organization (the "security
  * option" numbers). A value <= 0 means "unset" and is not enforced. */
@@ -39,7 +40,8 @@ export function assertWithinPerBoxLimits(cpu: number, memoryGb: number, diskGb: 
   if (limits.maxDiskPerBox > 0 && diskGb > limits.maxDiskPerBox) {
     violations.push(`disk ${diskGb}GB exceeds the per-box limit of ${limits.maxDiskPerBox}GB`)
   }
+  if (violations.length === 0) assertCpuAllocation(cpu)
   if (violations.length > 0) {
-    throw new BadRequestException(`Requested resources exceed per-box limits: ${violations.join('; ')}`)
+    throw new PerBoxResourceLimitExceededError(`Requested resources exceed per-box limits: ${violations.join('; ')}`)
   }
 }

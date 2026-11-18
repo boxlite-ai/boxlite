@@ -335,9 +335,10 @@ fn the_activation_context_registers_deregisters_and_wakes() {
 }
 
 #[test]
-fn snapshot_defaults_are_unsupported() {
+fn quiesce_default_succeeds_and_snapshots_remain_unsupported() {
     let mut device = TestDevice::new();
-    assert!(matches!(device.quiesce(), Err(DeviceError::Unsupported(_))));
+    assert_eq!(device.quiesce(), Ok(()));
+    assert_eq!(device.quiesce(), Ok(()));
     assert_eq!(device.save_state(), Err(SnapshotError::Unsupported));
     assert!(matches!(
         device.restore_state(

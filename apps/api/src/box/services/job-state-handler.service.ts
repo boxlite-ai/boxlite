@@ -20,6 +20,7 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
+import { CheckpointJobReceiver, isCheckpointJobType } from './checkpoint-job-receiver.service'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -34,6 +35,7 @@ export class JobStateHandlerService {
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
     private readonly imagePullFailureService: ImagePullFailureService,
+    private readonly checkpointJobReceiver: CheckpointJobReceiver,
   ) {}
 
   /**
@@ -46,6 +48,11 @@ export class JobStateHandlerService {
     }
 
     if (!job.resourceId) {
+      return
+    }
+
+    if (isCheckpointJobType(job.type)) {
+      await this.checkpointJobReceiver.handleJobCompletion(job)
       return
     }
 

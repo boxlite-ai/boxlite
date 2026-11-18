@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use boxlite::runtime::options::BoxliteOptions;
-use boxlite::{BoxliteError, BoxliteResult, BoxliteRuntime};
+use boxlite::{BoxliteError, BoxliteResult};
+use common::TestRuntime as BoxliteRuntime;
 use common::home::PerTestBoxHome;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};

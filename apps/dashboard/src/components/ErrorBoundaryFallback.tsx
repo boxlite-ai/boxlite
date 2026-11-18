@@ -8,14 +8,10 @@ import { RegistrationEmailError } from '@/api/errors'
 import { Dialog, DialogHeader, DialogDescription, DialogTitle, DialogContent } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { RoutePath } from '@/enums/RoutePath'
+import { accountSwitchPath } from '@/lib/auth-session'
 import { FallbackProps } from 'react-error-boundary'
 
-/**
- * Signing out is the recovery: it ends the IdP session, so the next sign-in can
- * pick another account. This boundary sits outside the router and the auth
- * provider (see main.tsx), so it navigates the whole page rather than reaching
- * for useNavigate/useAuth.
- */
+/** Account recovery uses a document navigation because this boundary is outside the router/auth provider. */
 function RegistrationEmailRejected({ error }: { error: RegistrationEmailError }) {
   const messages = {
     disposable_email:
@@ -34,7 +30,11 @@ function RegistrationEmailRejected({ error }: { error: RegistrationEmailError })
           <DialogDescription>{messages[error.code]}</DialogDescription>
         </DialogHeader>
         <div className="flex justify-end">
-          <Button onClick={() => window.location.assign(RoutePath.LOGOUT)}>Sign out and use another email</Button>
+          <Button
+            onClick={() => window.location.assign(accountSwitchPath(window.location.pathname + window.location.search))}
+          >
+            Use another account
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -65,7 +65,7 @@ export function ErrorBoundaryFallback({ error, resetErrorBoundary }: FallbackPro
         <div className="space-y-4">
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
             <h4 className="font-semibold text-red-800 dark:text-red-200 mb-2">Error Details:</h4>
-            <p className="text-red-700 dark:text-red-300 font-mono text-sm break-all">{errorMessage}</p>
+            <p className="text-red-700 dark:text-red-300 font-sans text-body break-all">{errorMessage}</p>
           </div>
 
           {caughtError?.stack && (
@@ -73,7 +73,7 @@ export function ErrorBoundaryFallback({ error, resetErrorBoundary }: FallbackPro
               <summary className="cursor-pointer font-semibold text-gray-800 dark:text-gray-200">
                 Stack Trace (click to expand)
               </summary>
-              <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-auto max-h-48 font-mono whitespace-pre-wrap mt-2">
+              <pre className="text-meta text-gray-700 dark:text-gray-300 overflow-auto max-h-48 font-mono whitespace-pre-wrap mt-2">
                 {caughtError.stack}
               </pre>
             </details>

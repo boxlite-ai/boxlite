@@ -380,7 +380,7 @@ func TestInspectTCP_IPRuleStillDialsGuestAddress(t *testing.T) {
 	cfg.AllowNet = []string{coveringCIDR}
 	tap := startNetworkWithSeams(t, cfg, networkSeams{
 		ca:            newTestCA(t),
-		secretMatcher: NewSecretHostMatcher([]SecretConfig{{Name: "k", Hosts: []string{"secret.example"}, Placeholder: "<S>", Value: "v"}}),
+		secretMatcher: NewSecretHostMatcher([]SecretConfig{{Name: "k", Hosts: []string{"secret.example"}, Placeholder: "<S>", Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: "v"}}),
 		dial:          rec.dial,
 	})
 	dial := startGuestStack(t, tap, cfg)
@@ -479,7 +479,7 @@ func TestInspectTCP_MitmDialsByName(t *testing.T) {
 	cfg.AllowNet = []string{coveringCIDR}
 	tap := startNetworkWithSeams(t, cfg, networkSeams{
 		ca:            newTestCA(t),
-		secretMatcher: NewSecretHostMatcher([]SecretConfig{{Name: "k", Hosts: []string{host}, Placeholder: "<S>", Value: "v"}}),
+		secretMatcher: NewSecretHostMatcher([]SecretConfig{{Name: "k", Hosts: []string{host}, Placeholder: "<S>", Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: "v"}}),
 		resolve:       names.resolve,
 		dial:          rec.dial,
 	})

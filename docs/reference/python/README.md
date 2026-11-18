@@ -206,7 +206,7 @@ Configuration options for creating a box.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
-| `cpus` | `float` | `1` | CPU allocation (0.01–16, step 0.001); fractional values require a Linux execution host; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
+| `cpus` | `float` | `1` | CPU allocation (0.125–16, step 0.001); fractional values require a Linux execution host; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
 | `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
@@ -214,7 +214,7 @@ Configuration options for creating a box.
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
-| `secrets` | `List[Secret]` | `[]` | Secrets injected into the `Authorization` header of outbound HTTPS requests |
+| `secrets` | `List[Secret]` | `[]` | Secrets rendered into configured headers of outbound HTTPS requests |
 | `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `auto_delete` | `int \| None` | `None` | `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. `None` keeps the runtime's default (`auto_remove` locally) |
 | `auto_remove` | `bool` | `True` | Deprecated: use `auto_delete`. Auto cleanup when stopped |
@@ -308,6 +308,7 @@ secrets=[
         name="openai",
         value="sk-...",
         hosts=["api.openai.com"],
+        headers={"Authorization": "Bearer {value}"},
         # placeholder is a dummy guest value, default "<BOXLITE_SECRET:openai>"
     )
 ]
@@ -319,6 +320,11 @@ a credential. It is a by-name dial like any hostname rule, so a host answering
 with a private, loopback or CGNAT address is still refused unless an IP or CIDR
 rule covers that range. Those hosts on port 80, on any other port, or over UDP
 are governed by `allow_net` alone.
+
+`headers` is a required keyword argument containing a non-empty name-to-template dictionary.
+Omission, `None` and empty dictionaries are rejected.
+Each template contains exactly one `{value}`; only headers already present in
+the original request are replaced. See the [validation rules](../configuration.md#secrets).
 
 ---
 
@@ -438,6 +444,11 @@ locally and over REST, requires saved configuration, and never starts the box.
 | Query | `await box.ssh.status() -> SshStatus` | Return SSH status |
 | Disable | `await box.ssh.disable() -> SshStatus` | Disable SSH |
 
+`enable()` and `disable()` require a running box. On a valid handle to a configured
+or stopped box, both raise `InvalidStateError` (HTTP 409 over REST) without changing
+saved SSH intent. Disable is safe to repeat while running; call it while running
+to persist the disabled switch.
+
 If a box is not running and explicitly sets `BoxOptions.cmd` or `entrypoint`,
 call `await box.start()` before configuring SSH; otherwise `configure()` raises
 `InvalidStateError`. See the [SSH lifecycle guide](../../guides/ssh.md) for
@@ -506,7 +517,7 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 `runtime.domains.unbind(hostname)` in the sync API return the empty tuple `()`
 on success. Failures raise a `BoxliteError` subclass; `()` is not an error
 indicator. Unbinding requires the full hostname returned by `list()`, retains
-the organization's domain and quota slot, and succeeds again if that held
+the organization's domain and any platform quota slot, and succeeds again if that held
 hostname is already unbound.
 
 Creation accepts `(ip, port)` and IPv6 `(ip, port, 0, 0)` tuples. IPs must be

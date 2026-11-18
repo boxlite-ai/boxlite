@@ -12,9 +12,19 @@ Development binaries live in the stage's GCS artifact bucket.
 
 ## Rollout behavior
 
-Each stage requires its own GCP project. Runner labels intentionally identify logical runners
-without a stage suffix; OS Config selects them within the configured project and zone.
-Sharing a project between stages is unsupported because matching labels can select another stage's hosts.
+Runner VMs carry `boxlite-stage=<stage>` alongside their logical `boxlite-runner` label.
+Every OS Config inclusion entry requires both labels, so dev and stage can share a project
+and zone without selecting each other's runners. For example, a stage canary requires
+`boxlite-stage=stage` AND `boxlite-runner=default`; the dev canary uses `boxlite-stage=dev`.
+Separate inclusion entries are ORed, so the stage label must stay inside every runner entry.
+These labels isolate policy targeting, not IAM permissions or other applications using the same stage name.
+
+For existing shared-project hosts, narrow every dev/stage Runner assignment before adding stage labels
+to VMs. Wait for each new narrowed revision to finish rollout and become the baseline, then add the
+correct stage label while preserving existing labels. Changing labels is an in-place operation;
+it does not replace VMs or disks. Preserve policy scripts, target versions and rollout settings.
+Do not run an older deployment during or after migration: it can restore the unscoped selectors.
+Inspect both environments afterward; narrowing selectors does not undo earlier wrong-environment execution.
 
 mdeploy splits the fleet into two disjoint OS Config assignments:
 
@@ -31,12 +41,16 @@ Each assignment has a 40-minute create/update timeout, covering convergence and 
 the initial migration from a whole-fleet assignment. This is an upper bound, not an added wait:
 completed operations proceed immediately. Deletion keeps the provider's default timeout.
 
-Each assignment carries both binary and unit-environment policies, so an update also converges the API
-address, volume backend and registry proxy host. Existing hosts retain their disks, image caches and
-local box state; machine-type and boot-image/startup changes do not resize or replace them.
+Each assignment carries binary, unit-environment and NFS client package policies. An update converges
+the API address, volume backend, registry proxy host and `nfs-common`; the package policy also covers
+existing hosts whose startup script predates Filestore, without requiring SSH or a boot-script rerun.
+`runner:update` preserves existing package policies but cannot add one to an older assignment; run
+mdeploy first to add `runner-nfs-client`. New hosts install the same package from their boot script. Existing hosts retain their disks, image
+caches and local box state; machine-type and boot-image/startup changes do not resize or replace them.
 New hosts use the current [runner sizing settings](../configuration.md#runner-sizing).
 
-`runner:update` checks both assignments before writing, then updates them in the same order. It waits
+`runner:update` checks host stage labels and both assignments' exact stage-and-runner selectors before
+writing, refusing legacy or mismatched scopes, then updates them in the same order. It waits
 for each rollout and verifies that every policy on each targeted host reports compliant with the updated
 revision. A failed update, missing report or stale revision stops progression. The first runner must be
 running, and runner labels must be unique after normalization. The command refuses `--host`;
@@ -60,6 +74,10 @@ and stays reachable, with the runner stopped: `systemctl status var-lib-boxlite.
 `/var/log/runner-setup.log` when the boot script refused a disk that was missing, not blank, or would hide data.
 A deploy sets size and performance only at creation and never
 changes them back, so grow the disk online; the disk is protected, so a deploy that would replace it fails.
+Each host's unit environment names its own disk — `GCP_PROJECT_ID`, `GCP_ZONE` and `RUNNER_DATA_DISK_NAME`, converged by
+the same OS policy as the rest of the unit environment, each host reading its own row of the fleet table — which is what the
+control plane reads to grow the disk online without a deploy. The resize grant is the API's alone, bounded to this stage's
+data-disk prefix in this zone.
 The attachment is fixed at creation too: a host that existed before its disk does not get it attached,
 and that disk stays unattached, and billed, until the host is destroyed and recreated; a `--replace`
 would carry the ignored attachment over.

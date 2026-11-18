@@ -5,6 +5,12 @@
  */
 
 import { CreateApiKeyDialog } from '@/components/CreateApiKeyDialog'
+import {
+  ResourceFilter,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+} from '@/components/ResourceLayout'
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { useRevokeApiKeyMutation } from '@/hooks/mutations/useRevokeApiKeyMutation'
 import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
@@ -14,18 +20,30 @@ import { handleApiError } from '@/lib/error-handling'
 import { ApiKeyList, CreateApiKeyPermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { useAuth } from 'react-oidc-context'
 import { ApiKeyTable } from '../components/ApiKeyTable'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 const DEFAULT_API_KEY_PERMISSIONS = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
 
 /** Lists the selected organization’s keys and limits creation options to the member’s assigned permissions. */
 const Keys: React.FC = () => {
+  usePageTitle('API keys')
+  const { user } = useAuth()
   const { apiUrl } = useConfig()
   const [loadingKeys, setLoadingKeys] = useState<Record<string, boolean>>({})
+  const [filter, setFilter] = useState('')
 
-  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const {
+    selectedOrganization,
+    authenticatedUserOrganizationMember,
+    organizationMembersStatus,
+    refreshOrganizationMembers,
+  } = useSelectedOrganization()
   const revokeApiKeyMutation = useRevokeApiKeyMutation()
   const apiKeysQuery = useApiKeysQuery(selectedOrganization?.id)
+  const needle = filter.trim().toLowerCase()
+  const filteredKeys = (apiKeysQuery.data ?? []).filter((key) => key.name.toLowerCase().includes(needle))
 
   const availablePermissions = useMemo<CreateApiKeyPermissionsEnum[]>(() => {
     if (!authenticatedUserOrganizationMember) {
@@ -77,7 +95,7 @@ const Keys: React.FC = () => {
   return (
     <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-[26px]">
       {/* header — same hierarchy as the Boxes page */}
-      <div className="mb-[22px] flex flex-wrap items-end justify-between gap-3">
+      <div className="resource-page-header">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">API Keys</h1>
           <p className="mt-2 text-body leading-relaxed text-muted-foreground">
@@ -85,20 +103,58 @@ const Keys: React.FC = () => {
           </p>
         </div>
       </div>
-      <div className="mb-[14px] flex min-h-9 justify-end">
+      <div className="resource-toolbar mb-[14px]">
+        <ResourceFilter
+          label="Filter API keys"
+          value={filter}
+          onChange={setFilter}
+          count={apiKeysQuery.data ? filteredKeys.length : '—'}
+          disabled={!apiKeysQuery.data}
+        />
+        <div className="flex-1" />
         <CreateApiKeyDialog
+          key={`${selectedOrganization?.id}:${user?.profile.sub}`}
+          organizationName={selectedOrganization?.name}
+          permissionsStatus={organizationMembersStatus ?? (authenticatedUserOrganizationMember ? 'ready' : 'loading')}
+          onRetryPermissions={async () => {
+            await refreshOrganizationMembers()
+          }}
           availablePermissions={availablePermissions}
           apiUrl={apiUrl}
           organizationId={selectedOrganization?.id}
         />
       </div>
 
-      <ApiKeyTable
-        data={apiKeysQuery.data ?? []}
-        loading={apiKeysQuery.isLoading || apiKeysQuery.isRefetching}
-        isLoadingKey={isLoadingKey}
-        onRevoke={handleRevoke}
-      />
+      <div className="resource-content">
+        {apiKeysQuery.data === undefined ? (
+          apiKeysQuery.isError ? (
+            <ResourceErrorState
+              title="Could not load API keys"
+              retrying={apiKeysQuery.isFetching}
+              onRetry={() => void apiKeysQuery.refetch()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading API keys…" />
+          )
+        ) : (
+          <>
+            {apiKeysQuery.isError && (
+              <ResourceErrorNotice
+                title="Could not refresh API keys. Showing previously loaded data."
+                retrying={apiKeysQuery.isFetching}
+                onRetry={() => void apiKeysQuery.refetch()}
+              />
+            )}
+            <ApiKeyTable
+              data={filteredKeys}
+              onClearFilter={needle ? () => setFilter('') : undefined}
+              loading={false}
+              isLoadingKey={isLoadingKey}
+              onRevoke={handleRevoke}
+            />
+          </>
+        )}
+      </div>
     </div>
   )
 }

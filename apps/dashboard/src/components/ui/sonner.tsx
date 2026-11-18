@@ -27,7 +27,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
         classNames: {
           // Square corners + mono font + bordered popover surface — matches the ASCII/terminal shell.
           toast:
-            'group toast font-mono rounded-none group-[.toaster]:rounded-none group-[.toaster]:bg-popover group-[.toaster]:text-foreground group-[.toaster]:border group-[.toaster]:border-border group-[.toaster]:shadow-lg',
+            'group toast font-sans rounded-none group-[.toaster]:rounded-none group-[.toaster]:bg-popover group-[.toaster]:text-foreground group-[.toaster]:border group-[.toaster]:border-border group-[.toaster]:shadow-lg',
           description: '!text-muted-foreground',
           actionButton:
             'rounded-none group-[.toast]:rounded-none group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',

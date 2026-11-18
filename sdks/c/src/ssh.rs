@@ -139,6 +139,8 @@ pub unsafe extern "C" fn boxlite_box_ssh_status(
 
 /// Enable saved SSH configuration on a running box without restarting a healthy
 /// listener. Requires existing configuration; never starts the box.
+/// A valid handle to a configured or stopped box fails the callback with
+/// `InvalidState` without changing saved SSH intent.
 ///
 /// # Safety
 ///
@@ -154,8 +156,11 @@ pub unsafe extern "C" fn boxlite_box_ssh_enable(
     spawn_op(handle, SshOp::Enable, cb, user_data, out_error)
 }
 
-/// Queue SSH shutdown, disconnecting clients. Repeated calls are supported and
-/// never start the box.
+/// Queue SSH shutdown on a running box, disconnecting clients. Repeated calls
+/// succeed while running; never starts the box. A valid handle to a configured
+/// or stopped box fails the callback with `InvalidState` without changing saved
+/// SSH intent.
+/// Disable while running to persist the disabled switch.
 ///
 /// # Safety
 ///

@@ -22,14 +22,40 @@ describe('JobStateHandlerService migration job routing', () => {
     const boxMigrationJobReceiver = {
       handleJobCompletion: jest.fn().mockResolvedValue(undefined),
     } as any
+    const checkpointJobReceiver = { handleJobCompletion: jest.fn().mockResolvedValue(undefined) } as any
     return {
-      service: new JobStateHandlerService(boxRepository, redisLockProvider, boxMigrationJobReceiver, {
-        reasonFor: jest.fn(async (_box: unknown, reason: string) => reason),
-      } as any),
+      service: new JobStateHandlerService(
+        boxRepository,
+        redisLockProvider,
+        boxMigrationJobReceiver,
+        {
+          reasonFor: jest.fn(async (_box: unknown, reason: string) => reason),
+        } as any,
+        checkpointJobReceiver,
+      ),
       redisLockProvider,
       boxMigrationJobReceiver,
+      checkpointJobReceiver,
     }
   }
+
+  it.each([JobType.EXPORT_CHECKPOINT, JobType.UPLOAD_CHECKPOINT, JobType.IMPORT_CHECKPOINT])(
+    'routes %s to its owning receiver without unlocking another lifecycle operation',
+    async (type) => {
+      const h = makeService()
+      const job = new Job({
+        type,
+        status: JobStatus.COMPLETED,
+        runnerId: 'runner',
+        resourceType: type === JobType.UPLOAD_CHECKPOINT ? ResourceType.CHECKPOINT : ResourceType.BOX,
+        resourceId: 'resource',
+      })
+      await h.service.handleJobCompletion(job)
+      expect(h.checkpointJobReceiver.handleJobCompletion).toHaveBeenCalledWith(job)
+      expect(h.boxMigrationJobReceiver.handleJobCompletion).not.toHaveBeenCalled()
+      expect(h.redisLockProvider.unlock).not.toHaveBeenCalled()
+    },
+  )
 
   // A migration job holds its own per-job lock and never the box's state-change
   // lock, so releasing that lock here would drop one a concurrent start or stop
@@ -91,6 +117,7 @@ describe('JobStateHandlerService failed pulls', () => {
       { unlock: jest.fn().mockResolvedValue(undefined) } as any,
       { handleJobCompletion: jest.fn() } as any,
       imagePullFailureService as any,
+      { handleJobCompletion: jest.fn() } as any,
     )
     return { service, boxRepository, imagePullFailureService }
   }

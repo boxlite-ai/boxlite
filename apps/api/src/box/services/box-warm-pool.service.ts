@@ -72,6 +72,9 @@ export class BoxWarmPoolService {
   }
 
   async fetchWarmPoolBox(params: FetchWarmPoolBoxParams): Promise<Box | null> {
+    // Existing pool specifications are integer GiB; a fractional request must
+    // neither claim a larger Box nor poison the shared image miss cache.
+    if (!Number.isInteger(params.mem)) return null
     //  check if box is warm pool
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: { ...warmPoolRowWhere(params), pool: MoreThan(0) },
@@ -188,8 +191,10 @@ export class BoxWarmPoolService {
     if (event.newOrganizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
       return
     }
+    const spec = warmPoolSpecOfBox(event.box)
+    if (!Number.isInteger(spec.mem)) return
     const warmPoolItem = await this.warmPoolRepository.findOne({
-      where: warmPoolRowWhere(warmPoolSpecOfBox(event.box)),
+      where: warmPoolRowWhere(spec),
     })
 
     if (!warmPoolItem) {

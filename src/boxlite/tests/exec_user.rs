@@ -27,14 +27,14 @@ async fn exec_stdout(handle: &boxlite::LiteBox, cmd: BoxCommand) -> String {
 /// RAII wrapper that creates/starts a box and cleans up on drop.
 struct TestBox {
     handle: boxlite::LiteBox,
-    runtime: boxlite::BoxliteRuntime,
+    runtime: common::TestRuntime,
     _home: boxlite_test_utils::home::PerTestBoxHome,
 }
 
 impl TestBox {
     async fn new() -> Self {
         let home = boxlite_test_utils::home::PerTestBoxHome::new();
-        let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
             ..Default::default()
@@ -176,7 +176,7 @@ async fn test_non_root_image_user_exec_uid_and_inode_ownership() {
     }
 
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()

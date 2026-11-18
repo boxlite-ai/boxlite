@@ -7,6 +7,7 @@ import { FindOptionsWhere } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxClass } from '../enums/box-class.enum'
+import { memoryGiBOf } from './memory-allocation'
 
 /**
  * The tuple that decides whether a pre-warmed box can serve a request.
@@ -62,7 +63,7 @@ export function warmPoolSpecOfBox(box: Box): WarmPoolSpec {
     target: box.region,
     class: box.class,
     cpu: box.cpu,
-    mem: box.mem,
+    mem: memoryGiBOf(box),
     disk: box.disk,
     gpu: box.gpu,
     osUser: box.osUser,

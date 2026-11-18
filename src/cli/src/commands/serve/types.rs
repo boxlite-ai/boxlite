@@ -83,6 +83,7 @@ pub(super) struct SecretSpecRequest {
     pub hosts: Vec<String>,
     #[serde(default)]
     pub placeholder: Option<String>,
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -354,6 +355,7 @@ pub(super) struct ServerConfig {
 
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
+    pub checkpoints_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
@@ -492,4 +494,17 @@ pub(super) struct RemoveQuery {
 #[derive(Deserialize)]
 pub(super) struct FileQuery {
     pub path: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_headers_create_rejects_missing_map() {
+        let result = serde_json::from_str::<SecretSpecRequest>(
+            r#"{"name":"x","value":"token","hosts":["api.test.com"]}"#,
+        );
+        assert!(result.is_err(), "serve accepted a secret with no headers");
+    }
 }

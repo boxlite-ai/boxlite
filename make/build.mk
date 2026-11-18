@@ -1,4 +1,11 @@
-PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:release skillbox-image build\:apps build\:apps\:api build\:apps\:dashboard
+PHONY_TARGETS += generate\:runner-client
+
+# Regenerate the client from the committed runner schema without starting the API.
+generate\:runner-client: _ensure-apps-deps
+	@cd apps && yarn openapi-generator-cli generate --git-repo-id=boxlite --git-user-id=boxlite-ai -i runner/pkg/api/docs/swagger.json -g typescript-axios --additional-properties=supportsES6=true,typescriptThreePlus=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,useTags=true,enumPropertyNaming=UPPERCASE --type-mappings=DateTime=Date -o libs/runner-api-client/src
+	@cd apps && node hack/ts-client/type-request-function.mjs libs/runner-api-client/src
+
+PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:release skillbox-image build\:apps build\:apps\:api build\:apps\:dashboard build\:apps\:ci-listener
 
 vmm:
 	@cargo build -p boxlite-hypervisor -p boxlite-vmm
@@ -56,10 +63,26 @@ build\:apps: _ensure-apps-deps
 	@echo "✅ apps workspace built → dist/apps"
 
 build\:apps\:api: _ensure-apps-deps
-	@cd apps && yarn nx run api:build --configuration=production
+	@cd apps && yarn nx run api:build --configuration=production --nxBail=true --output-style=stream
+	@cd apps && node --check dist/apps/api/main.js
+	@cd apps && node --test api/test/production-metadata.cjs
 
 build\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:build
+
+# Shared TypeScript core; both hosts consume this library.
+build\:apps\:ci-listener: _ensure-apps-deps
+	@cd apps && yarn nx build ci-listener --nxBail=true --output-style=stream
+	@cd apps && node libs/ci-listener/tests/package-entry.cjs dist/libs/ci-listener
+
+PHONY_TARGETS += build\:apps\:github-ci-runner
+build\:apps\:github-ci-runner: _ensure-apps-deps
+	@cd apps && yarn nx build github-ci-runner --nxBail=true --output-style=stream
+	@cd apps && node --check dist/apps/github-ci-runner/main.js
+
+PHONY_TARGETS += github-ci-runner-image
+github-ci-runner-image:
+	@docker build --platform linux/amd64 -f apps/github-ci-runner/Dockerfile -t boxlite-ci-listener:dev .
 
 # Build SkillBox container image (all-in-one AI CLI with noVNC)
 # Usage: make skillbox-image [APT_SOURCE=mirrors.aliyun.com]

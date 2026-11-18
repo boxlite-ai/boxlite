@@ -6,11 +6,12 @@
 
 import visaLogo from '@/assets/payment-brands/visa.svg'
 import mastercardLogo from '@/assets/payment-brands/mastercard.svg'
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
+import { toast } from 'sonner'
 import { WalletSection } from './WalletSection'
 
 const mocks = vi.hoisted(() => ({
@@ -23,6 +24,10 @@ const mocks = vi.hoisted(() => ({
     details: Record<string, unknown>
   }>,
   redeemCoupon: vi.fn(),
+  emailVerified: true,
+  memberRole: 'owner',
+  // Two organizations make the target ambiguous, so a coupon link waits for a click.
+  organizations: [{ id: 'org-without-card' }, { id: 'org-other' }] as Array<{ id: string }>,
   setAutomaticTopUp: vi.fn(),
   topUpWallet: vi.fn(),
   invoicesQuery: vi.fn(),
@@ -32,6 +37,8 @@ const mocks = vi.hoisted(() => ({
   // The query itself has not answered at all.
   historiesPending: false,
   historiesError: false,
+  historyRefreshError: false,
+  historyRefreshing: false,
   refetchHistory: vi.fn(),
   failLaterPage: false,
   // The wallet query has not answered yet.
@@ -49,11 +56,18 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
-  useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-without-card' } }),
+  useSelectedOrganization: () => ({
+    selectedOrganization: { id: 'org-without-card', name: 'Acme Labs' },
+    authenticatedUserOrganizationMember: { role: mocks.memberRole },
+  }),
+}))
+
+vi.mock('@/hooks/useOrganizations', () => ({
+  useOrganizations: () => ({ organizations: mocks.organizations }),
 }))
 
 vi.mock('react-oidc-context', () => ({
-  useAuth: () => ({ user: { profile: { email_verified: true } } }),
+  useAuth: () => ({ user: { profile: { email_verified: mocks.emailVerified } } }),
 }))
 
 vi.mock('@/hooks/queries/billingQueries', () => ({
@@ -85,6 +99,9 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
         totalPages: 2,
       },
       isLoading: false,
+      isError: mocks.historyRefreshError,
+      isFetching: mocks.historyRefreshing,
+      refetch: mocks.refetchHistory,
     }
   },
   useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
@@ -112,6 +129,9 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
         totalPages: 2,
       },
       isLoading: false,
+      isError: mocks.historyRefreshError,
+      isFetching: mocks.historyRefreshing,
+      refetch: mocks.refetchHistory,
     }
   },
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
@@ -163,12 +183,20 @@ describe('WalletSection top-up checkout', () => {
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
     mocks.fetchCheckoutUrl.mockResolvedValue('https://checkout.stripe.com/c/pay/cs_connect')
     mocks.totalsUnknown = false
+    mocks.historyRefreshError = false
+    mocks.historyRefreshing = false
     mocks.historiesError = false
     mocks.failLaterPage = false
     mocks.refetchHistory.mockClear()
     mocks.historiesPending = false
     mocks.walletPending = false
     mocks.topUpPending = false
+    mocks.emailVerified = true
+    mocks.memberRole = 'owner'
+    mocks.organizations = [{ id: 'org-without-card' }, { id: 'org-other' }]
+    mocks.redeemCoupon.mockReset()
+    vi.mocked(toast.success).mockClear()
+    vi.mocked(toast.error).mockClear()
   })
 
   afterEach(() => {
@@ -302,6 +330,41 @@ describe('WalletSection top-up checkout', () => {
     // time is what keeps a grant from ever sitting beside a charge.
     expect(document.body.textContent).toContain('2026-07-18')
     expect(document.body.textContent).not.toContain('BOX-2026-0002')
+  })
+
+  it.each([
+    ['Billing history', 'BOX-2026-0002', 'refreshing'],
+    ['Credit activity', '2026-07-18', 'refreshing'],
+    ['Billing history', 'BOX-2026-0002', 'error'],
+    ['Credit activity', '2026-07-18', 'error'],
+  ])('retains loaded %s during %s (%s)', async (tabName, record, phase) => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    if (tabName === 'Credit activity') {
+      const tab = [...host.querySelectorAll<HTMLElement>('[role="tab"]')].find((el) =>
+        el.textContent?.includes(tabName),
+      )!
+      await act(async () => {
+        tab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+        tab.click()
+      })
+    }
+    expect(host.textContent).toContain(record)
+    mocks.historyRefreshing = phase === 'refreshing'
+    mocks.historyRefreshError = phase === 'error'
+    await act(async () => root!.render(<WalletSection />))
+    expect(host.textContent).toContain(record)
+    if (phase === 'error') {
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain('Showing previously loaded data')
+      await act(async () => {
+        host.querySelector<HTMLButtonElement>('[role="alert"] button')!.click()
+      })
+      expect(mocks.refetchHistory).toHaveBeenCalledOnce()
+    }
   })
 
   it('keeps failed money histories distinct from empty records and retries', async () => {
@@ -611,5 +674,116 @@ describe('WalletSection top-up checkout', () => {
     expect(topUpButton?.disabled).toBe(true)
     expect(topUpButton?.querySelector('[role="status"]')).not.toBeNull()
     expect(discountRibbon?.parentElement?.previousElementSibling).toBe(topUpButton)
+  })
+
+  async function renderCouponLink(linkCouponCode?: string, onCouponRedeemed = vi.fn()) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      // StrictMode mounts effects twice, as the dashboard does in development.
+      root.render(
+        <StrictMode>
+          <WalletSection linkCouponCode={linkCouponCode} onCouponRedeemed={onCouponRedeemed} />
+        </StrictMode>,
+      )
+    })
+    await flush()
+    const input = host.querySelector<HTMLInputElement>('input[placeholder="Enter coupon code"]')
+    const redeem = [...host.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Redeem',
+    )
+    return { host, input, redeem, onCouponRedeemed }
+  }
+
+  it('opens the coupon form filled in from a coupon link and redeems it for the named organization', async () => {
+    mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')
+
+    const { host, input, redeem, onCouponRedeemed } = await renderCouponLink('ACME50')
+
+    expect(input?.value).toBe('ACME50')
+    expect(host.textContent).toContain('Credits go to Acme Labs')
+    // Two organizations: nothing is redeemed until the user picks this one by clicking.
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+    await act(async () => redeem!.click())
+    await flush()
+    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
+    expect(mocks.redeemCoupon).toHaveBeenCalledWith({ organizationId: 'org-without-card', couponCode: 'ACME50' })
+    expect(onCouponRedeemed).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('Coupon redeemed')
+  })
+
+  it('keeps the coupon form folded without a coupon link code', async () => {
+    const { host, input } = await renderCouponLink()
+
+    expect(input).toBeNull()
+    expect(host.textContent).toContain('Have a coupon code?')
+  })
+
+  it('shows a rejected coupon link code and keeps it for another try', async () => {
+    mocks.redeemCoupon.mockRejectedValue(new Error('Coupon not found'))
+
+    const { host, input, redeem, onCouponRedeemed } = await renderCouponLink('NOPE')
+
+    await act(async () => redeem!.click())
+    await flush()
+    expect(host.textContent).toContain('Coupon not found')
+    expect(onCouponRedeemed).not.toHaveBeenCalled()
+    expect(input?.value).toBe('NOPE')
+  })
+
+  it('asks to verify the email before redeeming a coupon link code', async () => {
+    mocks.emailVerified = false
+    mocks.organizations = [{ id: 'org-without-card' }]
+
+    const { host, input, redeem } = await renderCouponLink('ACME50')
+
+    expect(host.textContent).toContain('Verify your email to redeem coupon code ACME50')
+    expect(input).toBeNull()
+    expect(redeem).toBeUndefined()
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+  })
+
+  it('redeems a coupon link once without a click for the owner of a single organization', async () => {
+    mocks.organizations = [{ id: 'org-without-card' }]
+    mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')
+
+    const { host, onCouponRedeemed } = await renderCouponLink('ACME50')
+    await flush()
+
+    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
+    expect(mocks.redeemCoupon).toHaveBeenCalledWith({ organizationId: 'org-without-card', couponCode: 'ACME50' })
+    expect(onCouponRedeemed).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('Coupon redeemed')
+    // The inline note sits low in the panel and fades; a toast is visible wherever the page is scrolled.
+    expect(toast.success).toHaveBeenCalledWith('Coupon redeemed')
+  })
+
+  it('does not auto-redeem a coupon link for a member who does not own the organization', async () => {
+    mocks.organizations = [{ id: 'org-without-card' }]
+    mocks.memberRole = 'member'
+
+    const { input } = await renderCouponLink('ACME50')
+    await flush()
+
+    expect(input?.value).toBe('ACME50')
+    expect(mocks.redeemCoupon).not.toHaveBeenCalled()
+  })
+
+  it('tries a rejected coupon link once and leaves it for the user', async () => {
+    mocks.organizations = [{ id: 'org-without-card' }]
+    mocks.redeemCoupon.mockRejectedValue(new Error('Coupon not found'))
+
+    const { host, input, onCouponRedeemed } = await renderCouponLink('NOPE')
+    await flush()
+    await flush()
+
+    expect(mocks.redeemCoupon).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('Coupon not found')
+    expect(input?.value).toBe('NOPE')
+    expect(onCouponRedeemed).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Coupon NOPE was not redeemed', {
+      description: 'Error: Coupon not found',
+    })
   })
 })

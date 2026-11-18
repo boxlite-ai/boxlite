@@ -10,7 +10,9 @@ import (
 	"context"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/checkpoint"
 	"github.com/boxlite-ai/runner/pkg/models"
+	"github.com/boxlite-ai/runner/pkg/storage"
 )
 
 // BoxBackend abstracts box lifecycle operations.
@@ -33,4 +35,15 @@ type BoxBackend interface {
 
 	// Health
 	Ping(ctx context.Context) error
+}
+
+// CheckpointExporter captures a disk archive and the source's original OCI
+// build without extending the existing migration export contract.
+type CheckpointExporter interface {
+	ExportCheckpoint(ctx context.Context, boxId, destDir string) (archivePath, pinnedImage string, err error)
+}
+
+type CheckpointRestorer interface {
+	RestoreCheckpoint(context.Context, checkpoint.RestoreRequest, string, checkpoint.Artifacts, storage.ArchiveStore) (checkpoint.RestoreResult, error)
+	RetireCheckpointTarget(context.Context, string) error
 }

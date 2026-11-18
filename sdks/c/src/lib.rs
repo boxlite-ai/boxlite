@@ -11,6 +11,7 @@ mod advanced_options;
 mod agents;
 mod archive;
 mod box_handle;
+mod checkpoints;
 mod copy;
 mod domains;
 mod error;
@@ -48,6 +49,8 @@ pub(crate) static FREE_STR_CALLS: std::sync::atomic::AtomicUsize =
 pub(crate) static FREE_STR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub type CBoxliteRuntime = runtime::RuntimeHandle;
+pub type CCheckpointInfo = checkpoints::CCheckpointInfo;
+pub type CCheckpointList = checkpoints::CCheckpointList;
 pub type CBoxHandle = box_handle::BoxHandle;
 pub type CBoxNetworkHandle = network::BoxNetworkHandle;
 pub type CBoxTunnelHandle = network::BoxTunnelHandle;
@@ -86,6 +89,7 @@ pub type CAdvancedBoxOptions = advanced_options::AdvancedBoxOptionsHandle;
 pub use advanced_options::*;
 pub use agents::*;
 pub use box_handle::*;
+pub use checkpoints::*;
 pub use copy::*;
 pub use domains::*;
 pub use error::*;

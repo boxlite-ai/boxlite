@@ -62,6 +62,12 @@ pub struct VmConfig {
     pub disks: Vec<DiskConfig>,
     /// Aggregate filesystem device, fixed for the lifetime of this VM.
     pub filesystem: Option<FsConfig>,
+    /// Explicit Unix bridges for guest RPC and readiness.
+    pub vsock: Option<VsockConfig>,
+    /// Linux gvproxy stream endpoint and its configured guest MAC.
+    pub network: Option<NetConfig>,
+    /// Send hvc0 output to the supplied console sink.
+    pub virtio_console: bool,
 }
 
 /// One virtio-fs device exposing the configured host directories.
@@ -79,6 +85,23 @@ pub struct FsShareConfig {
     pub name: String,
     pub path: PathBuf,
     pub read_only: bool,
+}
+
+/// Unix socket mappings exposed by the stream-only vsock device.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VsockConfig {
+    pub cid: u64,
+    /// Host listeners forwarding connections to guest ports.
+    pub listen: Vec<(u32, PathBuf)>,
+    /// Guest connections to host ports forwarding to existing host sockets.
+    pub connect: Vec<(u32, PathBuf)>,
+}
+
+/// A virtio-net interface connected to a Linux gvproxy stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetConfig {
+    pub path: PathBuf,
+    pub mac: [u8; 6],
 }
 
 impl VmConfig {
@@ -128,6 +151,9 @@ mod tests {
             initramfs: None,
             disks: Vec::new(),
             filesystem: None,
+            vsock: None,
+            network: None,
+            virtio_console: false,
         }
     }
 

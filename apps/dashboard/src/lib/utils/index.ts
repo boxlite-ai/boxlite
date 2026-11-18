@@ -9,7 +9,7 @@ import { extendTailwindMerge } from 'tailwind-merge'
 
 // The console's type scale is six named sizes (tailwind.config.js). Without
 // telling tailwind-merge about them it files `text-page` under text *colour*,
-// so a component's default `text-lg` survives the merge and wins the cascade.
+// so a component's default `text-section` survives the merge and wins the cascade.
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {

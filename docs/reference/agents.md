@@ -32,11 +32,9 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Rust and the CLI on a local runtime run the operations listed in
-[OpenCode on a local runtime](#opencode-on-a-local-runtime). Everywhere else, agent
-operations return an unsupported error before agent execution: namespace access and
-data construction work, but execution, queues, event delivery, configuration
-validation, retry deduplication and timeout handling are unavailable.
+Rust, the CLI and C calls on a local runtime run the operations listed in
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Other SDKs and remote
+runtimes return unsupported errors before agent execution.
 
 | SDK | Error behavior |
 |---|---|
@@ -44,20 +42,19 @@ validation, retry deduplication and timeout handling are unavailable.
 | Python | `UnsupportedError` on awaiting operations or reading a property |
 | Node.js | Rejected operation promises; synchronous getter/event errors |
 | Go | `*Error` with `Code: ErrUnsupported` and no result |
-| C | Synchronous `Unsupported` return and optional `CBoxliteError`; no callback is invoked |
+| C | Invalid arguments return `InvalidArgument` synchronously without a callback; accepted async calls return `Ok` and deliver core errors through the drain callback; getters return core errors synchronously |
 | CLI | `boxlite agent …` reports the error on stderr and exits with code 1 |
 
-Event opening never returns an empty successful stream. Python/Node fail when
-`events()` is called; Rust fails when its future is awaited; Go returns a nil
-stream with an error. C clears the subscription output pointer.
+An unsupported event opening returns an error. Python/Node fail when `events()`
+is called; Rust fails when its future is awaited; Go returns a nil stream with
+an error. C delivers an open failure through `on_open` with a null handle.
 
-No agent or turn is returned by `create`, `get`, `send` or `respond`.
-C getters clear output pointers; callbacks are not invoked and no agent, turn,
-subscription or JSON result object is allocated.
+Unsupported calls do not return an agent or turn. C getters clear output pointers
+on failure.
 
 ### OpenCode on a local runtime
 
-Rust and the CLI on a local runtime forward agents to OpenCode 2.2 inside the Box
+Rust, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
@@ -139,8 +136,8 @@ Accessing a Box's agent namespace does not start or resume the Box. Python's
 Node's native `JsBox.agents` and `SimpleBox.agents` both expose `Agents`.
 
 In C, `boxlite_box_agents` requires a live `CBoxHandle` and a writable output
-pointer. It returns `Ok` with an owned `CAgents` namespace even while agent
-operations return `Unsupported`. Release that namespace with
+pointer. It returns `Ok` with an owned `CAgents` namespace without starting an
+agent. Release that namespace with
 `boxlite_agents_free`; release the Box separately with `boxlite_box_free`.
 A null Box handle or output pointer returns `InvalidArgument`.
 
@@ -235,6 +232,8 @@ Node uses `AgentWaitOptions.timeoutSeconds`.
 The C JSON fields use the following shapes. A question's
 `schema` and an answer's `data` may be omitted. Nullable output fields use JSON
 `null`; arrays remain arrays, including when empty.
+The Rust core owns the shared mapping used by the CLI and C bindings,
+so both surfaces use the same field names and validation rules.
 
 | Record | C JSON fields |
 |---|---|
@@ -254,7 +253,10 @@ Turn status is `queued`, `running`, `waiting_input`, `interrupting`,
 array of request records; wait/steer callbacks carry a result/receipt respectively.
 
 A synchronous error means no callback will run. State/config/capability getters
-clear `out_json` on error; event openers clear `out`.
+clear `out_json` on error.
+
+Send mode accepts `AgentSendQueue` or `AgentSendReject`; other values return
+`InvalidArgument` synchronously without scheduling a callback.
 Output/error pointers must be null or writable.
 
 Errors written to `out_error` belong to the caller; release their messages with
@@ -262,9 +264,24 @@ Errors written to `out_error` belong to the caller; release their messages with
 the callback's duration; copy their contents to retain them. JSON strings returned
 through getter output pointers belong to the caller; use `boxlite_free_string`.
 
-`boxlite_agent_free`, `boxlite_agent_turn_free` and
-`boxlite_agent_events_free` release local handles only; they never close an agent
-or interrupt work. Null handles may be freed.
+`boxlite_agent_free` and `boxlite_agent_turn_free` release local handles only;
+they never close an agent or interrupt work. Null handles may be freed.
+
+Event opening returns `Ok` when accepted; `on_open` receives the owned handle
+only after the native stream connects, or a null handle and error on failure.
+Open the agent stream before sending work when every live event is needed.
+
+`boxlite_agent_events_free` signals cancellation without waiting for queue space.
+Already queued events are delivered first, followed by exactly one terminal
+`on_event` with null JSON; its error is null for cancellation or a natural end.
+Keep `user_data` valid until the terminal callback returns, or until `on_open`
+returns when opening fails.
+
+While subscriptions are open, use one active `boxlite_runtime_drain` per runtime,
+including callback execution, and do not recursively drain the same runtime.
+Free subscriptions and drain their terminal callbacks before freeing the runtime;
+runtime free discards queued callbacks. Do not free a runtime while a drain or
+callback is active, or from its callback.
 
 ### CLI commands
 

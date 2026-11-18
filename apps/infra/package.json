@@ -41,6 +41,7 @@
     "runner:build-artifact:legacy": "tsx artifacts/runner-build.ts"
   },
   "devDependencies": {
+    "@actions/expressions": "0.3.61",
     "@google-cloud/secret-manager": "^7.0.0",
     "@google-cloud/storage": "^8.0.1",
     "@pulumi/aws": "^7.24.0",

@@ -28,6 +28,7 @@ export interface ApiInputs {
   defaultRunnerApiKey: random.RandomPassword
   defaultRunnerName: string
   oidcClientId: sst.Secret
+  turnstileSecretKey?: sst.Secret
   oidcMgmtClientId: sst.Secret
   oidcMgmtClientSecret: sst.Secret
   accountLinkSecret: sst.Secret
@@ -64,6 +65,7 @@ export function buildApi(input: ApiInputs) {
     defaultRunnerApiKey,
     defaultRunnerName,
     oidcClientId,
+    turnstileSecretKey,
     oidcMgmtClientId,
     oidcMgmtClientSecret,
     accountLinkSecret,
@@ -208,6 +210,19 @@ export function buildApi(input: ApiInputs) {
         REDIS_PORT: redis.port.apply(String),
         REDIS_PASSWORD: redis.password,
         REDIS_TLS: 'true',
+
+        // First local account creation; the Dashboard reads only the public widget settings.
+        ...(turnstileSecretKey
+          ? {
+              TURNSTILE_SITEKEY: requireEnv('TURNSTILE_SITEKEY', 'for first account registration'),
+              TURNSTILE_SECRET_KEY: turnstileSecretKey.value,
+              TURNSTILE_EXPECTED_HOSTNAMES: requireEnv(
+                'TURNSTILE_EXPECTED_HOSTNAMES',
+                'for first account registration',
+              ),
+              TURNSTILE_TIMEOUT_MS: envOr('TURNSTILE_TIMEOUT_MS', '5000'),
+            }
+          : {}),
 
         // Encryption
         ENCRYPTION_KEY: envOr('ENCRYPTION_KEY', encryptionKey.result),

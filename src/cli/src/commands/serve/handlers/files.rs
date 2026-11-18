@@ -1,63 +1,39 @@
 //! File upload/download handlers (tar-based).
+//!
+//! Tar bytes pass directly between HTTP and the backend. Guest-provided link
+//! entries stay in the archive; their targets must not be opened on the host.
 
 use std::sync::Arc;
 
-use axum::body::Bytes;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use futures::StreamExt;
 
 use boxlite::CopyOptions;
 
 use super::super::types::FileQuery;
-use super::super::{AppState, error_from_boxlite, error_response, get_or_resume_box};
+use super::super::{AppState, error_from_boxlite, get_or_resume_box};
 
 pub(in crate::commands::serve) async fn upload_files(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
     Query(query): Query<FileQuery>,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let litebox = match get_or_resume_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
 
-    // Extract tar to temp dir, then copy into container
-    let temp_dir = match tempfile::tempdir() {
-        Ok(d) => d,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create temp dir: {e}"),
-                "InternalError",
-                "internal",
-            );
-        }
-    };
-
-    let extract_dir = temp_dir.path().join("extracted");
-    if let Err(e) = std::fs::create_dir_all(&extract_dir) {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to create extract dir: {e}"),
-            "InternalError",
-            "internal",
-        );
-    }
-
-    let mut archive = tar::Archive::new(&body[..]);
-    if let Err(e) = archive.unpack(&extract_dir) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            format!("failed to extract tar: {e}"),
-            "InvalidArgumentError",
-            "invalid_argument",
-        );
-    }
-
+    let stream = body.into_data_stream().map(|chunk| {
+        chunk
+            .map(|bytes| bytes.to_vec())
+            .map_err(std::io::Error::other)
+    });
     if let Err(e) = litebox
-        .copy_into(&extract_dir, &query.path, CopyOptions::default())
+        .copy_in_stream(stream, &query.path, CopyOptions::default())
         .await
     {
         return error_from_boxlite(&e);
@@ -76,51 +52,199 @@ pub(in crate::commands::serve) async fn download_files(
         Err(resp) => return resp,
     };
 
-    let temp_dir = match tempfile::tempdir() {
-        Ok(d) => d,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create temp dir: {e}"),
-                "InternalError",
-                "internal",
-            );
-        }
-    };
-
-    if let Err(e) = litebox
-        .copy_out(&query.path, temp_dir.path(), CopyOptions::default())
+    let stream = match litebox
+        .copy_out_stream(&query.path, CopyOptions::default())
         .await
     {
-        return error_from_boxlite(&e);
-    }
-
-    // Create tar from extracted files
-    let mut builder = tar::Builder::new(Vec::new());
-    if let Err(e) = builder.append_dir_all(".", temp_dir.path()) {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to create tar: {e}"),
-            "InternalError",
-            "internal",
-        );
-    }
-
-    let tar_bytes = match builder.into_inner() {
-        Ok(b) => b,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to finalize tar: {e}"),
-                "InternalError",
-                "internal",
-            );
-        }
+        Ok(stream) => stream,
+        Err(e) => return error_from_boxlite(&e),
     };
 
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/x-tar")
-        .body(axum::body::Body::from(tar_bytes))
+        .body(Body::from_stream(stream))
         .unwrap()
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    mod streaming;
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::Json;
+    use axum::extract::{Path, Query};
+    use axum::http::StatusCode;
+    use axum::response::{IntoResponse, Response};
+    use tokio::sync::RwLock;
+
+    use super::super::super::types::FileQuery;
+    use super::super::super::{AppState, BoxliteRuntime};
+    use super::download_files;
+
+    const BOX_ID: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R5";
+    const GUEST_CANARY: &str = "bui-1725-host-canary";
+
+    struct GuestUpstream {
+        url: String,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    /// Simulate the guest copy protocol with a directory containing links that
+    /// leave the guest namespace and point at temporary host files.
+    async fn guest_upstream() -> (GuestUpstream, tempfile::TempDir) {
+        let host_root = tempfile::tempdir().expect("create host fixture root");
+        let linked_file = host_root.path().join("linked-file.txt");
+        std::fs::write(&linked_file, GUEST_CANARY).expect("write linked host file");
+
+        let linked_dir = host_root.path().join("linked-dir");
+        std::fs::create_dir_all(&linked_dir).expect("create linked host directory");
+        std::fs::write(linked_dir.join("nested.txt"), GUEST_CANARY)
+            .expect("write linked host file in directory");
+
+        let guest_dir = host_root.path().join("probe");
+        std::fs::create_dir_all(&guest_dir).expect("create guest directory");
+        std::fs::write(guest_dir.join("regular.txt"), "guest-owned")
+            .expect("write guest-owned file");
+        std::os::unix::fs::symlink(&linked_file, guest_dir.join("host-file"))
+            .expect("create guest file link");
+        std::os::unix::fs::symlink(&linked_dir, guest_dir.join("host-dir"))
+            .expect("create guest directory link");
+
+        let mut builder = tar::Builder::new(Vec::new());
+        builder.follow_symlinks(false);
+        builder
+            .append_dir_all("probe", &guest_dir)
+            .expect("pack guest fixture");
+        let guest_tar = builder.into_inner().expect("finish guest fixture");
+
+        let box_info = serde_json::json!({
+            "box_id": BOX_ID,
+            "name": "download-box",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "pid": null,
+            "image": "alpine:latest",
+            "cpus": 1,
+            "memory_mib": 512,
+            "auto_stop": 0,
+            "auto_delete": 0,
+            "auto_resume": true,
+        });
+
+        let app = axum::Router::new()
+            .route(
+                "/v1/boxes/{id}",
+                axum::routing::get(
+                    move |axum::extract::Path(id): axum::extract::Path<String>| {
+                        let box_info = box_info.clone();
+                        async move {
+                            assert_eq!(id, BOX_ID);
+                            Json(box_info).into_response()
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/v1/boxes/{id}/files",
+                axum::routing::get(move || async move {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/x-tar")
+                        .body(axum::body::Body::from(guest_tar.clone()))
+                        .expect("build guest download response")
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind guest upstream");
+        let url = format!("http://{}", listener.local_addr().expect("guest address"));
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        (GuestUpstream { url, task }, host_root)
+    }
+
+    #[tokio::test]
+    async fn download_preserves_guest_symlinks_without_reading_their_targets() {
+        let (upstream, host_root) = guest_upstream().await;
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+            .expect("REST runtime");
+        let state = Arc::new(AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
+        });
+
+        let response = download_files(
+            axum::extract::State(Arc::clone(&state)),
+            Path(BOX_ID.to_string()),
+            Query(FileQuery {
+                path: "/probe".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        assert!(
+            !String::from_utf8_lossy(&body).contains(GUEST_CANARY),
+            "download response leaked a linked host file"
+        );
+
+        let mut archive = tar::Archive::new(&body[..]);
+        let mut saw_file_link = false;
+        let mut saw_dir_link = false;
+        for entry in archive.entries().expect("read response entries") {
+            let mut entry = entry.expect("read response entry");
+            let name = entry.path().expect("entry path").to_path_buf();
+            let header = entry.header();
+
+            if name.ends_with("regular.txt") {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut bytes).expect("read regular file");
+                let contents = String::from_utf8_lossy(&bytes);
+                assert_eq!(contents, "guest-owned");
+            } else if name.ends_with("host-file") {
+                assert_eq!(header.entry_type(), tar::EntryType::Symlink);
+                assert_eq!(
+                    header
+                        .link_name()
+                        .expect("link name")
+                        .map(|value| value.to_path_buf()),
+                    Some(host_root.path().join("linked-file.txt"))
+                );
+                saw_file_link = true;
+            } else if name.ends_with("host-dir") {
+                assert_eq!(header.entry_type(), tar::EntryType::Symlink);
+                assert_eq!(
+                    header
+                        .link_name()
+                        .expect("link name")
+                        .map(|value| value.to_path_buf()),
+                    Some(host_root.path().join("linked-dir"))
+                );
+                saw_dir_link = true;
+            }
+        }
+
+        assert!(saw_file_link, "guest file link must remain a link entry");
+        assert!(
+            saw_dir_link,
+            "guest directory link must remain a link entry"
+        );
+        upstream.task.abort();
+    }
 }

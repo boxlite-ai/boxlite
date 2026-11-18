@@ -4,9 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { apiKeyHandlers } from './api-key-handlers'
 import { onboardingHandlers } from './onboarding-handlers'
 import { domainHandlers } from './domain-handlers'
+import { checkpointHandlers, createMockCheckpointBox } from './checkpoint-handlers'
 import { sshHandlers } from './ssh-handlers'
+import { tunnelHandlers } from './tunnel-handlers'
+import { ciHandlers } from './ci-handlers'
+import { resourceStateHandlers } from './resource-state-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -35,6 +40,7 @@ import {
   MOCK_IMAGE_LIMIT,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
+  MOCK_USER,
   MOCK_PAGINATED_BOXES,
   MOCK_REGISTRY_CREDENTIALS,
   buildBox,
@@ -49,6 +55,9 @@ import {
 
 const BILLING_API_URL = `${window.location.origin}/api/billing`
 const API_URL = import.meta.env.VITE_API_URL
+// Keep the selected billing fixture through client-side onboarding/navigation.
+const billingPreview = new URLSearchParams(window.location.search).get('preview')
+const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-user-unfunded'
 
 // Quickstart's agent handoff waits for a box created after it handed the key
 // over, then for that box enabling inbound access. Static fixtures can reach neither
@@ -57,16 +66,16 @@ const API_URL = import.meta.env.VITE_API_URL
 function quickstartHandoffDemoBox() {
   const stage = globalThis.localStorage?.getItem('qs-publish-demo')
   if (stage !== 'created' && stage !== 'published') return null
-  return {
-    ...MOCK_BOXES[0],
+  return buildBox({
     id: 'mock-box-agent',
     name: 'agile-otter',
+    state: BoxState.STARTED,
     createdAt: new Date().toISOString(),
     network: {
       outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
       inbound: { mode: stage === 'published' ? NetworkMode.ENABLED : NetworkMode.DISABLED, allow_net: [] },
     },
-  }
+  })
 }
 
 /** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
@@ -87,16 +96,46 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...resourceStateHandlers(API_URL),
+  ...ciHandlers(newUserPreview),
   ...sshHandlers,
+  ...tunnelHandlers,
   ...domainHandlers(),
+  ...checkpointHandlers,
   ...onboardingHandlers(API_URL),
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
-  http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/users/me`, () =>
+    HttpResponse.json({
+      id: MOCK_USER.sub,
+      name: MOCK_USER.name,
+      email: MOCK_USER.email,
+      publicKeys: [],
+      createdAt: new Date(0).toISOString(),
+    }),
+  ),
+  http.get(`${API_URL}/organizations`, () =>
+    HttpResponse.json(
+      import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true'
+        ? [
+            { ...MOCK_ORGANIZATION, name: 'Personal organization' },
+            { ...MOCK_ORGANIZATION, id: 'demo-acme', name: 'Acme AI', isDefaultForAuthenticatedUser: false },
+            {
+              ...MOCK_ORGANIZATION,
+              id: 'demo-research',
+              name: 'Research Collective',
+              isDefaultForAuthenticatedUser: false,
+            },
+          ]
+        : [MOCK_ORGANIZATION],
+    ),
+  ),
   http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
-    params.organizationId === MOCK_ORGANIZATION.id
-      ? HttpResponse.json(MOCK_ORGANIZATION)
+    params.organizationId === MOCK_ORGANIZATION.id ||
+    (import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true' &&
+      ['demo-acme', 'demo-research'].includes(String(params.organizationId)))
+      ? HttpResponse.json({ ...MOCK_ORGANIZATION, id: params.organizationId })
       : new HttpResponse(null, { status: 404 }),
   ),
   http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
@@ -156,8 +195,19 @@ export const handlers = [
   // The Box API's create, which the New Box dialog calls on the page's own
   // origin. The box pulls for a moment, then starts; reaching STARTED is what
   // puts its image in the catalog, as the API's registrar does.
-  http.post('*/v1/:organizationId/boxes', async ({ request }) => {
-    const body = (await request.json()) as { name?: string; image?: string; cpus?: number; memory_mib?: number }
+  http.post('*/v1/:organizationId/boxes', async ({ params, request }) => {
+    const body = (await request.json()) as {
+      checkpoint_id?: string
+      name?: string
+      image?: string
+      cpus?: number
+      memory_mib?: number
+    }
+    if (body.checkpoint_id !== undefined) {
+      if (!body.checkpoint_id || Object.keys(body).some((key) => key !== 'checkpoint_id' && key !== 'name'))
+        return HttpResponse.json({ message: 'Expected a checkpoint selector and optional name' }, { status: 400 })
+      return createMockCheckpointBox(String(params.organizationId), body.checkpoint_id, body.name)
+    }
     const image = body.image || 'ghcr.io/boxlite-ai/boxlite-agent-base:mock'
     const id = `mock-box-${Math.abs(Date.now() % 100000000)}`
     const box = buildBox({
@@ -213,17 +263,6 @@ export const handlers = [
     const { mode } = (await request.json()) as { mode: NetworkMode }
     box.network.inbound = { mode, allow_net: [] }
     return HttpResponse.json(box.network.inbound)
-  }),
-  // Refuses without inbound access, like the real route.
-  http.post(`${API_URL}/v1/:prefix/boxes/:boxId/network/tunnel`, ({ params, request }) => {
-    const boxId = String(params.boxId)
-    const box = MOCK_BOXES.find((b) => b.id === boxId)
-    if (box?.network?.inbound.mode !== NetworkMode.ENABLED) return new HttpResponse(null, { status: 409 })
-    const port = new URL(request.url).searchParams.get('port')
-    // Mirrors the real hex-encoded direct-preview host shape. Hand-rolled
-    // rather than via Buffer, which does not exist in the browser.
-    const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-    return HttpResponse.json({ uri: `https://${port}-d-${encodedBoxId}.proxy.mock.boxlite.ai` })
   }),
   // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
   // a volume still mounted by a live box is refused with 409, and a successful
@@ -472,17 +511,7 @@ export const handlers = [
   }),
 
   http.get(`${API_URL}/shared-regions`, () => HttpResponse.json([])),
-  http.get(`${API_URL}/api-keys`, () => HttpResponse.json([])),
-  http.post(`${API_URL}/api-keys`, async ({ request }) => {
-    const body = (await request.json().catch(() => ({}))) as { name?: string }
-    return HttpResponse.json({
-      name: body?.name || 'mock-key',
-      value: 'bxl_sk_mock_0123456789abcdef0123456789abcdef',
-      createdAt: new Date(),
-      permissions: [],
-      expiresAt: null,
-    })
-  }),
+  ...apiKeyHandlers,
   http.get(`${BILLING_API_URL}/organization/:organizationId/portal-url`, async () => {
     return HttpResponse.json<string>(`${BILLING_API_URL}/portal`)
   }),
@@ -501,6 +530,34 @@ export const handlers = [
     })
   }),
   http.get(`${BILLING_API_URL}/plan`, async () => {
+    if (billingPreview === 'subscription-cards') {
+      return HttpResponse.json<Plan[]>([
+        {
+          id: 'starter',
+          name: 'NoSubscription',
+          priceMonthlyCents: 0,
+          includedQuotaCents: 0,
+          concurrencyLimit: 20,
+          selfServe: true,
+        },
+        {
+          id: 'pro',
+          name: 'Go',
+          priceMonthlyCents: 500,
+          includedQuotaCents: 2000,
+          concurrencyLimit: 40,
+          selfServe: true,
+        },
+        {
+          id: 'max',
+          name: 'Team',
+          priceMonthlyCents: 10000,
+          includedQuotaCents: 40000,
+          concurrencyLimit: 1000,
+          selfServe: true,
+        },
+      ])
+    }
     // Mirrors the billing service's own standard-plan catalog (Subscription.md
     // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
     // data — and is not self-serve.
@@ -540,18 +597,26 @@ export const handlers = [
     ])
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/wallet`, async () => {
+    const preview = billingPreview
+    if (preview === 'balance-error') return new HttpResponse(null, { status: 503 })
     return HttpResponse.json<OrganizationWallet>({
-      balanceCents: 1000,
-      ongoingBalanceCents: 1000,
+      balanceCents: newUserPreview ? 0 : 1000,
+      ongoingBalanceCents:
+        newUserPreview || ['balance-empty', 'balance-subscription'].includes(preview ?? '') ? 0 : 1000,
       name: 'Wallet',
-      creditCardConnected: true,
+      creditCardConnected: !newUserPreview,
       automaticTopUp: undefined,
-      creditGrantedCents: 10_000,
-      creditRemainingCents: 1_000,
       usageChargeMultiplier: '1.0000',
     })
   }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/redeem-coupon/:code`, async ({ params }) =>
+    params.code === 'ACME50'
+      ? HttpResponse.json({ message: 'Coupon ACME50 redeemed: $50.00 added to your wallet' })
+      : HttpResponse.json({ message: `Coupon ${params.code} not found` }, { status: 400 }),
+  ),
   http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
+    if (newUserPreview)
+      return HttpResponse.json({ paymentMethods: [], meta: { currentPage: 1, totalPages: 0, totalCount: 0 } })
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
@@ -587,6 +652,9 @@ export const handlers = [
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
+    const preview = billingPreview
+    if (newUserPreview || preview === 'balance-wallet') return HttpResponse.json({})
+    const empty = preview === 'balance-empty' || preview === 'balance-wallet-fallback'
     // Mirrors the billing service's own mock seed: pro, a quarter used,
     // pinned mid-cycle so the meter renders deterministically. The real
     // route wraps this in a `plan` key ({} means no live plan), never a
@@ -594,13 +662,13 @@ export const handlers = [
     return HttpResponse.json<{ plan?: OrganizationPlan }>({
       plan: {
         planId: 'pro',
-        planName: 'Pro',
+        planName: preview === 'subscription-cards' ? 'Go' : 'Pro',
         status: 'active',
         cycleFrom: new Date(Date.UTC(2026, 7, 5)),
         cycleTo: new Date(Date.UTC(2026, 8, 5)),
         includedQuotaCents: 25000,
-        quotaConsumedCents: 6250,
-        quotaRemainingCents: 18750,
+        quotaConsumedCents: empty ? 25000 : 6250,
+        quotaRemainingCents: empty ? 0 : 18750,
       },
     })
   }),
@@ -968,3 +1036,10 @@ export const handlers = [
     })
   }),
 ]
+
+// Reset after every handler factory has seeded its resources, including CI runners.
+if (newUserPreview) {
+  MOCK_BOXES.splice(0)
+  MOCK_PAGINATED_BOXES.items = MOCK_BOXES
+  MOCK_PAGINATED_BOXES.total = 0
+}

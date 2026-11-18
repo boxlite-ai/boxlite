@@ -164,29 +164,4 @@ export class VolumeController {
   async deleteVolume(@Param('volumeId') volumeId: string, @UserContext() ctx: Context): Promise<void> {
     return this.volumeService.delete(volumeId, ctx)
   }
-
-  @Get('by-name/:name')
-  @ApiOperation({
-    summary: 'Get volume details by name',
-    operationId: 'getVolumeByName',
-  })
-  @ApiParam({
-    name: 'name',
-    description: 'Name of the volume',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Volume details',
-    type: VolumeDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
-  @UseGuards(VolumeAccessGuard)
-  async getVolumeByName(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('name') name: string,
-  ): Promise<VolumeDto> {
-    const volume = await this.volumeService.findByName(authContext.organizationId, name)
-    return VolumeDto.fromVolume(volume)
-  }
 }

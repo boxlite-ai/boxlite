@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { TraceSpan } from '@boxlite-ai/api-client'
+import type { TraceSpan } from '@/types/telemetry'
 
 export interface TraceWaterfallRow extends TraceSpan {
   depth: number

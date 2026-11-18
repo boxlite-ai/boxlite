@@ -10,7 +10,7 @@ lifecycle API, memory layout, buses, interrupts, and threads.
 
 `Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
 are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
-carries; M2's engine adapter will consume that API and inspect the error's host
+carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
 `Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
@@ -29,7 +29,7 @@ boxlite-vmm
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs, disks }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes, at most 8 `DiskConfig { path, format, read_only }` entries |
+| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; bounds are 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
@@ -43,21 +43,14 @@ boxlite-vmm
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
-The x86_64 KVM boot and lifecycle are in place. The virtio common
-infrastructure (`virtio`) is in place for M2: the device contract, queue
-adapter, MMIO transport, interrupt handle and the shared virtio workers are
-tested with test devices, and `Vm` owns them. `devices::add_all` composes one
-`virtio::blk` device per disk and then the reporting balloon, and both are
-tested with a real kernel. The output-only virtio console device is implemented
-and tested against real guest RAM and split virtqueues, but it is not wired
-into `Vm` yet. Linux arm64 and macOS arm64 remain required M2 qualification
-gates, blocked by their boot dependencies; unit tests or x86_64 evidence do not
-qualify those platforms or complete M2. The BoxLite engine adapter
-(`src/boxlite/src/vmm/native/`, behind the runtime's `native` feature)
-builds a `VmConfig` from the box specification and runs `Vm`; the pinned kernel
-also mounts an ext4 root disk and devtmpfs for a disk-root boot, so a box boots
-to `boxlite-guest` as PID 1. The vsock and virtio-fs devices and the virtio-net
-wiring follow in M2.
+The Linux x86_64 native engine composes disks, reporting balloon, aggregate
+virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
+The adapter maps the runtime specification into `VmConfig`; optional devices
+are omitted when not requested. Disk order remains `vda` (container) then
+`vdb` (read-only guest root). The guest runs as PID 1, reports readiness over
+vsock and receives aggregate mount instructions before container startup.
+Linux arm64 and macOS arm64 remain separate M2 qualification gates; x86_64
+results alone do not establish complete M2 acceptance.
 Neither new crate depends on `boxlite-shared`; the release workflow publishes
 `boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
 adapter depends on `boxlite-vmm`.
@@ -66,8 +59,8 @@ adapter depends on `boxlite-vmm`.
 
 `devices::net::Net::new(socket_path, mac)` implements an internal RX/TX queue
 pair over the Linux gvproxy QEMU stream. It compiles on Unix for socket tests;
-macOS gvproxy uses a different wire protocol. VM assembly and
-snapshots remain out of scope; `Vm::new` does not yet attach this device.
+macOS gvproxy uses a different wire protocol. `Vm::new` attaches Net when
+`VmConfig.network` is present. Snapshots of device state remain unsupported.
 
 - Device ID 1, RX queue 0, TX queue 1, up to 256 entries each; only MAC is
   offered by Net. The unchanged transport owns VERSION_1 negotiation.
@@ -289,8 +282,10 @@ The Unix-only `virtio::vsock` module provides the wire codec, captured writable
 guest buffers, registered Unix socket sources, stream connections and explicit
 Unix backend routing behind `Vsock`, a stream-only virtio device.
 The [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312) covers this
-contract; `Vm::new` does not attach it and native-engine integration remains
-outside this layer.
+contract. `Vm::new` attaches it when `VmConfig::vsock` is present; the native
+engine maps host RPC and ready sockets to guest ports 2695 and 2696. The device
+removes its listener paths after failed attachment or teardown only when the
+path still identifies the socket it bound; pre-existing and replaced paths survive.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
 payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
@@ -418,8 +413,10 @@ guest buffers after reset. Replenished RX resumes output and deferred TX;
 WouldBlock, missing credit and full output do not continually self-schedule.
 
 Like virtio-net, snapshots advertise `Unsupported`: active and inactive
-`save_state` reject snapshots, and `quiesce`/`restore_state` remain unsupported.
-There is no serialization, RestoreContext extension or active-VM restore.
+`save_state` and `restore_state` reject snapshots. The default `quiesce` succeeds
+without draining buffered traffic or releasing activation; reset/drop retain
+their existing cleanup. There is no serialization, RestoreContext extension
+or active-VM restore.
 
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
 scatter delivery, real Unix stream/listener readiness, and registration cleanup
@@ -467,14 +464,17 @@ nothing mapped.
    `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
    `DeviceFailed` its error. Later events are dropped.
 
-4. Once every vCPU has joined, `run` shuts down the
-   [virtio workers](#virtio-workers), then finishes the console worker
-   `Vm::new` started, so the guest's last output, a device's included,
-   reaches the sink, or is counted as dropped and logged, before `run`
-   returns. Workers that do not shut down turn a clean exit into
-   `Error::VirtioWorker`; an error that ended the VM stays the result. `Drop`
-   retries the shutdown and keeps the RAM registered, so `GuestRam` leaks it,
-   while the workers still run.
+4. Once every vCPU joins, `run` shuts down the [virtio workers](#virtio-workers),
+   which join dispatch and quiesce every device: console drains published TX,
+   block flushes its backend, and the other devices use a successful no-op.
+   It then finishes the host console worker that `Vm::new` started.
+   Before `run` returns, the guest's last output, including device output, reaches
+   the sink or is counted as dropped and logged.
+
+A join timeout turns a clean exit into `Error::VirtioWorker`; a quiesce failure
+becomes `Error::VirtioDevice`, while an error that ended the VM stays the result.
+`Drop` retries an incomplete join and keeps RAM registered while workers still
+run; a quiesce failure after joining still permits RAM unmapping.
 
 `Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
 thread, even before `run` starts. A VM runs once: a second `run` fails with
@@ -640,7 +640,23 @@ replace the shared one without changing the transport, the devices or `Vm`.
   `DeviceFailed(Error::VirtioWorker)`.
 - **Shutdown.** `shutdown` closes every source, wakes the thread and waits up
   to 300 s for it to exit before it joins it. A timeout reports
-  `Error::VirtioWorker` with `TimedOut`, and a later call retries.
+  `Error::VirtioWorker` with `TimedOut`, and a later call retries without having
+  called any device cleanup hooks.
+- **Shutdown quiesce.** After joining, the framework calls every device's
+  `quiesce` under its lock while guest RAM is registered, including devices never
+  started. The default succeeds without extra work; console scans published TX,
+  and block flushes/syncs its backend.
+
+Other devices keep their existing reset/drop cleanup. Successful quiesce does
+not promise network delivery, processing of unconsumed queues, filesystem
+durability or snapshots. Synchronous block flush/sync is not bounded by the
+worker join timeout.
+
+Poisoned devices are not called; errors, panics and poisoned locks do not
+prevent later hooks, and the first failure is cached as `ShutdownError::Quiesce`.
+Repeated shutdown never repeats hooks. `ShutdownError::Join` separately
+identifies workers that may still access RAM, so device cleanup errors cannot
+cause a RAM leak.
 
 ## Device composition
 
@@ -758,18 +774,25 @@ port and shares `ConsoleWriter`/`ConsoleWorker` with COM1.
   loss, so a slow or broken sink never delays the guest's completion. Each accepted head is completed
   once, in order, with used length 0; the queue facade decides whether to
   raise the interrupt.
-- **Stop and reset.** `quiesce` stops accepting new kicks; `finish_tx` scans
-  pending TX once even without a kick, completes it, and drops the queue and
-  RAM references. The console writer stays open, so a later activation keeps
-  appending to the same `console.log`. `reset` clears activation and failed
-  state for a new `DRIVER_OK`.
+- **Quiesce and resume.** `quiesce` stops kicks, then scans and completes
+  published TX once, including descriptors without a final kick. Repeated calls
+  do nothing; broken rings are skipped, and a new scan failure is reported.
+  Activation remains available for `resume`, which re-enables kicks without
+  clearing a broken ring.
+- **Reset and release.** `reset` or drop releases queue and RAM references;
+  reset also clears failed state for a new `DRIVER_OK`. The shared writer stays
+  open, so serial output and later activations append to the same `console.log`.
 - **VM seam.** The device is exercised with real guest RAM, split virtqueues,
-  the MMIO transport and the console worker; it is not wired into `Vm` yet.
-  The callback still processes every available TX head, so a continuously
-  refilled queue is unbounded. N1 in the design closes that before the device
-  becomes the default path. A stalled sink cannot block TX, but its backlog
-  is bounded by the 64 KiB pending queue plus the batch the worker is writing,
-  so up to about 128 KiB can be outstanding.
+  the MMIO transport and the console worker. `devices::add_all` registers it
+  when requested; `Vm` retains no concrete console device handle. Shutdown order
+  is vCPU join → device worker join → every device's quiesce → host console finish
+  → RAM unmap on drop.
+
+The callback still processes every available TX head, so a continuously
+refilled queue is unbounded. N1 in the design closes that before the device
+becomes the default path. A stalled sink cannot block TX, but its backlog
+is bounded by the 64 KiB pending queue plus the batch the worker is writing,
+so up to about 128 KiB can be outstanding.
 
 ## Reporting balloon and shared dispatch
 

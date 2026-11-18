@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxMigration } from '../../box/entities/box-migration.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
@@ -46,7 +47,7 @@ describeIfDatabase('ImagePreparationService (integration, real Postgres)', () =>
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent, Box, BoxLastActivity, BoxMigration],
+      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent, Box, BoxLastActivity, BoxMigration, Checkpoint],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,

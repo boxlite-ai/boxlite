@@ -20,6 +20,7 @@ import {
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
+import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
 
@@ -241,6 +242,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
       supportsPrivileged: response.data.supportsPrivileged,
+      nestedVirtualizationEnabled: response.data.nestedVirtualizationEnabled,
     }
   }
 
@@ -256,17 +258,19 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     box: Box,
     image: string,
     metadata?: { [key: string]: string },
+    nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
     const response = await this.boxApiClient.create({
       id: box.id,
+      ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
       image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
-      memoryQuota: box.mem,
+      memoryQuota: memoryGiBOf(box),
       storageQuota: box.disk,
       env: box.env,
       runAsUser: box.runAsUser,
@@ -279,6 +283,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         value: secret.value,
         hosts: secret.hosts,
         placeholder: secret.placeholder,
+        headers: secret.headers,
       })),
       outboundEnabled: box.outboundEnabled,
       outboundAllowNet: box.outboundAllowNet ?? undefined,
@@ -344,7 +349,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
-      memoryQuota: box.mem,
+      memoryQuota: memoryGiBOf(box),
       storageQuota: box.disk,
       env: box.env,
       privileged: box.privileged,
@@ -353,6 +358,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         value: secret.value,
         hosts: secret.hosts,
         placeholder: secret.placeholder,
+        headers: secret.headers,
       })),
       volumes: box.volumes?.map((volume) => ({
         volumeId: volume.volumeId,
