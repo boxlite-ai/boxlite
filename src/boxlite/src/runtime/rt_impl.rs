@@ -4075,12 +4075,12 @@ mod tests {
     // Remove box clone dependency guard (Fix #7)
     // ====================================================================
 
-    #[test]
-    fn test_remove_box_blocked_by_clone_dependency() {
+    #[tokio::test]
+    async fn test_remove_box_blocked_by_clone_dependency() {
         let (runtime, _dir) = create_test_runtime();
 
         // Create box A with a disk.
-        let config_a = test_box_config_in_layout(false, &runtime);
+        let mut config_a = test_box_config_in_layout(false, &runtime);
         let mut state_a = BoxState::new();
         let disks_a = config_a.box_home.join("disks");
         std::fs::create_dir_all(&disks_a).unwrap();
@@ -4090,7 +4090,12 @@ mod tests {
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
 
         runtime
-            .persist_box_with_locks(&config_a, &mut state_a)
+            .persist_box_with_locks(
+                &mut config_a,
+                &mut state_a,
+                crate::volumes::VolumeReferenceMode::CanonicalId,
+            )
+            .await
             .unwrap();
 
         // Create box B.
@@ -4139,11 +4144,11 @@ mod tests {
         assert!(msg.contains(&config_b.id.to_string()));
     }
 
-    #[test]
-    fn test_remove_box_succeeds_when_no_dependents() {
+    #[tokio::test]
+    async fn test_remove_box_succeeds_when_no_dependents() {
         let (runtime, _dir) = create_test_runtime();
 
-        let config = test_box_config_in_layout(false, &runtime);
+        let mut config = test_box_config_in_layout(false, &runtime);
         let mut state = BoxState::new();
         let disks_dir = config.box_home.join("disks");
         std::fs::create_dir_all(&disks_dir).unwrap();
@@ -4152,7 +4157,14 @@ mod tests {
         let disk = disks_dir.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk, None);
 
-        runtime.persist_box_with_locks(&config, &mut state).unwrap();
+        runtime
+            .persist_box_with_locks(
+                &mut config,
+                &mut state,
+                crate::volumes::VolumeReferenceMode::CanonicalId,
+            )
+            .await
+            .unwrap();
 
         // The socket binding symlink must be removed with the box.
         config.sockets().ensure().unwrap();
@@ -4167,19 +4179,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_remove_box_with_force_ignores_dependents() {
+    #[tokio::test]
+    async fn test_remove_box_with_force_ignores_dependents() {
         let (runtime, _dir) = create_test_runtime();
 
         // Create box A.
-        let config_a = test_box_config_in_layout(false, &runtime);
+        let mut config_a = test_box_config_in_layout(false, &runtime);
         let mut state_a = BoxState::new();
         let disks_a = config_a.box_home.join("disks");
         std::fs::create_dir_all(&disks_a).unwrap();
         let disk_a = disks_a.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
         runtime
-            .persist_box_with_locks(&config_a, &mut state_a)
+            .persist_box_with_locks(
+                &mut config_a,
+                &mut state_a,
+                crate::volumes::VolumeReferenceMode::CanonicalId,
+            )
+            .await
             .unwrap();
 
         // Create box B.
