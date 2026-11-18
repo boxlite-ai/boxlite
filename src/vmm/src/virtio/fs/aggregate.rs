@@ -236,9 +236,9 @@ impl AggregateFs {
     }
 
     /// Registers a backend over a directory descriptor delivered by the
-    /// runtime. Type and access validation happen in `from_dir_fd`.
+    /// runtime. `from_dir_fd` validates its type; host permissions apply per operation.
     pub fn register_fd(&self, name: String, file: File, read_only: bool) -> io::Result<u64> {
-        let backend = Arc::new(PassthroughFs::from_dir_fd(file, !read_only)?);
+        let backend = Arc::new(PassthroughFs::from_dir_fd(file)?);
         self.insert_export(name, backend, read_only)
     }
 

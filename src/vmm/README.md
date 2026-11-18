@@ -58,6 +58,11 @@ registers directory descriptors and `remove` retires per-directory exports.
 A retired export's name stops resolving while its in-use nodes, handles and
 in-flight requests retain their backend; a re-registered name has a new identity
 and independent read-only policy.
+Registration validates that the supplied descriptor refers to a directory;
+host read/write permissions are checked by the kernel for each operation.
+A writable export may modify an existing writable file in a non-writable
+directory, while creating files there still fails with EACCES. The export's
+read-only policy separately rejects mutations with EROFS.
 Guest LOOKUP and accepted READDIRPLUS entries retain root inodes independently
 of open handles. FORGET releases those references; rejected READDIRPLUS entries
 and plain READDIR create no persistent lookup ownership.

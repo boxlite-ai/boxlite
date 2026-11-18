@@ -1159,7 +1159,7 @@ fn directory_range_confines_walks_to_the_shared_subtree() {
 }
 
 #[test]
-fn from_dir_fd_requires_a_readable_directory_descriptor() {
+fn from_dir_fd_validates_type_and_defers_permissions_to_operations() {
     use std::os::unix::fs::PermissionsExt;
 
     if !in_unprivileged_child() {
@@ -1167,14 +1167,14 @@ fn from_dir_fd_requires_a_readable_directory_descriptor() {
     }
     let dir = Directory::new();
     let regular = File::create(dir.0.join("regular")).unwrap();
-    error(PassthroughFs::from_dir_fd(regular, false), libc::ENOTDIR);
+    error(PassthroughFs::from_dir_fd(regular), libc::ENOTDIR);
 
     let delivered = File::open(&dir.0).unwrap();
-    let fs = PassthroughFs::from_dir_fd(delivered, false).unwrap();
+    let fs = PassthroughFs::from_dir_fd(delivered).unwrap();
     let entry = fs.lookup(ctx(), 1, c"regular").unwrap();
     assert!(entry.attr.st_mode & libc::S_IFMT == libc::S_IFREG);
 
-    // A descriptor the process cannot read is unusable, whatever its owner.
+    // O_PATH pins the directory without granting traversal rights.
     fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o000)).unwrap();
     let path = CString::new(dir.0.as_os_str().as_bytes()).unwrap();
     // SAFETY: a plain O_PATH open of a NUL-terminated path we own.
@@ -1182,6 +1182,8 @@ fn from_dir_fd_requires_a_readable_directory_descriptor() {
     assert!(fd >= 0);
     // SAFETY: open returned a fresh owned descriptor.
     let unreadable = unsafe { File::from_raw_fd(fd) };
-    error(PassthroughFs::from_dir_fd(unreadable, false), libc::EACCES);
+    let backend = PassthroughFs::from_dir_fd(unreadable).unwrap();
+    let denied = backend.lookup(ctx(), 1, c"regular");
     fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
+    error(denied, libc::EACCES);
 }

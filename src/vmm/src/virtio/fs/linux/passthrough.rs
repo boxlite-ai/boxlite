@@ -30,11 +30,6 @@ use super::super::multikey::MultikeyBTreeMap;
 
 const ROOT: u64 = 1;
 
-/// `SYS_faccessat2` (uniform across supported architectures). libc does not
-/// export it yet. This check requires Linux 5.8; confined `openat2` walks
-/// require Linux 5.6.
-const SYS_FACCESSAT2: libc::c_long = 439;
-
 pub(crate) fn errno(code: i32) -> io::Error {
     io::Error::from_raw_os_error(code)
 }
@@ -284,39 +279,16 @@ impl PassthroughFs {
             libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW,
             0,
         )?;
-        // Static configuration keeps the baseline contract: write access is
-        // enforced per operation, not at construction.
-        Self::from_dir_fd(file, false)
+        Self::from_dir_fd(file)
     }
 
-    /// Builds a backend over a descriptor the runtime already holds. The
-    /// descriptor must be a directory this process can use: an `O_PATH`
-    /// descriptor of a symlink or any non-directory is rejected, and the
-    /// kernel evaluates the access mode — read always, write when the
-    /// export publishes write access — so a delivered directory can never
-    /// widen host access beyond the delivering user's rights.
-    pub(crate) fn from_dir_fd(file: File, writable: bool) -> io::Result<Self> {
+    /// Builds a backend over a directory descriptor the runtime already holds.
+    /// Symlink and non-directory descriptors are rejected. Host access rights
+    /// are enforced by the kernel when each filesystem operation executes.
+    pub(crate) fn from_dir_fd(file: File) -> io::Result<Self> {
         let (attr, mount) = statx(&file)?;
         if attr.st_mode & libc::S_IFMT != libc::S_IFDIR {
             return Err(errno(libc::ENOTDIR));
-        }
-        let required = if writable {
-            libc::R_OK | libc::W_OK
-        } else {
-            libc::R_OK
-        };
-        // SAFETY: an empty path with AT_EMPTY_PATH operates on the descriptor.
-        let granted = unsafe {
-            libc::syscall(
-                SYS_FACCESSAT2,
-                file.as_raw_fd(),
-                c"".as_ptr(),
-                required,
-                libc::AT_EMPTY_PATH,
-            )
-        };
-        if granted != 0 {
-            return Err(io::Error::last_os_error());
         }
         let fs = Self {
             root: Arc::new(InodeData {

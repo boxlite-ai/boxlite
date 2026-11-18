@@ -547,10 +547,6 @@
         "comment": "M6 virtio-fs: guest path resolution uses openat2(RESOLVE_BENEATH) confinement"
       },
       {
-        "syscall": "faccessat2",
-        "comment": "M6 virtio-fs: from_dir_fd checks directory access rights via faccessat2(AT_EMPTY_PATH)"
-      },
-      {
         "syscall": "newfstatat",
         "comment": "libkrun: glibc 2.33+ maps stat/fstat to newfstatat. Required at steady-state."
       },

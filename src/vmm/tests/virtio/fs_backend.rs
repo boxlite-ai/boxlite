@@ -1425,16 +1425,30 @@ fn register_fd_publishes_a_delivered_directory_descriptor() {
     error(fs.register_fd("bad".into(), regular, false), libc::ENOTDIR);
     error(fs.lookup(ctx(), 1, c"bad"), libc::ENOENT);
 
-    // A read-write export also requires write access to the directory.
+    // Directory mutation rights and existing-file write rights are independent.
     use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir.0.join("note"), fs::Permissions::from_mode(0o600)).unwrap();
     fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o555)).unwrap();
-    let ro_only = File::open(&dir.0).unwrap();
+    let root = fs
+        .register_fd("strict".into(), File::open(&dir.0).unwrap(), false)
+        .unwrap();
+    let entry = fs.lookup(ctx(), root, c"note").unwrap();
+    let handle = open(&fs, entry.inode, libc::O_RDWR);
+    write(&fs, entry.inode, handle, b"ok").unwrap();
+    assert_eq!(fs::read(dir.0.join("note")).unwrap(), b"ok");
     error(
-        fs.register_fd("strict".into(), ro_only, false),
+        fs.create(
+            ctx(),
+            root,
+            c"denied",
+            0o600,
+            false,
+            libc::O_RDWR as u32,
+            0,
+            Extensions::default(),
+        ),
         libc::EACCES,
     );
-    let read_only_ok = File::open(&dir.0).unwrap();
-    fs.register_fd("strict".into(), read_only_ok, true).unwrap();
     fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
 }
 

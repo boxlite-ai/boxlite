@@ -71,12 +71,6 @@
                 "syscall": "openat"
             },
             {
-                "syscall": "openat2"
-            },
-            {
-                "syscall": "faccessat2"
-            },
-            {
                 "syscall": "read"
             },
             {
@@ -537,12 +531,6 @@
                 "syscall": "openat"
             },
             {
-                "syscall": "openat2"
-            },
-            {
-                "syscall": "faccessat2"
-            },
-            {
                 "syscall": "read"
             },
             {
@@ -824,12 +812,6 @@
             },
             {
                 "syscall": "openat"
-            },
-            {
-                "syscall": "openat2"
-            },
-            {
-                "syscall": "faccessat2"
             },
             {
                 "syscall": "close"
