@@ -16,6 +16,7 @@ use crate::{
     config::VmConfig,
     error::{Error, Result},
     memory::{GuestMemoryMmap, GuestRam},
+    x86_boot_layout::{self, PageSize},
 };
 
 pub(crate) mod elf;
@@ -36,7 +37,8 @@ pub(crate) struct BootSetup {
 /// `config.vcpu_count` vCPUs, then sets up the long-mode entry.
 ///
 /// `ram` must be fresh and zero-filled. Its backed ranges determine the E820
-/// map and initramfs placement. A failure may have written RAM; discard it.
+/// map, initramfs placement and identity mappings. A failure may have written
+/// RAM; discard it.
 pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
     let memory = ram.memory().as_ref();
     let ranges: Vec<(GuestAddress, usize)> = ram.ranges().collect();
@@ -45,7 +47,7 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
         source,
     };
     let mut kernel = File::open(&config.kernel).map_err(load_kernel)?;
-    let entry = elf::load_elf(memory, &mut kernel).map_err(load_kernel)?;
+    let kernel = elf::load_elf(memory, &mut kernel).map_err(load_kernel)?;
     let initramfs = config
         .initramfs
         .as_ref()
@@ -56,21 +58,29 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
             })
         })
         .transpose()?;
-    let zero_page = params::write_boot_params(memory, &config.cmdline, &ranges, initramfs)
-        .map_err(|source| Error::WriteBootData {
-            what: "boot parameters",
-            source,
-        })?;
+    let table_error = |source| Error::WriteBootData {
+        what: "boot GDT and page tables",
+        source,
+    };
+    let leaf = PageSize::default();
+    let plan =
+        x86_boot_layout::plan_boot_tables(&ranges, (kernel.start, kernel.end), initramfs, leaf)
+            .map_err(table_error)?;
+    let fast = plan.tables().0 == x86_boot_layout::TABLES_BASE;
+    let reserved = plan.reserved(fast);
+    let zero_page =
+        params::write_boot_params(memory, &config.cmdline, &ranges, initramfs, &reserved).map_err(
+            |source| Error::WriteBootData {
+                what: "boot parameters",
+                source,
+            },
+        )?;
     mptable::write_mptable(memory, config.vcpu_count).map_err(|source| Error::WriteBootData {
         what: "MP table",
         source,
     })?;
-    let boot_regs = entry::long_mode_entry(memory, entry, zero_page).map_err(|source| {
-        Error::WriteBootData {
-            what: "boot GDT and page tables",
-            source,
-        }
-    })?;
+    let boot_regs =
+        entry::long_mode_entry(memory, kernel.entry, zero_page, &plan).map_err(table_error)?;
     Ok(BootSetup { boot_regs })
 }
 

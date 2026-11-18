@@ -448,7 +448,16 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         .write_obj(PARAMS_MARKER, GuestAddress(BOOT_PARAMS))
         .unwrap();
     memory.write_obj(TOP_MARKER, GuestAddress(top)).unwrap();
-    let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS).unwrap();
+    let ranges: Vec<_> = vm.ram.ranges().collect();
+    let leaf = crate::x86_boot_layout::PageSize::Mib;
+    let plan = crate::x86_boot_layout::plan_boot_tables(
+        &ranges,
+        (ENTRY, ENTRY + program.len() as u64),
+        None,
+        leaf,
+    )
+    .unwrap();
+    let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS, &plan).unwrap();
     let cpuid = vcpu_cpuid(vm.host_vm.supported_cpuid(), 0, 2);
 
     let mut vcpu = vm.host_vm.create_vcpu(0).unwrap();
