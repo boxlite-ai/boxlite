@@ -20,20 +20,27 @@ The connection needs permission to register workers and quota for the requested
 | Runner label | Jobs |
 | --- | --- |
 | `boxlite` | Lightweight lint, setup, status and release uploads using the default 10 GiB disk |
-| `boxlite-4vcpu-16gbmem-30gbdisk` | Application tests, client drift, CodeQL, Python and Node SDK tests, and release package checks |
-| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, native SDK and guest builds, Rust and Go coverage, Nix, and multi-architecture image builds |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, and Go, Python and TypeScript CodeQL |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, Rust and Go coverage, and standalone guest artifact builds |
+| GitHub-hosted Ubuntu | Service-container jobs, Docker image and SDK builds, Dashboard, Nix, and Actions, Rust and C/C++ CodeQL |
 
-The platform matrix controls check names and artifacts. The Ubuntu x64 leg selects
-a BoxLite label, and Linux ARM64 and macOS legs run on their native platforms.
-BoxLite jobs install Make and archive tooling through the
+The platform matrix controls check names and artifacts. Linux ARM64 and macOS
+legs run on their native platforms. BoxLite jobs install tools through the
 [runner setup action](../actions/setup-boxlite-runner/action.yml) where needed.
-The x64 Rust, Go and Nix hardware tests require an organization with nested
-virtualization and usable `/dev/kvm`.
+TypeScript CodeQL installs Node.js before initialization. The x64 Rust and Go
+hardware tests require an organization with nested virtualization and usable
+`/dev/kvm`.
+
+The workers serving this repository must pass Docker startup before
+service-container and Docker build jobs can use BoxLite. GitHub-hosted
+runners provide Docker for those jobs, including API client drift, API tests,
+and Linux manylinux and wheel builds.
+[Docker startup contract](../../apps/libs/ci-listener/README.md#docker-startup).
 
 The local E2E workflow uses its GCP runner pool for persistent caches and VM
-lifecycle. Deployment recovery uses GitHub-hosted runners, including shared
-configuration, x64-only C builds and Runner binary builds. npm publishing uses
-GitHub-hosted capacity for its [provenance requirement](https://docs.npmjs.com/generating-provenance-statements/).
+lifecycle. Deployment recovery uses GitHub-hosted runners. npm publishing uses
+GitHub-hosted capacity for its
+[provenance requirement](https://docs.npmjs.com/generating-provenance-statements/).
 
 ## How they fit together
 

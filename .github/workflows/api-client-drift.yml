@@ -36,7 +36,7 @@ concurrency:
 jobs:
   check-generated-clients:
     name: Regenerate API clients and diff
-    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    runs-on: ubuntu-latest
     services:
       # generate-openapi.ts boots the full NestJS app; SKIP_CONNECTIONS=true
       # defers DB/queue connections but bootstrap still issues Redis commands
@@ -52,11 +52,6 @@ jobs:
         working-directory: apps
     steps:
       - uses: actions/checkout@v5
-
-      - uses: ./.github/actions/setup-boxlite-runner
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
 
       # corepack must be enabled before setup-node's yarn cache probe runs
       - name: Enable corepack (yarn 4)
