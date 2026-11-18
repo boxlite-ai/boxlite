@@ -1326,6 +1326,27 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         })
         .unwrap_or_default();
 
+    // PortSpec is shared with the local SDK; validate before creating a box.
+    // The local runtime applies the same checks when it binds the listeners.
+    if !req.ports.is_empty() && matches!(network, NetworkSpec::Disabled) {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "ports require network.outbound.mode=\"enabled\"".into(),
+        ));
+    }
+    for port in &req.ports {
+        if port.guest_port == 0
+            || port.protocol != boxlite::runtime::options::PortProtocol::Tcp
+            || port
+                .host_ip
+                .as_deref()
+                .is_some_and(|ip| ip.parse::<std::net::IpAddr>().is_err())
+        {
+            return Err(boxlite::BoxliteError::InvalidArgument(
+                "ports require a guest port in 1-65535, TCP, and a numeric host_ip".into(),
+            ));
+        }
+    }
+
     Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
@@ -1336,6 +1357,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         secrets,
         network,
         inbound_network,
+        ports: req.ports.clone(),
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
         user: req.user.clone(),
@@ -2110,6 +2132,7 @@ mod tests {
     use std::time::Duration;
 
     mod executions;
+    mod ports;
     mod ssh;
 
     #[test]
@@ -2537,11 +2560,9 @@ mod tests {
         );
     }
 
-    /// The read-back must carry the policy the runtime holds, both
-    /// directions, so a remote `info()` or `inspect` can show it; and only
-    /// that, since host bindings mean nothing to a remote caller.
+    /// Read-back carries both policy directions and the runtime's live bindings.
     #[test]
-    fn a_box_response_carries_the_network_policy_and_nothing_local() {
+    fn a_box_response_carries_the_network_policy_and_host_bindings() {
         let mut info = info_as_the_runtime_reports_it("running");
         info.network = serde_json::from_value(serde_json::json!({
             "outbound": { "mode": "enabled", "allow_net": ["api.openai.com"] },
@@ -2562,6 +2583,9 @@ mod tests {
             serde_json::json!({
                 "outbound": { "mode": "enabled", "allow_net": ["api.openai.com"] },
                 "inbound": { "mode": "enabled", "allow_net": [] },
+                "published_ports": [
+                    { "guest_port": 80, "host_ip": "127.0.0.1", "host_port": 8080, "protocol": "tcp" }
+                ],
             })
         );
     }

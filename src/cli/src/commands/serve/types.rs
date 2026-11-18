@@ -45,6 +45,9 @@ pub(super) struct CreateBoxRequest {
     pub advanced: CreateBoxAdvancedOptions,
     #[serde(default)]
     pub network: Option<NetworkSpec>,
+    /// Local serve extension: host TCP listeners owned by the box runtime.
+    #[serde(default)]
+    pub ports: Vec<boxlite::runtime::options::PortSpec>,
     #[serde(default)]
     pub auto_stop: Option<u32>,
     #[serde(default)]
@@ -183,13 +186,14 @@ pub(super) struct BoxResponse {
     pub network: Option<NetworkInfoResponse>,
 }
 
-/// Network policy as `GET /v1/boxes/{box_id}` reports it: both directions and
-/// nothing else. Local host publications are not a remote caller's to use,
-/// so they stay off the wire, as do the deprecated flat mirrors.
+/// Network policy and resolved listeners on the serve host.
 #[derive(Serialize)]
 pub(super) struct NetworkInfoResponse {
     pub outbound: NetworkDirectionResponse,
     pub inbound: NetworkDirectionResponse,
+    /// Omitted when the runtime cannot report the current bindings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_ports: Option<Vec<boxlite::runtime::types::PublishedPort>>,
 }
 
 #[derive(Serialize)]
@@ -209,6 +213,7 @@ impl From<&NetworkInfo> for NetworkInfoResponse {
                 mode: network.inbound.mode.clone(),
                 allow_net: network.inbound.allow_net.clone(),
             },
+            published_ports: network.published_ports.clone(),
         }
     }
 }
@@ -355,6 +360,7 @@ pub(super) struct ServerConfig {
 
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
+    pub local_port_publication_enabled: bool,
     pub checkpoints_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
