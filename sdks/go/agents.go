@@ -3,6 +3,7 @@ package boxlite
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 )
 
@@ -180,62 +181,24 @@ type AgentEventStream interface {
 }
 
 // Agents, Agent and AgentTurn address agent conversations and work.
-type Agents struct{}
-type Agent struct{}
-type AgentTurn struct{}
+type Agents struct {
+	mu     sync.Mutex
+	box    *Box
+	native *agentNamespace
+}
+
+// Agent handles must not be copied after first use.
+type Agent struct{ native *agentSession }
+
+// AgentTurn handles must not be copied after first use.
+type AgentTurn struct{ native *agentTurnHandle }
 
 // Agents obtains the namespace without starting the Box.
-func (b *Box) Agents() *Agents { return &Agents{} }
+func (b *Box) Agents() *Agents { return &Agents{box: b} }
 
-func agentNotImplemented(operation string) error {
-	return &Error{Code: ErrUnsupported, Message: operation + " is not implemented"}
+func (a *Agent) Events(context.Context, AgentEventsOptions) (AgentEventStream, error) {
+	return nil, &Error{Code: ErrUnsupported, Message: "agent.events is not implemented"}
 }
-
-func (a *Agents) Create(ctx context.Context, agent string, options AgentCreateOptions) (*Agent, error) {
-	return nil, agentNotImplemented("agents.create")
-}
-func (a *Agents) Get(ctx context.Context, agentID string) (*Agent, error) {
-	return nil, agentNotImplemented("agents.get")
-}
-func (s *Agent) Close(ctx context.Context, options AgentControlOptions) error {
-	return agentNotImplemented("agent.close")
-}
-func (s *Agent) Send(ctx context.Context, text string, options AgentSendOptions) (*AgentTurn, error) {
-	return nil, agentNotImplemented("agent.send")
-}
-func (s *Agent) GetTurn(ctx context.Context, turnID string) (*AgentTurn, error) {
-	return nil, agentNotImplemented("agent.get_turn")
-}
-func (s *Agent) Events(ctx context.Context, options AgentEventsOptions) (AgentEventStream, error) {
-	return nil, agentNotImplemented("agent.events")
-}
-func (s *Agent) Requests(ctx context.Context) ([]AgentRequest, error) {
-	return nil, agentNotImplemented("agent.requests")
-}
-func (s *Agent) Respond(ctx context.Context, requestID string, response AgentResponse, options AgentControlOptions) (*AgentTurn, error) {
-	return nil, agentNotImplemented("agent.respond")
-}
-func (s *Agent) State() (*AgentState, error) {
-	return nil, agentNotImplemented("agent.state")
-}
-func (s *Agent) Config() (*AgentConfig, error) {
-	return nil, agentNotImplemented("agent.config")
-}
-func (s *Agent) Capabilities() (*AgentCapabilities, error) {
-	return nil, agentNotImplemented("agent.capabilities")
-}
-func (t *AgentTurn) Wait(ctx context.Context, options AgentWaitOptions) (*AgentResult, error) {
-	return nil, agentNotImplemented("turn.wait")
-}
-func (t *AgentTurn) Events(ctx context.Context, options AgentEventsOptions) (AgentEventStream, error) {
-	return nil, agentNotImplemented("turn.events")
-}
-func (t *AgentTurn) Steer(ctx context.Context, text string, options AgentControlOptions) (*AgentSteeringReceipt, error) {
-	return nil, agentNotImplemented("turn.steer")
-}
-func (t *AgentTurn) Interrupt(ctx context.Context, options AgentControlOptions) error {
-	return agentNotImplemented("turn.interrupt")
-}
-func (t *AgentTurn) State() (*AgentTurnState, error) {
-	return nil, agentNotImplemented("turn.state")
+func (t *AgentTurn) Events(context.Context, AgentEventsOptions) (AgentEventStream, error) {
+	return nil, &Error{Code: ErrUnsupported, Message: "turn.events is not implemented"}
 }

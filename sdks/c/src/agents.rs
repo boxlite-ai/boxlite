@@ -15,6 +15,10 @@ use crate::event_queue::{EventQueue, RuntimeEvent, push_event};
 use crate::{CBoxHandle, CBoxliteError};
 use tokio::runtime::Runtime as TokioRuntime;
 
+#[cfg(feature = "test-support")]
+#[path = "agents/tests/go_support.rs"]
+mod go_test_support;
+
 /// Box-owned namespace; release with boxlite_agents_free.
 pub struct CAgents {
     core: boxlite::Agents,
@@ -1012,6 +1016,8 @@ pub unsafe extern "C" fn boxlite_agents_free(handle: *mut CAgents) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_free(handle: *mut CAgent) {
     if !handle.is_null() {
+        #[cfg(feature = "test-support")]
+        go_test_support::record_free(false);
         unsafe {
             drop(Box::from_raw(handle));
         }
@@ -1023,6 +1029,8 @@ pub unsafe extern "C" fn boxlite_agent_free(handle: *mut CAgent) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_free(handle: *mut CAgentTurn) {
     if !handle.is_null() {
+        #[cfg(feature = "test-support")]
+        go_test_support::record_free(true);
         unsafe {
             drop(Box::from_raw(handle));
         }

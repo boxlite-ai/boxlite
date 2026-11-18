@@ -32,8 +32,8 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Rust, Python, Node.js, the CLI and C calls on a local runtime run the operations listed in
-[OpenCode on a local runtime](#opencode-on-a-local-runtime). Go and remote
+Rust, Python, Node.js, the CLI, C and Go calls on a local runtime run the operations listed in
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Remote
 runtimes return unsupported errors before agent execution.
 
 | SDK | Error behavior |
@@ -41,7 +41,7 @@ runtimes return unsupported errors before agent execution.
 | Rust | `Err(BoxliteError::Unsupported(…))` naming the operation or option; no panic |
 | Python | `UnsupportedError` on awaiting operations or reading a property |
 | Node.js | Rejected operation promises; synchronous getter/event errors |
-| Go | `*Error` with `Code: ErrUnsupported` and no result |
+| Go | Calls/getters return typed core `*Error` values and no result on failure; invalid arguments fail before submission; canceled calls return the context error |
 | C | Invalid arguments return `InvalidArgument` synchronously without a callback; accepted async calls return `Ok` and deliver core errors through the drain callback; getters return core errors synchronously |
 | CLI | `boxlite agent …` reports the error on stderr and exits with code 1 |
 
@@ -55,13 +55,13 @@ on failure.
 
 ### OpenCode on a local runtime
 
-Rust, Python, Node.js, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
+Rust, Python, Node.js, the CLI, C and Go calls on a local runtime forward agents to OpenCode 2.2 inside the Box
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
 answers, or with `Execution` when it lacks the `opencode service` commands. Remote
-runtimes and Go return `Unsupported`. `agent.id()` returns the `ses_…`
+runtimes return `Unsupported`. `agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
 
 ```text
@@ -214,6 +214,20 @@ use different tagged records, so an answer cannot grant permission.
 Retention is read from `idempotency_retention_seconds` using checked decimal
 conversion to `time.Duration`, without a float64 intermediate. Sub-nanosecond
 fractions are truncated; negative or out-of-range values return an error.
+
+Go calls and getters use the C SDK and these converters. One runtime drainer
+dispatches asynchronous completions; getters copy their JSON synchronously.
+Both event methods return `Unsupported`; subscriptions are a separate delivery step.
+
+Agent namespaces are acquired lazily. Closing a Box releases its local Box handle;
+an acquired namespace, agent or turn remains usable until `Runtime.Close`.
+Agent wrappers must not be copied after first use. Garbage collection releases
+local handles as a fallback, and `Runtime.Close` deterministically releases them.
+`Agent.Close` invokes the core operation; it does not release the local handle.
+
+Cancellation stops the Go wait, not submitted agent work. Late native handles
+are released, including results already buffered when cancellation wins.
+`Runtime.Close` wakes pending calls with `ErrRuntimeClosed` and rejects new calls.
 
 ### Example: handle operation errors
 
