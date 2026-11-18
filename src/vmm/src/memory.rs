@@ -248,8 +248,8 @@ fn interior_pages(start: usize, len: usize, page_size: usize) -> (usize, usize) 
 #[derive(Debug)]
 pub(crate) struct GuestRam {
     memory: Arc<GuestMemoryMmap>,
-    /// Regions `0..mapped`, in ascending address order, are registered with
-    /// the host VM.
+    /// Regions `0..mapped`, in ascending address order, may still have
+    /// mappings with the host VM.
     mapped: usize,
 }
 
@@ -302,8 +302,8 @@ impl GuestRam {
         })
     }
 
-    /// Registers every region with `vm`, lowest address first. A failure
-    /// removes the regions registered so far and returns the failure.
+    /// Registers every region with `vm`, lowest address first. On failure,
+    /// attempts to remove any registrations and returns the original error.
     ///
     /// # Panics
     ///
@@ -319,7 +319,10 @@ impl GuestRam {
             // otherwise. Host-side access goes through vm-memory's volatile API
             // on `memory`, never through Rust references.
             if let Err(error) = unsafe { vm.map_memory(region) } {
-                // A failed rollback leaves `mapped` above zero, so `Drop` leaks.
+                // The backend may keep slices it registered before the failure. Count this
+                // region so the rollback below attempts it too; a failed removal keeps the
+                // backing alive.
+                self.mapped += 1;
                 let _ = self.unmap(vm);
                 return Err(error.into());
             }

@@ -5,10 +5,10 @@
 //! the mock backend, and real KVM VMs whose guests read the mapped RAM and run
 //! 64-bit code with the boot CPU state.
 
-use std::{cell::Cell, error::Error as _, io};
+use std::{cell::Cell, error::Error as _, io, sync::Arc};
 
 use boxlite_hypervisor::Error as HypervisorError;
-use vm_memory::GuestMemoryBackend;
+use vm_memory::{GuestAddress, GuestMemoryBackend};
 
 use super::{BootRegisters, Vm};
 use crate::{
@@ -144,11 +144,11 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
     );
     assert!(memory.upgrade().is_some(), "VM still owns the backing");
     assert_eq!(log.lock().unwrap().len(), 1, "only RAM registration");
+    let region = vm.ram.regions().next().expect("one RAM region");
+    let map = Call::map(&region);
+    let unmap = Call::unmap(&region);
     drop(vm);
-    assert!(matches!(
-        &log.lock().unwrap()[..],
-        [Call::Map { .. }, Call::Unmap { .. }]
-    ));
+    assert_eq!(*log.lock().unwrap(), [map, unmap]);
     assert!(
         memory.upgrade().is_none(),
         "successful VM drop frees backing RAM"
@@ -206,24 +206,50 @@ fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
 }
 
 #[test]
-fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
+fn a_rejected_vm_mapping_releases_the_backing() {
     let backend = MockVm::failing_at(&[0]);
     let log = backend.log();
+    let call_log = backend.call_log();
+    let mut backing = None;
 
-    let error = bare(config(1, 16), || Ok(backend)).expect_err("mapping fails");
+    let error = Vm::with_backend(
+        config(1, 16),
+        || Ok(backend),
+        |_, _| panic!("a rejected map must not reach boot"),
+        |_, ctx| {
+            let host_addr = ctx
+                .memory
+                .get_host_address(GuestAddress(RAM_START))
+                .unwrap() as usize;
+            backing = Some((Arc::downgrade(ctx.memory), host_addr));
+            Ok(())
+        },
+    )
+    .expect_err("mapping fails");
 
     assert!(matches!(
         error,
-        Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, .. })
+        Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, source })
             if guest_addr == RAM_START && size == 16 << 20
+                && source.kind() == io::ErrorKind::OutOfMemory
     ));
-    let calls = log.lock().unwrap().clone();
-    assert_eq!(
-        calls.len(),
-        1,
-        "nothing was registered, so nothing is unmapped"
+    let (backing, host_addr) = backing.expect("allocated 16 MiB backing");
+    let map = Call::Map {
+        guest_addr: RAM_START,
+        host_addr,
+        size: 16 << 20,
+    };
+    let unmap = Call::Unmap {
+        guest_addr: RAM_START,
+        host_addr,
+        size: 16 << 20,
+    };
+    assert_eq!(log.lock().unwrap().as_slice(), [map, unmap]);
+    assert_eq!(call_log.ioctl_calls(), [map]);
+    assert!(
+        backing.upgrade().is_none(),
+        "failed VM construction must release the backing"
     );
-    assert!(matches!(calls[0], Call::Map { .. }));
 }
 
 /// A chipset conflict fails the build before any RAM is registered, so the
@@ -522,6 +548,14 @@ mod lifecycle {
         bare(config(vcpu_count, 16), || Ok(backend)).unwrap()
     }
 
+    fn memory_calls(calls: &[Call]) -> Vec<Call> {
+        calls
+            .iter()
+            .copied()
+            .filter(|call| matches!(call, Call::Map { .. } | Call::Unmap { .. }))
+            .collect()
+    }
+
     #[test]
     fn the_first_guest_exit_decides_the_outcome_and_stops_every_vcpu() {
         for (step, expected) in [
@@ -532,6 +566,9 @@ mod lifecycle {
             let (exit, vm) = run(mock(2, MockVm::with_scripts(vec![vec![step]])));
             assert_eq!(exit.unwrap(), expected);
             let log = vm.host_vm.log();
+            let call_log = vm.host_vm.call_log();
+            let region = vm.ram.regions().next().expect("one RAM region");
+            let expected_memory = [Call::map(&region), Call::unmap(&region)];
             drop(vm);
             let calls = log.lock().unwrap().clone();
             let first_unmap = calls
@@ -546,6 +583,8 @@ mod lifecycle {
                 .collect();
             assert_eq!(drops.len(), 2, "{calls:?}");
             assert!(drops.iter().all(|&index| index < first_unmap), "{calls:?}");
+            assert_eq!(memory_calls(&calls), expected_memory);
+            assert_eq!(memory_calls(&call_log.ioctl_calls()), expected_memory);
         }
     }
 
@@ -794,7 +833,7 @@ mod lifecycle {
             time::{Duration, Instant},
         };
 
-        use super::{super::*, SlowSink, run};
+        use super::{super::*, SlowSink, memory_calls, run};
         use crate::{
             VmExit,
             chipset::ChipsetBuilder,
@@ -1019,14 +1058,13 @@ mod lifecycle {
                 assert!(sink.0.lock().unwrap().is_empty());
                 assert!(vm.workers.shutdown().is_err(), "hook failure is cached");
 
+                let call_log = vm.host_vm.call_log();
+                let region = vm.ram.regions().next().expect("one RAM region");
+                let expected_memory = [Call::map(&region), Call::unmap(&region)];
                 drop(vm);
 
-                assert!(
-                    log.lock()
-                        .unwrap()
-                        .iter()
-                        .any(|call| matches!(call, Call::Unmap { .. }))
-                );
+                assert_eq!(memory_calls(&log.lock().unwrap()), expected_memory);
+                assert_eq!(memory_calls(&call_log.ioctl_calls()), expected_memory);
                 assert!(
                     memory.upgrade().is_none(),
                     "joined workers permit RAM release"

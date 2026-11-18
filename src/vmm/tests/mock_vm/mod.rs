@@ -1,22 +1,21 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! A mock hypervisor backend that records memory registrations, interrupt
-//! line changes and vCPU setup, runs each vCPU through a script, and can be
-//! told to fail, so the VMM's lifetime rules, interrupt path and vCPU
-//! lifecycle are testable without a host VM.
+//! A mock hypervisor backend that records memory, interrupt and vCPU call
+//! attempts, tracks memory registrations, and runs scripted vCPUs. Tests can
+//! inject failures without a host VM.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     io,
     sync::{Arc, Condvar, Mutex},
 };
 
 use boxlite_hypervisor::{Error, MemoryRegion, Result, Vcpu, VcpuExit, VcpuHandle, Vm};
 
-/// One recorded backend call, with the host address as an integer because
+/// One recorded call attempt, with the host address as an integer because
 /// `MemoryRegion` is not `Send`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Call {
     Map {
         guest_addr: u64,
@@ -83,13 +82,48 @@ impl Call {
     }
 }
 
-/// Records every map, unmap and interrupt line change, and fails the calls
-/// whose zero-based index (all calls counted together) was selected. A
-/// failed unmap keeps the registration, as KVM does.
+/// The (guest address, host address, size) passed to `unmap_memory`.
+pub(crate) type UnmapAttempt = (u64, usize, usize);
+
+/// The attempt log and its ioctl subset, shared by the VM and its vCPUs.
+#[derive(Debug, Default)]
+pub(crate) struct CallLog {
+    attempts: Arc<Mutex<Vec<Call>>>,
+    /// One flag per attempt. Always lock `attempts` before `ioctl`.
+    ioctl: Mutex<Vec<bool>>,
+}
+
+impl CallLog {
+    fn record(&self, call: Call, reaches_ioctl: bool) -> usize {
+        let mut attempts = self.attempts.lock().unwrap();
+        let index = attempts.len();
+        attempts.push(call);
+        self.ioctl.lock().unwrap().push(reaches_ioctl);
+        index
+    }
+
+    /// The attempts that reach the backend, in log order, including failures.
+    pub(crate) fn ioctl_calls(&self) -> Vec<Call> {
+        let attempts = self.attempts.lock().unwrap();
+        let ioctl = self.ioctl.lock().unwrap();
+        attempts
+            .iter()
+            .copied()
+            .zip(ioctl.iter().copied())
+            .filter_map(|(call, reaches_ioctl)| reaches_ioctl.then_some(call))
+            .collect()
+    }
+}
+
+/// Records all call attempts. Memory and interrupt failures are injected by
+/// index in that log. As in KVM, unmapping an unregistered region is a no-op
+/// unless a failure is injected, and a failed unmap keeps any existing registration.
 #[derive(Debug, Default)]
 pub(crate) struct MockVm {
-    log: Arc<Mutex<Vec<Call>>>,
-    fail_at: Vec<usize>,
+    log: Arc<CallLog>,
+    unmap_attempts: Arc<Mutex<Vec<UnmapAttempt>>>,
+    registrations: Mutex<HashSet<Call>>,
+    fail_at: Vec<(usize, io::ErrorKind)>,
     /// The script of each vCPU, by id; a missing one waits for a kick.
     scripts: Vec<Vec<Step>>,
     /// The vCPU whose `set_cpu_features` fails.
@@ -103,9 +137,21 @@ impl MockVm {
         Self::default()
     }
 
+    /// Injects out-of-memory errors at the given attempt-log indices.
     pub(crate) fn failing_at(call_indexes: &[usize]) -> Self {
         Self {
-            fail_at: call_indexes.to_vec(),
+            fail_at: call_indexes
+                .iter()
+                .map(|&index| (index, io::ErrorKind::OutOfMemory))
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    /// Injects the given errors at their attempt-log indices.
+    pub(crate) fn failing_with(fail_at: &[(usize, io::ErrorKind)]) -> Self {
+        Self {
+            fail_at: fail_at.to_vec(),
             ..Self::default()
         }
     }
@@ -137,23 +183,43 @@ impl MockVm {
         Arc::clone(&self.entries)
     }
 
-    /// The call log, which outlives the backend so tests can read it after a drop.
+    /// All call attempts, retained after the backend drops. Tests only read this log.
     pub(crate) fn log(&self) -> Arc<Mutex<Vec<Call>>> {
+        Arc::clone(&self.log.attempts)
+    }
+
+    /// A snapshot of all attempts, including unmaps of unregistered regions.
+    pub(crate) fn calls(&self) -> Vec<Call> {
+        self.log.attempts.lock().unwrap().clone()
+    }
+
+    /// Attempts that reach the backend: all maps and non-memory calls, and
+    /// only unmaps of regions that were registered at the time of the call.
+    pub(crate) fn ioctl_calls(&self) -> Vec<Call> {
+        self.log.ioctl_calls()
+    }
+
+    /// A handle for reading the ioctl subset even after the backend drops.
+    pub(crate) fn call_log(&self) -> Arc<CallLog> {
         Arc::clone(&self.log)
     }
 
-    pub(crate) fn calls(&self) -> Vec<Call> {
-        self.log.lock().unwrap().clone()
+    /// The arguments of every unmap attempt, including no-ops and failures.
+    pub(crate) fn unmap_attempts(&self) -> Vec<UnmapAttempt> {
+        self.unmap_attempts.lock().unwrap().clone()
     }
 
-    fn record(&self, call: Call) -> Result<()> {
-        let mut log = self.log.lock().unwrap();
-        let index = log.len();
-        log.push(call);
-        if !self.fail_at.contains(&index) {
+    /// The memory regions currently registered with the backend.
+    pub(crate) fn registrations(&self) -> HashSet<Call> {
+        self.registrations.lock().unwrap().clone()
+    }
+
+    fn record(&self, call: Call, reaches_ioctl: bool) -> Result<()> {
+        let index = self.log.record(call, reaches_ioctl);
+        let Some(&(_, kind)) = self.fail_at.iter().find(|&&(at, _)| at == index) else {
             return Ok(());
-        }
-        let source = io::Error::from(io::ErrorKind::OutOfMemory);
+        };
+        let source = io::Error::from(kind);
         Err(match call {
             Call::Map {
                 guest_addr, size, ..
@@ -181,11 +247,33 @@ impl Vm for MockVm {
     type Vcpu = MockVcpu;
 
     unsafe fn map_memory(&self, region: &MemoryRegion) -> Result<()> {
-        self.record(Call::map(region))
+        let mut registrations = self.registrations.lock().unwrap();
+        let call = Call::map(region);
+        self.record(call, true)?;
+        if !registrations.insert(call) {
+            return Err(Error::MapMemory {
+                guest_addr: region.guest_addr,
+                size: region.size,
+                source: io::ErrorKind::AlreadyExists.into(),
+            });
+        }
+        Ok(())
     }
 
     fn unmap_memory(&self, region: &MemoryRegion) -> Result<()> {
-        self.record(Call::unmap(region))
+        self.unmap_attempts.lock().unwrap().push((
+            region.guest_addr,
+            region.host_addr.as_ptr() as usize,
+            region.size,
+        ));
+        let mut registrations = self.registrations.lock().unwrap();
+        let registration = Call::map(region);
+        let registered = registrations.contains(&registration);
+        self.record(Call::unmap(region), registered)?;
+        if registered {
+            registrations.remove(&registration);
+        }
+        Ok(())
     }
 
     fn create_vcpu(&self, id: u32) -> Result<MockVcpu> {
@@ -202,14 +290,14 @@ impl Vm for MockVm {
     }
 
     fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
-        self.record(Call::SetIrqLine { line, level })
+        self.record(Call::SetIrqLine { line, level }, true)
     }
 }
 
 pub(crate) struct MockVcpu {
     id: u32,
     steps: VecDeque<Step>,
-    log: Arc<Mutex<Vec<Call>>>,
+    log: Arc<CallLog>,
     fail_setup: bool,
     entries: Arc<Mutex<Vec<u32>>>,
     kick: Arc<Kick>,
@@ -218,7 +306,7 @@ pub(crate) struct MockVcpu {
 
 impl MockVcpu {
     fn record(&self, call: Call) {
-        self.log.lock().unwrap().push(call);
+        self.log.record(call, true);
     }
 }
 

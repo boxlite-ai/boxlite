@@ -7,7 +7,7 @@ use kvm_bindings::{KVM_API_VERSION, KVM_PIT_SPEAKER_DUMMY, kvm_pit_config};
 use kvm_ioctls::{Cap, Kvm, VmFd};
 
 use super::KvmVcpu;
-use super::memory::MemorySlots;
+use super::memory::{MAX_PAGES_PER_SLOT, MemorySlots};
 use crate::{Error, MemoryRegion, Result};
 
 /// An x86_64 KVM VM with an in-kernel interrupt controller and timer.
@@ -128,11 +128,20 @@ impl KvmVm {
                 .slots
                 .lock()
                 .map_err(|_| io::Error::other("KVM memory slot lock is poisoned"))?;
-            slots.map(region, |mapping| {
-                // SAFETY: the caller guarantees valid backing memory. MemorySlots
-                // checks the ranges and retains the slot only after KVM accepts it.
-                unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)
-            })
+            slots.map_chunks(
+                region,
+                MAX_PAGES_PER_SLOT,
+                |mapping| {
+                    // SAFETY: the caller guarantees valid backing memory. MemorySlots
+                    // checks the ranges and retains the slot only after KVM accepts it.
+                    unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)
+                },
+                |mapping| {
+                    // SAFETY: a zero-sized region deletes the slot; KVM does not
+                    // dereference the supplied userspace address.
+                    unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)
+                },
+            )
         };
         install().map_err(|source| Error::MapMemory {
             guest_addr: region.guest_addr,
@@ -141,15 +150,16 @@ impl KvmVm {
         })
     }
 
-    /// Removes exactly the mapping identified by all three region fields.
-    /// A failed removal retains the slot and its backing-memory requirements.
+    /// Removes the slots for the exact region previously passed to `map_memory`.
+    /// An unrecorded region is a no-op. A failed removal retains the slot and
+    /// its backing-memory requirements.
     pub fn unmap_memory(&self, region: &MemoryRegion) -> Result<()> {
         let remove = || {
             let mut slots = self
                 .slots
                 .lock()
                 .map_err(|_| io::Error::other("KVM memory slot lock is poisoned"))?;
-            slots.unmap(region, |mapping| {
+            slots.unmap_chunks(region, |mapping| {
                 // SAFETY: a zero-sized region deletes the slot; KVM does not
                 // dereference the supplied userspace address.
                 unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)
