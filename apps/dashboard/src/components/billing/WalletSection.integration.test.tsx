@@ -730,7 +730,7 @@ describe('WalletSection top-up checkout', () => {
     return { host, button, input, visit, onCouponClaimAccepted, client }
   }
 
-  it('confirms the coupon link for the selected organization and offers card setup after URL cleanup', async () => {
+  it('submits a double-clicked coupon claim once for the selected organization and offers card setup after URL cleanup', async () => {
     mocks.claimCoupon.mockResolvedValue({ status: 'pending', result: null })
     const checkout = { location: { href: '' }, close: vi.fn() }
     vi.spyOn(window, 'open').mockReturnValue(checkout as unknown as Window)
@@ -739,7 +739,11 @@ describe('WalletSection top-up checkout', () => {
     expect(host.textContent).toContain('Acme Labs')
     expect(mocks.claimCoupon).not.toHaveBeenCalled()
 
-    await act(async () => button('Claim reward')!.click())
+    const claim = button('Claim reward')!
+    await act(async () => {
+      claim.click()
+      claim.click()
+    })
     expect(mocks.claimCoupon).toHaveBeenCalledExactlyOnceWith('org-without-card', {
       eventId: expect.any(String),
       couponCode: 'ACME50',
@@ -803,8 +807,14 @@ describe('WalletSection top-up checkout', () => {
     [
       'skipped',
       () => Promise.resolve({ status: 'done', result: { outcome: 'skipped', reason: 'coupon_expired' } }),
-      'Reward claim failed. This coupon has expired',
+      'Reward claim failed. This coupon has expired.',
     ],
+    [
+      'unrecognized skip reason',
+      () => Promise.resolve({ status: 'done', result: { outcome: 'skipped', reason: 'coupon_unavailable' } }),
+      'Reward claim failed. coupon_unavailable',
+    ],
+    ['rejection without a reason', () => Promise.reject(), 'Reward claim failed.'],
     ['failed', () => Promise.resolve({ status: 'failed', result: null }), 'Reward claim failed.'],
   ])('retains the coupon link after a definite %s', async (_name, reply, message) => {
     mocks.organizations = [{ id: mocks.organizationId }]
@@ -812,7 +822,7 @@ describe('WalletSection top-up checkout', () => {
     const { input, host, onCouponClaimAccepted } = await renderCouponLink('NOPE')
     expect(mocks.claimCoupon).toHaveBeenCalledTimes(1)
     expect(input()?.value).toBe('NOPE')
-    expect(host.textContent).toContain(message)
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(message)
     expect(onCouponClaimAccepted).not.toHaveBeenCalled()
     expect(mocks.redeemCoupon).not.toHaveBeenCalled()
   })
@@ -837,30 +847,38 @@ describe('WalletSection top-up checkout', () => {
     },
   )
 
-  it('isolates coupon codes, accounts and organizations when navigation overtakes a claim', async () => {
-    mocks.organizations = [{ id: mocks.organizationId }]
-    let finish!: (value: unknown) => void
-    mocks.claimCoupon.mockReturnValueOnce(
-      new Promise((resolve) => {
-        finish = resolve
-      }),
-    )
-    mocks.claimCoupon.mockRejectedValue(new Error('Coupon disabled'))
-    const { host, visit, onCouponClaimAccepted } = await renderCouponLink('FIRST')
-    await visit('SECOND')
-    mocks.organizationId = 'org-other'
-    mocks.organizations = [{ id: mocks.organizationId }]
-    await visit('SECOND')
-    mocks.accountId = 'owner-2'
-    await visit('SECOND')
-    await act(async () => finish({ status: 'done', result: { outcome: 'processed' } }))
-    expect(onCouponClaimAccepted).not.toHaveBeenCalled()
-    expect(host.textContent).toContain('Coupon disabled')
-    expect(host.textContent).not.toContain('Reward credited.')
-    expect(mocks.claimCoupon).toHaveBeenCalledTimes(4)
-    const ids = mocks.claimCoupon.mock.calls.map(([, { eventId }]) => eventId)
-    expect(new Set(ids).size).toBe(4)
-  })
+  it.each(['processed', 'refused'])(
+    'isolates a late %s claim after navigating to another code, organization and account',
+    async (outcome) => {
+      mocks.organizations = [{ id: mocks.organizationId }]
+      let finish!: () => void
+      mocks.claimCoupon.mockReturnValueOnce(
+        new Promise((resolve, reject) => {
+          finish = () =>
+            outcome === 'processed'
+              ? resolve({ status: 'done', result: { outcome: 'processed' } })
+              : reject(new Error('First coupon expired'))
+        }),
+      )
+      mocks.claimCoupon.mockRejectedValue(new Error('Coupon disabled'))
+      const { host, visit, onCouponClaimAccepted } = await renderCouponLink('FIRST')
+      await visit('SECOND')
+      mocks.organizationId = 'org-other'
+      mocks.organizations = [{ id: mocks.organizationId }]
+      await visit('SECOND')
+      mocks.accountId = 'owner-2'
+      await visit('SECOND')
+      vi.mocked(toast.error).mockClear()
+      await act(async () => finish())
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(onCouponClaimAccepted).not.toHaveBeenCalled()
+      expect(host.textContent).toContain('Coupon disabled')
+      expect(host.textContent).not.toContain('Reward credited.')
+      expect(mocks.claimCoupon).toHaveBeenCalledTimes(4)
+      const ids = mocks.claimCoupon.mock.calls.map(([, { eventId }]) => eventId)
+      expect(new Set(ids).size).toBe(4)
+    },
+  )
 
   it('redeems independently entered Wallet coupon codes through Commerce', async () => {
     mocks.redeemCoupon.mockResolvedValue('Coupon redeemed')

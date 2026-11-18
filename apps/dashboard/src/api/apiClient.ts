@@ -110,8 +110,8 @@ export class ApiClient {
         ...this.v1Config(),
         timeout: 10_000,
       })
-      .catch((error: unknown) => {
-        const cause = error instanceof Error ? error.cause : undefined
+      .catch((error: BoxliteError) => {
+        const { cause } = error
         if (axios.isAxiosError(cause) && cause.response && cause.response.status < 500) throw error
         throw new CouponClaimUnconfirmedError()
       })
