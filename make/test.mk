@@ -741,7 +741,7 @@ test\:apps\:infra\:auth0: _ensure-infra-deps
 PHONY_TARGETS += test\:apps\:infra\:aws
 test\:apps\:infra\:aws: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:tooling
-	@cd apps/infra && npm exec -- tsx --conditions=development --test bootstrap/aws*.test.ts deployment/pulumi-logs.test.ts deployment/release-safety.test.ts
+	@cd apps/infra && npm exec -- tsx --conditions=development --test bootstrap/aws*.test.ts deployment/aws-ownership.test.ts deployment/pulumi-logs.test.ts deployment/release-safety.test.ts
 
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy

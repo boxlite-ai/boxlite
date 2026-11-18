@@ -73,6 +73,8 @@ The SST configuration also rejects direct invocation after adoption begins.
 Create a reviewed Pulumi version-3 export using native resource URNs and the target app/stage.
 Importing a raw SST checkpoint, or merely renaming its JSON file, is unsupported.
 
+For an existing Secrets Manager JSON secret, the database reads the `password` field and the cache reads `authToken`. A plain-text secret keeps its original ARN. Check that the selected value is nonempty before cutover.
+
 | Preserve or reconcile | Required treatment |
 | --- | --- |
 | Physical resource IDs | Import incumbent resources instead of creating duplicates |
