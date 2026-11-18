@@ -480,7 +480,10 @@ export const gcpApiProvider =
         // and reads the value held in state — so it refuses the delete half.
         // Left on, the first rename of this service costs two applies.
         deletionProtection: false,
-        ...(continuousCi ? { scaling: { minInstanceCount: 1 } } : {}),
+        scaling: {
+          maxInstanceCount: 5,
+          ...(continuousCi ? { minInstanceCount: 1 } : {}),
+        },
         template: {
           serviceAccount: placement.serviceAccount,
           /*

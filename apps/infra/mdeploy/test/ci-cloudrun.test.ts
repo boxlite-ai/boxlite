@@ -133,13 +133,13 @@ function capture(configured: boolean) {
   return { service: unwrap(service.args), records }
 }
 
-test('the Cloud Run API retains background CPU and adds a service-level minimum only with CI', () => {
+test('the Cloud Run API sets a maximum of five and keeps one instance warm only with CI', () => {
   const on = capture(true).service
-  assert.deepEqual(on.scaling, { minInstanceCount: 1 })
+  assert.deepEqual(on.scaling, { maxInstanceCount: 5, minInstanceCount: 1 })
   assert.equal(on.template.containers[0].resources.cpuIdle, false)
   assert.equal(on.ingress, 'INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER')
   const off = capture(false).service
-  assert.equal(off.scaling, undefined)
+  assert.deepEqual(off.scaling, { maxInstanceCount: 5 })
   assert.equal(off.template.containers[0].resources.cpuIdle, false)
 })
 

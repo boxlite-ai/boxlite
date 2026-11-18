@@ -80,7 +80,7 @@ test('GCP supplies its certificate resources and IAM without stored custom-domai
       value: 'boxlite-app-stage-proxy',
     },
   )
-  assert.equal(service.args.scaling, undefined)
+  assert.deepEqual(service.args.scaling, { maxInstanceCount: 5 })
   assert.equal(service.args.template.scaling, undefined)
   assert.equal(container.resources.cpuIdle, false)
   assert.deepEqual(container.ports, { name: 'http1', containerPort: 3000 })
