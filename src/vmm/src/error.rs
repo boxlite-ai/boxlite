@@ -32,6 +32,9 @@ pub enum Error {
     },
     /// The host's guest-memory capabilities are invalid or insufficient.
     HostMemoryCapability(io::Error),
+    /// A hotplug capacity or target in MiB is not a multiple of 128 MiB, or
+    /// does not fit the capacity or the host's physical address width.
+    InvalidHotplugSize(u32),
     /// Allocating the guest RAM failed.
     AllocateMemory { bytes: u64, source: io::Error },
     /// A host hypervisor operation failed.
@@ -108,6 +111,7 @@ impl fmt::Display for Error {
             Self::HostMemoryCapability(source) => {
                 write!(f, "guest memory capability check failed: {source}")
             }
+            Self::InvalidHotplugSize(mib) => write!(f, "invalid hotplug memory size: {mib} MiB"),
             Self::AllocateMemory { bytes, .. } => {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
             }
@@ -167,6 +171,7 @@ impl error::Error for Error {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
             | Self::GuestMemoryAddressLimit { .. }
+            | Self::InvalidHotplugSize(_)
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)
             | Self::InvalidDiskId(_)

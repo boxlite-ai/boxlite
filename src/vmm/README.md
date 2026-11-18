@@ -202,8 +202,32 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
   block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
   leaks a slot whose unmap fails.
 
-The virtio-mem device and host control handle that drive it arrive next; the
-`hotplug` tests use the recording backend.
+### Virtio-mem device and handle
+
+`VirtioMem` (device ID 24, one request queue) drives the window, and its
+`MemoryHandle` sets the target from any thread. Adding the device through
+`VmConfig` and `Vm::memory_handle` comes next.
+
+- `MemoryHandle::request(added_mib)` sets the target above boot RAM: a
+  multiple of 128 MiB up to the capacity. A lower target shrinks. It
+  publishes `requested_size`, raises a configuration interrupt and returns.
+- `MemoryHandle::status` reports the capacity, target, plugged and mapped
+  MiB. Shrinking is best effort, so `plugged_mib` can stay above the target.
+- The device offers only `VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE` and refuses
+  activation without it. `region_size` and `usable_region_size` equal the
+  capacity.
+
+| Request | Response |
+| --- | --- |
+| PLUG within the target, blocks unplugged | Plug, then ACK; BUSY if a slot fails to map |
+| PLUG above the target | NACK, never ERROR, which Linux treats as fatal |
+| UNPLUG, blocks plugged | Unplug, then ACK |
+| UNPLUG_ALL | Unplug everything, then ACK; the target stays |
+| STATE | ACK with plugged 0, unplugged 1 or mixed 2 |
+| Misaligned, out of range, empty or wrong state | ERROR |
+
+A device reset keeps plugged blocks: a reprobing Linux driver sends
+UNPLUG_ALL first. The `mem` and `hotplug` tests use the recording backend.
 
 ## Kernel loading
 
