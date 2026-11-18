@@ -7,7 +7,7 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::sse::{Event, Sse};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use boxlite::agents::{
     self, AgentControlOptions, AgentCreateOptions, AgentEventsOptions, AgentSendMode,
@@ -19,7 +19,12 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::super::{AppState, error_from_boxlite, get_or_resume_box};
+use super::super::{
+    AGENT_STOPPING, AgentReservation, AppState, error_from_boxlite, get_or_resume_box,
+};
+
+const UNCERTAIN_ADMISSION_GRACE: std::time::Duration = std::time::Duration::from_secs(300);
+static NEXT_RESERVATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn optional_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -139,19 +144,38 @@ fn snapshot(agent: &Agent) -> Result<Value, BoxliteError> {
     )
 }
 
-fn release_turn(turns: &mut std::collections::HashMap<String, usize>, box_id: &str) {
-    if let Some(count) = turns.get_mut(box_id) {
-        *count -= 1;
-        if *count == 0 {
+fn release_turn(
+    turns: &mut std::collections::HashMap<String, AgentReservation>,
+    box_id: &str,
+    generation: u64,
+) {
+    if let Some(reservation) = turns.get_mut(box_id) {
+        if reservation.generation != generation || reservation.count == AGENT_STOPPING {
+            return;
+        }
+        reservation.count -= 1;
+        if reservation.count == 0 {
             turns.remove(box_id);
         }
     }
 }
 
-fn observe_turn(state: Arc<AppState>, box_id: String, agent: Agent, turn_id: String) {
+fn observe_turn(
+    state: Arc<AppState>,
+    box_id: String,
+    generation: u64,
+    agent: Agent,
+    turn_id: String,
+) {
     tokio::spawn(async move {
         loop {
-            if !state.agent_turns.lock().await.contains_key(&box_id) {
+            if !state
+                .agent_turns
+                .lock()
+                .await
+                .get(&box_id)
+                .is_some_and(|turn| turn.generation == generation)
+            {
                 return;
             }
             if let Ok(turn) = agent.get_turn(&turn_id).await
@@ -161,10 +185,11 @@ fn observe_turn(state: Arc<AppState>, box_id: String, agent: Agent, turn_id: Str
                     AgentTurnStatus::Completed
                         | AgentTurnStatus::Cancelled
                         | AgentTurnStatus::Failed
+                        | AgentTurnStatus::Unknown
                 )
             {
                 let mut turns = state.agent_turns.lock().await;
-                release_turn(&mut turns, &box_id);
+                release_turn(&mut turns, &box_id, generation);
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -306,15 +331,30 @@ pub(in crate::commands::serve) async fn send(
             }
             Err(error) => return error_from_boxlite(&error),
         };
-        {
+        let generation = loop {
             let mut turns = state.agent_turns.lock().await;
-            *turns.entry(canonical.clone()).or_default() += 1;
-        }
+            if !turns
+                .get(&canonical)
+                .is_some_and(|turn| turn.count == AGENT_STOPPING)
+            {
+                let turn = turns
+                    .entry(canonical.clone())
+                    .or_insert_with(|| AgentReservation {
+                        count: 0,
+                        generation: NEXT_RESERVATION
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    });
+                turn.count += 1;
+                break turn.generation;
+            }
+            drop(turns);
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
         let agent = match open(&state, &canonical, &agent_id).await {
             Ok(agent) => agent,
             Err(response) => {
                 let mut turns = state.agent_turns.lock().await;
-                release_turn(&mut turns, &canonical);
+                release_turn(&mut turns, &canonical, generation);
                 return response;
             }
         };
@@ -331,7 +371,13 @@ pub(in crate::commands::serve) async fn send(
         {
             Ok(turn) => match turn.state() {
                 Ok(snapshot) => {
-                    observe_turn(Arc::clone(&state), canonical, agent, snapshot.id.clone());
+                    observe_turn(
+                        Arc::clone(&state),
+                        canonical,
+                        generation,
+                        agent,
+                        snapshot.id.clone(),
+                    );
                     (
                         StatusCode::CREATED,
                         [(
@@ -351,9 +397,20 @@ pub(in crate::commands::serve) async fn send(
                         | BoxliteError::Unsupported(_)
                         | BoxliteError::NotFound(_)
                         | BoxliteError::AlreadyExists(_)
+                        | BoxliteError::InvalidState(_)
+                        | BoxliteError::ResourceExhausted(_)
+                        | BoxliteError::Config(_)
+                        | BoxliteError::Stopped(_)
                 ) {
                     let mut turns = state.agent_turns.lock().await;
-                    release_turn(&mut turns, &canonical);
+                    release_turn(&mut turns, &canonical, generation);
+                } else {
+                    let deadline = tokio::time::Instant::now() + UNCERTAIN_ADMISSION_GRACE;
+                    tokio::spawn(async move {
+                        tokio::time::sleep_until(deadline).await;
+                        let mut turns = state.agent_turns.lock().await;
+                        release_turn(&mut turns, &canonical, generation);
+                    });
                 }
                 error_from_boxlite(&error)
             }
@@ -551,5 +608,7 @@ pub(in crate::commands::serve) async fn events(
         };
         Some((Ok::<_, Infallible>(event), (stream, ended)))
     });
-    Sse::new(events).into_response()
+    Sse::new(events)
+        .keep_alive(KeepAlive::new().text("keepalive"))
+        .into_response()
 }

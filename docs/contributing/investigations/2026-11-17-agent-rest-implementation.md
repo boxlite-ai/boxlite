@@ -4,7 +4,7 @@ Connect the agent API to `boxlite serve` and the Rust REST backend using the con
 
 ## Problem
 
-**Status:** Proposed
+**Status:** Implemented; in review. This design extends [#2672](https://github.com/boxlite-ai/boxlite/issues/2672).
 
 Remote Boxes reject agent calls because `Agents` requires a local `BoxImpl`. The OpenAPI contract describes nine operations, but no server or REST client executes them.
 
@@ -39,7 +39,11 @@ Successful close and interrupt return HTTP 204 without a snapshot. A client that
 
 When a response has null agent state, create and get still succeed. The synchronous state accessor returns `Unsupported`, matching an adapter that lacks state; config and capabilities remain available.
 
-The server opens the native event stream before returning SSE headers. It forwards event data and emits an SSE ID only for a non-null cursor; a post-header error is sent as an error event before closing. Dropping the client stream releases the connection without cancelling the agent turn.
+The server opens the native event stream before returning SSE headers. It forwards event data and emits an SSE ID only for a non-null cursor; a post-header error is sent as an error event before closing. Comment heartbeats keep idle connections open without producing client events. Dropping the client stream releases the connection without cancelling the agent turn.
+
+Agent admission and AutoStop coordinate per Box. A stopping marker prevents new admissions for that Box while the actual stop runs without holding a global lock. Definite rejections release their reservations; uncertain admissions expire after a bounded grace period, and observed terminal states, including `unknown`, release their protection.
+
+Agent record decoding shares the existing record module with the encoders. This preserves one mapping of state, result, request and steering values across REST and other consumers.
 
 Wire conversion must be shared or tested against the existing CLI record mapping, preserve omitted versus null fields and reject malformed inputs. URL path segments for opaque IDs must be encoded. The current OpenCode adapter supports only its advertised operations; unsupported controls keep their core error.
 
@@ -50,6 +54,9 @@ Wire conversion must be shared or tested against the existing CLI record mapping
 | Existing remote rejection changes | Reproduce the current `Unsupported` result, then verify remote agent calls through the production client |
 | Contract conformance | Exercise all routes, methods, bodies, headers, statuses and error envelopes through the server router |
 | Stream correctness | Test ready-before-headers, split chunks, line endings, nullable cursors, post-open errors and cancellation |
+| AutoStop coordination | Definite rejection releases the reservation; uncertain admission expires; unknown and other terminal states release it; a blocked stop does not prevent another Box from admitting work |
+| SSE heartbeat | A keep-alive comment reaches an idle stream without becoming a REST client event |
+| Record conversion | Round-trip representative agent, turn, result, request and steering records through shared encoders and decoders |
 | Authentication and isolation | Check authorized and denied requests, plus agent and turn IDs under the wrong Box or parent |
 | Snapshot and unsupported state | Create and get with null state succeed; state access returns `Unsupported` and other snapshot accessors still succeed |
 | Mutation uncertainty | A lost response produces an error and exactly one upstream mutation attempt |

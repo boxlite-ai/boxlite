@@ -3,14 +3,12 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
     Agent, AgentBackend, AgentCapabilities, AgentConfig, AgentControlOptions, AgentCreateOptions,
-    AgentEventStream, AgentEventsOptions, AgentOutcome, AgentRequest, AgentRequestKind,
-    AgentResponse, AgentResult, AgentSendMode, AgentSendOptions, AgentState, AgentStatus,
-    AgentSteeringReceipt, AgentSteeringStatus, AgentTurnState, AgentTurnStatus,
+    AgentEventStream, AgentEventsOptions, AgentResponse, AgentSendMode, AgentSendOptions,
+    AgentState, AgentSteeringReceipt, AgentTurnState,
 };
 use crate::rest::client::ApiClient;
 use crate::rest::litebox::RestBox;
@@ -19,82 +17,7 @@ use crate::{BoxliteError, BoxliteResult};
 
 mod events;
 
-#[derive(Deserialize)]
-struct Resource {
-    id: String,
-    agent: String,
-    state: Option<State>,
-    config: Value,
-    capabilities: Capabilities,
-}
-
-#[derive(Deserialize)]
-struct Capabilities {
-    operations: Vec<String>,
-    input_kinds: Vec<String>,
-    max_queued_turns: Option<usize>,
-    max_pending_steering: Option<usize>,
-    idempotency_retention_seconds: Option<f64>,
-}
-
-#[derive(Deserialize)]
-struct State {
-    id: String,
-    status: String,
-    cursor: Option<String>,
-    active_turn_id: Option<String>,
-    queued_turn_ids: Vec<String>,
-    requests: Vec<Request>,
-    steering: Vec<Receipt>,
-}
-
-#[derive(Deserialize)]
-struct Request {
-    id: String,
-    turn_id: String,
-    kind: RequestKind,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum RequestKind {
-    Question { text: String, schema: Option<Value> },
-    Permission { tool: String, arguments: Value },
-}
-
-#[derive(Deserialize)]
-struct Receipt {
-    id: String,
-    turn_id: String,
-    status: String,
-}
-
-#[derive(Deserialize)]
-struct Turn {
-    id: String,
-    agent_id: String,
-    status: String,
-    cursor: Option<String>,
-    result: Option<ResultRecord>,
-    requests: Vec<Request>,
-    steering: Vec<Receipt>,
-}
-
-#[derive(Deserialize)]
-struct ResultRecord {
-    turn_id: String,
-    status: String,
-    outcome: Option<String>,
-    text: Option<String>,
-    data: Option<Value>,
-    artifacts: Vec<String>,
-    usage: Option<Value>,
-    error: Option<String>,
-}
-
-fn invalid(field: &str, value: &str) -> BoxliteError {
-    BoxliteError::Internal(format!("invalid REST agent {field}: {value}"))
-}
+use super::records::{Receipt, Resource, Turn, invalid};
 
 fn segment(value: &str) -> BoxliteResult<String> {
     if value.is_empty() || value == "." || value == ".." {
@@ -103,139 +26,6 @@ fn segment(value: &str) -> BoxliteResult<String> {
         ));
     }
     Ok(urlencoding::encode(value).into_owned())
-}
-
-fn turn_status(value: &str) -> BoxliteResult<AgentTurnStatus> {
-    match value {
-        "queued" => Ok(AgentTurnStatus::Queued),
-        "running" => Ok(AgentTurnStatus::Running),
-        "waiting_input" => Ok(AgentTurnStatus::WaitingInput),
-        "interrupting" => Ok(AgentTurnStatus::Interrupting),
-        "completed" => Ok(AgentTurnStatus::Completed),
-        "cancelled" => Ok(AgentTurnStatus::Cancelled),
-        "failed" => Ok(AgentTurnStatus::Failed),
-        "unknown" => Ok(AgentTurnStatus::Unknown),
-        other => Err(invalid("turn status", other)),
-    }
-}
-
-impl TryFrom<ResultRecord> for AgentResult {
-    type Error = BoxliteError;
-    fn try_from(value: ResultRecord) -> BoxliteResult<Self> {
-        let outcome = match value.outcome.as_deref() {
-            None => None,
-            Some("answer") => Some(AgentOutcome::Answer),
-            Some("question") => Some(AgentOutcome::Question),
-            Some(other) => return Err(invalid("outcome", other)),
-        };
-        Ok(Self {
-            turn_id: value.turn_id,
-            status: turn_status(&value.status)?,
-            outcome,
-            text: value.text,
-            data: value.data,
-            artifacts: value.artifacts,
-            usage: value.usage,
-            error: value.error,
-        })
-    }
-}
-
-impl TryFrom<Turn> for AgentTurnState {
-    type Error = BoxliteError;
-    fn try_from(value: Turn) -> BoxliteResult<Self> {
-        if value
-            .result
-            .as_ref()
-            .is_some_and(|result| result.turn_id != value.id)
-            || value
-                .requests
-                .iter()
-                .any(|request| request.turn_id != value.id)
-            || value
-                .steering
-                .iter()
-                .any(|receipt| receipt.turn_id != value.id)
-        {
-            return Err(invalid("turn child identity", &value.id));
-        }
-        Ok(Self {
-            id: value.id,
-            agent_id: value.agent_id,
-            status: turn_status(&value.status)?,
-            cursor: value.cursor,
-            result: value.result.map(TryInto::try_into).transpose()?,
-            requests: value.requests.into_iter().map(Into::into).collect(),
-            steering: value
-                .steering
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<BoxliteResult<_>>()?,
-        })
-    }
-}
-
-impl TryFrom<Receipt> for AgentSteeringReceipt {
-    type Error = BoxliteError;
-
-    fn try_from(value: Receipt) -> BoxliteResult<Self> {
-        let status = match value.status.as_str() {
-            "accepted" => AgentSteeringStatus::Accepted,
-            "applied" => AgentSteeringStatus::Applied,
-            "unused" => AgentSteeringStatus::Unused,
-            "unknown" => AgentSteeringStatus::Unknown,
-            other => return Err(invalid("steering status", other)),
-        };
-        Ok(Self {
-            id: value.id,
-            turn_id: value.turn_id,
-            status,
-        })
-    }
-}
-
-impl From<Request> for AgentRequest {
-    fn from(value: Request) -> Self {
-        let kind = match value.kind {
-            RequestKind::Question { text, schema } => AgentRequestKind::Question { text, schema },
-            RequestKind::Permission { tool, arguments } => {
-                AgentRequestKind::Permission { tool, arguments }
-            }
-        };
-        Self {
-            id: value.id,
-            turn_id: value.turn_id,
-            kind,
-        }
-    }
-}
-
-impl TryFrom<State> for AgentState {
-    type Error = BoxliteError;
-
-    fn try_from(value: State) -> BoxliteResult<Self> {
-        let status = match value.status.as_str() {
-            "ready" => AgentStatus::Ready,
-            "busy" => AgentStatus::Busy,
-            "closing" => AgentStatus::Closing,
-            "closed" => AgentStatus::Closed,
-            "unknown" => AgentStatus::Unknown,
-            other => return Err(invalid("status", other)),
-        };
-        Ok(Self {
-            id: value.id,
-            status,
-            cursor: value.cursor,
-            active_turn_id: value.active_turn_id,
-            queued_turn_ids: value.queued_turn_ids,
-            requests: value.requests.into_iter().map(Into::into).collect(),
-            steering: value
-                .steering
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<BoxliteResult<_>>()?,
-        })
-    }
 }
 
 struct RestAgent {

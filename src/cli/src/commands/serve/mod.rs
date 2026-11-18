@@ -117,7 +117,14 @@ struct AppState {
     /// Recovered exit status, scoped by canonical box ID and retained for the
     /// same grace period as executions whose output this server owns.
     recovered_terminals: RwLock<HashMap<TerminalKey, TerminalSlot>>,
-    agent_turns: tokio::sync::Mutex<HashMap<String, usize>>,
+    agent_turns: tokio::sync::Mutex<HashMap<String, AgentReservation>>,
+}
+
+const AGENT_STOPPING: usize = usize::MAX;
+
+struct AgentReservation {
+    count: usize,
+    generation: u64,
 }
 
 /// Scope of a terminal record: the box a client addresses plus the execution.
@@ -989,10 +996,19 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
         ) {
             LifecycleAction::Leave => {}
             LifecycleAction::Stop => {
-                // Coordinate the final busy check and stop with agent admission.
-                let turns = state.agent_turns.lock().await;
-                if turns.contains_key(&box_id) {
-                    continue;
+                // Reserve this box without holding the shared map over I/O.
+                {
+                    let mut turns = state.agent_turns.lock().await;
+                    if turns.contains_key(&box_id) {
+                        continue;
+                    }
+                    turns.insert(
+                        box_id.clone(),
+                        AgentReservation {
+                            count: AGENT_STOPPING,
+                            generation: 0,
+                        },
+                    );
                 }
                 tracing::info!(
                     box_id = %box_id,
@@ -1019,6 +1035,13 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
                     Err(_) => {
                         tracing::warn!(box_id = %box_id, "AutoStop timed out fetching box")
                     }
+                }
+                let mut turns = state.agent_turns.lock().await;
+                if turns
+                    .get(&box_id)
+                    .is_some_and(|turn| turn.count == AGENT_STOPPING)
+                {
+                    turns.remove(&box_id);
                 }
             }
             LifecycleAction::Delete => {

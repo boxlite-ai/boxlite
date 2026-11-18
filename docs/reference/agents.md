@@ -103,7 +103,7 @@ read receives it. Plain `next()` has no per-read cancellation.
 | `agents.get` | Reads a session by its `ses_…` ID, starting the service again after a Box restart |
 | `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming the ID to read with `get_turn` |
 | `agent.get_turn`, `turn.state` | `get_turn` reads the turn now, among the newest 1,000 messages of the session (older turns, and IDs of messages that are not inputs, are `NotFound`); `turn.state` returns the snapshot taken when the handle was obtained. A turn is `queued` in the inbox; `running` or `waiting_input` until its run records an outcome; `completed`, `failed` or `cancelled` from that outcome; `unknown` when its execution was cut off and a later run took the next input |
-| `turn.wait` | Polls every 500 ms. A timeout, or an `unknown` turn, returns `InvalidState` and never interrupts |
+| `turn.wait` | Polls every 500 ms. A timeout, an `unknown` turn, or a completed, cancelled or failed turn without a recorded result returns `InvalidState`; it never interrupts |
 | `agent.events` | Live events of the session and of subagent sessions created while the stream is open; `cursor` is `None` and `after` is rejected. Events of the session itself that name an input in OpenCode's `inboxID` carry it as `turn_id`; subagent events have none. Opening the stream fails with `Network` after 30 s without a response. The stream ends with one error, after any events that arrived before it: `Network` when the native stream ends or fails, `Internal` for an event that is not UTF-8 JSON or a subagent session ID that OpenCode would not mint, `ResourceExhausted` for an event over 1 MiB or a 1,001st subagent session |
 | `agent.config`, `agent.capabilities` | The session model; the operations above, with unknown limits as `None` |
 
@@ -199,13 +199,17 @@ steering and typed replies. It also defines cached getter behavior and retry
 headers. The REST server exposes these routes, and the Rust REST client forwards
 agent operations to them. Agent routes respect a stopped Box's AutoResume setting.
 AutoStop keeps the Box running while an admitted turn is active and can stop it
-after the turn ends. If admission fails with an uncertain outcome, the server
-retains the protection until the Box is removed or the server restarts.
+after the turn ends. If admission fails with an uncertain outcome and no turn ID,
+the server retains the protection for five minutes or until the Box is removed.
+After that grace period AutoStop may interrupt work that was admitted but could
+not be observed.
 
 Close and interrupt return HTTP 204 without a snapshot;
 read a resource separately when its current state is needed. The remote Rust
 `requests()` method remains unsupported, although turn snapshots can include
 pending requests. The CLI does not provide interactive request handling.
+SSE connections send comment heartbeats while idle; clients do not receive them
+as agent events.
 Agent `Idempotency-Key` values must contain 1–256 visible ASCII bytes and are
 forwarded to the adapter; BoxLite does not store retry results.
 
