@@ -31,7 +31,7 @@ concurrency:
 jobs:
   release:
     name: Publish box images
-    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    runs-on: ubuntu-latest
     # The workflow this replaced allowed publishing only from main; workflow_dispatch can target
     # any ref, so keep that restriction. A release tag is the other legitimate source.
     if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'

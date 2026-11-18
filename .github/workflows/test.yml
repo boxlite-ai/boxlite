@@ -778,7 +778,7 @@ jobs:
     name: Nix flake build
     needs: changes
     if: needs.changes.outputs.nix == 'true'
-    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    runs-on: ubuntu-latest
     # A cold build took 27 minutes on 12 local cores; the runner has 4.
     timeout-minutes: 90
     permissions:
@@ -790,13 +790,9 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - uses: ./.github/actions/setup-boxlite-runner
-
       # No /nix/store cache: it comes from the cache.nixos.org CDN, and
       # restoring 3 GB from the Actions cache would save little.
       - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
-        with:
-          enable_kvm: 'false' # The worker exposes /dev/kvm and the job sets its permissions.
 
       - uses: ./.github/actions/sccache
 
@@ -820,14 +816,12 @@ jobs:
             --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
             -c make cli
 
-      # The jailer needs user namespaces. AppArmor-enabled kernels can restrict
-      # them, so adjust that setting when the disposable runner exposes it.
+      # The jailer runs bwrap, which Ubuntu 24.04's AppArmor blocks without the
+      # bwrap profile (docs/guides/troubleshooting.md); the runner is discarded.
       - name: Enable KVM and unprivileged user namespaces
         run: |
           sudo chmod a+rw /dev/kvm
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Boot a box
         timeout-minutes: 10
@@ -838,7 +832,7 @@ jobs:
     name: API Tests
     needs: changes
     if: ${{ needs.changes.outputs.api == 'true' }}
-    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    runs-on: "ubuntu-latest"
     permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
       id-token: write
@@ -879,11 +873,6 @@ jobs:
         with: # Native workspace dependencies are submodules.
           submodules: "recursive"
           persist-credentials: ${{ false }}
-
-      - uses: ./.github/actions/setup-boxlite-runner
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Enable Corepack
         run: "corepack enable"
       - uses: actions/setup-node@v4
@@ -912,7 +901,7 @@ jobs:
     name: Dashboard Tests
     needs: changes
     if: ${{ needs.changes.outputs.dashboard == 'true' }}
-    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    runs-on: "ubuntu-latest"
     permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
       id-token: write
@@ -923,11 +912,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: ${{ false }}
-
-      - uses: ./.github/actions/setup-boxlite-runner
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Enable Corepack
         run: "corepack enable"
       - uses: actions/setup-node@v4
