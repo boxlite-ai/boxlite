@@ -61,6 +61,20 @@ impl TestBox {
     }
 }
 
+#[tokio::test]
+async fn test_box_env_preserves_json_quotes_and_spaces() {
+    let value = r#"{"a": "b c"}"#;
+    let t = boxlite_test_utils::box_test::BoxTestBase::with_options(boxlite::BoxOptions {
+        env: vec![("X".into(), value.into())],
+        ..common::alpine_opts()
+    })
+    .await;
+
+    t.bx.start().await.expect("start box with JSON env");
+    let stdout = t.exec_stdout("printenv", &["X"]).await;
+    assert_eq!(stdout.trim_end(), value);
+}
+
 /// working_dir changes the current directory for the command.
 #[tokio::test]
 async fn test_working_dir() {

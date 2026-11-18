@@ -1294,6 +1294,9 @@ Used by `run` and `exec` (defined in `src/cli/src/cli.rs`).
 | `--workdir PATH` | `-w` | Working directory inside the box |
 | `--user NAME[:GROUP]` | `-u` | Run as `name`/`uid`[:`group`/`gid`] |
 
+Environment values may contain whitespace and double quotes. For example,
+`-e 'X={"a": "b c"}'` passes the JSON value to the box unchanged.
+
 For `run`, `--tty` always requires TTY-attached stdin, including with
 `--detach`. Foreground `exec --tty` has the same requirement and implies
 interactive input; detached `exec --tty` skips the stdin check and attaches no
