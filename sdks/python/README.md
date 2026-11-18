@@ -454,11 +454,11 @@ guest's live process inventory, including the main command (`is_main_session=Tru
 Each record has `execution_id` (canonical guest ID), `argv`, `started_at`
 (Unix milliseconds), `tty`, and `is_main_session`. Completed commands are not history
 entries and disappear from this list. Listing never starts a box: a stopped
-or not-yet-started native box returns an empty list, and a paused or quiesced box returns
+or not-yet-started native box returns an empty list, and a paused or parked box returns
 an invalid-state error.
 
-`paused` means a pause confirmed by the checkpoint control interface;
-`quiesced` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+`parked` means a pause confirmed by the checkpoint control interface;
+`paused` is the brief guest-freeze + SIGSTOP state used for disk consistency.
 Neither state allows exec or an implicit cold start.
 
 `SimpleBox.executions()` exposes the same async operations without creating a

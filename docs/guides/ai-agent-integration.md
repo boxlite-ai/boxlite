@@ -272,8 +272,9 @@ What the list contains, and what it does not:
   are captured when the session is spawned, so they describe the BoxLite
   execution rather than whatever a `ps` parse would report.
 - **Listing never starts or resumes a box.** Configured and stopped boxes list
-  nothing. A paused box returns an invalid-state error rather than claiming
-  that its sessions disappeared. Listing does not refresh the server's idle clock.
+  nothing. A `paused` or `parked` box returns an invalid-state error rather than
+  claiming that its sessions disappeared. Listing does not refresh the
+  server's idle clock.
 
 `executions().get(id)` recovers wait and control without taking the output
 reader. On a REST-backed box it asks the server by ID rather than requiring the

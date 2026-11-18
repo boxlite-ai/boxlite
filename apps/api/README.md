@@ -149,7 +149,7 @@ Filtering occurs before the database limit and matches the response's public
 `status`, including desired-state transitions. For example, a stored started Box
 targeting stopped matches `stopping`, while a stopped Box targeting started matches
 `configured`. Archived Boxes match `stopped`; eligible errors and resizing match
-`unknown`. `paused` and `failed` are accepted but currently have no hosted matches.
+`unknown`. `paused`, `parked`, and `failed` are accepted but currently have no hosted matches.
 Destroyed Boxes and error Boxes targeting destruction remain excluded.
 
 Tokens are opaque, versioned and bound to organization, resource and status;

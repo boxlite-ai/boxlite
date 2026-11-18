@@ -184,7 +184,7 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
     expect((next.json as any).boxes.map((b: any) => b.box_id)).toEqual(['000000000006'])
   })
 
-  it.each(['running', 'stopped', 'configured', 'stopping', 'unknown', 'paused', 'quiesced', 'failed'])(
+  it.each(['running', 'stopped', 'configured', 'stopping', 'unknown', 'parked', 'paused', 'failed'])(
     'matches production response projection for all persisted combinations: %s',
     async (status) => {
       await rows.createQueryBuilder().delete().execute()

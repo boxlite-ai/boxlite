@@ -775,7 +775,7 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 	switch state {
 	case boxlite.StateRunning:
 		return enums.BoxStateStarted
-	case boxlite.StatePaused, boxlite.StateQuiesced:
+	case boxlite.StateParked, boxlite.StatePaused:
 		// Checkpoint pause or temporary disk-consistency freeze. The VM is up,
 		// so the control plane should keep seeing the box as started.
 		return enums.BoxStateStarted
@@ -956,7 +956,7 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 		}
 		// Both frozen states count as up, not stopped: the handle still
 		// drives a live machine, matching Rust's BoxStatus::is_active.
-		if info.State == boxlite.StateRunning || info.State == boxlite.StatePaused || info.State == boxlite.StateQuiesced {
+		if info.State == boxlite.StateRunning || info.State == boxlite.StateParked || info.State == boxlite.StatePaused {
 			return cached, nil
 		}
 		c.evictBox(boxId, cached)

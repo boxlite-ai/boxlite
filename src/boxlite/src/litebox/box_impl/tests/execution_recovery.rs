@@ -214,8 +214,8 @@ async fn list_executions_rejects_frozen_and_leaves_idle_boxes_unstarted() {
     for status in [
         BoxStatus::Configured,
         BoxStatus::Stopped,
+        BoxStatus::Parked,
         BoxStatus::Paused,
-        BoxStatus::Quiesced,
     ] {
         let id = BoxIDMint::mint();
         let config = BoxConfig {
@@ -251,7 +251,7 @@ async fn list_executions_rejects_frozen_and_leaves_idle_boxes_unstarted() {
             runtime.shutdown_token.child_token(),
         );
 
-        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+        if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
             assert!(matches!(
                 box_impl.ensure_booted().await,
                 Err(BoxliteError::InvalidState(_))
@@ -266,7 +266,7 @@ async fn list_executions_rejects_frozen_and_leaves_idle_boxes_unstarted() {
             ));
         }
         let result = box_impl.list_executions().await;
-        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+        if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
             assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
         } else {
             assert!(result.expect("list idle box").is_empty());
@@ -312,7 +312,7 @@ async fn recovered_frozen_standin(
 
 #[tokio::test]
 async fn stop_terminates_recovered_frozen_shim() {
-    for status in [BoxStatus::Paused, BoxStatus::Quiesced] {
+    for status in [BoxStatus::Parked, BoxStatus::Paused] {
         let (_home, runtime, _child, id, pid) = recovered_frozen_standin(status, false).await;
         let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
         let bx = Arc::clone(&handle.box_backend)
@@ -339,7 +339,7 @@ async fn stop_terminates_recovered_frozen_shim() {
 #[tokio::test]
 async fn sync_shutdown_terminates_recovered_frozen_shim() {
     let (_home, runtime, _child, id, pid) =
-        recovered_frozen_standin(BoxStatus::Quiesced, false).await;
+        recovered_frozen_standin(BoxStatus::Paused, false).await;
     runtime.shutdown_sync();
 
     assert!(!is_process_alive(pid), "sync shutdown left the shim alive");
@@ -354,7 +354,7 @@ async fn sync_shutdown_terminates_recovered_frozen_shim() {
 
 #[tokio::test]
 async fn snapshot_restore_rejects_recovered_unknown_shim() {
-    let (_home, runtime, _child, id, pid) = recovered_frozen_standin(BoxStatus::Paused, true).await;
+    let (_home, runtime, _child, id, pid) = recovered_frozen_standin(BoxStatus::Parked, true).await;
     let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
     let (config, persisted) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
     assert_eq!(
@@ -386,7 +386,7 @@ async fn snapshot_restore_rejects_recovered_unknown_shim() {
 
 async fn assert_snapshot_rejects_recovered_frozen_shim(status: BoxStatus) {
     let (_home, runtime, _child, id, pid) = recovered_frozen_standin(status, false).await;
-    if status == BoxStatus::Quiesced {
+    if status == BoxStatus::Paused {
         // Simulate SIGCONT having landed without the Running state being saved.
         assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
     }
@@ -421,18 +421,18 @@ async fn assert_snapshot_rejects_recovered_frozen_shim(status: BoxStatus) {
 }
 
 #[tokio::test]
-async fn snapshot_rejects_recovered_quiesced_shim() {
-    assert_snapshot_rejects_recovered_frozen_shim(BoxStatus::Quiesced).await;
-}
-
-#[tokio::test]
 async fn snapshot_rejects_recovered_paused_shim() {
     assert_snapshot_rejects_recovered_frozen_shim(BoxStatus::Paused).await;
 }
 
 #[tokio::test]
+async fn snapshot_rejects_recovered_parked_shim() {
+    assert_snapshot_rejects_recovered_frozen_shim(BoxStatus::Parked).await;
+}
+
+#[tokio::test]
 async fn quiesce_rejects_recovered_unknown_shim_from_pid_file() {
-    let (_home, runtime, _child, id, _) = recovered_frozen_standin(BoxStatus::Quiesced, true).await;
+    let (_home, runtime, _child, id, _) = recovered_frozen_standin(BoxStatus::Paused, true).await;
     let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
     let bx = Arc::clone(&handle.box_backend)
         .as_any_arc()
@@ -460,7 +460,7 @@ async fn quiesce_rejects_recovered_unknown_shim_from_pid_file() {
 #[tokio::test]
 async fn stop_preserves_unverified_frozen_shim() {
     let (_home, runtime, _child, id, pid) =
-        recovered_frozen_standin(BoxStatus::Paused, false).await;
+        recovered_frozen_standin(BoxStatus::Parked, false).await;
     let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
     let pid_file = runtime
         .layout
@@ -482,6 +482,6 @@ async fn stop_preserves_unverified_frozen_shim() {
     let persisted = runtime.box_manager.update_box(&id).unwrap();
     assert_eq!(
         (persisted.status, persisted.pid),
-        (BoxStatus::Paused, Some(pid))
+        (BoxStatus::Parked, Some(pid))
     );
 }

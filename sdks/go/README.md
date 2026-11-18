@@ -120,11 +120,11 @@ func main() {
 including its main process (`IsMainSession`). Fields are `ExecutionID` (canonical guest
 ID), `Argv`, `StartedAt` (Unix milliseconds), `TTY`, and `IsMainSession`.
 Completed executions disappear. Listing never boots the box; a stopped or
-not-yet-started box returns an empty slice, and a paused or quiesced box returns an
+not-yet-started box returns an empty slice, and a paused or parked box returns an
 invalid-state error.
 
-`paused` means a pause confirmed by the checkpoint control interface;
-`quiesced` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+`parked` means a pause confirmed by the checkpoint control interface;
+`paused` is the brief guest-freeze + SIGSTOP state used for disk consistency.
 Neither state allows exec or an implicit cold start.
 
 `box.Executions().Get(ctx, id)` recovers a control-only `*Execution`: `ID()`,

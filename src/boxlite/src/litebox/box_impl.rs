@@ -690,7 +690,7 @@ impl BoxImpl {
             || (existing_id.is_none()
                 && !matches!(
                     status,
-                    BoxStatus::Configured | BoxStatus::Running | BoxStatus::Paused
+                    BoxStatus::Configured | BoxStatus::Running | BoxStatus::Parked
                 ))
         {
             return Err(BoxliteError::InvalidState(format!(
@@ -734,8 +734,8 @@ impl BoxImpl {
         ))
     }
 
-    /// Live sessions in the box. Inactive boxes have none; paused boxes reject
-    /// discovery until resumed. Listing never starts or resumes a VM.
+    /// Live sessions in the box. Inactive boxes have none; Paused and Parked
+    /// boxes reject discovery. Listing never starts or resumes a VM.
     pub(crate) async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
         if self.shutdown_token.is_cancelled() || !self.state.read().status.is_active() {
             return Ok(Vec::new());
@@ -861,7 +861,7 @@ impl BoxImpl {
             let state = self.state.read();
             (state.status, state.pid)
         };
-        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+        if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
             ShimHandler::stop_frozen(self.id(), pid, &self.layout.pid_file_path())?;
         }
 
@@ -1326,7 +1326,7 @@ impl BoxImpl {
     /// Caller owns lifecycle admission, including when stop attaches for teardown.
     async fn ensure_booted_locked(&self) -> BoxliteResult<&LiveState> {
         let status = self.state.read().status;
-        if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+        if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
             return Err(BoxliteError::InvalidState(format!(
                 "Cannot boot or attach to box in {status} state"
             )));
@@ -1631,7 +1631,7 @@ impl BoxImpl {
     ///   5. Guest Thaw RPC (FITHAW — unblock writes)
     ///
     /// If the VM is not running, `fut` is executed directly unless its state
-    /// is Paused, Quiesced, or Unknown with evidence of a shim.
+    /// is Paused, Parked, or Unknown with evidence of a shim.
     /// Guest RPCs are best-effort with timeout — failure degrades to
     /// crash-consistent (SIGSTOP-only), not operation failure.
     pub(crate) async fn with_quiesce_async<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
@@ -1665,7 +1665,7 @@ impl BoxImpl {
             let state = self.state.read();
             let status = state.status;
             // A persisted freeze label is not proof this operation froze the VM.
-            if matches!(status, BoxStatus::Paused | BoxStatus::Quiesced) {
+            if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
                 return Err(BoxliteError::InvalidState(format!(
                     "Box {} is already {status}; resume or stop it before performing disk operations",
                     self.id()
@@ -1714,7 +1714,7 @@ impl BoxImpl {
         }
         {
             let mut state = self.state.write();
-            state.force_status(BoxStatus::Quiesced);
+            state.force_status(BoxStatus::Paused);
             let _ = self.runtime.box_manager.save_box(self.id(), &state);
         }
 

@@ -493,13 +493,13 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 **Synopsis:** `boxlite top [OPTIONS] BOX`
 
 List live guest executions, including the box's init process. The list is read
-from the guest and does not start a configured or stopped box. A paused or quiesced box is
+from the guest and does not start a configured or stopped box. A paused or parked box is
 rejected with an invalid-state error. Execution IDs are canonical guest IDs and
 can be used by `attach`, `kill`, and `signal`, including from a different CLI
 process.
 
-`paused` means a pause confirmed by the checkpoint control interface;
-`quiesced` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+`parked` means a pause confirmed by the checkpoint control interface;
+`paused` is the brief guest-freeze + SIGSTOP state used for disk consistency.
 Neither state allows exec or an implicit cold start.
 
 | Flag | Short | Default | Description |
@@ -754,7 +754,7 @@ existing file `DST` fails.
 If a stopped box is safe to resume, it is started temporarily and restored to
 stopped state after the copy succeeds or fails. A job box whose start would run
 or re-run its user-selected main command is refused; start it deliberately
-before copying. `cp` rejects `paused` and `quiesced` boxes in both directions
+before copying. `cp` rejects `paused` and `parked` boxes in both directions
 without starting or stopping them.
 
 Paths at or under a mount inside the box are refused in both directions — `/tmp`,

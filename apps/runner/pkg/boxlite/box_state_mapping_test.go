@@ -21,8 +21,8 @@ func TestToBoxState(t *testing.T) {
 	}{
 		{"running", enums.BoxStateStarted},
 		// Both frozen states keep the VM up, so the box stays started.
+		{"parked", enums.BoxStateStarted},
 		{"paused", enums.BoxStateStarted},
-		{"quiesced", enums.BoxStateStarted},
 		{"stopping", enums.BoxStateStopping},
 		{"stopped", enums.BoxStateStopped},
 		{"configured", enums.BoxStateCreating},
@@ -43,7 +43,7 @@ func TestToBoxState(t *testing.T) {
 // Unknown, which the API bills as compute-consuming. This list is maintained by
 // hand, so it catches a mapping that regresses — not a status the core adds.
 func TestToBoxStateLeavesNoCurrentStatusUnmapped(t *testing.T) {
-	for _, status := range []boxlite.State{"configured", "running", "stopping", "stopped", "paused", "quiesced", "failed"} {
+	for _, status := range []boxlite.State{"configured", "running", "stopping", "stopped", "parked", "paused", "failed"} {
 		if got := ToBoxState(status); got == enums.BoxStateUnknown {
 			t.Errorf("core status %q fell through to Unknown", status)
 		}

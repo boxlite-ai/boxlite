@@ -541,9 +541,9 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 - **No handle churn.** Status reads a stopped or never-started box's state
   and returns the zero disabled status without fetching a handle (see `evictBox`).
   Enable and disable instead return `409 invalid_state`; they never claim a
-  saved-state change succeeded on an idle box. Other states, such as paused,
-  also answer `409`. The SDK prevents these mutations from starting a box even
-  if it stops after the runner's checks.
+  saved-state change succeeded on an idle box. Other states, such as `paused`
+  and `parked`, also answer `409`. The SDK prevents these mutations from
+  starting a box even if it stops after the runner's checks.
 - **Strict body.** The parser matches member names exactly and rejects unknown,
   case-variant, duplicate, missing, and `null` members (`ca` may be `null`).
   Every rejection is the fixed `400 invalid SSH configuration`, so private key

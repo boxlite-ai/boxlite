@@ -1103,15 +1103,15 @@ interface ExecutionInfo {
 ```
 
 The list excludes completed sessions. A created or stopped box returns `[]`
-without starting; a paused or quiesced box returns an invalid-state error. Use
+without starting; a paused or parked box returns an invalid-state error. Use
 `executions().get(executionId)` for independent control, or
 `executions().attach(executionId)` for streams; an existing output reader is a
 conflict.
 See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for retention semantics.
 
-`paused` means a pause confirmed by the checkpoint control interface;
-`quiesced` is the brief guest-freeze + SIGSTOP state used for disk consistency.
+`parked` means a pause confirmed by the checkpoint control interface;
+`paused` is the brief guest-freeze + SIGSTOP state used for disk consistency.
 Neither state allows exec or an implicit cold start.
 
 ### `ExecResult` (wrapper)

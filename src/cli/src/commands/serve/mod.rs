@@ -1613,10 +1613,11 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// The flag governs *resuming* — bringing back a box that ran and was stopped,
 /// which is what AutoStop leaves behind. Only `Stopped` is that state.
 ///
-/// Every other state is left alone deliberately. `Running`/`Paused` are already
-/// up, so no wake is involved. A `Configured` box has never run, and its first
-/// boot is not a resume: gating it would break `run --url`, which attaches
-/// before it starts the box, so `run --no-auto-resume` would refuse itself.
+/// Every other state is left alone deliberately. A `Running`, `Paused`, or
+/// `Parked` box is already up, so no wake is involved. A `Configured` box has
+/// never run, and its first boot is not a resume: gating it would break
+/// `run --url`, which attaches before it starts the box, so
+/// `run --no-auto-resume` would refuse itself.
 /// `Failed` and `Stopping` are not states a caller asked to come back from.
 fn autoresume_allows(status: BoxStatus, auto_resume: bool) -> bool {
     status != BoxStatus::Stopped || auto_resume
@@ -2603,6 +2604,7 @@ mod tests {
             BoxStatus::Stopping,
             BoxStatus::Stopped,
             BoxStatus::Paused,
+            BoxStatus::Parked,
             BoxStatus::Failed,
         ] {
             assert!(
@@ -2863,13 +2865,15 @@ mod tests {
             "a stopped box must refuse an implicit wake"
         );
 
-        // Everything else is allowed whatever the flag says. Running/Paused are
-        // already up. `Configured` has never run, and its first boot is not a
-        // resume: gating it would make `run --url --no-auto-resume` refuse
-        // itself, since `run` attaches before it starts the box.
+        // Everything else is allowed whatever the flag says. Running, Paused,
+        // and Parked boxes are already up. `Configured` has never run, and its
+        // first boot is not a resume: gating it would make `run --url
+        // --no-auto-resume` refuse itself, since `run` attaches before it starts
+        // the box.
         for status in [
             BoxStatus::Running,
             BoxStatus::Paused,
+            BoxStatus::Parked,
             BoxStatus::Configured,
             BoxStatus::Failed,
             BoxStatus::Stopping,

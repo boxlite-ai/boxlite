@@ -959,7 +959,7 @@ impl RuntimeImpl {
                     continue;
                 }
             };
-            let frozen = matches!(state.status, BoxStatus::Paused | BoxStatus::Quiesced);
+            let frozen = matches!(state.status, BoxStatus::Parked | BoxStatus::Paused);
             if !frozen && state.status != BoxStatus::Running {
                 continue;
             }
@@ -1627,7 +1627,7 @@ impl RuntimeImpl {
                     // aren't lost on upgrade; the next stop/start writes a
                     // two-line file and the fingerprint check takes over.
                     state.adopt_recovered_shim(pid);
-                    if matches!(original_status, BoxStatus::Paused | BoxStatus::Quiesced) {
+                    if matches!(original_status, BoxStatus::Parked | BoxStatus::Paused) {
                         // Liveness alone cannot verify the recorded frozen VM.
                         state.set_status(BoxStatus::Unknown);
                     }
@@ -1671,7 +1671,7 @@ impl RuntimeImpl {
                             box_id = %box_id,
                             "Box crashed; marked Failed with crash report"
                         );
-                    } else if matches!(state.status, BoxStatus::Paused | BoxStatus::Quiesced) {
+                    } else if matches!(state.status, BoxStatus::Parked | BoxStatus::Paused) {
                         // No matching live shim: do not claim a successful
                         // recovery or retain a frozen state for a dead VM.
                         state.mark_stop();
@@ -3253,7 +3253,7 @@ mod tests {
     #[test]
     fn test_recovery_frozen_states_require_matching_shim_identity() {
         let mut repeated = Vec::new();
-        for frozen in [BoxStatus::Paused, BoxStatus::Quiesced] {
+        for frozen in [BoxStatus::Parked, BoxStatus::Paused] {
             for identity in [
                 "verified",
                 "different_pid",

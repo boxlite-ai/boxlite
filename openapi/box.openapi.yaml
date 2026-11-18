@@ -99,7 +99,7 @@ info:
     guest's bounded retention window, but this API does not promise durable
     execution history.
     Listing does not start or restart a box. Configured and stopped boxes
-    answer `{"executions": []}`; paused boxes return an invalid-state error.
+    answer `{"executions": []}`; `paused` and `parked` boxes return an invalid-state error.
 
     Out-of-band control endpoints exist for clients that prefer a
     request/response style: `GET /executions/{exec_id}` (status),
@@ -873,8 +873,8 @@ paths:
         and is not durable history.
 
         Listing never starts or resumes a box. Configured and stopped boxes
-        answer `{"executions": []}`; paused boxes return an invalid-state
-        error. Polling does not refresh the box's idle clock.
+        answer `{"executions": []}`; `paused` and `parked` boxes return an
+        invalid-state error. Polling does not refresh the box's idle clock.
       tags: [Execution]
       responses:
         "200":
@@ -2638,14 +2638,14 @@ components:
         - `running`: VM active, accepting commands
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
-        - `paused`: The checkpoint control interface has confirmed the pause.
+        - `paused`: The VM is temporarily frozen by guest freeze and SIGSTOP
+          for a disk-consistency operation (snapshot, clone, or export).
+        - `parked`: The checkpoint control interface has confirmed the pause.
           The VM remains paused until resumed.
-        - `quiesced`: The VM is temporarily frozen for a disk-consistency
-          operation (snapshot, clone, or export) and is unfrozen when it ends.
         - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
 
-        Neither `paused` nor `quiesced` means the VM has stopped. Neither
+        Neither `paused` nor `parked` means the VM has stopped. Neither
         state allows command execution.
       enum:
         - configured
@@ -2653,7 +2653,7 @@ components:
         - stopping
         - stopped
         - paused
-        - quiesced
+        - parked
         - failed
         - unknown
 

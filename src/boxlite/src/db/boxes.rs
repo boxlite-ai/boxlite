@@ -577,7 +577,7 @@ mod tests {
 
         let store = BoxStore::new(Database::open(Path::new(":memory:")).unwrap());
         let statuses = [
-            Unknown, Configured, Running, Stopping, Stopped, Paused, Quiesced, Failed,
+            Unknown, Configured, Running, Stopping, Stopped, Parked, Paused, Failed,
         ];
         let mut expected = Vec::new();
         for (pid, status) in (1000..).zip(statuses) {
@@ -620,8 +620,8 @@ mod tests {
 
         let store = BoxStore::new(Database::open(Path::new(":memory:")).unwrap());
         let cases = [
-            (Paused, 1000, Stopped, None),
-            (Quiesced, 1001, Stopped, None),
+            (Parked, 1000, Stopped, None),
+            (Paused, 1001, Stopped, None),
             (Running, 1002, Stopped, None),
             (Stopped, 1003, Stopped, Some(1003)),
             (Configured, 1004, Configured, Some(1004)),
