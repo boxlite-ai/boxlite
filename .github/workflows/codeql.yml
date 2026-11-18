@@ -33,7 +33,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    runs-on: ${{ matrix.runner }}
     permissions:
       # Required to upload code scanning results.
       security-events: write
@@ -46,16 +46,22 @@ jobs:
         include:
           - language: actions
             build-mode: none
+            runner: ubuntu-latest
           - language: c-cpp
             build-mode: none
+            runner: ubuntu-latest
           - language: go
             build-mode: autobuild
+            runner: boxlite-4vcpu-16gbmem-30gbdisk
           - language: javascript-typescript
             build-mode: none
+            runner: boxlite-4vcpu-16gbmem-30gbdisk
           - language: python
             build-mode: none
+            runner: boxlite-4vcpu-16gbmem-30gbdisk
           - language: rust
             build-mode: none
+            runner: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -63,7 +69,11 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-boxlite-runner
-        if: matrix.language == 'go'
+        if: matrix.language == 'go' || matrix.language == 'javascript-typescript'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: matrix.language == 'javascript-typescript'
+        with:
+          node-version: '22'
       - name: Install Go autobuild dependencies
         if: matrix.language == 'go'
         run: sudo apt-get install -y --no-install-recommends gcc libc6-dev

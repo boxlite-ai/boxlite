@@ -20,14 +20,13 @@ const picomatch = createRequire(import.meta.url)('picomatch') as (pattern: strin
 const workflow = (name: string): any => loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows', name), 'utf8'))
 const matches = (pattern: string, path: string) => picomatch(pattern, { dot: true })(path)
 
-function matrixRunner(selection: string, os: string, linuxX64Only = false) {
+function matrixRunner(selection: string, os: string) {
   const osEntry = { key: 'os', value: new data.StringData(os) }
   const context = new data.Dictionary(
     { key: 'matrix', value: new data.Dictionary(osEntry, { key: 'platform', value: new data.Dictionary(osEntry) }) },
-    { key: 'inputs', value: new data.Dictionary({ key: 'linux_x64_only', value: new data.BooleanData(linuxX64Only) }) },
   )
   const expression = selection.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
-  const ast = new Parser(new Lexer(expression).lex().tokens, ['matrix', 'inputs'], []).parse()
+  const ast = new Parser(new Lexer(expression).lex().tokens, ['matrix'], []).parse()
   return new Evaluator(ast, context).evaluate().coerceString()
 }
 
@@ -40,12 +39,8 @@ test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native p
     ['test.yml', 'guest_artifacts', 64],
     ['test.yml', 'python', 30],
     ['test.yml', 'node', 30],
-    ['build-c.yml', 'build', 64],
     ['build-go.yml', 'test', 30],
-    ['build-node.yml', 'build', 64],
     ['build-node.yml', 'test', 30],
-    ['build-runtime.yml', 'build', 64],
-    ['build-wheels.yml', 'build_wheels', 64],
   ] as const
 
   for (const [name, job, disk] of jobs) {
@@ -57,12 +52,44 @@ test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native p
   }
 })
 
-test('deployment callers can build the x64 C archive without a BoxLite worker', () => {
-  const selection = workflow('build-c.yml').jobs.build['runs-on']
-  for (const caller of ['deploy-infra.yml', 'build-runner-binary.yml']) {
-    const inputs = workflow(caller).jobs['build-c'].with
-    assert.equal(matrixRunner(selection, 'ubuntu-latest', inputs.linux_x64_only), 'ubuntu-latest', caller)
-  }
+for (const [name, job, matrix] of [
+  ['api-client-drift.yml', 'check-generated-clients', false],
+  ['build-box-images.yml', 'build', false],
+  ['release-box-images.yml', 'release', false],
+  ['build-c.yml', 'build', true],
+  ['build-node.yml', 'build', true],
+  ['build-runtime.yml', 'build', true],
+  ['build-wheels.yml', 'build_wheels', true],
+  ['test.yml', 'api', false],
+  ['test.yml', 'dashboard', false],
+  ['test.yml', 'nix', false],
+] as const) {
+  test(`${name}/${job} uses GitHub-hosted Ubuntu`, () => {
+    const selection = workflow(name).jobs[job]['runs-on']
+    assert.equal(matrix ? matrixRunner(selection, 'ubuntu-latest') : selection, 'ubuntu-latest')
+  })
+}
+
+test('CodeQL places every language on its qualified runner and retains its build mode', () => {
+  const job = workflow('codeql.yml').jobs.analyze
+  assert.equal(job['runs-on'], '${{ matrix.runner }}')
+  assert.deepEqual(job.strategy.matrix.include, [
+    { language: 'actions', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'go', 'build-mode': 'autobuild', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'javascript-typescript', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'python', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'rust', 'build-mode': 'none', runner: 'ubuntu-latest' },
+  ])
+})
+
+test('CodeQL installs Node.js before initializing the TypeScript extractor', () => {
+  const { steps } = workflow('codeql.yml').jobs.analyze
+  const setup = steps.findIndex((step: any) => step.uses?.startsWith('actions/setup-node@'))
+  const init = steps.findIndex((step: any) => step.uses?.startsWith('github/codeql-action/init@'))
+  assert.ok(setup >= 0 && setup < init, 'TypeScript extraction needs node on PATH before CodeQL initialization')
+  assert.equal(steps[setup].if, "matrix.language == 'javascript-typescript'")
+  assert.equal(String(steps[setup].with['node-version']), '22')
 })
 
 function testSuites(paths: string[]) {

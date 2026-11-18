@@ -93,7 +93,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: [ config, resolve-ref ]
-    runs-on: ${{ !inputs.linux_x64_only && matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -110,13 +110,6 @@ jobs:
         with:
           ref: ${{ needs.resolve-ref.outputs.sha }}
           submodules: recursive
-
-      # The selected checkout can predate the shared BoxLite setup action.
-      - name: Install BoxLite runner tools
-        if: runner.environment == 'self-hosted'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends make ripgrep xz-utils zstd
 
       - uses: ./.github/actions/setup-rust
         with:
