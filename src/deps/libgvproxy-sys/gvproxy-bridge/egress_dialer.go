@@ -245,7 +245,7 @@ func (d *egressDialer) candidates(ctx context.Context, hostname string, check fu
 	return ips, nil
 }
 
-func (s *outboundSnapshot) tcpAddressFacts(ip netip.Addr, candidate bool) outboundAddressFacts {
+func (s *outboundSnapshot) egressAddressFacts(ip netip.Addr, candidate bool) outboundAddressFacts {
 	ip = ip.Unmap()
 	if !ip.Is4() {
 		return outboundAddressFacts{address: ip, platformDenied: true}
@@ -254,7 +254,7 @@ func (s *outboundSnapshot) tcpAddressFacts(ip netip.Addr, candidate bool) outbou
 	local := reason == "loopback" || reason == "private" || reason == "cgnat"
 	return outboundAddressFacts{
 		address:         ip,
-		platformDenied:  (restricted && (!local || s.cloudTCP)) || (candidate && s.dialer.boxSubnet.Contains(ip.AsSlice())),
+		platformDenied:  (restricted && (!local || s.cloud)) || (candidate && s.dialer.boxSubnet.Contains(ip.AsSlice())),
 		restrictedLocal: candidate && local,
 	}
 }

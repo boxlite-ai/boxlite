@@ -177,7 +177,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			Protocol:       "tcp",
 			PolicyRevision: current.revision,
 		}
-		if current.tcpPolicy != nil {
+		if current.extended != nil {
 			forwardExtendedTCP(r, target, current, inspectionSlots, ca, secretMatcher)
 			return
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"net"
 	"testing"
 
@@ -83,7 +84,7 @@ func TestBlockedDestinationLog_OneLinePerDestination(t *testing.T) {
 	// Drops 2..9 are neither a new destination nor an order-of-magnitude
 	// milestone, so they must stay silent.
 	for i := 0; i < 5; i++ {
-		blocked.note(dest, 53)
+		blocked.note(dest, 53, outboundAllowMiss)
 	}
 
 	if got := len(hook.Entries); got != 1 {
@@ -99,9 +100,9 @@ func TestBlockedDestinationLog_LogsEachNewDestination(t *testing.T) {
 	defer hook.Reset()
 
 	blocked := newBlockedDestinationLog()
-	blocked.note(ipv4Addr(t, "1.2.3.4"), 53)
-	blocked.note(ipv4Addr(t, "1.2.3.4"), 443) // same IP, different port
-	blocked.note(ipv4Addr(t, "5.6.7.8"), 53)
+	blocked.note(ipv4Addr(t, "1.2.3.4"), 53, outboundAllowMiss)
+	blocked.note(ipv4Addr(t, "1.2.3.4"), 443, outboundAllowMiss)
+	blocked.note(ipv4Addr(t, "5.6.7.8"), 53, outboundUserDeny)
 
 	if got := len(hook.Entries); got != 3 {
 		t.Fatalf("3 distinct destinations produced %d log lines, want 3", got)
@@ -117,7 +118,7 @@ func TestBlockedDestinationLog_BoundedByDestinationCap(t *testing.T) {
 	// 1, 10, 100) coincide with new destinations, so they add no extra
 	// entries; every drop past the cap must be silent.
 	for port := 0; port < maxLoggedDestinations+64; port++ {
-		blocked.note(ipv4Addr(t, "1.2.3.4"), uint16(port))
+		blocked.note(ipv4Addr(t, "1.2.3.4"), uint16(port), outboundAllowMiss)
 	}
 
 	if got := len(hook.Entries); got != maxLoggedDestinations {
@@ -136,7 +137,7 @@ func TestBlockedDestinationLog_MilestoneKeepsFloodVisible(t *testing.T) {
 	blocked := newBlockedDestinationLog()
 	dest := ipv4Addr(t, "1.2.3.4")
 	for i := 0; i < 100; i++ {
-		blocked.note(dest, 53)
+		blocked.note(dest, 53, outboundAllowMiss)
 	}
 
 	// Drops 1, 10 and 100 to a single destination: first-seen plus two
@@ -146,5 +147,26 @@ func TestBlockedDestinationLog_MilestoneKeepsFloodVisible(t *testing.T) {
 	}
 	if last := hook.LastEntry().Data["dropped_total"]; last != uint64(100) {
 		t.Errorf("last line reported dropped_total=%v, want 100", last)
+	}
+}
+
+func TestBlockedDestinationLog_StopsAtLastMilestone(t *testing.T) {
+	hook := logrustest.NewLocal(logrus.StandardLogger())
+	defer hook.Reset()
+
+	blocked := newBlockedDestinationLog()
+	dest := ipv4Addr(t, "1.2.3.4")
+	blocked.seen[udpDestination{addr: dest, port: 53}] = true
+	blocked.dropped = 10_000_000_000_000_000_000 - 1
+	blocked.nextMilestone = 10_000_000_000_000_000_000
+	blocked.note(dest, 53, outboundPlatformDeny)
+	if len(hook.AllEntries()) != 1 || blocked.nextMilestone != 0 {
+		t.Fatal("the last representable milestone must log once and stop")
+	}
+	blocked.dropped = math.MaxUint64 - 1
+	blocked.note(dest, 53, outboundPlatformDeny)
+	blocked.note(dest, 53, outboundUserDeny)
+	if len(hook.AllEntries()) != 1 || blocked.dropped != math.MaxUint64 {
+		t.Fatal("saturation must keep the counter and the log bound intact")
 	}
 }

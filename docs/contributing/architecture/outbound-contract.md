@@ -192,33 +192,8 @@ User address rules evaluate the pre-NAT target.
 Platform policy also checks the translated dial destination, so Cloud refuses translated loopback even when the pre-NAT address passes.
 The local alias can map to host loopback when the pre-NAT policy permits it.
 
-PR04 owns the UDP post-NAT platform check.
-The current wrapper checks the guest address, then the pinned forwarder resolves NAT and owns endpoint creation and socket dialing.
-[Pinned UDP forwarder](https://github.com/containers/gvisor-tap-vsock/blob/v0.8.7/pkg/services/forwarder/udp.go#L15-L41)
-
-The UDP forwarder captures the translated address and port once and checks them against the flow's pinned policy.
-It hands that exact destination to the socket.
-A rejected translation reaches neither endpoint creation nor the external dial hook.
-
-While egress stays enabled, an established UDP endpoint keeps its admitting snapshot until it closes or expires.
-A new endpoint takes the latest snapshot, including reuse of a tuple after the old endpoint closes.
-
-To verify a new deny, send over an established endpoint, then create a fresh one and observe zero dial attempts and no delivery.
-The global disabled gate blocks forwarding for both.
-
-```mermaid
-sequenceDiagram
-    participant C as Policy coordinator
-    participant G as UDP handler
-    participant E as Established endpoint
-    G->>E: Admit flow under the current allow snapshot
-    C->>G: Publish a replacement containing deny
-    Note over C,G: Egress remains enabled
-    E->>E: Relay with the captured allow snapshot
-    Note over G: New flow is denied before endpoint creation
-    E-->>G: Endpoint closes or expires
-    Note over G: Reopened tuple also uses the deny snapshot
-```
+Trusted UDP admission checks both addresses before endpoint creation and dials the exact approved literal.
+See [Extended UDP enforcement](#extended-udp-enforcement).
 
 Platform rollout validates deployment address sets and trusted exceptions.
 
@@ -367,12 +342,12 @@ An association for a different address leaves the decision denied.
 For a restricted local candidate and nonempty allow list, the candidate needs an IP rule covering its actual port.
 The caller selects the connector and enforces transport eligibility.
 
-The shared rule fixtures exercise the compiler and matcher. Trusted extended TCP snapshots use both functions at guest connection setup.
+The shared rule fixtures exercise the compiler and matcher. Trusted TCP and UDP snapshots use the shared policy at guest flow setup.
 [Design and handoff](https://github.com/boxlite-ai/boxlite/issues/2874)
 
 ### Extended TCP enforcement
 
-The bridge's trusted Go controller compiles extended TCP rules into a snapshot alongside the legacy UDP filter.
+The bridge's trusted Go controller compiles extended rules into a snapshot shared by TCP and UDP.
 Current wire inputs still select the legacy transport policy. The bridge advertises the complete extended capability after its owning integration slices.
 
 At flow entry, capture the snapshot and the pre-NAT and translated addresses. For example, an IP allow for `192.0.2.254:8080` can admit a local alias to loopback, subject to the platform check on `127.0.0.1:8080`. A Cloud snapshot refuses that translated socket.
@@ -408,9 +383,9 @@ Plaintext Host can match user rules. Only TLS SNI on actual port 443 can grant s
 
 An HTTP/1.1 upgrade keeps its tunnel open for bidirectional traffic. Closing the guest connection releases the per-flow MITM listener, including after an upgrade.
 
-An extended DNS route screens raw answers with the TCP policy, independent of the legacy UDP allow list. Only approved IPv4 literals reach the chosen connector. An address route keeps its translated socket and requires a matching controlled DNS answer when the matcher requests name association.
+An extended DNS route screens raw answers with the captured policy. Only approved IPv4 literals reach the chosen connector. An address route keeps its translated socket and requires a matching controlled DNS answer when the matcher requests name association.
 
-Trusted replacement keeps the legacy UDP filter and publishes through the existing NIC transition. Both wire PUT resources return 409 for a valid incomplete write when a trusted TCP snapshot is configured, including while disabled. While disabled, both reads project an empty legacy allow list; re-enable restores the preserved UDP filter and allow list.
+Trusted replacement publishes through the NIC transition. Both wire PUT resources return 409 for a valid incomplete write when a trusted snapshot is configured, including while disabled. While disabled, both reads project an empty legacy allow list, and re-enable restores the preserved legacy projection.
 
 | Requested transition | Before NIC call | On success | On NIC failure |
 | --- | --- | --- | --- |
@@ -420,6 +395,53 @@ Trusted replacement keeps the legacy UDP filter and publishes through the existi
 Policy GET returns 503 while either operation is pending or uncertain. The status resource reports the snapshot and its application state.
 
 [TCP design and acceptance](https://github.com/boxlite-ai/boxlite/issues/2880)
+
+### Extended UDP enforcement
+
+Trusted snapshots select extended UDP admission even when both rule lists are empty. IPv4 UDP and QUIC use the original guest address and port for user rules, and platform checks cover both the original and translated addresses. An applicable hostname deny blocks the flow because UDP does not supply verified name evidence.
+
+Legacy wire snapshots continue to check the legacy allow list and delegate NAT and dialing to the [pinned upstream forwarder](https://github.com/containers/gvisor-tap-vsock/blob/v0.8.7/pkg/services/forwarder/udp.go#L15-L41). The global mode gate precedes endpoint demultiplexing in both paths. Registered gateway DNS and DHCP handle packets gVisor delivers to their sockets, and other datagrams enter ordinary admission.
+
+A trusted flow reserves one of 256 per-Box slots after its destination passes. For example, Local can admit `192.0.2.254:8080` and dial its translation `127.0.0.1:8080`, while Cloud refuses that translation before endpoint creation or dialing. The 30-second setup budget covers the first readable guest datagram and the literal UDP dial.
+
+The flow uses one connected guest endpoint and one host socket. Traffic in either direction renews a 90-second idle deadline and preserves datagram boundaries, including empty payloads. Idle expiry, I/O failure, or Box cancellation closes both sides and releases the slot.
+
+One writer per Box drains up to 32 queued trusted UDP replies independently of flow cleanup. When the guest link is backpressured, a full queue drops additional replies and closed flows discard queued replies. Box cancellation also closes the accepted guest link to wake an in-progress write.
+
+```mermaid
+sequenceDiagram
+    participant G as Guest
+    participant A as UDP admission
+    participant C as Policy controller
+    participant F as Connected UDP flow
+    participant W as Box reply writer
+    participant B as Box
+    G->>A: Datagram misses endpoint demux
+    A->>C: Read enabled snapshot A
+    A->>F: Register endpoint under snapshot A
+    alt Box destroyed during setup
+        B-->>F: Cancel first read or dial
+        F-->>A: Close resources and release slot
+    else Setup succeeds
+        C->>C: Publish enabled snapshot B with deny
+        G->>F: Established tuple still relays
+        F->>W: Queue host reply
+        W-->>G: Write guest link
+        alt Box destroyed during relay
+            B-->>F: Cancel and close both sides
+            B-->>W: Close guest link to wake write
+        else Endpoint expires while Box runs
+            F-->>A: Close both sides and release slot
+            G->>A: Next packet for the same tuple
+            A->>C: Read snapshot B
+            A-->>G: Drop before endpoint creation or dial
+        end
+    end
+```
+
+While egress stays enabled, new tuples and reopened tuples take the latest policy. To verify a new deny, check that an established tuple still delivers and both kinds of new admission produce zero socket dials and no delivery. Disabled mode blocks new guest frames before demux, including frames for existing sockets.
+
+[UDP design and acceptance](https://github.com/boxlite-ai/boxlite/issues/2886)
 
 ## Revisions and acknowledgements
 
