@@ -23,12 +23,13 @@ jobs:
     if: >-
       ${{ github.event_name == 'pull_request' &&
           startsWith(github.event.pull_request.title, 'chore(release): bump version to ') }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-boxlite-runner
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
