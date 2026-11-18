@@ -786,6 +786,41 @@ func TestFilestoreVolumeRejectsSubpath(t *testing.T) {
 	}
 }
 
+func TestCreateReclaimsNewMountWhenPreparationFailsBeforeFirstRecord(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(c)
+	umountLogPath := installFakeUmount(t)
+	c.prepareRunner = func(string) error { return errors.New("injected prepare failure") }
+	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
+	recordDir := getVolumeMountRecordDir()
+	if _, err := os.Stat(recordDir); !os.IsNotExist(err) {
+		t.Fatalf("record directory existed before the first mount: %v", err)
+	}
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: "abc123def456", OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{{
+			VolumeId: "vol-ok", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected prepare failure") {
+		t.Fatalf("Create returned %v, want prepare failure", err)
+	}
+	if got := fake.mounts.Load(); got != 1 {
+		t.Fatalf("mount command ran %d times, want one ready mount before preparation", got)
+	}
+	if got, want := commandLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		t.Errorf("umount log = %v, want %v; preparation failed before the first record and stranded the new mount", got, want)
+	}
+	if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+		t.Errorf("new filestore root survived preparation failure: %v", statErr)
+	}
+}
+
 // A create that fails partway through its volume list must remove the partial
 // record and reclaim the NFS mount when no box references it. A reference from
 // another box must keep the mount intact through the same rollback.

@@ -595,9 +595,11 @@ admission are outside this runner-only slice.
   After a successful record rollback, it immediately reclaims any resulting
   unreferenced Filestore mounts, independently of scheduled cleanup and its
   dry-run mode. A record rollback failure skips reclaim because references
-  cannot be verified. Reclaim rechecks references and pending operations under
-  the instance lock; start replay retains existing entries until their
-  replacements are durable.
+  cannot be verified. New mounts create the empty record directory after
+  readiness and before data-directory preparation, making pre-record failures
+  reclaimable without weakening protection for existing mounts with no records.
+  Reclaim rechecks references and pending operations under the instance lock;
+  start replay retains existing entries until their replacements are durable.
 - Prepare failures return `FILESTORE_VOLUME_PREPARE_FAILED` with box, volume,
   and instance IDs plus the mount error. Logs do not include box environment
   variables, secrets, authorization headers, or job payloads.

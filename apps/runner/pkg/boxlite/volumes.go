@@ -440,6 +440,15 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 		return fmt.Errorf("mount %s not ready after mounting: %s", mountRoot, err)
 	}
 
+	// This attempt owns the new mount before its first record exists. An empty
+	// record directory lets rollback prove it unreferenced; existing mounts
+	// return above without weakening the missing-records safety guard.
+	recordDir := getVolumeMountRecordDir()
+	if err = os.MkdirAll(recordDir, 0755); err != nil {
+		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
+		return fmt.Errorf("failed to create volume mount record directory %s: %w", recordDir, err)
+	}
+
 	c.logger.InfoContext(ctx, "mounted filestore instance", "instance", ref.Instance, "mountRoot", mountRoot)
 	return nil
 }
