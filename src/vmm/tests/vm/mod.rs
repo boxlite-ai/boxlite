@@ -1992,6 +1992,12 @@ fn a_hotplug_capacity_adds_virtio_mem_and_returns_its_handle() {
             |_, config| {
                 // The balloon keeps slot 0; virtio-mem takes the next slot.
                 assert_eq!(config.cmdline.contains("@0xd0001000:6"), present);
+                assert_eq!(
+                    config.cmdline.ends_with(
+                        " memhp_default_state=online memory_hotplug.online_policy=auto-movable"
+                    ),
+                    present
+                );
                 Ok(BootRegisters::default())
             },
             |chipset, ctx, config, host_vm| {
