@@ -47,7 +47,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	// Stream straight into the guest, which lands the upload by the archive's
 	// first entry. No runner-side staging; an old client's source_is_dir
 	// query parameter is ignored.
-	if err := r.Boxlite.CopyInStreamWithOverwrite(ctx.Request.Context(), boxId, destPath, ctx.Request.Body, overwrite); err != nil {
+	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, ctx.Request.Body, boxlite.WithOverwrite(overwrite)); err != nil {
 		respondCopyError(ctx, err)
 		return
 	}

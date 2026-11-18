@@ -12,6 +12,19 @@ import (
 	"unsafe"
 )
 
+// CopyOption configures a streaming upload.
+type CopyOption func(*copyConfig)
+
+type copyConfig struct {
+	overwrite bool
+}
+
+// WithOverwrite controls replacement of existing files during a streaming upload.
+// The default is true. False creates missing files but refuses existing files.
+func WithOverwrite(overwrite bool) CopyOption {
+	return func(cfg *copyConfig) { cfg.overwrite = overwrite }
+}
+
 // CopyInto copies a host file or directory into the box.
 //
 // A directory lands as docker cp lands it: it becomes a guestDst that does
@@ -213,16 +226,16 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer) e
 // An archive led by one directory becomes a guestDst that does not exist.
 // Every later entry must then lie under that directory, or the copy fails
 // with ErrInvalidArgument and keeps the entries written before it.
-func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) error {
-	return b.CopyInStreamWithOverwrite(ctx, guestDst, r, true)
-}
-
-// CopyInStreamWithOverwrite streams an archive with an explicit replacement
-// policy. False creates missing destinations but refuses existing files.
-// CopyInStream retains its original overwrite=true default.
-func (b *Box) CopyInStreamWithOverwrite(ctx context.Context, guestDst string, r io.Reader, overwrite bool) error {
+//
+// Existing files are overwritten by default. Options apply in argument order;
+// the last WithOverwrite value wins. Options must not be nil.
+func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader, opts ...CopyOption) error {
 	if r == nil {
 		return &Error{Code: ErrInvalidArgument, Message: "copy-in reader must not be nil"}
+	}
+	cfg := copyConfig{overwrite: true}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 
 	b.runtime.ensureDrainRunning()
@@ -242,7 +255,7 @@ func (b *Box) CopyInStreamWithOverwrite(ctx context.Context, guestDst string, r 
 	// Like copy_out_start, copy_in_start may implicitly boot the box and
 	// wait on guest file service under the guard; the returned stream is
 	// independent of the box handle.
-	stream := C.boxlite_copy_in_start_with_overwrite(handle, cDst, C.bool(overwrite), C.cbCopy(), handleToPtr(h), &cerr)
+	stream := C.boxlite_copy_in_start_with_overwrite(handle, cDst, C.bool(cfg.overwrite), C.cbCopy(), handleToPtr(h), &cerr)
 	unlock()
 	if stream == nil {
 		deleteHandleForDispatch(h)

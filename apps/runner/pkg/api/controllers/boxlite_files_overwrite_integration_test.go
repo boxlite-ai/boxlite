@@ -159,11 +159,14 @@ func TestRunnerUploadOverwritePreservesBytes(t *testing.T) {
 			}
 		})
 	}
-	for _, query := range []string{"&overwrite=true", ""} {
-		if response := upload(query, "allowed"); response.Code != http.StatusNoContent {
-			t.Fatalf("allowed replacement %q: HTTP %d %s", query, response.Code, response.Body.String())
+	for _, test := range []struct{ query, content string }{
+		{"&overwrite=true", "explicit"},
+		{"", "default"},
+	} {
+		if response := upload(test.query, test.content); response.Code != http.StatusNoContent {
+			t.Fatalf("allowed replacement %q: HTTP %d %s", test.query, response.Code, response.Body.String())
 		}
-		if got := read(); got != "allowed" {
+		if got := read(); got != test.content {
 			t.Fatalf("replacement bytes=%q", got)
 		}
 	}

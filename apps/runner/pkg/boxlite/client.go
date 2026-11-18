@@ -872,18 +872,12 @@ func (c *Client) CopyOut(ctx context.Context, boxId string, guestSrc, hostDst st
 }
 
 // CopyInStream streams raw tar bytes from r into guestDst without staging.
-func (c *Client) CopyInStream(ctx context.Context, boxId, guestDst string, r io.Reader) error {
-	return c.CopyInStreamWithOverwrite(ctx, boxId, guestDst, r, true)
-}
-
-// CopyInStreamWithOverwrite preserves the caller's replacement policy through
-// the Go/C streaming boundary; the guest remains responsible for enforcement.
-func (c *Client) CopyInStreamWithOverwrite(ctx context.Context, boxId, guestDst string, r io.Reader, overwrite bool) error {
+func (c *Client) CopyInStream(ctx context.Context, boxId, guestDst string, r io.Reader, opts ...boxlite.CopyOption) error {
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
 	}
-	return bx.CopyInStreamWithOverwrite(ctx, guestDst, r, overwrite)
+	return bx.CopyInStream(ctx, guestDst, r, opts...)
 }
 
 // CopyOutStream streams a tar of guestSrc to w without staging.

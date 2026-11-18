@@ -18,11 +18,25 @@ go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
 
 Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library and header into the module directory in your Go module cache (one-time). Set `GITHUB_TOKEN` to avoid API rate limits.
 
-For archive uploads, `CopyInStreamWithOverwrite` accepts an explicit replacement policy;
-`false` creates missing destinations and refuses replacing existing files.
-`CopyInStream` retains its existing overwrite-enabled default. The guest enforces the policy during extraction, without a host-side existence check.
-
 ## Usage
+
+### Streaming uploads
+
+`CopyInStream` overwrites existing files by default. Pass `WithOverwrite(false)`
+to create missing files while refusing to replace existing files and preserving their bytes.
+The guest enforces this policy during extraction.
+
+```go
+err := box.CopyInStream(ctx, "/root/config.toml", archive, boxlite.WithOverwrite(false))
+if err != nil { return err }
+```
+
+Options apply in argument order; the last `WithOverwrite` value wins.
+Options must not be nil.
+
+Existing calls without options retain their behavior. Interfaces and typed method
+values must update their `CopyInStream` signatures to include `...CopyOption`.
+Use the matching native library and header containing `boxlite_copy_in_start_with_overwrite`.
 
 ### Managed checkpoints
 

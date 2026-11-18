@@ -11,10 +11,6 @@ import (
 	"testing"
 )
 
-func copyStreamWithOverwrite(box *Box, ctx context.Context, destination string, reader io.Reader, overwrite bool) error {
-	return box.CopyInStreamWithOverwrite(ctx, destination, reader, overwrite)
-}
-
 func TestCopyInStreamOverwritePreservesExistingBytes(t *testing.T) {
 	rt := newTestRuntime(t)
 	box := createStartedBox(t, rt, "alpine:latest")
@@ -45,17 +41,17 @@ func TestCopyInStreamOverwritePreservesExistingBytes(t *testing.T) {
 		return result.Stdout
 	}
 
-	if err := copyStreamWithOverwrite(box, ctx, destination, archive("original"), false); err != nil {
+	if err := box.CopyInStream(ctx, destination, archive("original"), WithOverwrite(false)); err != nil {
 		t.Fatalf("overwrite=false must create a missing destination: %v", err)
 	}
-	err := copyStreamWithOverwrite(box, ctx, destination, archive("replacement"), false)
+	err := box.CopyInStream(ctx, destination, archive("replacement"), WithOverwrite(false))
 	if err == nil || !strings.Contains(err.Error(), "overwrite=false") {
 		t.Fatalf("expected overwrite=false refusal, got %v; stored bytes=%q", err, read())
 	}
 	if got := read(); got != "original" {
 		t.Fatalf("refusal changed original bytes: %q", got)
 	}
-	if err := copyStreamWithOverwrite(box, ctx, destination, archive("explicit"), true); err != nil {
+	if err := box.CopyInStream(ctx, destination, archive("explicit"), WithOverwrite(true)); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(); got != "explicit" {
@@ -66,5 +62,18 @@ func TestCopyInStreamOverwritePreservesExistingBytes(t *testing.T) {
 	}
 	if got := read(); got != "default" {
 		t.Fatalf("default overwrite behavior changed: %q", got)
+	}
+	if err := box.CopyInStream(ctx, destination, archive("last-true"), WithOverwrite(false), WithOverwrite(true)); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != "last-true" {
+		t.Fatalf("last overwrite=true option did not win: %q", got)
+	}
+	err = box.CopyInStream(ctx, destination, archive("last-false"), WithOverwrite(true), WithOverwrite(false))
+	if err == nil || !strings.Contains(err.Error(), "overwrite=false") {
+		t.Fatalf("expected last overwrite=false option to refuse, got %v; stored bytes=%q", err, read())
+	}
+	if got := read(); got != "last-true" {
+		t.Fatalf("last overwrite=false option changed existing bytes: %q", got)
 	}
 }
