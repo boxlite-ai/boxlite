@@ -306,7 +306,12 @@ export class ListenerState {
   }
 
   /** Host adapters must check the live binding in this same database transaction. */
-  async ingress<T>(target: string, work: (tx: IngressTransaction) => Promise<T>, lease?: ExecutionLease): Promise<T> {
+  async ingress<T>(
+    target: string,
+    work: (tx: IngressTransaction) => Promise<T>,
+    lease?: ExecutionLease,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (!/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,200}$/.test(target)) throw new Error('Invalid ingress target')
     return this.database.transaction(this.namespace, async (tx) => {
       if (lease) await this.assertLease(tx, lease)
@@ -334,6 +339,8 @@ export class ListenerState {
         },
       })
       if (lease) await this.assertLease(tx, lease)
+      // A superseded scan rolls back staged counters even if inventory changed during the final lease check.
+      signal?.throwIfAborted()
       return result
     })
   }

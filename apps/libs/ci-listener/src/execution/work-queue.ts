@@ -30,6 +30,9 @@ export class WorkQueue {
     )
       throw new Error('Invalid CI work queue budget')
   }
+  revision(key: string): string | undefined {
+    return this.work.get(key)?.revision
+  }
   enqueue(key: string, revision: string, run: (queueWaitMs: number) => Promise<void>): boolean {
     if (this.failure) throw this.failure
     if (this.closed) return false

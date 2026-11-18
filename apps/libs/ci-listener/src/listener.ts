@@ -41,6 +41,8 @@ export interface ListenerHost {
 interface Runtime {
   backend: ListenerBackend
   pool: WorkerPool
+  scan?: AbortController
+  verification?: number
 }
 interface QueueProof {
   demands: StateRecord[]
@@ -48,7 +50,7 @@ interface QueueProof {
 }
 interface Session {
   verifying: WorkQueue
-  verifiedAt: Map<string, { version: string; until: number }>
+  verifiedAt: Map<string, { version: string; until: number; mismatch: boolean }>
   repairing: WorkQueue
   snapshots: Map<string, QueueProof>
   observed: Map<string, string>
@@ -600,9 +602,9 @@ export class Listener {
         const backend = group.runtime.backend
         const verifications = selected.map((job) => {
           const key = `${id}/${job.record.key}`,
-            entry = { version: job.record.version, until: 0 }
+            entry = { version: job.record.version, until: 0, mismatch: false }
           session.verifiedAt.set(key, entry)
-          return { key, entry }
+          return { key, entry, job: job.notice.job }
         })
         while (session.verifiedAt.size > 4096) session.verifiedAt.delete(session.verifiedAt.keys().next().value!)
         let observations: WorkflowJob[] = []
@@ -624,8 +626,17 @@ export class Listener {
             if (notice) await this.settle(session.lease, notice.record)
           }
         })
-        for (const { key, entry } of verifications)
-          if (session.verifiedAt.get(key) === entry) entry.until = checkedAt + 30000
+        const observed = new Map(observations.map((job) => [job.job, job]))
+        let eligible = false
+        for (const { key, entry, job } of verifications) {
+          if (session.verifiedAt.get(key) !== entry) continue
+          const result = observed.get(job)!
+          const matches = jobMatches(result, this.worker.labels)
+          entry.mismatch = result.status === 'queued' && result.runner === null && !matches
+          entry.until = checkedAt + 30000
+          eligible ||= matches
+        }
+        if (eligible) group.runtime.verification = (group.runtime.verification ?? 0) + 1
         this.wake?.()
       })
     }
@@ -635,7 +646,8 @@ export class Listener {
     for (let offset = 0; offset < entries.length; offset++) {
       const index = (start + offset) % entries.length
       const [key, { scope, runtime }] = entries[index]
-      const accepted = session.planning.enqueue(key, revision, async () => {
+      const verification = runtime.verification ?? 0
+      const accepted = session.planning.enqueue(key, revision + '/' + verification, async () => {
         signal.throwIfAborted()
         const current = session.current.has(key),
           repos = repositories(scope)
@@ -649,7 +661,8 @@ export class Listener {
           )
             throw new StateCorrupt()
         const notices = pending.filter((job) => matches(scope, job))
-        const signature = JSON.stringify(notices.map((job) => [job.record.key, job.record.version]))
+        const signature =
+          verification + '/' + JSON.stringify(notices.map((job) => [job.record.key, job.record.version]))
         const resolve = async (values: readonly LabelDemand[]) => {
           const target = values.find((value) => value.queued > 0)
           return target ? capacity(scope, target.repositoryId) : closedCapacity
@@ -682,7 +695,7 @@ export class Listener {
             await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true, checks)
           } catch (error) {
             if (!(error instanceof DemandUncertain) || !error.requiresJobRefresh) throw error
-            await this.invalidateVerification(session, key, scope)
+            await this.invalidateVerification(session, key, scope, runtime)
             return
           }
           for (const repository of repos) session.snapshots.delete(`${key}/${repository}`)
@@ -721,7 +734,7 @@ export class Listener {
           } catch (error) {
             if (!(error instanceof DemandUncertain) || !current) throw error
             if (error.requiresJobRefresh) {
-              await this.invalidateVerification(session, key, scope)
+              await this.invalidateVerification(session, key, scope, runtime)
               return
             }
             this.reconcileScope(session, key, scope, runtime, signal, true)
@@ -730,7 +743,9 @@ export class Listener {
         if (!current) return
         const demands = await session.positive.read(scope, [], async () => [])
         if (!demands.length && values.some((value) => value.queued > 0)) {
-          const stale = [...session.verifiedAt].filter(([id, entry]) => id.startsWith(key + '/') && entry.until > 0)
+          const stale = [...session.verifiedAt].filter(
+            ([id, entry]) => id.startsWith(key + '/') && entry.until > 0 && !entry.mismatch,
+          )
           try {
             await runtime.pool.balance(session.lease, closedCapacity, [], signal)
           } catch (error) {
@@ -744,7 +759,7 @@ export class Listener {
           await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, 'positive')
         } catch (error) {
           if (!(error instanceof DemandUncertain) || !error.requiresJobRefresh) throw error
-          await this.invalidateVerification(session, key, scope)
+          await this.invalidateVerification(session, key, scope, runtime)
           return
         }
         session.observed.set(key, signature)
@@ -754,7 +769,13 @@ export class Listener {
     }
     session.planningAfter = after
   }
-  private async invalidateVerification(session: Session, key: string, scope: ExecutionScope): Promise<void> {
+  private async invalidateVerification(
+    session: Session,
+    key: string,
+    scope: ExecutionScope,
+    runtime: Runtime,
+  ): Promise<void> {
+    runtime.scan?.abort(new Error('Scope queue observation superseded'))
     for (const repository of repositories(scope)) session.snapshots.delete(`${key}/${repository}`)
     for (const repository of repositories(scope)) await session.positive.invalidate(scope.installation.id, repository)
     for (const id of session.verifiedAt.keys()) if (id.startsWith(key + '/')) session.verifiedAt.delete(id)
@@ -775,36 +796,46 @@ export class Listener {
     )
       return
     session.repairing.enqueue(key, String(previous), async () => {
-      const repos = repositories(scope)
-      const proofs = await parallelReads(
-        repos,
-        (repository, signal) => this.scanRepository(session, key, scope, runtime, repository, signal),
-        signal,
-        4,
-      ).catch((error) => {
-        // Back off a whole-cohort conflict so healthy repositories and admission can progress.
-        if (error instanceof StateConflict)
-          throw new AggregateError([error], 'Scope queue changed during reconciliation')
-        throw error
-      })
-      const now = await this.options.state.now(session.lease)
-      session.demandRefresh.set(key, Date.now())
-      // Publish one cohort; an early completion retains its own deadline.
-      if (repos.length <= 100 && proofs.every((proof) => proof.check.expiresAt! > now)) {
-        for (const [index, repository] of repos.entries()) session.snapshots.set(`${key}/${repository}`, proofs[index])
-        session.demandRetryAt.delete(key)
-      } else {
-        for (const repository of repos) session.snapshots.delete(`${key}/${repository}`)
-        session.demandRetryAt.set(key, Date.now() + this.timing.compensationMs)
-        const deferred = new DemandUncertain(
-          repos.length > 100
-            ? 'Surplus retirement deferred: scope exceeds the 100-check proof budget'
-            : 'Surplus retirement deferred: scope scan exceeded the proof freshness window',
-        )
-        deferred.name = repos.length > 100 ? 'ScopeProofBudgetExceeded' : 'ScopeProofFreshnessExceeded'
-        this.options.host.report(deferred, 'surplus-retirement-deferred')
+      const scan = new AbortController()
+      runtime.scan = scan
+      try {
+        const repos = repositories(scope)
+        const proofs = await parallelReads(
+          repos,
+          (repository, signal) => this.scanRepository(session, key, scope, runtime, repository, signal),
+          AbortSignal.any([signal, scan.signal]),
+          4,
+        ).catch((error) => {
+          // Back off a whole-cohort conflict so healthy repositories and admission can progress.
+          if (error instanceof StateConflict)
+            throw new AggregateError([error], 'Scope queue changed during reconciliation')
+          throw error
+        })
+        const now = await this.options.state.now(session.lease)
+        scan.signal.throwIfAborted()
+        session.demandRefresh.set(key, Date.now())
+        // Publish one cohort; an early completion retains its own deadline.
+        if (repos.length <= 100 && proofs.every((proof) => proof.check.expiresAt! > now)) {
+          for (const [index, repository] of repos.entries())
+            session.snapshots.set(`${key}/${repository}`, proofs[index])
+          session.demandRetryAt.delete(key)
+        } else {
+          for (const repository of repos) session.snapshots.delete(`${key}/${repository}`)
+          session.demandRetryAt.set(key, Date.now() + this.timing.compensationMs)
+          const deferred = new DemandUncertain(
+            repos.length > 100
+              ? 'Surplus retirement deferred: scope exceeds the 100-check proof budget'
+              : 'Surplus retirement deferred: scope scan exceeded the proof freshness window',
+          )
+          deferred.name = repos.length > 100 ? 'ScopeProofBudgetExceeded' : 'ScopeProofFreshnessExceeded'
+          this.options.host.report(deferred, 'surplus-retirement-deferred')
+        }
+        this.wake?.()
+      } catch (error) {
+        if (!scan.signal.aborted || error !== scan.signal.reason || signal.aborted) throw error
+      } finally {
+        if (runtime.scan === scan) runtime.scan = undefined
       }
-      this.wake?.()
     })
   }
   private async scanRepository(
@@ -832,21 +863,27 @@ export class Listener {
         const jobs = (await reader.queued(repository, signal)).filter((job) => jobMatches(job, this.worker.labels))
         signal.throwIfAborted()
         try {
-          const snapshot = await session.positive.invalidate(scope.installation.id, repository, () =>
-            rebuildQueueSnapshot(
-              this.options.state,
-              session.lease,
-              {
-                installationId: scope.installation.id,
-                accountId: scope.installation.account.id,
-                repositoryId: repository,
-              },
-              records.filter((row) => row.key.startsWith(prefix)),
-              jobs,
-              before.get(wakeKey)?.version,
-              { version: before.get(revisionKey)?.version },
-            ),
+          const snapshot = await session.positive.invalidate(
+            scope.installation.id,
+            repository,
+            () =>
+              rebuildQueueSnapshot(
+                this.options.state,
+                session.lease,
+                {
+                  installationId: scope.installation.id,
+                  accountId: scope.installation.account.id,
+                  repositoryId: repository,
+                },
+                records.filter((row) => row.key.startsWith(prefix)),
+                jobs,
+                before.get(wakeKey)?.version,
+                { version: before.get(revisionKey)?.version },
+                signal,
+              ),
+            signal,
           )
+          signal.throwIfAborted()
           for (const id of session.verifiedAt.keys())
             if (id.startsWith(`${key}/${repository}/`)) session.verifiedAt.delete(id)
           proof = {

@@ -579,6 +579,22 @@ planning drops the cached snapshot and requests fresh job verification.
 Invalidated reads cannot repopulate evidence or publish a verification timestamp. This covers missed assignment notifications
 without treating an older queued observation as a new capacity grant.
 
+A matching result from targeted job verification wakes the scope planner even when
+its webhook and a dirty aggregate have the same versions as the previous pass.
+A queued job with incompatible labels retains its scope-specific verification
+deadline. A new notice version or expiry makes it eligible for another check.
+
+When an unassigned runner becomes busy, the planner cancels that scope's in-flight
+scan. A cancelled correction rolls back at the repository transaction boundary.
+The planner checks cancellation again before publishing the complete snapshot.
+
+An allocation accepted by the execution queue counts against its label's create
+budget until it leaves the queue or its durable create intent accounts for it.
+For one job, if B is queued while A is backing off, A becoming eligible cannot
+start a second Box. Routine recovery of the same allocation version preserves
+an outstanding idle retirement. Execution checks its proof and runner identity
+before deregistration.
+
 Each run verifier owns its credential handles. If token issuance has an unknown
 outcome, replacement readers share a 60-second retry delay for that repository
 and purpose. Many small runs increase issuance and retirement traffic. Deployment
