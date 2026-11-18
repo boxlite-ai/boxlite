@@ -134,6 +134,7 @@ const DEFAULT_BOX_GPU = 0
 const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
+  onStarted?: () => void
   maxCreatedBoxes?: number
   /** Authenticated creator, supplied by the caller rather than the request DTO. */
   createdBy?: string
@@ -425,7 +426,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options.maxCreatedBoxes)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options)
           }
         }
       }
@@ -523,6 +524,7 @@ export class BoxService {
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
         .catch((err) => this.logger.error('Failed to emit BoxCreatedEvent', err))
 
+      if (insertedBox.state === BoxState.STARTED) options.onStarted?.()
       return this.toBoxDto(insertedBox)
     } catch (error) {
       if (error.code === '23505') {
@@ -542,7 +544,7 @@ export class BoxService {
     createBoxDto: CreateBoxDto,
     organization: Organization,
     ctx: Context,
-    maxCreatedBoxes?: number,
+    { maxCreatedBoxes, onStarted }: BoxCreationOptions,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
@@ -607,6 +609,7 @@ export class BoxService {
       BoxEvents.STATE_UPDATED,
       new BoxStateUpdatedEvent(updatedBox, BoxState.STARTED, BoxState.STARTED),
     )
+    if (updatedBox.state === BoxState.STARTED) onStarted?.()
     return this.toBoxDto(updatedBox)
   }
 

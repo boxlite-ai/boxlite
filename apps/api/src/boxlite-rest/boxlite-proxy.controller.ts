@@ -562,7 +562,7 @@ export class BoxliteProxyController {
     opts?.admit?.(box, boxId)
 
     if (policy.autoResume && box.autoResume) {
-      await this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit, requestTiming(req))
+      await this.autoResume.ensureReady(box, authContext.organization, opts?.admit, requestTiming(req))
     }
 
     const runner = await this.runnerService.findOne(box.runnerId)

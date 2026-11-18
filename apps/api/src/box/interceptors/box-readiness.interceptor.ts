@@ -21,6 +21,8 @@ import { OrganizationAuthContext } from '../../common/interfaces/auth-context.in
 import { beginBoxOperation } from '../utils/box-operation.util'
 import { requestTiming } from '../../common/utils/request-timing.util'
 
+export const ON_BOX_STARTED = Symbol('on_box_started')
+
 const READINESS_OPERATION = Symbol('readiness_operation')
 
 @Injectable()
@@ -34,6 +36,7 @@ export class BoxReadinessInterceptor implements NestInterceptor {
       Request & {
         user?: OrganizationAuthContext
         [AUDIT_TARGET_ID]?: string
+        [ON_BOX_STARTED]?: () => void
       }
     >()
     if (!request.user?.organizationId) return next.handle()
@@ -44,9 +47,13 @@ export class BoxReadinessInterceptor implements NestInterceptor {
       scope: 'rest_api',
       timing: requestTiming(request),
     })
+    let confirmedAt: number | undefined
+    request[ON_BOX_STARTED] = () => {
+      confirmedAt ??= performance.now()
+    }
     return defer(() => next.handle()).pipe(
       tap({
-        next: () => finish({ outcome: 'success', boxId: request[AUDIT_TARGET_ID] }),
+        next: () => finish({ outcome: 'success', boxId: request[AUDIT_TARGET_ID], confirmedAt }),
         error: (error) => finish({ outcome: 'exception', error, boxId: request[AUDIT_TARGET_ID] }),
       }),
       finalize(() => finish({ outcome: 'cancelled', boxId: request[AUDIT_TARGET_ID] })),

@@ -860,10 +860,10 @@ Existing Activity operation totals exclude this event family.
 
 REST create/start observations cover canonical and prefixed v1 routes whose handlers wait for `STARTED`.
 Resume observations cover API proxy requests, WebSocket attaches and preview `ensure-ready`.
-Successful already-ready traffic emits no resume attempt; joined starts and stop-then-start waits each count as one attempt per caller.
+Each caller that observes a pending start records one resume attempt, including when the Box reaches `STARTED` during lifecycle lock acquisition. Already-ready traffic emits no resume attempt. A stop-then-start wait counts as one attempt.
 
 HTTP ingress time is captured before body parsing and authentication, then only admitted operations are recorded.
-WebSocket timing starts at upgrade dispatch. Timing ends at confirmed `STARTED`; client networking and guest application readiness are outside this measurement.
+WebSocket timing starts at upgrade dispatch. A successful duration ends when the API observes `STARTED`, before response metadata reads such as last activity. Client networking and guest application readiness are outside this measurement.
 
 | Attribute                | Contract                                                           |
 | ------------------------ | ------------------------------------------------------------------ |

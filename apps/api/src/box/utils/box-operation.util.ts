@@ -10,7 +10,7 @@ import { BusinessEventName, BusinessEventOperation, recordBusinessEvent } from '
 import { BoxReadinessError } from '../errors/box-readiness.error'
 
 type Completion = { boxId?: string } & (
-  | { outcome: 'success' }
+  | { outcome: 'success'; confirmedAt?: number }
   | { outcome: 'exception'; error: unknown }
   | { outcome: 'cancelled' }
 )
@@ -43,10 +43,11 @@ export function beginBoxOperation(options: {
     if (finished) return
     finished = true
     const result = completion.outcome === 'exception' ? failureResult(completion.error) : completion.outcome
+    const ended = completion.outcome === 'success' ? (completion.confirmedAt ?? performance.now()) : performance.now()
     const timing: BusinessEventOperation = {
       ...operation,
       boxId: completion.boxId ?? operation.boxId,
-      durationMs: Math.max(0, performance.now() - started),
+      durationMs: Math.max(0, ended - started),
       result,
     }
     recordBusinessEvent({

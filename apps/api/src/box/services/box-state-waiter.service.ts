@@ -53,8 +53,13 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     return this.subscription
   }
 
-  waitForStarted(boxId: string, organizationId: string, timeoutSeconds: number): Promise<BoxDto> {
-    return this.waitForState(boxId, organizationId, BoxState.STARTED, timeoutSeconds)
+  waitForStarted(
+    boxId: string,
+    organizationId: string,
+    timeoutSeconds: number,
+    onStarted?: () => void,
+  ): Promise<BoxDto> {
+    return this.waitForState(boxId, organizationId, BoxState.STARTED, timeoutSeconds, onStarted)
   }
 
   waitForStopped(boxId: string, organizationId: string, timeoutSeconds: number): Promise<BoxDto> {
@@ -66,9 +71,13 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     organizationId: string,
     targetState: BoxState,
     timeoutSeconds: number,
+    onReached?: () => void,
   ): Promise<BoxDto> {
     const current = await this.boxService.findOneByIdOrName(boxId, organizationId)
-    if (current.state === targetState) return this.boxService.toBoxDto(current)
+    if (current.state === targetState) {
+      onReached?.()
+      return this.boxService.toBoxDto(current)
+    }
     await this.ensureSubscribed()
     this.assertNotFailed(current.id, current.state, current.errorReason)
 
@@ -87,6 +96,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
         finished = true
         cleanup()
         try {
+          onReached?.()
           resolve(await this.boxService.toBoxDto(eventBox))
         } catch (error) {
           reject(error)

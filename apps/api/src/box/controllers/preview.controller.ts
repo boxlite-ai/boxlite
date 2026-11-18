@@ -176,7 +176,7 @@ export class PreviewController {
     await this.boxService
       .updateLastActivityAt(box.id, new Date())
       .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
-    await this.autoResume.ensureReady(box.id, organization, undefined, timing)
+    await this.autoResume.ensureReady(box, organization, undefined, timing)
   }
 
   @Get(':boxId/inbound')
