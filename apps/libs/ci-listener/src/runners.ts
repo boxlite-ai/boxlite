@@ -243,13 +243,14 @@ export class GitHubRunners {
     if (await this.lookup(identity, signal)) throw new Error('GitHub runner deletion is not yet confirmed')
   }
   /** Uses the classic REST busy-refusal contract; missing runners cannot prove safe retirement. */
-  async retireIdle(identity: RunnerIdentity, signal?: AbortSignal): Promise<boolean> {
+  async retireIdle(identity: RunnerIdentity, signal?: AbortSignal, checkRetirement?: () => void): Promise<boolean> {
     identity = { ...identity }
     if (!positive(identity.id) || !workerName(identity.name)) throw new Error('Known original runner required')
     const current = (await this.list(signal)).find((runner) => runner.id === identity.id)
     if (current && current.name !== identity.name) throw new Error('Original runner identity changed')
     if (!current || current.status !== 'online' || current.busy) return false
     await this.beforeMutation({ kind: 'remove', ...identity })
+    checkRetirement?.()
     try {
       await this.credential.request(`${this.route}/actions/runners/${identity.id}`, {
         method: 'DELETE',
