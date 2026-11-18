@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
+import { CreateApiKeyPermissionsEnum, CreateApiKeyProxyPermissionsEnum } from '@boxlite-ai/api-client'
+import { ResourcePermission } from '@/lib/resource-permissions'
 
-export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: CreateApiKeyPermissionsEnum[] }[] = [
+export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: ResourcePermission[] }[] = [
   {
     name: 'Members',
     permissions: [CreateApiKeyPermissionsEnum.READ_MEMBERS, CreateApiKeyPermissionsEnum.WRITE_MEMBERS],
@@ -42,5 +43,9 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
       CreateApiKeyPermissionsEnum.WRITE_VOLUMES,
       CreateApiKeyPermissionsEnum.DELETE_VOLUMES,
     ],
+  },
+  {
+    name: 'Outbound proxies',
+    permissions: [CreateApiKeyProxyPermissionsEnum.WRITE_PROXIES, CreateApiKeyProxyPermissionsEnum.DELETE_PROXIES],
   },
 ]

@@ -5,7 +5,8 @@
  */
 
 import React, { useState } from 'react'
-import { OrganizationRole, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { OrganizationRole, UpdateOrganizationRole } from '@boxlite-ai/api-client'
+import { ResourcePermission, splitResourcePermissions } from '@/lib/resource-permissions'
 import {
   Dialog,
   DialogClose,
@@ -26,7 +27,7 @@ interface UpdateOrganizationRoleDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   initialData: OrganizationRole
-  onUpdateRole: (name: string, description: string, permissions: OrganizationRolePermissionsEnum[]) => Promise<boolean>
+  onUpdateRole: (role: UpdateOrganizationRole) => Promise<boolean>
 }
 
 export const UpdateOrganizationRoleDialog: React.FC<UpdateOrganizationRoleDialogProps> = ({
@@ -37,12 +38,25 @@ export const UpdateOrganizationRoleDialog: React.FC<UpdateOrganizationRoleDialog
 }) => {
   const [name, setName] = useState(initialData.name)
   const [description, setDescription] = useState(initialData.description)
-  const [permissions, setPermissions] = useState(initialData.permissions)
+  const [permissions, setPermissions] = useState<ResourcePermission[]>([
+    ...initialData.permissions,
+    ...(initialData.proxyPermissions ?? []),
+  ])
   const [loading, setLoading] = useState(false)
 
   const handleUpdateRole = async () => {
     setLoading(true)
-    const success = await onUpdateRole(name, description, permissions)
+    const selection = splitResourcePermissions(permissions)
+    const initialProxyPermissions = initialData.proxyPermissions ?? []
+    const proxyChanged =
+      selection.proxyPermissions.length !== initialProxyPermissions.length ||
+      selection.proxyPermissions.some((permission) => !initialProxyPermissions.includes(permission))
+    const success = await onUpdateRole({
+      name,
+      description,
+      permissions: selection.permissions,
+      ...(proxyChanged ? { proxyPermissions: selection.proxyPermissions } : {}),
+    })
     if (success) {
       onOpenChange(false)
       setName('')
@@ -76,7 +90,7 @@ export const UpdateOrganizationRoleDialog: React.FC<UpdateOrganizationRoleDialog
   }
 
   // Toggle a single permission
-  const handlePermissionToggle = (permission: OrganizationRolePermissionsEnum) => {
+  const handlePermissionToggle = (permission: ResourcePermission) => {
     setPermissions((current) => {
       if (current.includes(permission)) {
         return current.filter((p) => p !== permission)

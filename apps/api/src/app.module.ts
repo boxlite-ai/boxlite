@@ -37,7 +37,7 @@ import { StatusSyncModule } from './status-sync/status-sync.module'
 import { OpenFeatureModule } from '@openfeature/nestjs-sdk'
 import { OpenFeaturePostHogProvider } from './common/providers/openfeature-posthog.provider'
 import { LoggerModule } from 'nestjs-pino'
-import { getPinoTransport, swapMessageAndObject } from './common/utils/pino.util'
+import { getPinoRequestOptions, getPinoTransport } from './common/utils/pino.util'
 import { Redis } from 'ioredis'
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { RegionModule } from './region/region.module'
@@ -55,13 +55,7 @@ import { McpModule } from './mcp/mcp.module'
         const isProduction = configService.get('production')
         return {
           pinoHttp: {
-            autoLogging: logConfig.requests.enabled,
-            level: logConfig.level,
-            redact: ['req.headers.authorization', 'req.body.turnstileToken'],
-            hooks: {
-              logMethod: swapMessageAndObject,
-            },
-            quietReqLogger: true,
+            ...getPinoRequestOptions(logConfig.requests.enabled, logConfig.level),
             transport: getPinoTransport(isProduction, logConfig),
           },
         }

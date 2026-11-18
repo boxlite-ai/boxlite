@@ -11,7 +11,8 @@ import { useApi } from '@/hooks/useApi'
 import { useOrganizationRoles } from '@/hooks/useOrganizationRoles'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { ResourcePermission, splitResourcePermissions } from '@/lib/resource-permissions'
+import { UpdateOrganizationRole } from '@boxlite-ai/api-client'
 import React, { useState } from 'react'
 import { toast } from 'sonner'
 
@@ -26,16 +27,18 @@ const OrganizationRoles: React.FC = () => {
   const handleCreateRole = async (
     name: string,
     description: string,
-    permissions: OrganizationRolePermissionsEnum[],
+    selection: ResourcePermission[],
   ): Promise<boolean> => {
     if (!selectedOrganization) {
       return false
     }
     try {
+      const { permissions, proxyPermissions } = splitResourcePermissions(selection)
       await organizationsApi.createOrganizationRole(selectedOrganization.id, {
         name: name.trim(),
         description: description?.trim(),
         permissions,
+        ...(proxyPermissions.length ? { proxyPermissions } : {}),
       })
       toast.success('Role created successfully')
       await refreshRoles(false)
@@ -46,21 +49,16 @@ const OrganizationRoles: React.FC = () => {
     }
   }
 
-  const handleUpdateRole = async (
-    roleId: string,
-    name: string,
-    description: string,
-    permissions: OrganizationRolePermissionsEnum[],
-  ): Promise<boolean> => {
+  const handleUpdateRole = async (roleId: string, role: UpdateOrganizationRole): Promise<boolean> => {
     if (!selectedOrganization) {
       return false
     }
     setLoadingRoleAction((prev) => ({ ...prev, [roleId]: true }))
     try {
       await organizationsApi.updateOrganizationRole(selectedOrganization.id, roleId, {
-        name: name.trim(),
-        description: description?.trim(),
-        permissions,
+        ...role,
+        name: role.name.trim(),
+        description: role.description?.trim(),
       })
       toast.success('Role updated successfully')
       await refreshRoles(false)

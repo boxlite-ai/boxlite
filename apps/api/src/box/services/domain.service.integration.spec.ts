@@ -378,6 +378,26 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     expect((await service.listHeld(ORG)).domainSuffix).toBe(APP_DOMAIN)
   })
 
+  it('keeps owner claims idempotent when a held name becomes reserved', async () => {
+    const hostname = `proxies.${APP_DOMAIN}`
+    await expect(service.claim(ORG, 'proxies')).rejects.toMatchObject({ message: 'Subdomain "proxies" is reserved' })
+    expect(await heldNames(ORG)).toEqual([])
+
+    await dataSource.getRepository(Domain).insert({ hostname, kind: 'platform', organizationId: ORG })
+    const box = await makeBox()
+    await service.bind(box, 3000, hostname)
+
+    await expect(service.claim(ORG, ' Proxies ')).resolves.toEqual({
+      hostname,
+      url: `https://${hostname}`,
+      target: { type: 'box', box: box.id, port: 3000 },
+    })
+    await expect(service.claim(OTHER_ORG, 'proxies')).rejects.toMatchObject({
+      message: 'Subdomain "proxies" is reserved',
+    })
+    expect(await heldNames(ORG)).toEqual([{ hostname, box_id: box.id, port: 3000 }])
+  })
+
   it('hostname contract: unbind selects the exact held hostname independently of the configured suffix', async () => {
     const box = await makeBox()
     await service.claim(box.organizationId, 'demo1')

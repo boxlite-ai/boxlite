@@ -7,6 +7,7 @@ import { AddRegistryReadScope1790500000000 } from './1790500000000-add-registry-
 import { AddImageWriteScope1790700000000 } from './1790700000000-add-image-write-scope-migration'
 import { RenameMemberScopes1792728000000 } from './1792728000000-rename-member-scopes-migration'
 import { AddTenantScopes1792497600000 } from './1792497600000-add-tenant-scopes-migration'
+import { AddOutboundProxyPermissions1795000002000 } from './1795000002000-add-outbound-proxy-permissions-migration'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const tables = ['api_key', 'organization_role'] as const
@@ -160,6 +161,32 @@ describeIfDatabase('AddTenantScopes1792497600000 (integration, real Postgres)', 
         { name: 'tenant', permissions: ['write:tenant'] },
         { name: 'unscoped', permissions: [] },
       ])
+    }
+  })
+
+  it('adds and rolls back outbound proxy permissions without changing older grants', async () => {
+    await migrate('up')
+    await new RenameMemberScopes1792728000000().up(queryRunner)
+    const before = [...scopesBefore, 'read:members', 'write:members']
+    const proxyPermissions = new AddOutboundProxyPermissions1795000002000()
+    await queryRunner.startTransaction()
+    try {
+      await proxyPermissions.up(queryRunner)
+      await queryRunner.commitTransaction()
+    } catch (error) {
+      await queryRunner.rollbackTransaction()
+      throw error
+    }
+    await seed('proxy-mixed', ['read:members', 'write:proxies', 'write:boxes', 'delete:proxies'])
+    for (const table of tables) {
+      expect(await scopes(table)).toEqual([...before, 'write:proxies', 'delete:proxies'])
+      expect(await grants(table)).toContainEqual({ name: 'legacy', permissions: scopesBefore })
+    }
+    await proxyPermissions.down(queryRunner)
+    for (const table of tables) {
+      expect(await scopes(table)).toEqual(before)
+      expect(await grants(table)).toContainEqual({ name: 'proxy-mixed', permissions: ['read:members', 'write:boxes'] })
+      expect(await grants(table)).toContainEqual({ name: 'legacy', permissions: scopesBefore })
     }
   })
 

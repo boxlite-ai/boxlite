@@ -17,6 +17,7 @@ import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
+import { ResourcePermission } from '@/lib/resource-permissions'
 import { ApiKeyList, CreateApiKeyPermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
@@ -45,7 +46,7 @@ const Keys: React.FC = () => {
   const needle = filter.trim().toLowerCase()
   const filteredKeys = (apiKeysQuery.data ?? []).filter((key) => key.name.toLowerCase().includes(needle))
 
-  const availablePermissions = useMemo<CreateApiKeyPermissionsEnum[]>(() => {
+  const availablePermissions = useMemo<ResourcePermission[]>(() => {
     if (!authenticatedUserOrganizationMember) {
       return []
     }
@@ -53,7 +54,10 @@ const Keys: React.FC = () => {
       return DEFAULT_API_KEY_PERMISSIONS
     }
     const assignedPermissions = new Set(
-      authenticatedUserOrganizationMember.assignedRoles.flatMap((role) => role.permissions),
+      authenticatedUserOrganizationMember.assignedRoles.flatMap((role) => [
+        ...role.permissions,
+        ...(role.proxyPermissions ?? []),
+      ]),
     )
     return DEFAULT_API_KEY_PERMISSIONS.filter(
       (permission) => permission !== CreateApiKeyPermissionsEnum.WRITE_MEMBERS && assignedPermissions.has(permission),

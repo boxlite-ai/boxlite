@@ -598,6 +598,27 @@ The attach URL may omit `{prefix}`; the ticket already names the organization.
 organization membership.
 
 <details>
+<summary><b>Outbound proxy registry</b> · 5 routes</summary>
+
+| Method | Path | Required permission and behavior |
+| ------ | ---- | -------------------------------- |
+| `GET` | `/v1[/{prefix}]/proxies` | Organization membership. Lists registered proxies. |
+| `GET` | `/v1[/{prefix}]/proxies/{name}` | Organization membership. Reads a registration. |
+| `POST` | `/v1[/{prefix}]/proxies` | `write:proxies`. Creates a named registration from JSON. |
+| `PATCH` | `/v1[/{prefix}]/proxies/{name}` | `write:proxies`. Updates the registration and returns the accepted revision. |
+| `DELETE` | `/v1[/{prefix}]/proxies/{name}` | `delete:proxies`. Returns 409 while any revision has an active or pending reference. |
+
+Keys and organization roles expose these grants in `proxyPermissions`. A registration
+read returns whether credentials are configured, while the credential itself is write-only.
+See the [Cloud registry contract](../outbound-proxy-contract.md#cloud-registry) for fields,
+credential rotation, and deployment requirements.
+
+The platform rejects new app-domain claims for `proxies`. Existing owners can retry a
+claim and keep their current target.
+
+</details>
+
+<details>
 <summary><b>Discovery</b> · 2 routes</summary>
 
 | Method | Path             | What it does                                                               |

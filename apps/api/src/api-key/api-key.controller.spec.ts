@@ -73,12 +73,12 @@ describe('API key authorization', () => {
     }
   })
 
-  async function create(permissions: Permission[]) {
+  async function create(permissions: Permission[], proxyPermissions?: Permission[] | null) {
     const address = app.getHttpServer().address() as AddressInfo
     return fetch(`http://127.0.0.1:${address.port}/api-keys`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'delegated-key', permissions }),
+      body: JSON.stringify({ name: 'delegated-key', permissions, proxyPermissions }),
     })
   }
 
@@ -141,6 +141,27 @@ describe('API key authorization', () => {
     }
 
     expect((await create([Permission.WRITE_BOXES])).status).toBe(201)
+  })
+
+  it('checks proxy delegation and keeps the existing permissions response stable', async () => {
+    const permissions = [Permission.WRITE_BOXES]
+    const proxyPermissions = [Permission.WRITE_PROXIES]
+    expect((await create(permissions, proxyPermissions)).status).toBe(403)
+    expect(createApiKey).not.toHaveBeenCalled()
+
+    principal.apiKey = { organizationId: 'org-1', permissions: [...permissions, ...proxyPermissions] }
+    const response = await create(permissions, proxyPermissions)
+    expect(response.status).toBe(201)
+    expect(await response.json()).toMatchObject({ permissions, proxyPermissions })
+    expect(createApiKey.mock.calls[0][3]).toEqual([...permissions, ...proxyPermissions])
+    expect(await (await create(permissions)).json()).not.toHaveProperty('proxyPermissions')
+  })
+
+  it('rejects null and permissions from the wrong field', async () => {
+    expect((await create([], null)).status).toBe(400)
+    expect((await create([], [Permission.WRITE_BOXES])).status).toBe(400)
+    expect((await create([Permission.WRITE_PROXIES])).status).toBe(400)
+    expect(createApiKey).not.toHaveBeenCalled()
   })
 
   describe.each(['/api-keys/target-key', '/api-keys/owner-1/target-key'])('revocation through %s', (path) => {

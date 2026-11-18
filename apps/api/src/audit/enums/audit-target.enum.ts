@@ -18,4 +18,5 @@ export enum AuditTarget {
   IMAGE = 'image',
   DOMAIN = 'domain',
   REGISTRY_CREDENTIAL = 'registry_credential',
+  OUTBOUND_PROXY = 'outbound_proxy',
 }

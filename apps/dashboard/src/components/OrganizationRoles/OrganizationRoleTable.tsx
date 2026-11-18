@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
-import { OrganizationRole, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { OrganizationRole, UpdateOrganizationRole } from '@boxlite-ai/api-client'
 import {
   ColumnDef,
   flexRender,
@@ -29,12 +29,7 @@ import { TableEmptyState } from '../TableEmptyState'
 interface DataTableProps {
   data: OrganizationRole[]
   loadingData: boolean
-  onUpdateRole: (
-    roleId: string,
-    name: string,
-    description: string,
-    permissions: OrganizationRolePermissionsEnum[],
-  ) => Promise<boolean>
+  onUpdateRole: (roleId: string, role: UpdateOrganizationRole) => Promise<boolean>
   onDeleteRole: (roleId: string) => Promise<boolean>
   loadingRoleAction: Record<string, boolean>
 }
@@ -80,13 +75,9 @@ export function OrganizationRoleTable({
     },
   })
 
-  const handleUpdateRole = async (
-    name: string,
-    description: string,
-    permissions: OrganizationRolePermissionsEnum[],
-  ) => {
+  const handleUpdateRole = async (role: UpdateOrganizationRole) => {
     if (roleToUpdate) {
-      const success = await onUpdateRole(roleToUpdate.id, name, description, permissions)
+      const success = await onUpdateRole(roleToUpdate.id, role)
       if (success) {
         setRoleToUpdate(null)
         setIsUpdateDialogOpen(false)
@@ -222,7 +213,7 @@ const getColumns = ({
         return <div className="max-w-md px-3">Permissions</div>
       },
       cell: ({ row }) => {
-        const permissions = row.original.permissions.join(', ')
+        const permissions = [...row.original.permissions, ...(row.original.proxyPermissions ?? [])].join(', ')
         return (
           <Tooltip>
             <TooltipTrigger>
