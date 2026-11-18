@@ -306,7 +306,7 @@ fn extract_from_reader<R: Read>(
         let mut file =
             entry.map_err(|e| BoxliteError::Storage(format!("failed to read tar entry: {e}")))?;
         let undecided = !landing.decided();
-        let placed = landing.place(&file)?;
+        let placed = landing.place(&file, opts.overwrite)?;
         // Before `prepare`, so a refused first entry leaves `dest` untouched.
         if let Some(landed) = &placed {
             refuse(&landed.name)?;
@@ -364,6 +364,10 @@ fn extract_from_reader<R: Read>(
             directories.push((file, landed));
         } else {
             unpack_at(&mut file, dest, &landed, owner).map_err(copy_unpack_error)?;
+            // A hard link adds a name to an inode whose owner must be preserved.
+            if file.header().entry_type().is_hard_link() {
+                continue;
+            }
             // An entry that lands as the destination itself has an empty
             // name; `dest.join("")` would append a trailing separator, which
             // turns a no-follow chown of a symlink into ENOTDIR.
@@ -488,13 +492,23 @@ impl Landing {
 
     /// What the first entry, of `kind` and sanitized `name`, makes of this
     /// copy.
-    fn decide(&self, kind: tar::EntryType, name: Option<&Path>) -> BoxliteResult<Shape> {
+    fn decide(
+        &self,
+        kind: tar::EntryType,
+        name: Option<&Path>,
+        overwrite: bool,
+    ) -> BoxliteResult<Shape> {
         if kind.is_dir() {
             if self.dest_exists && !self.dest_is_dir {
-                return Err(BoxliteError::InvalidArgument(format!(
+                let message = format!(
                     "cannot copy a directory to {}, which is not a directory",
                     self.dest.display()
-                )));
+                );
+                return Err(if overwrite {
+                    BoxliteError::InvalidArgument(message)
+                } else {
+                    BoxliteError::AlreadyExists(message)
+                });
             }
             let root = name
                 .filter(|name| !self.dest_exists && name.components().count() == 1)
@@ -556,7 +570,11 @@ impl Landing {
     /// Where `entry` lands, or `None` for what extraction skips: records about
     /// other entries, which `Entry::unpack` skips too, and names that are
     /// empty or climb out with `..`.
-    fn place<R: Read>(&mut self, entry: &tar::Entry<'_, R>) -> BoxliteResult<Option<Landed>> {
+    fn place<R: Read>(
+        &mut self,
+        entry: &tar::Entry<'_, R>,
+        overwrite: bool,
+    ) -> BoxliteResult<Option<Landed>> {
         let kind = entry.header().entry_type();
         let directory = entry_is_directory(entry);
         if kind.is_pax_global_extensions()
@@ -582,7 +600,7 @@ impl Landing {
             } else {
                 kind
             };
-            self.shape = Some(self.decide(shape_kind, name.as_deref())?);
+            self.shape = Some(self.decide(shape_kind, name.as_deref(), overwrite)?);
         }
         let name = match name {
             Some(name) => name,

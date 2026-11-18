@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -12,10 +13,14 @@ import (
 )
 
 func BoxliteFileUpload(ctx *gin.Context) {
+	query, err := url.ParseQuery(ctx.Request.URL.RawQuery)
+	if err != nil {
+		respondError(ctx, http.StatusBadRequest, "invalid query encoding", "InvalidArgumentError", "invalid_argument")
+		return
+	}
 	overwrite := true
-	if raw, present := ctx.GetQuery("overwrite"); present {
-		var err error
-		overwrite, err = strconv.ParseBool(raw)
+	if values, present := query["overwrite"]; present {
+		overwrite, err = strconv.ParseBool(values[0])
 		if err != nil {
 			respondError(ctx, http.StatusBadRequest, "overwrite must be a boolean", "InvalidArgumentError", "invalid_argument")
 			return
@@ -28,7 +33,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 
 	boxId := ctx.Param("boxId")
-	destPath := ctx.Query("path")
+	destPath := query.Get("path")
 	if destPath == "" {
 		respondError(ctx, http.StatusBadRequest, "path query parameter required", "InvalidArgumentError", "invalid_argument")
 		return
