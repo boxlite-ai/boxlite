@@ -754,21 +754,21 @@ restart loses queued reports. Deploy the migration and API before Runners.
 
 ### Data disk resize
 
-[`internal/diskresize/ticker.go`](internal/diskresize/ticker.go). The
-control plane can grow a GCP runner's Hyperdisk data disk online
-(disks.update); the filesystem must still be resized to use the extra
-capacity, and that is this runner's job. Every 10 seconds the ticker
-reads the block device's size from sysfs via the stable
-`/dev/disk/by-id/google-boxlite-data` symlink and compares it with the
-last observed size:
+[`internal/diskresize/ticker.go`](internal/diskresize/ticker.go) handles filesystem growth.
+The control plane can grow GCP Hyperdisk and AWS EBS gp3 data disks online.
+The Runner resizes their filesystems to use the extra capacity.
+
+Every 10 seconds the ticker reads the block device's size from sysfs and compares it with the last observed size.
+It uses `/dev/disk/by-id/google-boxlite-data` or the deployment's `RUNNER_DATA_DISK_DEVICE` override.
+AWS uses `/dev/disk/by-id/boxlite-data`.
 
 - unchanged: nothing happens (steady state costs one sysfs read);
 - larger: runs `resize2fs` on the device, which grows the mounted ext4
   filesystem online; the baseline moves only on success, so a failed
   resize retries next round;
-- smaller: not skipped — a smaller device still runs resize2fs, which fails and retries each round (disks cannot shrink via GCP; a disk swap is caught by the API-side stale-ref alert);
-- missing (AWS, local, or non-Linux hosts): skip, logged once at debug;
-  disk resize is a GCP-only behavior.
+- smaller: still runs `resize2fs`, which fails and retries each round.
+  Cloud disks cannot shrink; the API-side stale-ref alert catches disk swaps;
+- missing device or non-Linux host: skip, logged once at debug.
 
 The first round always runs resize2fs once: the nil baseline forces an
 idempotent no-op that also repairs an earlier failed resize after a
@@ -777,8 +777,9 @@ increment an in-process failure counter; successes log the same event
 at info. The disk trigger is the device size, deliberately not statfs:
 the ext4 metadata overhead makes statfs total permanently smaller than
 the device, so statfs comparison would fire resize2fs every round.
-`RUNNER_DATA_DISK_DEVICE` overrides the device path for tests and local
-runs; infra never injects that key.
+
+`RUNNER_DATA_DISK_DEVICE` selects the deployment's device path; tests and local runs can also override it.
+AWS infra supplies its stable device link through this key.
 
 ### v2 job poller + executor
 
@@ -890,7 +891,10 @@ Malformed locations and unsupported schemes fail before export begins.
 GCS uses Application Default Credentials and initializes its client on first
 use. Missing credentials can be retried on a later operation. S3 configuration
 is independent: an absent `AWS_DEFAULT_BUCKET` disables S3 transfers without
-preventing GCS transfers or runner startup. Operators must grant the runner's
+preventing GCS transfers or runner startup.
+
+S3 uses explicit access/secret/session credentials when supplied, otherwise AWS environment and workload-role credentials.
+A partial explicit key pair is rejected. Operators must grant the runner's
 credentials access to the buckets selected by the control plane.
 
 A GCS upload succeeds only after its writer commits; a failed local read
@@ -912,18 +916,15 @@ domain, API + proxy URLs, BoxLite ping result, and the current metrics
 snapshot. Failures are logged but never crash the runner — this is the
 control plane's view of the runner's liveness, not a self-test.
 
-GCP runners also carry the data disk identity: when infra injects all
-three `GCP_PROJECT_ID`, `GCP_ZONE` and `RUNNER_DATA_DISK_NAME` env
-keys, every healthcheck includes `dataDiskRef` with provider, project,
-zone and disk name; any missing key omits the whole field, so AWS and
-local runners never send a partial identity. The API's disk-expansion
-controller uses this ref to address the right disk. Infra also injects
-`RUNNER_DATA_DISK_TYPE` (derived from the provisioned disk type, e.g.
-`hyperdisk_balanced`); the ref carries it as `diskType` so the API can
-tell expandable block disks from backends with a different resize path
-(e.g. Filestore). The key is optional — binaries predating it, and
-hosts whose infra predates it, are treated as `hyperdisk_balanced` by
-the API, which matches everything infra provisions today.
+Runners report a complete data-disk identity in healthchecks.
+AWS supplies `RUNNER_DATA_DISK_PROVIDER=aws`, the account ID through `RUNNER_DATA_DISK_PROJECT`,
+the availability zone through `RUNNER_DATA_DISK_ZONE`, the EBS volume ID, and `RUNNER_DATA_DISK_TYPE=gp3`.
+
+The API validates this identity and the deployment's volume tags before expansion.
+Incomplete or unknown provider identities are omitted.
+
+GCP retains `GCP_PROJECT_ID`, `GCP_ZONE` and `RUNNER_DATA_DISK_NAME` compatibility.
+A GCP disk without `diskType` retains the `hyperdisk_balanced` default; AWS expansion requires `gp3`.
 
 ---
 

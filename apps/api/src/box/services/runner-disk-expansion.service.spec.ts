@@ -1180,3 +1180,51 @@ describe('RunnerDiskExpansionService round', () => {
     warnSpy.mockRestore()
   })
 })
+
+describe('AWS expansion budget', () => {
+  it('counts a full 24-hour window and passes the authenticated runner name', async () => {
+    const now = new Date('2026-11-17T10:00:00Z')
+    jest.useFakeTimers().setSystemTime(now)
+    try {
+      const awsRef = {
+        provider: 'aws',
+        project: '123456789012',
+        zone: 'us-east-1a',
+        diskName: 'vol-0123456789abcdef0',
+        diskType: 'gp3',
+      }
+      const runner = gcpRunner({ name: 'aws-runner', dataDiskRef: awsRef })
+      const harness = makeService({
+        readyRunners: [runner],
+        acceptedCount: 3,
+        expansion: { maxExpansionsPerWindow: 4 },
+      })
+      await harness.service.evaluateAndConfirm()
+      expect(harness.gcpDiskClient.resizeDisk).toHaveBeenCalledWith(awsRef, 250, undefined, 'aws-runner')
+      const counted = (harness.expansions.count as jest.Mock).mock.calls[0][0]
+      expect(counted.where.requestedAt.value).toEqual(new Date(now.getTime() - 24 * HOUR))
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+  it('enforces the four-per-day physical limit even when local settings are larger', async () => {
+    const awsRef = {
+      provider: 'aws',
+      project: '123456789012',
+      zone: 'us-east-1a',
+      diskName: 'vol-0123456789abcdef0',
+      diskType: 'gp3',
+    }
+    const harness = makeService({
+      readyRunners: [gcpRunner({ dataDiskRef: awsRef })],
+      acceptedCount: 4,
+      expansion: { maxExpansionsPerWindow: 100, growthWindowHours: 1 },
+    })
+    await harness.service.evaluateAndConfirm()
+    expect(harness.gcpDiskClient.resizeDisk).not.toHaveBeenCalled()
+    expect(harness.runnerRepository.update).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ unschedulable: true }),
+    )
+  })
+})

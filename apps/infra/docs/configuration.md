@@ -82,8 +82,8 @@ the secret does not. Use `.env.example` for the names and defaults.
 The two largest tiers default to `n4-standard-32` and `n4-standard-64` on GCP,
 and `c8i.4xlarge` and `c8i.8xlarge` on AWS.
 
-In each stage, optional
-`machineTypes` entries override the cloud machine for individual tiers. Choose
+Both clouds require `rootDiskGb` and accept `dataDiskGb` for a separate data disk.
+Optional `machineTypes` entries override the cloud machine for individual tiers. Choose
 machines that support nested virtualization and the runner's disk configuration.
 For example, a GCP stage can configure its runners as follows:
 
@@ -100,12 +100,14 @@ For example, a GCP stage can configure its runners as follows:
 ```
 
 Disk values are whole GiB from 20 through 4000. Omitting `dataDiskGb` keeps the 200 GiB default;
-the IOPS and throughput presets still come from `size`. AWS keeps box state on the root disk and
-rejects `dataDiskGb`; configure `rootDiskGb` there.
+GCP selects performance presets from `size`; AWS uses gp3 defaults.
+The data disk is independent of the operating-system root disk on both clouds.
 
-On GCP, sizing applies at creation. Existing hosts retain their recorded machine types and disk sizes,
+Runner sizing applies at creation on both clouds. Existing hosts retain their recorded machine types and disk sizes,
 so a fleet can keep smaller hosts while new runners use `large` and a 2 TiB data disk. Updating these
-settings does not resize existing GCP hosts. `RUNNERS` in the encrypted stage store controls the fleet
+settings does not resize existing hosts.
+
+`RUNNERS` in the encrypted stage store controls the fleet
 count; see [scale out](runners.md#scale-out).
 
 Keep the stage declaration and its GitHub Environment copy synchronized with `mstage config put`.
@@ -239,8 +241,10 @@ npm run --silent mstage config get -- --stage dev
 variable first, then the local file, and emits `{ "dev": { ... } }`. The setup action restores the
 ignored file for a job; promotion restores both source and destination declarations.
 
-The AWS bootstrap `.env` and legacy SST manifest belong to the legacy `boxlite` app.
-The current manifest names `boxlite-app`; see [AWS compatibility](../bootstrap/aws/README.md#aws-mdeploy-compatibility). Updating an ignored
+Native AWS bootstrap follows the declared app; its retained `--legacy-sst` path uses the legacy `boxlite` conventions.
+Existing stages need [AWS adoption](aws/migration.md).
+
+Updating an ignored
 local file does not update the encrypted stage store or a GitHub Environment until its corresponding
 write command runs. Verify each destination after changing it.
 

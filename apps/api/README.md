@@ -390,13 +390,16 @@ Fixtures exercising lifecycle synchronization or deletion must register
 The transaction tests inject a failure after the Box write and before operation
 completion; they verify rollback and concurrent replay against PostgreSQL.
 
-Provision `CHECKPOINT_ARCHIVE_PREFIX=gs://<bucket>/checkpoints/` and grant the
-API/runner identities object access. Storage alone does not enable admission.
+Provision `CHECKPOINT_ARCHIVE_PREFIX=gs://<bucket>/checkpoints/` on GCP or `s3://<bucket>/checkpoints/` on AWS.
+Use a dedicated archive bucket; the API deletes exact tenant-bound objects, while Runners upload, download and delete archives. Storage alone does not enable admission.
+
 After compatible runners are deployed, set `CHECKPOINTS_ENABLED=true` to allow
 capture and checkpoint import; it defaults to false, including mdeploy stacks.
 Disabling admission keeps existing records readable and lets accepted jobs finish. The optional
 `CHECKPOINT_MAX_PER_ORGANIZATION` defaults to 10; creating, ready, failed and
-deleting records all count. Quota and name checks run in the transaction that
+deleting records all count.
+
+Quota and name checks run in the transaction that
 creates the export job. An unset prefix returns 503 before source mutation.
 
 Apply the checkpoint pre-deploy migration before API instances that map its

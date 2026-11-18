@@ -23,7 +23,9 @@ describe('checkpoint storage configuration', () => {
   })
 
   it.each([
-    's3://bucket/prefix',
+    's3://bad_bucket/prefix',
+    's3://bucket/a//b',
+    's3://bucket/../escape',
     'gs:///prefix',
     'gs://bucket/a//b',
     'gs://bucket/../escape',
@@ -39,4 +41,18 @@ describe('checkpoint storage configuration', () => {
       'CHECKPOINT_MAX_PER_ORGANIZATION',
     )
   })
+})
+
+describe('AWS checkpoint configuration', () => {
+  it.each(['s3://checkpoint-bucket/checkpoints', 's3://checkpoint-bucket/checkpoints/'])(
+    'normalizes %s with explicit admission',
+    (prefix) => {
+      expect(checkpointConfig({ CHECKPOINT_ARCHIVE_PREFIX: prefix, CHECKPOINTS_ENABLED: 'true' })).toEqual({
+        archivePrefix: 's3://checkpoint-bucket/checkpoints/',
+        maxPerOrganization: 10,
+        enabled: true,
+      })
+      expect(checkpointConfig({ CHECKPOINT_ARCHIVE_PREFIX: prefix }).enabled).toBe(false)
+    },
+  )
 })

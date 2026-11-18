@@ -1,110 +1,124 @@
-/*
- * The box proxy, behind a network load balancer with a wildcard certificate.
- *
- * A network load balancer rather than an application one, and a `443/tls`
- * listener rather than `443/https`. Both of those terminate — an NLB `443/tls`
- * listener holds the certificate and hands the task plaintext on 4000, which is
- * why `ENABLE_TLS` is unset on the container. What the NLB buys over an ALB is
- * a layer-4 forward with no HTTP handling of its own in the way.
- *
- * The routing survives termination because it never depended on the handshake:
- * the proxy reads `<port>-<boxid>.<domain>` out of the **Host header**
- * (`parseHost` in `apps/proxy/pkg/proxy/get_box_target.go`), not out of SNI.
- * This comment used to claim the opposite, and the GCP side was built as a
- * genuine passthrough to match it — which left every box's hostname with no
- * certificate at all, because nothing in `apps/proxy` can obtain one.
- *
- * The topology is protected: the load balancer, the listener and the target
- * group all carry `protect`. A replacement that swapped the listener before ECS
- * had attached the new target group would take every running box offline, and a
- * routine task revision never needs one. Protecting them makes an immutable
- * change fail loudly instead of half-switching.
- */
-
 import type { WorkloadHost } from '../../cluster.ts'
 import type { Edge, EdgeProvider, EdgeRequest } from '../../edge.ts'
 import { PROXY_PORT } from '../../edge.ts'
 import type { Placement } from '../../network.ts'
+import { awsCertificate, awsDnsName, proxyCertificateDomains } from './certificate.ts'
+import { awsService } from './service.ts'
+import { instanceFor } from 'naming'
+import { createHash } from 'node:crypto'
+
+/** Stable within AWS's 32-character load-balancer name limit. */
+export const proxyLoadBalancerName = (): string => {
+  const name = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' })
+  return name.length <= 32
+    ? name
+    : name.slice(0, 23) + '-' + createHash('sha256').update(name).digest('hex').slice(0, 8)
+}
 
 export const awsEdgeProvider =
   ({
     host,
     placement,
-    dns,
+    zoneId,
     dependsOn,
   }: {
     host: Extract<WorkloadHost, { cloud: 'aws' }>
     placement: Extract<Placement, { cloud: 'aws' }>
-    dns: ReturnType<typeof sst.cloudflare.dns>
-    dependsOn: any[]
+    zoneId: string
+    dependsOn: CloudResource[]
   }): EdgeProvider =>
   (request: EdgeRequest): Edge => {
-    const service = new sst.aws.Service(
-      'Proxy',
+    const network = host.cluster.network
+    const certificate = awsCertificate(
+      'ProxyCertificate',
+      proxyCertificateDomains(request.domain, zoneId, request.userDomain),
+    )
+    const ingress = new aws.ec2.SecurityGroup('ProxyBalancerSecurityGroup', {
+      vpcId: network.vpcId,
+      ingress: [{ protocol: 'tcp', fromPort: 443, toPort: 443, cidrBlocks: ['0.0.0.0/0'] }],
+      egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: [network.cidr] }],
+    })
+    const allowTask = new aws.vpc.SecurityGroupIngressRule('ProxyIngressFromBalancer', {
+      securityGroupId: placement.securityGroups[0],
+      referencedSecurityGroupId: ingress.id,
+      ipProtocol: 'tcp',
+      fromPort: PROXY_PORT,
+      toPort: PROXY_PORT,
+    })
+    const balancer = new aws.lb.LoadBalancer(
+      'ProxyLoadBalancer',
       {
-        cluster: host.cluster,
-        image: request.image,
-        wait: true,
-        loadBalancer: {
-          domain: {
-            name: request.domain,
-            // One certificate for every box that will ever exist. Without it a
-            // new box is unreachable until someone issues a certificate for it.
-            aliases: [`*.${request.domain}`],
-            dns,
-          },
-          rules: [{ listen: '443/tls', forward: `${PROXY_PORT}/tcp` }],
-        },
-        environment: {
-          ...request.environment,
-          PROXY_PORT: String(PROXY_PORT),
-          PROXY_PROTOCOL: request.protocol,
-          PROXY_DOMAIN: request.domain,
-          // api-client-go appends paths like `/config` directly, so the `/api`
-          // prefix belongs here rather than at every call site inside the proxy.
-          BOXLITE_API_URL: $interpolate`${request.apiUrl}/api`,
-        },
-        ssm: request.secrets,
-        transform: {
-          loadBalancer: (args: any, opts: any) => {
-            args.loadBalancerType = 'network'
-            opts.protect = true
-          },
-          listener: (_args: any, opts: any) => {
-            opts.protect = true
-          },
-          target: (args: any, opts: any) => {
-            // A TCP listener has no health notion of its own, so the target
-            // group is where the proxy's own `/health` route is probed.
-            args.healthCheck = {
-              enabled: true,
-              protocol: 'HTTP',
-              path: '/health',
-              port: 'traffic-port',
-              matcher: '200-399',
-              interval: 30,
-              timeout: 5,
-              healthyThreshold: 2,
-              unhealthyThreshold: 3,
-            }
-            opts.protect = true
-          },
-          service: (args: any) => {
-            args.networkConfiguration = {
-              ...args.networkConfiguration,
-              subnets: placement.subnets,
-              securityGroups: placement.securityGroups,
-              assignPublicIp: false,
-            }
-          },
+        name: proxyLoadBalancerName(),
+        loadBalancerType: 'network',
+        subnets: network.publicSubnets,
+        securityGroups: [ingress.id],
+        enableCrossZoneLoadBalancing: true,
+      },
+      { protect: true },
+    )
+    const target = new aws.lb.TargetGroup(
+      'ProxyTarget',
+      {
+        vpcId: network.vpcId,
+        targetType: 'ip',
+        protocol: 'TCP',
+        port: PROXY_PORT,
+        healthCheck: {
+          path: '/health',
+          protocol: 'HTTP',
+          matcher: '200-399',
+          port: 'traffic-port',
+          interval: 30,
+          healthyThreshold: 2,
+          unhealthyThreshold: 3,
         },
       },
-      { dependsOn },
+      { protect: true },
     )
-
+    const listener = new aws.lb.Listener(
+      'ProxyListener',
+      {
+        loadBalancerArn: balancer.arn,
+        port: 443,
+        protocol: 'TLS',
+        certificateArn: certificate.certificateArn,
+        defaultActions: [{ type: 'forward', targetGroupArn: target.arn }],
+      },
+      { protect: true },
+    )
+    const service = awsService('Proxy', {
+      host,
+      placement,
+      image: request.image,
+      port: PROXY_PORT,
+      environment: {
+        ...request.environment,
+        PROXY_PORT: String(PROXY_PORT),
+        PROXY_PROTOCOL: request.protocol,
+        PROXY_DOMAIN: request.domain,
+        BOXLITE_API_URL: $interpolate`${request.apiUrl}/api`,
+      },
+      secrets: request.secrets,
+      targets: [{ targetGroupArn: target.arn, containerPort: PROXY_PORT }],
+      dependsOn: [...dependsOn, listener, allowTask],
+    })
+    const records = [
+      awsDnsName('ProxyRecord', request.domain, zoneId, balancer.dnsName),
+      awsDnsName('ProxyWildcardRecord', '*.' + request.domain, zoneId, balancer.dnsName),
+      ...(request.userDomain
+        ? [
+            awsDnsName(
+              'ProxyAppWildcardRecord',
+              '*.' + request.userDomain.domain,
+              request.userDomain.dnsZoneId,
+              balancer.dnsName,
+            ),
+          ]
+        : []),
+    ]
     return {
       url: $util.output(`https://${request.domain}`),
-      metricTarget: service.nodes.loadBalancer.arnSuffix,
-      ready: [service],
+      metricTarget: balancer.arnSuffix,
+      ready: [...service.ready, ...records],
     }
   }

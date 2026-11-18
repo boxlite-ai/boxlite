@@ -28,7 +28,8 @@ const recorder = ({ existing = false, versions = [] as any[] } = {}) => {
     }
     return { code: 0, stdout: '', stderr: '' }
   }
-  const applied = (...needles: string[]): string[][] => calls.filter((call) => needles.every((needle) => call.join(' ').includes(needle)))
+  const applied = (...needles: string[]): string[][] =>
+    calls.filter((call) => needles.every((needle) => call.join(' ').includes(needle)))
   return { run, calls, applied }
 }
 
@@ -54,6 +55,9 @@ test('a fresh stage gets every prerequisite mdeploy and mbuild cannot create for
   assert.equal(result.roleArn, 'arn:aws:iam::123456789012:role/boxlite-dev-github-deploy')
   assert.equal(result.boundaryArn, 'arn:aws:iam::123456789012:policy/boxlite-dev-runtime-boundary')
   assert.equal(result.repositoryName, 'boxlite-app-dev-api')
+  const repositoryCall = aws.applied('ecr create-repository')[0]
+  assert.equal(repositoryCall[repositoryCall.indexOf('--image-tag-mutability') + 1], 'IMMUTABLE')
+  assert.equal(repositoryCall[repositoryCall.indexOf('--image-scanning-configuration') + 1], 'scanOnPush=true')
   assert.equal(result.bucketName, 'boxlite-app-dev-artifacts-123456789012')
 
   // The rendered trust document carries no placeholder left to substitute.
@@ -63,7 +67,10 @@ test('a fresh stage gets every prerequisite mdeploy and mbuild cannot create for
 })
 
 test('re-running reconciles what is there instead of creating it again', async () => {
-  const aws = recorder({ existing: true, versions: [{ VersionId: 'v1', IsDefaultVersion: true, CreateDate: '2026-01-01T00:00:00Z' }] })
+  const aws = recorder({
+    existing: true,
+    versions: [{ VersionId: 'v1', IsDefaultVersion: true, CreateDate: '2026-01-01T00:00:00Z' }],
+  })
   await invoke(aws.run)
 
   for (const created of ['iam create-policy ', 'iam create-role', 'ecr create-repository', 's3api create-bucket']) {
@@ -128,5 +135,80 @@ test('a failing AWS call surfaces the CLI stderr rather than a generic failure',
     if (args.join(' ').startsWith('iam create-policy')) return { code: 1, stdout: '', stderr: 'AccessDenied: nope' }
     return { code: 0, stdout: '', stderr: '' }
   }
-  await assert.rejects(invoke(run), (error: any) => error instanceof AwsBootstrapError && /AccessDenied: nope/.test(error.message))
+  await assert.rejects(
+    invoke(run),
+    (error: any) => error instanceof AwsBootstrapError && /AccessDenied: nope/.test(error.message),
+  )
+})
+
+test('native AWS bootstrap follows declared identities and preserves the legacy IAM fence boundary', async () => {
+  const aws = recorder()
+  const result = await bootstrapAws({
+    run: aws.run,
+    ...SCOPE,
+    log: () => {},
+    native: {
+      app: 'community-app',
+      repository: 'community-images',
+      stateBucket: 'existing-state-bucket',
+      volumePrefix: 'community-dev-volume',
+    },
+  })
+  assert.equal(result.roleArn, 'arn:aws:iam::123456789012:role/community-app-dev-pulumi-deploy')
+  assert.equal(result.boundaryArn, 'arn:aws:iam::123456789012:policy/community-app-dev-runtime-boundary')
+  assert.equal(result.repositoryName, 'community-images')
+  assert.equal(result.bucketName, 'community-app-dev-artifacts-123456789012')
+  const policyCall = aws.applied('iam put-role-policy')[0]
+  const policy = JSON.parse(policyCall[policyCall.indexOf('--policy-document') + 1])
+  assert.ok(JSON.stringify(policy).length < 10_240, 'inline role policy exceeds the IAM aggregate size limit')
+  assert.doesNotMatch(JSON.stringify(policy), /<[A-Z_]+>/)
+  const deny = policy.Statement.find((statement: any) => statement.Sid === 'DenySelfPrivilegeEscalation')
+  assert.ok(deny.Action.includes('iam:DeleteRolePolicy'))
+  assert.ok(deny.Resource.includes('arn:aws:iam::123456789012:role/boxlite-*-github-deploy'))
+  assert.ok(deny.Resource.includes('arn:aws:iam::123456789012:role/community-app-*-pulumi-deploy'))
+  assert.equal(
+    aws.applied('--role-name boxlite-dev-github-deploy').length,
+    0,
+    'native bootstrap changed the legacy role',
+  )
+  const boundaryCall = aws.applied('iam create-policy')[0]
+  const boundary = JSON.parse(boundaryCall[boundaryCall.indexOf('--policy-document') + 1])
+  const growth = boundary.Statement.find((statement: any) => statement.Sid === 'RunnerDataDiskGrowth')
+  assert.deepEqual(growth.Condition.StringEquals, {
+    'ec2:ResourceTag/boxlite:app': 'community-app',
+    'ec2:ResourceTag/boxlite:stage': 'dev',
+    'ec2:ResourceTag/boxlite:role': 'runner-data',
+  })
+  const registry = boundary.Statement.find((statement: any) => statement.Sid === 'RegistryCredentialAccessCeiling')
+  assert.equal(
+    registry.Resource,
+    'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:registry-credential-community-app-dev-*',
+  )
+})
+
+test('native bootstrap validates names before cloud calls and honors declared ECR settings', async () => {
+  const native = {
+    app: 'community-app',
+    repository: 'community-images',
+    stateBucket: 'existing-state-bucket',
+    volumePrefix: 'community-dev-volume',
+    immutableTags: false,
+    scanOnPush: false,
+  }
+  for (const invalid of [
+    { ...native, app: '../invalid' },
+    { ...native, volumePrefix: 'unsafe/*' },
+  ]) {
+    const aws = recorder()
+    await assert.rejects(
+      bootstrapAws({ run: aws.run, ...SCOPE, native: invalid, log: () => {} }),
+      /valid native AWS|Invalid native AWS/,
+    )
+    assert.equal(aws.calls.length, 0)
+  }
+  const aws = recorder()
+  await bootstrapAws({ run: aws.run, ...SCOPE, native, log: () => {} })
+  const repository = aws.applied('ecr create-repository')[0]
+  assert.equal(repository[repository.indexOf('--image-tag-mutability') + 1], 'MUTABLE')
+  assert.equal(repository[repository.indexOf('--image-scanning-configuration') + 1], 'scanOnPush=false')
 })

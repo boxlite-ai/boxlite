@@ -41,22 +41,31 @@ Run from the repository root:
 
 ```bash
 make test:apps:infra
+make test:apps:infra:aws
+make test:apps:mdeploy
 make coverage:infra
 make test:apps:infra-config
 ```
 
 `test:apps:infra` typechecks tooling and runs the infrastructure suites. `coverage:infra` runs those same
 checks with c8 and writes repository-relative LCOV to `target/coverage/infra/lcov.info`, including
-unloaded production modules at zero coverage. Setup reinstalls dependencies if the c8 executable is
+unloaded production modules at zero coverage.
+
+Setup reinstalls dependencies if the c8 executable is
 missing, including older installs that already have `node_modules`. CI uploads this report under the `infra` flag;
 infrastructure changes cannot use the empty-upload path. The wheel smoke fixture copies Python
 sources while omitting native extensions, so unrelated missing modules cannot mask a broken wheel.
-`test:apps:infra-config` installs SST's platform and typechecks the full configuration.
+
+`test:apps:infra:aws` checks AWS bootstrap and retained launcher contracts; its cloud calls are mocked.
+`test:apps:mdeploy` typechecks and tests both native Pulumi programs, including AWS resource construction, scoped previews and Runner rollout.
+`test:apps:infra-config` installs SST's platform and typechecks the retained legacy configuration.
+
 Runtime synthesis tests load SST builders through dynamic module paths so tooling-only typechecking
 does not require generated SST globals.
 Registration synthesis tests execute `deployStack()` through the API service constructor with
 recording cloud-resource doubles and real Pulumi secret Outputs. They verify opt-in Turnstile
 settings, timeout defaults and enabled stage-secret delivery without contacting cloud providers.
+
 For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.
 

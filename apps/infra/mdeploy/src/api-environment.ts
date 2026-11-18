@@ -1,12 +1,10 @@
 /*
  * What the API container reads.
  *
- * Assembled here rather than in `sst.config.ts` because none of it needs SST:
- * it is the stage's own configuration rearranged into the names the service
- * expects. A function handed its environment is one a test can run; one reading
- * `process.env` through an SST config is not, which is how a key stops being
- * passed without anything noticing. The incumbent `stack/api.ts` was the second
- * kind, which is why its two hundred lines of `envOr` had no test at all.
+ * Shared by both native Pulumi programs: stage configuration is translated
+ * into service names here, independently of provider resource construction.
+ * Explicit environment inputs let tests verify delivery without process-wide
+ * configuration or cloud credentials.
  *
  * Two channels come out of it, because a container reads a name the same way
  * whichever one carried it. `environment` is delivered as values; `secrets` is

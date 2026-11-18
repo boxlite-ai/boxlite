@@ -6,8 +6,8 @@
  * from — an uploaded artifact, a debug `cat`, a stale working copy — are far
  * easier to get wrong than the IAM that guards the store itself.
  *
- * It is not put into this process's own `process.env` either. `sst` is a child
- * and reads its own environment, so injecting here would only add a second copy
+ * It is not put into this process's own `process.env` either. the Pulumi engine and provider subprocesses
+ * read their own environments, so injecting here would only add a second copy
  * visible to anything else in this process, crash dumps included.
  */
 
@@ -58,10 +58,8 @@ export const SERVICE_GROUPS = [API_GROUP, PROXY_GROUP, OTEL_GROUP, RUNNER_GROUP]
 /**
  * The engine's own secret, which no service reads.
  *
- * Pulumi seals the secrets in its state with a passphrase; SST does not, and an
- * AWS stage has no state of that kind to open. Kept out of `deploy` for that
- * reason: a group names keys the store *must* hold, so putting it there would
- * fail every AWS stage over a value it would never read.
+ * Pulumi seals deployment-state secrets on both clouds with this stable
+ * passphrase. A separate group keeps the engine key out of workload settings.
  */
 export const PULUMI_GROUP = 'pulumi'
 
@@ -232,9 +230,8 @@ export const TEARDOWN_GROUPS = [DEPLOY_GROUP]
 export type StageEnvironment = { values: Record<string, string>; source: string }
 
 /**
- * A local deploy skips the fetch and runs on whatever the shell already exports,
- * which is also what CI does today: the workflow puts the values in the job
- * environment before `sst deploy` and never consults the store.
+ * Ambient mode runs on the shell's values without reading the stage store.
+ * CI can select this mode after hydrating its job environment explicitly.
  */
 export const ambientEnvironment = (): StageEnvironment => ({
   values: {},

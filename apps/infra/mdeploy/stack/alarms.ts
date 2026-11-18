@@ -8,9 +8,8 @@
  *
  * A threshold is a count and a number of consecutive periods, on both clouds.
  * That much is genuinely shared. What is not shared is what a metric *is*: AWS
- * reads counters the API embeds in its own log lines, and Google reads
- * log-based metrics it has to be told how to extract first. Each provider owns
- * that translation, and this module never names a namespace or a filter.
+ * and GCP both extract counters from structured API logs. Each provider owns
+ * the logging service, metric namespace and workload boundary. This module never names a namespace or a filter.
  */
 
 import type { Api } from './api.ts'

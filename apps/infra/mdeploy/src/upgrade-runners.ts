@@ -39,18 +39,14 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { ON_HOST } from '../stack/runner-upgrade.ts'
 
 /** ~5 min at 10s apart, which covers an agent registering on a fresh instance. */
 const CONNECT_ATTEMPTS = 30
 const CONNECT_PAUSE_SECONDS = 10
-/**
- * ~30 min at 5s apart. It has to stay above everything the payload can bound —
- * 300s fetches and two readiness gates of up to 150s each — with room for the apt/tar/systemctl
- * steps that take no timeout at all. Read it as "supervision must exceed
- * everything we can bound, with room for what we cannot".
- */
-const COMPLETION_ATTEMPTS = 360
+/** Remote execution is capped at 30 minutes; supervision allows five more. */
+const COMPLETION_ATTEMPTS = 420
 const COMPLETION_PAUSE_SECONDS = 5
 
 export const TERMINAL_SSM_STATUSES = new Set(['Success', 'Failed', 'Cancelled', 'TimedOut'])
@@ -92,7 +88,12 @@ export type RunCommand = (file: string, args: string[]) => CommandResult
 export const spawnWith =
   (environment: NodeJS.ProcessEnv = process.env): RunCommand =>
   (file, args) => {
-    const result = spawnSync(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: environment })
+    const result = spawnSync(file, args, {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      env: environment,
+      ...(file === 'aws' ? { timeout: 30_000 } : {}),
+    })
     if (result.error) {
       const code = (result.error as NodeJS.ErrnoException).code
       if (code === 'ENOENT') throw new Error(`the \`${file}\` CLI is required but was not found on PATH`)
@@ -172,39 +173,88 @@ const upgradeOverSsm = ({
   sleep: (seconds: number) => void
   log: (line: string) => void
 }): number => {
-  const send = [
+  const deadline = Date.now() + 35 * 60_000
+  const digest = createHash('sha256').update(payload).digest('hex').slice(0, 32)
+  const comment = `boxlite-runner upgrade to ${identity.slice(0, 36)} [${digest}]`
+  // Inventory the whole document, including Pending commands that have not
+  // reached their instance yet. The CLI follows all pages before filtering here.
+  const inventory = run('aws', [
     'ssm',
-    'send-command',
+    'list-commands',
     '--region',
     region,
-    '--document-name',
-    'AWS-RunShellScript',
-    '--instance-ids',
-    target,
-    '--comment',
-    `boxlite-runner upgrade to ${identity}`,
-    '--parameters',
-    `commands=["echo ${payload} | base64 -d | bash"]`,
-    '--query',
-    'Command.CommandId',
+    '--filters',
+    'key=ExecutionStage,value=Executing',
+    'key=DocumentName,value=AWS-RunShellScript',
     '--output',
-    'text',
-  ]
-
-  let commandId = ''
-  for (let attempt = 1; ; attempt++) {
-    const sent = run('aws', send)
-    if (sent.ok) {
-      commandId = sent.stdout
-      break
-    }
-    if (!RETRYABLE_SEND_ERRORS.test(sent.stderr) || attempt >= CONNECT_ATTEMPTS) {
-      throw new Error(`aws ssm send-command failed for ${target}: ${sent.stderr || '(no stderr)'}`)
-    }
-    log(`    ${target} not accepted yet (${attempt}/${CONNECT_ATTEMPTS}); retrying`)
-    sleep(CONNECT_PAUSE_SECONDS)
+    'json',
+  ])
+  if (!inventory.ok)
+    throw new Error(`cannot reconcile SSM commands for ${target}: ${inventory.stderr || '(no stderr)'}`)
+  let commands: { CommandId: string; Comment: string; InstanceIds: string[] }[]
+  try {
+    const response = JSON.parse(inventory.stdout)
+    if (!Array.isArray(response.Commands) || response.NextToken) throw new Error('incomplete command inventory')
+    commands = response.Commands.filter((item: any) => {
+      if (typeof item.Comment !== 'string' || !item.Comment.startsWith('boxlite-runner upgrade to ')) return false
+      if (typeof item.CommandId !== 'string' || !Array.isArray(item.InstanceIds) || !item.InstanceIds.length) {
+        throw new Error('Runner command has no complete target identity')
+      }
+      return item.InstanceIds.includes(target)
+    })
+  } catch (error) {
+    throw new Error(`invalid SSM command inventory for ${target}: ${String(error)}`)
   }
-  log(`    command:  ${commandId}`)
+  if (commands.length > 1) {
+    throw new Error(
+      `${target}: multiple active updates; reconcile commands ${commands.map((item) => item.CommandId).join(', ')} before retrying`,
+    )
+  }
+  const previous = commands[0]
+  let commandId = previous?.CommandId ?? ''
+  if (previous) {
+    log(`    resuming command: ${commandId}`)
+  } else {
+    const send = [
+      'ssm',
+      'send-command',
+      '--region',
+      region,
+      '--document-name',
+      'AWS-RunShellScript',
+      '--instance-ids',
+      target,
+      '--comment',
+      comment,
+      '--timeout-seconds',
+      '60',
+      '--parameters',
+      `commands=["echo ${payload} | base64 -d | bash"],executionTimeout=["1800"]`,
+      '--query',
+      'Command.CommandId',
+      '--output',
+      'text',
+    ]
+    for (let attempt = 1; ; attempt++) {
+      const sent = run('aws', send)
+      if (sent.ok) {
+        commandId = sent.stdout
+        if (!/^[A-Za-z0-9-]+$/.test(commandId))
+          throw new Error(`${target}: SSM accepted an update without a valid command ID; reconcile before retrying`)
+        break
+      }
+      // Retry only an explicit rejection. An interrupted request may already
+      // have been accepted; its next invocation must inventory before sending.
+      if (!RETRYABLE_SEND_ERRORS.test(sent.stderr) || attempt >= CONNECT_ATTEMPTS || Date.now() >= deadline) {
+        throw new Error(
+          `aws ssm send-command failed for ${target}: ${sent.stderr || '(no stderr)'}; reconcile before retrying`,
+        )
+      }
+      log(`    ${target} not accepted yet (${attempt}/${CONNECT_ATTEMPTS}); retrying`)
+      sleep(CONNECT_PAUSE_SECONDS)
+    }
+    log(`    command:  ${commandId}`)
+  }
 
   const invocation = [
     'ssm',
@@ -223,7 +273,7 @@ const upgradeOverSsm = ({
   let lastFailure = ''
   let lastStatus = ''
   let terminal = ''
-  for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS && Date.now() < deadline; attempt++) {
     const polled = run('aws', [...invocation, '--query', 'Status', '--output', 'text'])
     if (polled.ok) {
       if (TERMINAL_SSM_STATUSES.has(polled.stdout)) {
@@ -242,7 +292,9 @@ const upgradeOverSsm = ({
   if (!terminal) {
     const why = lastFailure ? `last polling error: ${lastFailure}` : `last status: ${lastStatus || 'unknown'}`
     const minutes = (COMPLETION_ATTEMPTS * COMPLETION_PAUSE_SECONDS) / 60
-    throw new Error(`${target}: the SSM command was still not terminal after ${minutes} minutes (${why})`)
+    throw new Error(
+      `${target}: the SSM command was still not terminal; command ${commandId} after ${minutes} minutes (${why})`,
+    )
   }
 
   // Both streams, because the payload's own diagnosis is the reason to read
@@ -250,6 +302,11 @@ const upgradeOverSsm = ({
   for (const query of ['StandardOutputContent', 'StandardErrorContent']) {
     const read = run('aws', [...invocation, '--query', query, '--output', 'text'])
     if (read.ok && read.stdout) log(indent(read.stdout))
+  }
+  if (previous && previous.Comment !== comment) {
+    throw new Error(
+      `${target}: previous payload ${commandId} settled ${terminal}; retry to submit the requested update`,
+    )
   }
   if (terminal !== 'Success') throw new Error(`${target}: the SSM command ${commandId} finished ${terminal}`)
   return 0

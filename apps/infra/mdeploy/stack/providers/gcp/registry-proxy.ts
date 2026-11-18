@@ -53,6 +53,8 @@ export const gcpRegistryProxyProvider =
     dependsOn: any[]
   }): RegistryProxyProvider =>
   (request: RegistryProxyRequest): RegistryProxy => {
+    const binding = registryCredentials.active ? registryCredentials.binding : null
+    if (binding && binding.cloud !== 'gcp') throw new Error('The GCP registry proxy needs a GCP credential store')
     const probe = { httpGet: { path: REGISTRY_PROXY_HEALTH_PATH, port: REGISTRY_PROXY_PORT } }
 
     const service = new gcp.cloudrunv2.Service(
@@ -132,13 +134,13 @@ export const gcpRegistryProxyProvider =
      * secret, because the secrets appear at run time and nothing at deploy
      * time could name them.
      */
-    const readers = registryCredentials.active
+    const readers = binding
       ? [
           new gcp.projects.IAMMember('RegistryProxySecretReader', {
             project,
-            role: registryCredentials.binding.readRole,
+            role: binding.readRole,
             member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
-            condition: registryCredentials.binding.condition,
+            condition: binding.condition,
           }),
         ]
       : []

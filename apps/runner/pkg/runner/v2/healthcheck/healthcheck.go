@@ -31,9 +31,12 @@ type HealthcheckServiceConfig struct {
 	// Data disk identity from the infra-injected env keys (hyperdisk LLD §4.2).
 	// Any part missing leaves the healthcheck without a dataDiskRef: only a
 	// complete ref is useful to the API's disk-expansion controller.
-	GCPProjectID       string
-	GCPZone            string
-	RunnerDataDiskName string
+	GCPProjectID           string
+	GCPZone                string
+	RunnerDataDiskProvider string
+	RunnerDataDiskProject  string
+	RunnerDataDiskZone     string
+	RunnerDataDiskName     string
 	// RunnerDataDiskType names the backend behind the identity (optional; the
 	// API assumes hyperdisk_balanced when absent). Empty on hosts whose infra
 	// predates the field.
@@ -72,8 +75,12 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 	}
 
 	var dataDiskRef *apiclient.RunnerDataDiskRef
-	if cfg.GCPProjectID != "" && cfg.GCPZone != "" && cfg.RunnerDataDiskName != "" {
-		dataDiskRef = apiclient.NewRunnerDataDiskRef("gcp", cfg.GCPProjectID, cfg.GCPZone, cfg.RunnerDataDiskName)
+	provider, project, zone := cfg.RunnerDataDiskProvider, cfg.RunnerDataDiskProject, cfg.RunnerDataDiskZone
+	if provider == "" {
+		provider, project, zone = "gcp", cfg.GCPProjectID, cfg.GCPZone
+	}
+	if (provider == "aws" || provider == "gcp") && project != "" && zone != "" && cfg.RunnerDataDiskName != "" {
+		dataDiskRef = apiclient.NewRunnerDataDiskRef(provider, project, zone, cfg.RunnerDataDiskName)
 		dataDiskRef.SetDiskType(cfg.RunnerDataDiskType)
 	}
 

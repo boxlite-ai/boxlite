@@ -43,10 +43,12 @@ func NewReader(ctx context.Context, store, directory string) (Reader, error) {
 		return nil, nil
 	case "gcp":
 		return newSecretManager(ctx)
+	case "aws":
+		return newAWSSecretManager(ctx)
 	case "file":
 		return fileReader{directory: directory}, nil
 	default:
-		return nil, fmt.Errorf("secret store must be \"gcp\" or \"file\", got %q", store)
+		return nil, fmt.Errorf("secret store must be \"gcp\", \"aws\" or \"file\", got %q", store)
 	}
 }
 

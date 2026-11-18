@@ -66,6 +66,7 @@ export function parseBootstrapOptions(args: readonly string[]) {
     strict: true,
     options: {
       confirm: { type: 'boolean' },
+      'legacy-sst': { type: 'boolean' },
       force: { type: 'boolean' },
       'provision-auth0': { type: 'boolean' },
       'provision-ses': { type: 'boolean' },
@@ -283,9 +284,7 @@ export function prepareStageConfigLoad(source: any) {
   const { config, excluded } = deployableStageConfig(source)
   const storedKeys = Object.keys(config)
   if (storedKeys.length === 0) {
-    throw new Error(
-      'defines no deployable stage configuration — every key is local-only or unread by the deploy',
-    )
+    throw new Error('defines no deployable stage configuration — every key is local-only or unread by the deploy')
   }
 
   const manifest = serializeStageConfigManifest(storedKeys)

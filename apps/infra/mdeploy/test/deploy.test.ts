@@ -51,10 +51,10 @@ const home = (cloud: 'aws' | 'gcp') => async () => ({
   stateBucket: async () => 'boxlite-state',
 })
 
-test('each cloud is answered by its own engine, and by nothing else', async () => {
+test('both clouds use Pulumi with their own provider programs', async () => {
   const aws = await resolveDeployTarget({ config, scope: scope(), resolveHomeWith: home('aws') as any })
   assert.equal(aws.cloud, 'aws')
-  assert.equal(aws.engine, 'sst')
+  assert.equal(aws.engine, 'pulumi')
 
   const gcp = await resolveDeployTarget({
     config,
@@ -85,16 +85,14 @@ test('a rollout reads every service’s group; a teardown reads none of them', a
   const target = await resolveDeployTarget({ config, scope: scope(), resolveHomeWith: home('aws') as any })
   const rollout = target.environmentGroups('deploy', declaration as any)
   for (const group of [DEPLOY_GROUP, ...SERVICE_GROUPS]) assert.ok(rollout.includes(group), `${group} is not read`)
-  assert.deepEqual(target.environmentGroups('remove', declaration as any), [DEPLOY_GROUP])
+  assert.deepEqual(target.environmentGroups('remove', declaration as any), [DEPLOY_GROUP, PULUMI_GROUP])
 })
 
-test('only the Pulumi engine asks for the passphrase, and it asks on a teardown too', async () => {
-  // SST discovers its state bucket from a parameter and seals nothing with a
-  // passphrase, so there is no engine group to add there. A teardown still has
-  // to open the state to destroy what it describes.
+test('both clouds require the Pulumi passphrase, including teardown', async () => {
   const declaration = { envSelectGroup: { deploy: [], api: [] } }
   const aws = await resolveDeployTarget({ config, scope: scope(), resolveHomeWith: home('aws') as any })
-  assert.ok(!aws.environmentGroups('deploy', declaration as any).includes(PULUMI_GROUP))
+  assert.ok(aws.environmentGroups('deploy', declaration as any).includes(PULUMI_GROUP))
+  assert.ok(aws.environmentGroups('remove', declaration as any).includes(PULUMI_GROUP))
 
   const gcp = await resolveDeployTarget({
     config,
@@ -154,7 +152,13 @@ test('a refresh reaches the engine as a refresh, not as the preview it resembles
  * anything. A guard that can refuse every GCP apply is worth exercising through
  * the function that calls it rather than only beside it.
  */
-const applying = ({ held, intent = 'deploy' as const }: { held: { name: string; domain: string }[]; intent?: 'deploy' | 'diff' }) => {
+const applying = ({
+  held,
+  intent = 'deploy' as const,
+}: {
+  held: { name: string; domain: string }[]
+  intent?: 'deploy' | 'diff'
+}) => {
   const started: string[] = []
   return {
     started,

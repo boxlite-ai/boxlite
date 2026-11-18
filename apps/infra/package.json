@@ -13,8 +13,8 @@
     "test:mbuild": "tsx --conditions=development --test mbuild/test/*.test.ts",
     "test:mdeploy": "tsx --conditions=development --test mdeploy/test/*.test.ts",
     "build:mstage": "tsc -p mstage/tsconfig.build.json",
-  "build:mbuild": "tsc -p mbuild/tsconfig.build.json",
-  "typecheck": "tsc --noEmit",
+    "build:mbuild": "tsc -p mbuild/tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
     "typecheck:tooling": "tsc --noEmit -p tsconfig.tooling.json",
     "typecheck:naming": "tsc -p naming/tsconfig.json",
     "typecheck:mstage": "tsc -p mstage/tsconfig.json",
@@ -25,7 +25,7 @@
     "mdeploy": "tsx --conditions=development mdeploy/bin/mdeploy.ts",
     "runner:update": "tsx --conditions=development mdeploy/bin/runner-update.ts",
     "runner:build": "tsx --conditions=development mdeploy/bin/runner-build.ts",
-  "runner:promote": "tsx --conditions=development mdeploy/bin/runner-promote.ts",
+    "runner:promote": "tsx --conditions=development mdeploy/bin/runner-promote.ts",
     "sst": "tsx deployment/sst.ts",
     "secrets": "tsx deployment/secret-names.ts",
     "runner:update:legacy": "tsx runner/update.ts",
@@ -38,7 +38,8 @@
     "auth0:configure-login": "tsx bootstrap/configure-auth0-login.ts",
     "auth0:configure-mcp": "tsx bootstrap/configure-auth0-mcp.ts",
     "verify-deploy-role": "tsx deployment/verify-role.ts",
-    "runner:build-artifact:legacy": "tsx artifacts/runner-build.ts"
+    "runner:build-artifact:legacy": "tsx artifacts/runner-build.ts",
+    "aws:migrate": "tsx --conditions=development mdeploy/bin/migrate-aws.ts"
   },
   "devDependencies": {
     "@actions/expressions": "0.3.61",
@@ -67,6 +68,7 @@
     "typescript": "5.8.3"
   },
   "dependencies": {
+    "@aws-sdk/client-iam": "^3.1170.0",
     "@pulumi/command": "^1.2.1",
     "@pulumi/random": "^4.19.2",
     "dotenv": "^17.4.0"

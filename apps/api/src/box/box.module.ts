@@ -83,6 +83,8 @@ import { RunnerDiskExpansion } from './entities/runner-disk-expansion.entity'
 import { RunnerDiskUsageSample } from './entities/runner-disk-usage-sample.entity'
 import { RunnerDiskExpansionService } from './services/runner-disk-expansion.service'
 import { GcpDiskClient } from './services/gcp-disk-client'
+import { AwsDiskClient } from './services/aws-disk-client'
+import { CloudDiskClient } from './services/disk-client'
 
 @Module({
   imports: [
@@ -161,6 +163,8 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     AttachTicketService,
     RunnerDiskExpansionService,
     GcpDiskClient,
+    AwsDiskClient,
+    CloudDiskClient,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,

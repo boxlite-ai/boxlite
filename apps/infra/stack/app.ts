@@ -9,6 +9,9 @@ export async function configureApp(input: { stage?: string } | undefined) {
   // Loading .env again would reintroduce a second answer for keys the store now owns.
   const { SST_APP_NAME, resolveAwsRegion } = await import('../deployment/environment.js')
   const REGION = resolveAwsRegion()
+  if (!input?.stage) throw new Error('Legacy SST requires an explicit stage')
+  const { assertLegacyDeploymentAllowed } = await import('../deployment/aws-ownership.js')
+  await assertLegacyDeploymentAllowed({ stage: input.stage, region: REGION })
 
   return {
     name: SST_APP_NAME,

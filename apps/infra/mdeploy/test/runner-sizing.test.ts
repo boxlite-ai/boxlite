@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test, { type TestContext } from 'node:test'
 import { awsRunnerProvider } from '../stack/providers/aws/runners.ts'
 import { gcpRunnerProvider } from '../stack/providers/gcp/runners.ts'
@@ -6,20 +7,32 @@ import type { RunnerRequest } from '../stack/runners.ts'
 
 // Record actual provider declarations; this does not simulate Pulumi state reconciliation.
 const captureResources = (t: TestContext) => {
-  const resources = new Map<string, { args: any; options: any }>()
+  const resources = new Map<string, { args: any; options: any; resource: any }>()
   const unwrap = (value: any): any => value?.value ?? value
-  const output = (value: any): any => ({ value, apply: (fn: (value: any) => any) => output(fn(value)) })
+  const output = (value: any): any =>
+    value?.apply ? value : { value, apply: (fn: (value: any) => any) => output(fn(value)) }
   class Resource {
     [key: string]: any
     constructor(name: string, args: any, options: any = {}) {
-      resources.set(name, { args, options })
-      Object.assign(this, args, { id: output(name), name: output(name), arn: output(`${name}-arn`) })
+      resources.set(name, { args, options, resource: this })
+      Object.assign(this, args, {
+        id: output(
+          name.endsWith('DataDisk') ? 'vol-' + createHash('sha256').update(name).digest('hex').slice(0, 17) : name,
+        ),
+        name: output(name),
+        arn: output(`${name}-arn`),
+      })
     }
   }
   const constructors = new Proxy(
     {},
     {
-      get: (_, name) => (name === 'getAmiOutput' ? () => ({ id: output('ami') }) : Resource),
+      get: (_, name) =>
+        name === 'getAmiOutput'
+          ? () => ({ id: output('ami') })
+          : name === 'getSubnetOutput'
+            ? () => ({ availabilityZone: output('us-east-1a') })
+            : Resource,
     },
   )
   const globals = {
@@ -132,17 +145,102 @@ test('GCP honors an explicit data disk capacity and retains the default and disk
   }
 })
 
-test('AWS refuses a GCP data disk size before creating resources', (t) => {
-  const { resources } = captureResources(t)
-  const provider = awsRunnerProvider({
+const awsProvider = () =>
+  awsRunnerProvider({
     ...common,
+    accountId: '123456789012',
     region: 'us-east-1',
     placement: { cloud: 'aws', exposure: 'egress-only-public', subnets: ['subnet'], securityGroups: [] } as any,
   })
-  const request = { ...requestFor(), dataDiskGb: 2048 }
-  assert.throws(() => provider(request), /AWS runners do not support dataDiskGb; configure rootDiskGb instead/)
-  assert.equal(resources.size, 0)
-  provider({ ...requestFor('2xlarge'), machineTypes: { '2xlarge': 'c8i.12xlarge' } })
-  assert.equal(resources.get('Runner')!.args.instanceType, 'c8i.12xlarge')
-  assert.equal(resources.get('Runner')!.args.rootBlockDevice.volumeSize, 100)
+
+test('AWS provisions an independently retained encrypted gp3 disk for each host', (t) => {
+  const { resources } = captureResources(t)
+  const provider = awsProvider()
+  provider({ ...requestFor('2xlarge'), machineTypes: { '2xlarge': 'c8i.12xlarge' }, dataDiskGb: 2048 })
+  const disk = resources.get('RunnerDataDisk')!
+  assert.equal(disk.args.size, 2048)
+  assert.equal(disk.args.type, 'gp3')
+  assert.equal(disk.args.encrypted, true)
+  assert.deepEqual(disk.options.ignoreChanges, ['size', 'iops', 'throughput'])
+  assert.equal(disk.options.protect, true)
+  assert.equal(disk.options.retainOnDelete, true)
+  const attachment = resources.get('RunnerDataAttachment')!
+  assert.equal(attachment.args.volumeId, disk.resource.id)
+  assert.equal(attachment.options.protect, true)
+  const host = resources.get('Runner')!
+  assert.equal(host.args.instanceType, 'c8i.12xlarge')
+  assert.equal(host.args.rootBlockDevice.volumeSize, 100)
+  const boot = Buffer.from(host.args.userDataBase64.value, 'base64').toString()
+  assert.ok(boot.includes('RUNNER_DATA_DISK_PROVIDER=aws'))
+  assert.ok(boot.includes('RUNNER_DATA_DISK_NAME=' + disk.resource.id.value))
+})
+
+test('AWS observes one canary then runs bounded batches with barriers', (t) => {
+  const { resources } = captureResources(t)
+  for (const count of [1, 4, 8, 16]) {
+    resources.clear()
+    const request = requestFor()
+    request.fleet = Array.from({ length: count }, (_, index) => ({
+      slot: {
+        resourceName: index ? `Runner-runner-${index + 1}` : 'Runner',
+        nameTag: `boxlite-app-dev-runner-${index + 1}`,
+        controlPlaneRunnerName: `runner-${index + 1}`,
+      },
+      token: 'token',
+    }))
+    awsProvider()(request)
+    const checks = [...resources]
+      .filter(([name]) => name.startsWith('CheckRunnerHealth'))
+      .map(([, value]) => value.resource)
+    const upgrades = [...resources].filter(([name]) => name.startsWith('UpgradeRunnerBinary')).map(([, value]) => value)
+    assert.equal(upgrades.length, count)
+    assert.deepEqual(upgrades[0].options.dependsOn.slice(1), checks)
+    assert.match(
+      Buffer.from(upgrades[0].args.environment.RUNNER_UPGRADE_PAYLOAD.value, 'base64').toString(),
+      /canary_deadline=\$\(\(SECONDS \+ 300\)\)/,
+    )
+    const size = Math.min(4, Math.max(1, Math.floor(count / 4)))
+    for (let index = 1; index < count; index++) {
+      const first = 1 + Math.floor((index - 1) / size) * size
+      const prior =
+        first === 1
+          ? [upgrades[0].resource]
+          : upgrades.slice(Math.max(1, first - size), first).map((value) => value.resource)
+      assert.deepEqual(upgrades[index].options.dependsOn.slice(1), prior)
+    }
+  }
+})
+
+test('AWS supplies the registry proxy and checkpoint bucket to boot and update together', (t) => {
+  const { resources, output } = captureResources(t)
+  awsProvider()({
+    ...requestFor(),
+    checkpointBucket: output('checkpoint-bucket'),
+    registryProxyHost: 'registry.example.com',
+    environment: {
+      ...requestFor().environment,
+      BOXLITE_RUNNER_ENV: '{"BOXLITE_EXPERIMENTAL":"nested-virtualization"}',
+    },
+  })
+  const boot = Buffer.from(resources.get('Runner')!.args.userDataBase64.value, 'base64').toString()
+  const update = Buffer.from(
+    resources.get('UpgradeRunnerBinary')!.args.environment.RUNNER_UPGRADE_PAYLOAD.value,
+    'base64',
+  ).toString()
+  for (const value of ['AWS_DEFAULT_BUCKET=checkpoint-bucket', 'REGISTRY_PROXY_HOST=registry.example.com']) {
+    assert.ok(boot.includes(value))
+    assert.ok(update.includes(value))
+  }
+  assert.ok(boot.includes('BOXLITE_EXPERIMENTAL="nested-virtualization"'))
+  const managedBlock = update.match(/UNIT_ENV_CUSTOM=.*printf '%s' '([^']+)'/)?.[1]
+  assert.ok(managedBlock, 'the update carries the managed environment block')
+  assert.ok(Buffer.from(managedBlock, 'base64').toString().includes('BOXLITE_EXPERIMENTAL="nested-virtualization"'))
+  const triggers = resources.get('UpgradeRunnerBinary')!.args.triggers
+  assert.ok(triggers.includes(requestFor().apiUrl))
+  assert.ok(triggers.includes(requestFor().otlpUrl))
+  const grant = JSON.parse(resources.get('RunnerCheckpoints')!.args.policy.value)
+  assert.deepEqual(
+    grant.Statement.map((statement: any) => statement.Resource),
+    ['arn:aws:s3:::checkpoint-bucket', 'arn:aws:s3:::checkpoint-bucket/checkpoints/*'],
+  )
 })

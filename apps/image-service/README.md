@@ -168,7 +168,10 @@ steps.
 | `SHUTDOWN_TIMEOUT_SEC` | `3600` | How long a drain may take. A blob is one long response, so this has to outlast the longest pull in flight or a deploy truncates an image mid-layer. |
 | `BOXLITE_API_URL` | — | **Required.** The control plane. A runner API key is an opaque column rather than a signed token, so a caller can only be checked by asking. |
 | `REGISTRY_PROXY_UPSTREAM_HOSTS` | `ghcr.io,docker.io,quay.io,gcr.io,us.gcr.io,eu.gcr.io,asia.gcr.io` | Registries this proxy will pull from, written as the names an operator knows — never `registry-1.docker.io`. |
-| `REGISTRY_SECRET_STORE` | — | Where organizations' registry passwords are read from: `gcp` (Secret Manager) or `file`. Unset, every pull is anonymous. The API writes them under the same name. |
+| `REGISTRY_SECRET_STORE` | — | Where organizations' registry passwords are read from: `gcp` (Secret Manager), `aws` (Secrets Manager), or `file`. Unset, every pull is anonymous. The API writes them under the same name. |
+| `REGISTRY_SECRET_PREFIX` | — | AWS stage-scoped credential-name prefix; required for `aws`. |
+| `REGISTRY_SECRET_ACCOUNT_ID` | — | AWS account owning registry credentials; required for `aws`. |
+| `AWS_REGION` | — | AWS Secrets Manager region; required for `aws`. |
 | `REGISTRY_SECRET_DIR` | — | The directory the `file` store reads, on a local stack. |
 | `REGISTRY_PROXY_CREDENTIAL_TTL` | `60s` | How long a verified caller is taken on trust. Also the delay between revoking a runner and this proxy noticing. |
 | `REGISTRY_PROXY_REJECTION_TTL` | `30s` | How long a refused credential is remembered, so a caller with a bad key cannot turn this proxy into a load generator aimed at the control plane. |
@@ -257,3 +260,7 @@ nothing else in Secret Manager.
   login accepts only the registry's own host and the ones in
   `tokenHostsBeyond` (`internal/proxy/token.go`); a registry that moves its
   token endpoint elsewhere fails private pulls until that table names it.
+
+AWS registry credentials use one Secrets Manager secret per write and a pinned version ID.
+The proxy validates account, region, stage prefix and matching credential/version UUID before reading.
+Its workload role can read credentials but cannot create, overwrite, revoke or change their policies.

@@ -19,17 +19,17 @@ import (
 // checks if the RunnerDataDiskRef type satisfies the MappedNullable interface at compile time
 var _ MappedNullable = &RunnerDataDiskRef{}
 
-// RunnerDataDiskRef Cloud identity of the runner data disk. diskType names the backend so the API can tell expandable block disks from backends with a different resize path (e.g. Filestore); runners predating the field are treated as hyperdisk_balanced, the only type infra provisions today.
+// RunnerDataDiskRef Cloud identity of a Runner data disk. GCP uses a project ID, zone and disk name; AWS uses an account ID, availability zone and EBS volume ID. GCP disks without diskType retain the hyperdisk_balanced compatibility default; AWS expansion requires gp3.
 type RunnerDataDiskRef struct {
 	// Cloud provider of the data disk
 	Provider string `json:"provider"`
-	// Cloud project the data disk lives in
+	// GCP project ID or AWS account ID containing the data disk
 	Project string `json:"project"`
 	// Cloud zone the data disk lives in
 	Zone string `json:"zone"`
 	// Name of the data disk, as the cloud API addresses it
 	DiskName string `json:"diskName"`
-	// Backend behind the identity (hyperdisk_balanced, filestore, ...). Omitted by runner binaries predating the field; the API then assumes hyperdisk_balanced, the only data disk infra provisions today.
+	// Disk backend, including hyperdisk_balanced, filestore or gp3. GCP disks without this field retain the hyperdisk_balanced compatibility default; AWS expansion requires gp3.
 	DiskType *string `json:"diskType,omitempty"`
 	AdditionalProperties map[string]interface{}
 }

@@ -11,8 +11,7 @@
  *
  * The objects below `state` are not mstage's to choose: Pulumi deploys a GCP
  * stage and keeps its checkpoint and locks in this bucket, so those keys are
- * read exactly as it writes them — the relationship the AWS backend has with
- * SST, against a different engine.
+ * read exactly as Pulumi writes them, using the same paths as the AWS backend.
  *
  * The bucket is discovered rather than passed, as AWS reads `/sst/bootstrap`,
  * so moving the store is one edit to one record. The record has the same shape
@@ -23,6 +22,7 @@
  */
 
 import { EnvError, objectKey, type StoreBackend, type StoredVersion } from './backend.ts'
+import { pulumiCheckpointKey as checkpointKey, pulumiLockPrefix as lockPrefix } from './pulumi-state.ts'
 
 /**
  * The two Google clients, in the shape their SDKs already have. Structural
@@ -60,41 +60,6 @@ const isNotFound = (error: unknown): boolean => {
 }
 
 const BOOTSTRAP_SECRET = 'mstage-bootstrap'
-
-/*
- * Where the engine keeps this stage's deployment state, which is not where SST
- * keeps it.
- *
- * On AWS the engine is SST, writing `app/<app>/<stage>.json` with one
- * `lock/…` object beside it. On GCP the engine is Pulumi, whose backend keeps
- * everything under `.pulumi/` — so one bucket holds both the store and the
- * checkpoint, which is why a GCP stage needs no second cloud to deploy.
- *
- * Two differences matter. The stack path is scoped by project, which is what
- * Pulumi writes into a new backend from 3.61.0 on; the older flat layout is not
- * read here because nothing makes one. And a lock is a *directory*, one file
- * per operation holding the stage, where SST has a single object.
- *
- * `app` is the Pulumi project: mdeploy passes the app as `projectName` and the
- * stage as `stackName`, so the halves line up with SST's keys.
- */
-const PULUMI = '.pulumi'
-
-/**
- * `.pulumi/stacks/<project>/<stack>.json` — `projectReferenceStore.StackBasePath`
- * joins the stacks directory, the project and the stack name, and nothing else
- * (`pkg/backend/diy/store.go`).
- */
-const checkpointKey = (app: string, stage: string): string => `${PULUMI}/stacks/${app}/${stage}.json`
-
-/**
- * `.pulumi/locks/organization/<project>/<stack>/` — the extra segment is not a
- * typo. Locks are keyed by `FullyQualifiedName()` (`pkg/backend/diy/backend.go`)
- * while stacks are keyed by the store, which omits it. Pulumi's own docs
- * describe the lock path without the segment; getting it wrong means listing an
- * empty prefix and reporting a locked stage as free.
- */
-const lockPrefix = (app: string, stage: string): string => `${PULUMI}/locks/organization/${app}/${stage}/`
 
 /**
  * The lock files this stage currently has, by key. Listed rather than

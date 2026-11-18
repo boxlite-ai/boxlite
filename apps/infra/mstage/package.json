@@ -73,7 +73,13 @@
       "development": "./src/aws/precedence.ts",
       "types": "./dist/src/aws/precedence.d.ts",
       "default": "./dist/src/aws/precedence.js"
-    }
+    },
+    "./aws-ownership": {
+      "development": "./src/environment/aws-ownership.ts",
+      "types": "./dist/src/environment/aws-ownership.d.ts",
+      "default": "./dist/src/environment/aws-ownership.js"
+    },
+    "./legacy-aws-ownership": "./src/environment/legacy-aws.ts"
   },
   "files": [
     "dist",
@@ -93,7 +99,8 @@
     "@aws-sdk/client-s3": "^3.1124.0",
     "@aws-sdk/client-ssm": "^3.1124.0",
     "@aws-sdk/client-sts": "^3.1124.0",
-    "@aws-sdk/credential-providers": "^3.1124.0"
+    "@aws-sdk/credential-providers": "^3.1124.0",
+    "@aws-sdk/client-iam": "^3.1170.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

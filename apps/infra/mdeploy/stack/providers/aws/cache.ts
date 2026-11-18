@@ -1,61 +1,62 @@
-/*
- * Redis on ElastiCache.
- *
- * Shaped like the database's provider and for the same reason: the component
- * mints a password and exposes it as a value, and this copies it into Secrets
- * Manager so the container is handed an address instead. The cache holds
- * sessions and box credentials, so a password sitting in every task definition
- * is worth the one extra resource to avoid.
- *
- * No snapshot, no deletion protection and no retention. A cache that is lost is
- * refilled; the contract says so, and giving it a backup would be paying to
- * keep something nothing reads.
- */
-
 import type { Cache, CacheProvider, CacheRequest } from '../../cache.ts'
 import type { NetworkBinding } from '../../network.ts'
-import { instanceFor } from 'naming'
+import { awsPassword } from './password.ts'
 
 const INSTANCE = { small: 'cache.t4g.micro', medium: 'cache.m7g.large' } as const
 
 export const awsCacheProvider =
-  ({ network }: { network: Extract<NetworkBinding, { cloud: 'aws' }> }): CacheProvider =>
+  ({
+    network,
+    existingPasswordRef,
+  }: {
+    network: Extract<NetworkBinding, { cloud: 'aws' }>
+    existingPasswordRef?: string
+  }): CacheProvider =>
   (request: CacheRequest): Cache => {
-    const redis = new sst.aws.Redis('Cache', {
-      vpc: network.vpc,
-      cluster: request.clustered,
-      instance: INSTANCE[request.size],
-      transform: {
-        cluster: (args: any) => {
-          /*
-           * Set from the request rather than left to the component's default.
-           * `mdeploy.config.json` refuses `false` outright, so this can only
-           * ever be true today — writing it anyway is what makes the setting
-           * visible in the plan, and what keeps a future component default
-           * change from quietly turning encryption off.
-           */
-          args.transitEncryptionEnabled = request.encryptInTransit
-        },
-      },
+    if (!request.encryptInTransit) throw new Error('AWS Redis AUTH requires encryptInTransit=true')
+    const password = awsPassword('CachePassword', existingPasswordRef, 'authToken')
+    const clients = new aws.ec2.SecurityGroup('CacheClientSecurityGroup', {
+      vpcId: network.vpcId,
+      egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],
     })
-
-    const secret = new aws.secretsmanager.Secret('CachePassword', {
-      namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: 'cache-password' })}-`,
-      recoveryWindowInDays: 7,
+    const ingress = new aws.vpc.SecurityGroupIngressRule('CacheFromClients', {
+      securityGroupId: clients.id,
+      referencedSecurityGroupId: clients.id,
+      ipProtocol: 'tcp',
+      fromPort: 6379,
+      toPort: 6379,
     })
-    const version = new aws.secretsmanager.SecretVersion('CachePasswordValue', {
-      secretId: secret.id,
-      secretString: $util.secret(redis.password),
+    const subnet = new aws.elasticache.SubnetGroup('CacheSubnetGroup', { subnetIds: network.privateSubnets })
+    const parameters = new aws.elasticache.ParameterGroup('CacheParameterGroup', {
+      family: 'redis7',
+      parameters: [{ name: 'cluster-enabled', value: request.clustered ? 'yes' : 'no' }],
     })
-
+    const cluster = new aws.elasticache.ReplicationGroup('CacheCluster', {
+      description: 'BoxLite cache',
+      engine: 'redis',
+      engineVersion: '7.1',
+      nodeType: INSTANCE[request.size],
+      port: 6379,
+      subnetGroupName: subnet.name,
+      securityGroupIds: [clients.id],
+      parameterGroupName: parameters.name,
+      atRestEncryptionEnabled: true,
+      transitEncryptionEnabled: request.encryptInTransit,
+      ...(request.encryptInTransit ? { transitEncryptionMode: 'required' } : {}),
+      authToken: password.value,
+      authTokenUpdateStrategy: 'ROTATE',
+      autoMinorVersionUpgrade: false,
+      ...(request.clustered
+        ? { numNodeGroups: 1, replicasPerNodeGroup: 0, automaticFailoverEnabled: true }
+        : { numCacheClusters: 1, automaticFailoverEnabled: false }),
+    })
     return {
-      connection: { host: redis.host, port: redis.port.apply(String) },
-      binding: {
-        cloud: 'aws',
-        passwordRef: version.arn,
-        clientGrant: redis.nodes.cluster.securityGroupIds.apply((groups: string[]) => groups[0] as string),
+      connection: {
+        host: request.clustered ? cluster.configurationEndpointAddress : cluster.primaryEndpointAddress,
+        port: cluster.port.apply(String),
       },
-      id: redis.nodes.cluster.id,
-      ready: [version],
+      binding: { cloud: 'aws', passwordRef: password.passwordRef, clientGrant: clients.id },
+      id: cluster.id,
+      ready: [cluster, ingress, ...password.ready],
     }
   }

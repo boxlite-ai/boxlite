@@ -35,6 +35,7 @@ type Config struct {
 	AWSEndpointUrl                     string        `envconfig:"AWS_ENDPOINT_URL"`
 	AWSAccessKeyId                     string        `envconfig:"AWS_ACCESS_KEY_ID"`
 	AWSSecretAccessKey                 string        `envconfig:"AWS_SECRET_ACCESS_KEY"`
+	AWSSessionToken                    string        `envconfig:"AWS_SESSION_TOKEN"`
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET"`
 	VolumeStorageBackend               string        `envconfig:"VOLUME_STORAGE_BACKEND" default:"s3" validate:"oneof=s3 gcs"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
@@ -68,20 +69,22 @@ type Config struct {
 	// Data disk identity injected by infra on GCP hosts (hyperdisk LLD §4.2).
 	// When all three are set, the healthcheck reports them as a dataDiskRef;
 	// if any is missing, the ref is omitted entirely.
-	GCPProjectID string `envconfig:"GCP_PROJECT_ID"`
-	GCPZone      string `envconfig:"GCP_ZONE"`
+	GCPProjectID           string `envconfig:"GCP_PROJECT_ID"`
+	GCPZone                string `envconfig:"GCP_ZONE"`
+	RunnerDataDiskProvider string `envconfig:"RUNNER_DATA_DISK_PROVIDER"`
+	RunnerDataDiskProject  string `envconfig:"RUNNER_DATA_DISK_PROJECT"`
+	RunnerDataDiskZone     string `envconfig:"RUNNER_DATA_DISK_ZONE"`
 	// RunnerDataDiskName is the GCP disk resource name (the name part of
 	// projects/…/zones/…/disks/<name>) as provisioned by infra; the API's
 	// disk-expansion controller targets this exact resource.
 	RunnerDataDiskName string `envconfig:"RUNNER_DATA_DISK_NAME"`
 	// RunnerDataDiskType names the backend behind the identity
-	// (hyperdisk_balanced today; a Filestore share would report differently).
-	// Optional: the API assumes hyperdisk_balanced when absent, matching
-	// everything infra provisions today.
+	// (hyperdisk_balanced, gp3 or another reported storage backend).
+	// GCP disks retain the hyperdisk_balanced compatibility default.
 	RunnerDataDiskType string `envconfig:"RUNNER_DATA_DISK_TYPE"`
 	// DataDiskDevice overrides the block device path the resize ticker reads
-	// (default /dev/disk/by-id/google-boxlite-data). Test/local-only: prod
-	// never sets it.
+	// (default /dev/disk/by-id/google-boxlite-data). AWS deployments set the
+	// stable link for their assigned EBS data volume.
 	DataDiskDevice string `envconfig:"RUNNER_DATA_DISK_DEVICE"`
 }
 

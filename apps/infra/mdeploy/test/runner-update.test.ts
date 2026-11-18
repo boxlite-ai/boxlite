@@ -34,6 +34,7 @@ const awsFleet = (calls: string[][] = []): RunCommand => {
     if (args[1] === 'describe-instances') {
       return ok('i-0002\tboxlite-app-dev-runner-2\ni-0001\tboxlite-app-dev-runner')
     }
+    if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
     if (args[1] === 'send-command') return ok('cmd-1')
     if (args.includes('Status')) return ok('Success')
     return ok('')
