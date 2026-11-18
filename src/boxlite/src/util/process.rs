@@ -232,7 +232,7 @@ fn is_process_zombie(pid: u32) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn is_process_zombie_linux(pid: u32) -> bool {
+pub(crate) fn is_process_zombie_linux(pid: u32) -> bool {
     let status_path = format!("/proc/{pid}/status");
     let Ok(status) = std::fs::read_to_string(status_path) else {
         return false;

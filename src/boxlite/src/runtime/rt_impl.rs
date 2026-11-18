@@ -1216,30 +1216,25 @@ impl RuntimeImpl {
         lock_id: crate::lock::LockId,
     ) -> BoxliteResult<()> {
         let mut state = state;
-        if state.status.is_active() || state.pid.is_some() {
-            if force {
-                // Stop the box's whole process tree through the same handler
-                // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
-                // pid (the outer launcher), then reaps any survivors of a
-                // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
-                // which a single-pid kill misses, since #851 stopped tying
-                // detached boxes to the launcher's lifetime.
-                if let Some(pid) = state.pid {
-                    tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
-                    let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                    handler.stop()?;
-                }
-                // Update status to stopped and save
-                state.set_status(BoxStatus::Stopped);
-                state.set_pid(None);
-                self.box_manager.save_box(id, &state)?;
-            } else {
-                // Non-force mode: error on active box
-                return Err(BoxliteError::InvalidState(format!(
-                    "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
-                    id, state.pid, state.status
-                )));
-            }
+        let active = state.status.is_active() || state.pid.is_some();
+        if active && !force {
+            return Err(BoxliteError::InvalidState(format!(
+                "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
+                id, state.pid, state.status
+            )));
+        }
+
+        let layout = self.layout.box_layout(id.as_str(), false)?;
+        if let Some(pid) = state.pid {
+            tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
+            ShimHandler::from_pid(pid, config.id.clone(), &layout).stop()?;
+        } else {
+            ShimHandler::retry_cleanup(id, &layout)?;
+        }
+        if active {
+            state.set_status(BoxStatus::Stopped);
+            state.set_pid(None);
+            self.box_manager.save_box(id, &state)?;
         }
 
         // Check if other boxes depend on this box's disks (COW backing references).
@@ -1497,7 +1492,13 @@ impl RuntimeImpl {
             };
 
             if should_remove {
-                boxes_to_remove.push(config.id.clone());
+                let layout = self.layout.box_layout(config.id.as_str(), false)?;
+                match ShimHandler::retry_cleanup(&config.id, &layout) {
+                    Ok(_) => boxes_to_remove.push(config.id.clone()),
+                    Err(error) => {
+                        tracing::warn!(box_id = %config.id, %error, "Deferring removal during recovery")
+                    }
+                }
             }
         }
 

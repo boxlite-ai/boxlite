@@ -99,7 +99,7 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
             }
         };
 
-        let handler = ShimHandler::from_pid(pid, config_id);
+        let handler = ShimHandler::from_pid(pid, config_id, &layout);
 
         // The box's one network backend on the reattach path: control over the
         // live gvproxy. No wire spec is produced on reattach; PortPublishTask

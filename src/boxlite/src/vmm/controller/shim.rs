@@ -1,5 +1,9 @@
 //! ShimController and ShimHandler - Universal process management for all Box engines.
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/shim_cleanup_retry.rs"]
+mod cleanup_retry_tests;
+
 use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
 
 use crate::{
@@ -28,6 +32,7 @@ pub struct ShimHandler {
     pid: u32,
     #[allow(dead_code)]
     box_id: BoxID,
+    layout: BoxFilesystemLayout,
     /// Child process handle for proper lifecycle management.
     /// When we spawn the process, we keep the Child to properly wait() on stop.
     /// When we attach to an existing process, this is None.
@@ -46,7 +51,56 @@ pub struct ShimHandler {
 /// Snapshot before stopping the launcher: detached bwrap descendants can enter
 /// another session and become reparented as soon as the launcher exits.
 #[cfg(target_os = "linux")]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ShimProcessTree(Vec<crate::util::PidRecord>);
+
+#[cfg(target_os = "linux")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingShimCleanup {
+    boot_id: String,
+    pid_namespace: PathBuf,
+    tree: ShimProcessTree,
+}
+
+#[cfg(target_os = "linux")]
+impl PendingShimCleanup {
+    fn path(layout: &BoxFilesystemLayout) -> PathBuf {
+        layout.root().join("shim-cleanup.json")
+    }
+
+    fn save(layout: &BoxFilesystemLayout, tree: ShimProcessTree) -> BoxliteResult<()> {
+        let pending = Self {
+            boot_id: std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?,
+            pid_namespace: std::fs::read_link("/proc/self/ns/pid")?,
+            tree,
+        };
+        std::fs::create_dir_all(layout.root())?;
+        let mut file = tempfile::NamedTempFile::new_in(layout.root())?;
+        serde_json::to_writer(&mut file, &pending)?;
+        file.persist(Self::path(layout)).map_err(|e| e.error)?;
+        Ok(())
+    }
+
+    fn retry(box_id: &BoxID, layout: &BoxFilesystemLayout) -> BoxliteResult<bool> {
+        let path = Self::path(layout);
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        let pending: Self = serde_json::from_reader(file)?;
+        if pending.boot_id == std::fs::read_to_string("/proc/sys/kernel/random/boot_id")? {
+            if pending.pid_namespace != std::fs::read_link("/proc/self/ns/pid")? {
+                return Err(BoxliteError::InvalidState(format!(
+                    "box {box_id} has pending shim cleanup in a different PID namespace"
+                )));
+            }
+            pending.tree.stop(box_id)?;
+        }
+        std::fs::remove_file(path)?;
+        Ok(true)
+    }
+}
 
 #[cfg(target_os = "linux")]
 impl ShimProcessTree {
@@ -79,8 +133,21 @@ impl ShimProcessTree {
 
     fn retain_alive(&mut self) {
         self.0.retain(|record| {
-            crate::util::process_start_time(record.pid) == record.start_time
-                && crate::util::is_process_alive(record.pid)
+            i32::try_from(record.pid).is_ok_and(|pid| pid > 0)
+                && record.start_time.is_some()
+                && match crate::util::process_start_time(record.pid) {
+                    Some(start_time) => {
+                        Some(start_time) == record.start_time
+                            && !crate::util::process::is_process_zombie_linux(record.pid)
+                    }
+                    None => {
+                        // An unreadable process may still own resources. Only ESRCH
+                        // establishes that there is no process at this PID.
+                        let result = unsafe { libc::kill(record.pid as i32, 0) };
+                        result == 0
+                            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+                    }
+                }
         });
     }
 
@@ -88,7 +155,9 @@ impl ShimProcessTree {
         // A recycled PID is unrelated to this box and must never be signalled.
         self.retain_alive();
         for record in self.0.iter().rev() {
-            unsafe { libc::kill(record.pid as i32, signal) };
+            if crate::util::process_start_time(record.pid) == record.start_time {
+                unsafe { libc::kill(record.pid as i32, signal) };
+            }
         }
     }
 
@@ -126,11 +195,12 @@ impl ShimHandler {
     /// Takes ownership of the `SpawnedShim` (child process + keepalive) for
     /// proper lifecycle management. The keepalive keeps the watchdog pipe
     /// alive; dropping it triggers shim shutdown.
-    pub fn from_spawned(spawned: SpawnedShim, box_id: BoxID) -> Self {
+    pub fn from_spawned(spawned: SpawnedShim, box_id: BoxID, layout: &BoxFilesystemLayout) -> Self {
         let pid = spawned.child.id();
         Self {
             pid,
             box_id,
+            layout: layout.clone(),
             process: Some(spawned.child),
             keepalive: spawned.keepalive,
             metrics_sys: Mutex::new(sysinfo::System::new()),
@@ -145,13 +215,29 @@ impl ShimHandler {
     /// # Arguments
     /// * `pid` - Process ID of the running VM
     /// * `box_id` - Box identifier (for logging)
-    pub fn from_pid(pid: u32, box_id: BoxID) -> Self {
+    /// * `layout` - Filesystem layout for resuming pending cleanup
+    pub fn from_pid(pid: u32, box_id: BoxID, layout: &BoxFilesystemLayout) -> Self {
         Self {
             pid,
             box_id,
+            layout: layout.clone(),
             process: None,
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
+        }
+    }
+
+    /// Resume a stop even when the original launcher is gone.
+    pub(crate) fn retry_cleanup(
+        box_id: &BoxID,
+        layout: &BoxFilesystemLayout,
+    ) -> BoxliteResult<bool> {
+        #[cfg(target_os = "linux")]
+        return PendingShimCleanup::retry(box_id, layout);
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (box_id, layout);
+            Ok(false)
         }
     }
 
@@ -251,17 +337,24 @@ impl VmmHandlerTrait for ShimHandler {
 
     fn stop(&mut self) -> BoxliteResult<()> {
         #[cfg(target_os = "linux")]
-        let process_tree = ShimProcessTree::capture(self.pid);
+        {
+            if Self::retry_cleanup(&self.box_id, &self.layout)? {
+                return Ok(());
+            }
+            // Publish the snapshot before the launcher can orphan its children.
+            let tree = ShimProcessTree::capture(self.pid);
+            if !tree.0.is_empty() {
+                PendingShimCleanup::save(&self.layout, tree)?;
+            }
+        }
 
-        let result = self.graceful_stop();
+        self.graceful_stop()?;
 
-        // cgroup setup is optional. Keep a process-identity-checked fallback for
-        // sandboxes without delegated controllers, including nested sessions.
-        #[cfg(target_os = "linux")]
-        process_tree.stop(&self.box_id)?;
-        #[cfg(not(target_os = "linux"))]
-        crate::jailer::reap_box(&self.box_id);
-        result
+        // The saved process identities cover sandboxes without delegated cgroups.
+        if !Self::retry_cleanup(&self.box_id, &self.layout)? {
+            crate::jailer::reap_box(&self.box_id);
+        }
+        Ok(())
     }
 
     fn metrics(&self) -> BoxliteResult<VmmMetrics> {
@@ -470,7 +563,7 @@ impl VmmController for ShimController {
         // which allows reusing that task across spawn/restart/reconnect.
 
         // Create handler from spawned shim (takes ownership of child + keepalive)
-        let handler = ShimHandler::from_spawned(spawned, self.box_id.clone());
+        let handler = ShimHandler::from_spawned(spawned, self.box_id.clone(), &self.layout);
 
         tracing::info!(
             box_id = %self.box_id,
@@ -557,8 +650,10 @@ mod tests {
                 let _cleanup = Cleanup(descendant);
                 assert!(std::net::TcpListener::bind(address).is_err());
                 let box_id = crate::runtime::id::BoxIDMint::mint();
+                let dir = tempfile::tempdir().unwrap();
+                let layout = BoxFilesystemLayout::new(dir.path().into(), Default::default(), false);
                 let mut handler = if attached {
-                    ShimHandler::from_pid(launcher.id(), box_id)
+                    ShimHandler::from_pid(launcher.id(), box_id, &layout)
                 } else {
                     ShimHandler::from_spawned(
                         SpawnedShim {
@@ -566,6 +661,7 @@ mod tests {
                             keepalive: None,
                         },
                         box_id,
+                        &layout,
                     )
                 };
                 handler.stop().unwrap();
