@@ -98,6 +98,12 @@ Stop all vCPUs and IRQ producers and complete userspace I/O with
 notifies an enabled KVM pvclock about the pause; an inactive pvclock is a no-op.
 Other backends report unsupported for these operations.
 
+KVM VM-state ioctl failures return `Error::VmState` with operation `"save"` or
+`"restore"`; its display identifies the state transfer, not VM creation.
+Its `source()` is the original `io::Error`, preserving `raw_os_error()` and
+`kind()` without a message wrapper. Unsupported `X86Vm` default methods retain
+`Error::CreateVm` with `Unsupported` and no errno.
+
 Restore into an identically configured VM and fresh, never-entered vCPUs, with
 RAM available before register restore; do not enter a vCPU until all state is
 installed. Writes are not transactional: discard the destination after any
@@ -116,11 +122,12 @@ KVM timers make platform capture non-atomic; PIT restore rebases host load
 timestamps, so exact sub-tick phase is not preserved. Restoring the KVM clock
 excludes snapshot downtime.
 
-`make test:unit:vmm` includes Postcard round trips, truncated input and
-flexible-array bounds on Linux x86_64, without `/dev/kvm`.
+`make test:unit:vmm` checks VM-state error construction, display and cause
+preservation without hardware, and includes Postcard round trips, truncated input
+and flexible-array bounds on Linux x86_64, without `/dev/kvm`.
 `make test:integration:vmm:kvm` also exercises platform and vCPU restoration
-with KVM, including executing AVX loads/stores across a vCPU restore on
-an AVX-capable host.
+with KVM, including errno preservation through both VM-state ioctl failure
+paths and executing AVX loads/stores across a vCPU restore on an AVX-capable host.
 
 ## Host execution
 

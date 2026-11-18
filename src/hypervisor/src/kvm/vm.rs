@@ -166,8 +166,7 @@ impl KvmVm {
                 clock: self.fd.get_clock().map_err(io::Error::from)?,
             })
         };
-        capture()
-            .map_err(|e| Error::CreateVm(io::Error::new(e.kind(), format!("save VM state: {e}"))))
+        capture().map_err(|source| Error::vm_state("save", source))
     }
 
     /// Fully overwrites an identically configured stopped VM; see [`crate::X86VmState`].
@@ -195,9 +194,7 @@ impl KvmVm {
             };
             self.fd.set_clock(&clock).map_err(io::Error::from)
         };
-        restore().map_err(|e| {
-            Error::CreateVm(io::Error::new(e.kind(), format!("restore VM state: {e}")))
-        })
+        restore().map_err(|source| Error::vm_state("restore", source))
     }
 
     /// KVM-supported guest CPUID before the VMM applies guest topology/policy.
@@ -348,6 +345,48 @@ mod tests {
 
     use super::*;
     use crate::{VcpuExit, VcpuHandle};
+
+    /// Replace the owned VM fd with a valid non-KVM fd to force ioctl failure.
+    fn vm_with_failing_ioctls() -> (KvmVm, crate::X86VmState) {
+        let vm = KvmVm::new().unwrap();
+        let state = vm.save_state().unwrap();
+        let file = std::fs::File::open("/dev/null").unwrap();
+        // SAFETY: both fds are valid and distinct; vm exclusively owns the
+        // destination fd and continues to own its replacement until drop.
+        assert_eq!(
+            unsafe { libc::dup2(file.as_raw_fd(), vm.fd.as_raw_fd()) },
+            vm.fd.as_raw_fd()
+        );
+        (vm, state)
+    }
+
+    fn assert_vm_state_ioctl_error(error: Error, operation: &'static str) {
+        let cause = std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("original ioctl error");
+        assert_eq!(cause.raw_os_error(), Some(libc::ENOTTY));
+        assert_eq!(
+            cause.kind(),
+            io::Error::from_raw_os_error(libc::ENOTTY).kind()
+        );
+        assert!(std::error::Error::source(cause).is_none());
+        assert_eq!(error.to_string(), format!("failed to {operation} VM state"));
+        assert!(matches!(error, Error::VmState { operation: actual, .. } if actual == operation));
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn save_vm_state_preserves_the_ioctl_error() {
+        let (vm, _) = vm_with_failing_ioctls();
+        assert_vm_state_ioctl_error(vm.save_state().unwrap_err(), "save");
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn restore_vm_state_preserves_the_ioctl_error() {
+        let (vm, state) = vm_with_failing_ioctls();
+        assert_vm_state_ioctl_error(vm.restore_state(&state).unwrap_err(), "restore");
+    }
 
     struct Ram(NonNull<u8>);
 

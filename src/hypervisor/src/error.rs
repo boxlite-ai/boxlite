@@ -20,6 +20,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// Creating the VM or its interrupt controller failed.
     CreateVm(io::Error),
+    /// Saving or restoring global VM state failed.
+    VmState {
+        operation: &'static str,
+        source: io::Error,
+    },
     /// Mapping host memory into the guest failed.
     MapMemory {
         guest_addr: u64,
@@ -57,10 +62,19 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// Keeps the host cause intact at the VM state transfer boundary.
+    #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+    pub(crate) fn vm_state(operation: &'static str, source: io::Error) -> Self {
+        Self::VmState { operation, source }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CreateVm(_) => f.write_str("failed to create the VM"),
+            Self::VmState { operation, .. } => write!(f, "failed to {operation} VM state"),
             Self::MapMemory {
                 guest_addr, size, ..
             } => write!(
@@ -94,6 +108,7 @@ impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
             Self::CreateVm(source)
+            | Self::VmState { source, .. }
             | Self::MapMemory { source, .. }
             | Self::UnmapMemory { source, .. }
             | Self::CreateVcpu { source, .. }
@@ -179,6 +194,35 @@ mod tests {
                 .expect("original host error");
             assert_eq!(cause.kind(), io::ErrorKind::PermissionDenied);
             assert_eq!(cause.to_string(), "hypervisor access denied");
+        }
+    }
+
+    #[test]
+    fn vm_state_errors_preserve_the_original_errno_and_kind() {
+        for operation in ["save", "restore"] {
+            // EACCES on both Linux and macOS.
+            let source = io::Error::from_raw_os_error(13);
+            let kind = source.kind();
+            let error = Error::vm_state(operation, source);
+            let cause = error
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .expect("original host error");
+
+            assert!(
+                matches!(error, Error::VmState { operation: actual, .. } if actual == operation)
+            );
+            assert_eq!(cause.raw_os_error(), Some(13));
+            assert_eq!(cause.kind(), kind);
+            assert!(cause.source().is_none());
+        }
+    }
+
+    #[test]
+    fn vm_state_errors_identify_save_and_restore() {
+        for operation in ["save", "restore"] {
+            let error = Error::vm_state(operation, io::Error::from_raw_os_error(13));
+            assert_eq!(error.to_string(), format!("failed to {operation} VM state"));
         }
     }
 
