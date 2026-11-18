@@ -232,7 +232,12 @@ fn owning_threads_capture_all_cpus_before_platform_and_records_are_id_ordered() 
                 matches!(observed.recv_timeout(Duration::from_secs(1)).unwrap(), Capture::Done(done) if done == id as u32)
             );
         }
-        assert!(observed.recv_timeout(Duration::from_millis(20)).is_err());
+        // CPU 0 is still held at its capture gate, so platform capture
+        // cannot be published regardless of host scheduling.
+        assert!(matches!(
+            observed.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         releases[0].send(()).unwrap();
         assert!(matches!(
             observed.recv_timeout(Duration::from_secs(1)).unwrap(),

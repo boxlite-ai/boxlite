@@ -155,6 +155,7 @@ fn device_presence_is_from_chipset_and_refused_before_pause_or_kick() {
 
 #[derive(Clone, Copy)]
 enum Failure {
+    Healthy,
     Kick,
     Io,
     NotifyPanic,
@@ -407,4 +408,192 @@ fn wait_paused_wakes_on_real_worker_failure() {
         handle.join(),
         Err(Error::Hypervisor(boxlite_hypervisor::Error::RunVcpu { .. }))
     ));
+}
+
+/// Virtual time at the real driver's event-wait boundary. Each tick is
+/// acknowledged, so an unfinished wait is observable without wall-clock races.
+pub(crate) struct DriveWait {
+    requests: mpsc::Sender<(Option<Duration>, usize, usize)>,
+    ticks: mpsc::Receiver<(Duration, mpsc::Sender<(usize, usize)>)>,
+    rounds: usize,
+    completed: usize,
+}
+impl DriveWait {
+    pub(crate) fn wait(
+        &mut self,
+        timeout: Option<Duration>,
+        sender: &EventSender,
+    ) -> io::Result<Option<Event>> {
+        self.rounds += 1;
+        self.requests
+            .send((timeout, self.rounds, self.completed))
+            .unwrap();
+        let mut remaining = timeout.unwrap();
+        loop {
+            let Ok((elapsed, progress)) = self.ticks.recv() else {
+                sender.send(Event::StopRequested);
+                return Ok(Some(Event::StopRequested));
+            };
+            if elapsed >= remaining {
+                self.completed += 1;
+                progress.send((self.rounds, self.completed)).unwrap();
+                return Ok(None);
+            }
+            remaining -= elapsed;
+            progress.send((self.rounds, self.completed)).unwrap();
+        }
+    }
+}
+
+fn idle_drive_budget(status: VmStatus) {
+    let (entered, ready) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let backend = Backend {
+        mock: MockVm::new(),
+        failure: if status == VmStatus::Pausing {
+            Failure::Io
+        } else {
+            Failure::Healthy
+        },
+        entered,
+        // Hold before ACK only in Pausing; Paused uses already parked workers.
+        io_gate: Some(Arc::new(Mutex::new(gate))),
+    };
+    let mut vm = Vm::with_backend(
+        config(1),
+        || Ok(backend),
+        |_, _| Ok(X86BootRegisters::default()),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let parking = Parking::new(vm.sender.clone());
+    {
+        let mut state = parking.mailbox.lock().unwrap();
+        state.status = status;
+        state.generation = 1;
+        state.requested = status != VmStatus::Running;
+        if status == VmStatus::Pausing {
+            let (reply, _result) = mpsc::channel();
+            state.pending = Some(PendingPark {
+                generation: 1,
+                seen: 0,
+                reply,
+            });
+        }
+    }
+    let (requests, observed) = mpsc::channel();
+    let (ticks, clock) = mpsc::channel();
+    *parking.drive_wait.lock().unwrap() = Some(DriveWait {
+        requests,
+        ticks: clock,
+        rounds: 0,
+        completed: 0,
+    });
+    thread::scope(|scope| {
+        // Drop the clock before joining, even when the first assertion fails.
+        let driver = scope.spawn(|| vm.drive(&parking));
+        let _release_io = ReleaseIo(release);
+        let ticks = ticks;
+        assert_eq!(
+            observed.recv_timeout(Duration::from_secs(2)).unwrap(),
+            (Some(crate::events::RECHECK), 1, 0)
+        );
+        if status == VmStatus::Paused {
+            wait_for_ack(&parking);
+        } else if status == VmStatus::Pausing {
+            ready.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert!(parking.mailbox.lock().unwrap().acknowledgements.is_empty());
+        }
+        let broadcasts = parking.broadcasts.load(Ordering::Relaxed);
+        let (progress, counts) = mpsc::channel();
+        ticks
+            .send((Duration::from_millis(999), progress.clone()))
+            .unwrap();
+        assert_eq!(counts.recv_timeout(Duration::from_secs(1)).unwrap(), (1, 0));
+        assert!(matches!(
+            observed.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        ticks.send((Duration::from_millis(1), progress)).unwrap();
+        assert_eq!(counts.recv_timeout(Duration::from_secs(1)).unwrap(), (1, 1));
+        assert_eq!(
+            observed.recv_timeout(Duration::from_secs(1)).unwrap(),
+            (Some(crate::events::RECHECK), 2, 1)
+        );
+        assert_eq!(parking.mailbox.lock().unwrap().status, status);
+        if status == VmStatus::Paused {
+            assert_eq!(parking.broadcasts.load(Ordering::Relaxed), broadcasts);
+        }
+        drop(ticks);
+        drop(_release_io);
+        let _ = driver.join().unwrap();
+    });
+}
+
+#[test]
+fn running_idle_drive_waits_one_second() {
+    idle_drive_budget(VmStatus::Running);
+}
+
+#[test]
+fn paused_idle_drive_waits_one_second_without_broadcasting() {
+    idle_drive_budget(VmStatus::Paused);
+}
+
+#[test]
+fn pausing_without_ack_drive_waits_one_second() {
+    idle_drive_budget(VmStatus::Pausing);
+}
+
+#[test]
+fn coalesced_commands_drain_exports_before_sleeping() {
+    let mut vm = bare(MockVm::new(), 1);
+    let parking = Parking::new(vm.sender.clone());
+    let (export, exported) = mpsc::channel();
+    for path in ["first", "second"] {
+        parking.send(ParkCommand::Export(path.into(), export.clone()));
+    }
+    let (resume, resumed) = mpsc::channel();
+    parking.send(ParkCommand::Resume(0, resume));
+    let (requests, observed) = mpsc::channel();
+    let (ticks, clock) = mpsc::channel();
+    *parking.drive_wait.lock().unwrap() = Some(DriveWait {
+        requests,
+        ticks: clock,
+        rounds: 0,
+        completed: 0,
+    });
+    thread::scope(|scope| {
+        let driver = scope.spawn(|| vm.drive(&parking));
+        let ticks = ticks;
+        for round in 1..=2 {
+            assert_eq!(
+                observed.recv_timeout(Duration::from_secs(2)).unwrap(),
+                (Some(Duration::ZERO), round, round - 1)
+            );
+            assert!(
+                exported
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap()
+                    .is_err()
+            );
+            let (progress, counts) = mpsc::channel();
+            ticks.send((Duration::ZERO, progress)).unwrap();
+            assert_eq!(
+                counts.recv_timeout(Duration::from_secs(1)).unwrap(),
+                (round, round)
+            );
+        }
+        assert_eq!(
+            observed.recv_timeout(Duration::from_secs(1)).unwrap(),
+            (Some(crate::events::RECHECK), 3, 2)
+        );
+        assert_eq!(
+            resumed.try_recv().unwrap(),
+            Err(ControlReason::InvalidState)
+        );
+        assert!(parking.mailbox.lock().unwrap().commands.is_empty());
+        drop(ticks);
+        assert_eq!(driver.join().unwrap().unwrap(), VmExit::StopRequested);
+    });
 }

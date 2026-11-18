@@ -70,7 +70,15 @@ impl EventSender {
         self.stopping.store(true, Ordering::SeqCst);
         if let Err(mpsc::SendError(event)) = self.events.send(event) {
             tracing::debug!(?event, "event sent after the VM ended; discarded");
-        } else if let Err(error) = self.waker.wake() {
+        } else {
+            self.wake();
+        }
+    }
+
+    /// Wakes the supervisor without queuing an event or setting the stop latch.
+    /// A failed wake is covered by the loop's periodic recheck.
+    pub(crate) fn wake(&self) {
+        if let Err(error) = self.waker.wake() {
             tracing::warn!(%error, "event loop wake-up failed; the event waits for the next recheck");
         }
     }
@@ -87,6 +95,12 @@ pub(crate) struct EventLoop {
     readiness: Events,
     events: mpsc::Receiver<Event>,
     sender: EventSender,
+    #[cfg(test)]
+    pub(crate) poll_gate: Option<tests::PollGate>,
+    #[cfg(test)]
+    pub(crate) poll_calls: usize,
+    #[cfg(test)]
+    pub(crate) wake_polls: usize,
 }
 
 impl EventLoop {
@@ -96,6 +110,12 @@ impl EventLoop {
         let (tx, rx) = mpsc::channel();
         Ok(Self {
             poll,
+            #[cfg(test)]
+            poll_gate: None,
+            #[cfg(test)]
+            poll_calls: 0,
+            #[cfg(test)]
+            wake_polls: 0,
             // Only the waker is registered; the events themselves queue in
             // the channel.
             readiness: Events::with_capacity(1),
@@ -113,8 +133,9 @@ impl EventLoop {
     }
 
     /// The oldest queued event, waiting up to `timeout`, or forever with
-    /// `None`. Returns `Ok(None)` once the timeout passes; a zero timeout
-    /// never enters the poller. The poller is re-entered every [`RECHECK`],
+    /// `None`. Returns `Ok(None)` on timeout or a wake with no queued event,
+    /// handing control back to the supervisor to check its mailbox. A zero
+    /// timeout never enters the poller. The queue is rechecked every [`RECHECK`],
     /// so an event whose wake-up failed is still found.
     pub(crate) fn wait(&mut self, timeout: Option<Duration>) -> io::Result<Option<Event>> {
         // A timeout too long to add counts as forever.
@@ -130,8 +151,23 @@ impl EventLoop {
                 },
                 None => RECHECK,
             };
+            #[cfg(test)]
+            {
+                if let Some(gate) = self.poll_gate.take() {
+                    gate.enter();
+                }
+                self.poll_calls += 1;
+            }
             match self.poll.poll(&mut self.readiness, Some(slice)) {
-                Ok(()) => {}
+                Ok(()) => {
+                    #[cfg(test)]
+                    if self.readiness.iter().any(|event| event.token() == WAKE) {
+                        self.wake_polls += 1;
+                    }
+                    if self.readiness.iter().any(|event| event.token() == WAKE) {
+                        return Ok(self.events.try_recv().ok());
+                    }
+                }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }
@@ -141,4 +177,4 @@ impl EventLoop {
 
 #[cfg(test)]
 #[path = "../tests/events/mod.rs"]
-mod tests;
+pub(crate) mod tests;

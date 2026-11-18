@@ -39,8 +39,6 @@ pub enum VmStatus {
 
 /// Caller patience for pause ACKs; expiry does not end state-machine parking.
 const PAUSE_TIMEOUT: Duration = Duration::from_secs(5);
-// Bound terminal-event latency while the supervisor waits on the ACK condvar.
-const PARK_RECHECK: Duration = Duration::from_millis(10);
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 use boxlite_hypervisor::Vcpu as ParkVcpu;
@@ -101,10 +99,11 @@ struct Mailbox {
 pub(crate) struct Parking {
     mailbox: Mutex<Mailbox>,
     changed: Condvar,
+    sender: EventSender,
     #[cfg(test)]
     broadcasts: AtomicUsize,
-    #[cfg(test)]
-    ack_wait_ready: Mutex<Option<mpsc::Sender<()>>>,
+    #[cfg(all(test, target_arch = "x86_64"))]
+    drive_wait: Mutex<Option<tests::execution::DriveWait>>,
     #[cfg(test)]
     paused_wait_ready: Mutex<Option<mpsc::Sender<()>>>,
     #[cfg(test)]
@@ -112,7 +111,7 @@ pub(crate) struct Parking {
 }
 
 impl Parking {
-    fn new() -> Self {
+    fn new(sender: EventSender) -> Self {
         Self {
             mailbox: Mutex::new(Mailbox {
                 generation: 0,
@@ -127,10 +126,11 @@ impl Parking {
                 accesses: VecDeque::new(),
             }),
             changed: Condvar::new(),
+            sender,
             #[cfg(test)]
             broadcasts: AtomicUsize::new(0),
-            #[cfg(test)]
-            ack_wait_ready: Mutex::new(None),
+            #[cfg(all(test, target_arch = "x86_64"))]
+            drive_wait: Mutex::new(None),
             #[cfg(test)]
             paused_wait_ready: Mutex::new(None),
             #[cfg(test)]
@@ -151,27 +151,8 @@ impl Parking {
         } else {
             state.commands.push_back(command);
             self.notify_all();
+            self.sender.wake();
         }
-    }
-
-    /// ACKs and commands wake the supervisor immediately during parking.
-    fn wait_for_ack(&self, slice: Duration) -> Duration {
-        let state = self.mailbox.lock().unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
-        if let Some(ready) = self.ack_wait_ready.lock().unwrap().take() {
-            // Signal with the mailbox held; acquiring it proves wait admission.
-            ready.send(()).unwrap();
-        }
-        drop(
-            self.changed
-                .wait_timeout_while(state, slice, |s| {
-                    s.acknowledgements.is_empty()
-                        && s.commands.is_empty()
-                        && s.status != VmStatus::Stopping
-                })
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-        Duration::ZERO
     }
 
     /// Supervisor only: publish generations and validate all acknowledgements.
@@ -239,7 +220,12 @@ impl Parking {
             let _ = pending.reply.send(Ok(pending.generation));
             self.notify_all();
         }
-        (kick, PARK_RECHECK)
+        let wait = if sender.is_stopping() || !state.commands.is_empty() {
+            Duration::ZERO
+        } else {
+            crate::events::RECHECK
+        };
+        (kick, wait)
     }
 
     fn wait_paused(&self, timeout: Duration, sender: &EventSender) -> Result<u64> {
@@ -293,6 +279,7 @@ impl Parking {
             ControlReason::TerminalOutcome,
         );
         self.notify_all();
+        self.sender.wake();
     }
 
     /// Called before EVERY guest entry. Complete I/O and notify the backend
@@ -316,6 +303,7 @@ impl Parking {
             }
             state.acknowledgements.push_back((generation, id));
             self.notify_all();
+            self.sender.wake();
             while state.requested
                 && state.generation == generation
                 && state.status != VmStatus::Stopping
@@ -542,7 +530,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
     /// otherwise ended cleanly. A VM runs once; a second call fails with
     /// [`Error::AlreadyRan`].
     pub fn run(&mut self) -> Result<VmExit> {
-        self.drive(&Parking::new())
+        self.drive(&Parking::new(self.sender.clone()))
     }
 
     /// Moves the VM into an owned supervisor. Imported state is installed
@@ -555,7 +543,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         if self.state != crate::vm::VmState::Created {
             return Err(Error::AlreadyRan);
         }
-        let parking = Arc::new(Parking::new());
+        let parking = Arc::new(Parking::new(self.sender.clone()));
         let stop = self.stop_handle();
         let chipset = self.chipset.as_ref().expect("live VM has a chipset");
         let devices = !chipset.is_empty();
@@ -772,7 +760,15 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                             }
                         }
                     }
-                    match events.wait(Some(parking.wait_for_ack(wait))) {
+                    let timeout = Some(wait);
+                    #[cfg(test)]
+                    let waited = match parking.drive_wait.lock().unwrap().as_mut() {
+                        Some(stub) => stub.wait(timeout, &self.sender),
+                        None => events.wait(timeout),
+                    };
+                    #[cfg(not(test))]
+                    let waited = events.wait(timeout);
+                    match waited {
                         Ok(None) => continue,
                         event => break event,
                     }
@@ -818,7 +814,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             Ok(Some(Event::GuestShutdown)) => Ok(VmExit::GuestShutdown),
             Ok(Some(Event::GuestReset)) => Ok(VmExit::GuestReset),
             Ok(Some(Event::VcpuFailed(error) | Event::DeviceFailed(error))) => Err(error),
-            Ok(None) => unreachable!("a wait without a timeout returns an event"),
+            Ok(None) => unreachable!("the supervisor retries every nonterminal wake"),
             Err(error) => Err(Error::EventLoop(error)),
         };
         // The error that ended the VM stays the one the caller sees.

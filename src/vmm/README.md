@@ -552,9 +552,12 @@ let exit = execution.join()?;
   a Condvar and retain an owning-thread command checkpoint.
 - Mailbox commands wake the supervisor while Running, Pausing or Paused; parked
   workers are notified on transitions and capture requests, not on idle polling
-  passes. ACKs wake the supervisor through a Condvar, not sleep polling. The
-  supervisor rechecks terminal events at most every 10 ms while waiting; this
-  is not a host scheduling or teardown latency guarantee.
+  passes. Commands, vCPU ACKs and parking stop share the terminal event loop's
+  Waker; the supervisor waits on that poller in every state. A wake without a
+  terminal event returns control to mailbox supervision. Unconsumed commands
+  (including Export) run again immediately; idle waits use a one-second recheck
+  as a lost-wake fault fallback, not a scheduling or teardown latency guarantee.
+  The Condvar serves parked vCPU checkpoints and `wait_paused()` observers.
 - Parking does not expire: late ACKs can still complete the epoch and publish
   Paused. `pause()` has a five-second caller patience limit. On timeout it returns
   `DeadlineTimeout`. If the supervisor has not admitted the request, timeout
@@ -810,8 +813,10 @@ are built from. `Vm` owns the chipset they form.
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
   poller. vCPU workers and `StopHandle` send the other events. An event sent
   after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
-  the oldest event, or `None` at its timeout, and rechecks the queue every
-  second in case a wake-up was lost. Every event ends the VM; the VMM never
+  the oldest event, or `None` at its timeout or a nonterminal wake, and rechecks
+  the queue every second in case a wake-up was lost. Mailbox commands and ACKs
+  share this Waker without setting the stop latch or queuing an event.
+  Every event ends the VM; the VMM never
   restarts a guest.
 
 ## Virtio-mmio transport

@@ -4,12 +4,10 @@
 //! Epoch/ACK protocol tests run on every host; owned execution tests use the
 //! x86_64 mock driver. Hardware tests require Linux x86_64 and /dev/kvm.
 
-use std::{
-    io,
-    sync::mpsc,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{io, sync::mpsc, thread, time::Duration};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::time::Instant;
 
 use boxlite_hypervisor::{Vcpu, VcpuExit, VcpuHandle};
 
@@ -37,13 +35,14 @@ fn ack(parking: &Parking, generation: u64, id: u8) {
         .acknowledgements
         .push_back((generation, id));
     parking.changed.notify_all();
+    parking.sender.wake();
 }
 
 #[test]
 fn all_ack_bits_are_required_and_duplicates_and_late_epochs_do_not_count() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
+    let parking = Parking::new(events.sender());
     let result = park(&parking);
     assert!(parking.supervise(3, &sender).0);
     for (generation, id) in [(0, 0), (2, 0), (1, 3), (1, 64), (1, 0), (1, 0), (1, 2)] {
@@ -84,7 +83,7 @@ fn all_ack_bits_are_required_and_duplicates_and_late_epochs_do_not_count() {
 fn sixty_four_vcpus_and_epoch_overflow() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
+    let parking = Parking::new(events.sender());
     let result = park(&parking);
     parking.supervise(64, &sender);
     for id in 0..64 {
@@ -106,7 +105,7 @@ fn sixty_four_vcpus_and_epoch_overflow() {
 fn repeat_pause_is_invalid_not_idempotent() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
+    let parking = Parking::new(events.sender());
     let first = park(&parking);
     let second = park(&parking);
     parking.supervise(1, &sender);
@@ -129,7 +128,7 @@ fn repeat_pause_is_invalid_not_idempotent() {
 fn timeout_before_admission_withdraws_park_and_allows_retry() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let mut handle = VmHandle::<crate::mock_vm::MockVm> {
         parking: parking.clone(),
         stop: StopHandle(sender.clone()),
@@ -178,7 +177,7 @@ fn timeout_before_admission_withdraws_park_and_allows_retry() {
 fn caller_timeout_keeps_parking_and_accepts_late_ack() {
     let mut events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let handle = VmHandle::<crate::mock_vm::MockVm> {
         parking: parking.clone(),
         stop: StopHandle(sender.clone()),
@@ -270,7 +269,7 @@ fn caller_timeout_keeps_parking_and_accepts_late_ack() {
                 expected
             );
         }
-        parking.wait_for_ack(Duration::from_secs(1));
+        wait_for_ack(&parking);
         thread::scope(|scope| {
             let (ready, waiting) = mpsc::channel();
             *parking.paused_wait_ready.lock().unwrap() = Some(ready);
@@ -299,7 +298,7 @@ fn caller_timeout_keeps_parking_and_accepts_late_ack() {
 fn wait_paused_rejects_running_and_stop_terminates_pending_parking() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let handle = VmHandle::<crate::mock_vm::MockVm> {
         parking: parking.clone(),
         stop: StopHandle(sender.clone()),
@@ -350,7 +349,7 @@ fn wait_paused_rejects_running_and_stop_terminates_pending_parking() {
 fn wait_paused_and_caller_timeout_observe_external_stop_before_supervisor_publication() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let handle = VmHandle::<crate::mock_vm::MockVm> {
         parking: parking.clone(),
         stop: StopHandle(sender.clone()),
@@ -401,7 +400,7 @@ fn terminal_stop_or_worker_failure_wins_over_queued_pause_or_final_ack() {
         for last_ack in [false, true] {
             let events = EventLoop::new().unwrap();
             let sender = events.sender();
-            let parking = Parking::new();
+            let parking = Parking::new(events.sender());
             let result = park(&parking);
             if last_ack {
                 parking.supervise(1, &sender);
@@ -426,7 +425,7 @@ fn terminal_stop_or_worker_failure_wins_over_queued_pause_or_final_ack() {
 fn caller_timeout_does_not_request_terminal_stop() {
     let mut events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let handle = VmHandle::<crate::mock_vm::MockVm> {
         parking: parking.clone(),
         stop: StopHandle(sender.clone()),
@@ -454,7 +453,6 @@ fn caller_timeout_does_not_request_terminal_stop() {
         waiting.recv_timeout(Duration::from_secs(1)).unwrap();
         parking.supervise(1, &sender);
         release_wait.send(()).unwrap();
-        parking.wait_for_ack(Duration::from_millis(40));
         parking.supervise(1, &sender);
         let _handle = caller.join().unwrap();
         assert!(!sender.is_stopping());
@@ -508,7 +506,7 @@ impl Vcpu for FakeVcpu {
 fn ack_follows_io_and_notification_and_parked_worker_serves_commands_on_its_thread() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
+    let parking = Parking::new(events.sender());
     let result = park(&parking);
     parking.supervise(1, &sender);
     let (progress, observed) = mpsc::channel();
@@ -538,7 +536,7 @@ fn ack_follows_io_and_notification_and_parked_worker_serves_commands_on_its_thre
             observed.recv_timeout(Duration::from_secs(1)).unwrap(),
             "notified"
         );
-        parking.wait_for_ack(Duration::from_secs(1));
+        wait_for_ack(&parking);
         parking.supervise(1, &sender);
         assert_eq!(result.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(1));
         let owner = worker.thread().id();
@@ -561,7 +559,7 @@ fn ack_follows_io_and_notification_and_parked_worker_serves_commands_on_its_thre
 fn failed_pending_io_never_acknowledges() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
+    let parking = Parking::new(events.sender());
     let result = park(&parking);
     parking.supervise(1, &sender);
     let (progress, _observed) = mpsc::channel();
@@ -642,24 +640,24 @@ fn device_less_configuration_rejects_every_device_kind() {
 }
 
 #[cfg(target_arch = "x86_64")]
-mod execution;
+pub(super) mod execution;
 
 #[test]
-fn condvar_rechecks_without_ack_and_late_ack_publishes_paused() {
+fn pending_park_uses_recheck_budget_and_late_ack_publishes_paused() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
+    let parking = Parking::new(sender.clone());
     let result = park(&parking);
-    let (_, wait) = parking.supervise(1, &sender);
-    assert_eq!(wait, PARK_RECHECK);
-    let started = Instant::now();
-    assert_eq!(parking.wait_for_ack(wait), Duration::ZERO);
-    assert!(started.elapsed() >= PARK_RECHECK);
-    assert!(started.elapsed() < Duration::from_secs(1));
-    parking.supervise(1, &sender);
+    assert_eq!(
+        parking.supervise(1, &sender),
+        (true, crate::events::RECHECK)
+    );
+    assert_eq!(
+        parking.supervise(1, &sender),
+        (false, crate::events::RECHECK)
+    );
     assert_eq!(result.try_recv(), Err(mpsc::TryRecvError::Empty));
     assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Pausing);
-    assert!(!sender.is_stopping());
     ack(&parking, 1, 0);
     parking.supervise(1, &sender);
     assert_eq!(result.recv().unwrap(), Ok(1));
@@ -678,7 +676,7 @@ fn public_handle_rejects_actual_chipset_devices_without_submitting_a_request() {
     let mut builder = ChipsetBuilder::new(Arc::new(MockVm::new()), events.sender());
     builder.add("idle", |_| Ok(Idle)).unwrap();
     let chipset = builder.build().unwrap();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let mut handle = VmHandle::<MockVm> {
         parking: parking.clone(),
         stop: StopHandle(events.sender()),
@@ -716,7 +714,7 @@ fn public_handle_pause_and_resume_use_the_supervisors_ack_fence() {
     use crate::mock_vm::MockVm;
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let handle = VmHandle::<MockVm> {
         parking: parking.clone(),
         stop: StopHandle(sender.clone()),
@@ -761,13 +759,27 @@ fn public_handle_pause_and_resume_use_the_supervisors_ack_fence() {
                 expected
             );
         }
-        parking.wait_for_ack(Duration::from_secs(1));
+        wait_for_ack(&parking);
         parking.supervise(1, &sender);
         wait_for_command(&parking);
         parking.supervise(1, &sender);
         caller.join().unwrap();
         worker.join().unwrap();
     });
+}
+
+fn wait_for_ack(parking: &Parking) {
+    let state = parking.mailbox.lock().unwrap();
+    let (state, _) = parking
+        .changed
+        .wait_timeout_while(state, Duration::from_secs(1), |state| {
+            state.acknowledgements.is_empty()
+        })
+        .unwrap();
+    assert!(
+        !state.acknowledgements.is_empty(),
+        "vCPU did not acknowledge"
+    );
 }
 
 fn wait_for_command(parking: &Parking) {
@@ -817,7 +829,7 @@ impl boxlite_hypervisor::X86Vcpu for FakeVcpu {
 #[test]
 fn export_refuses_nonpaused_and_devices_without_queueing() {
     let events = EventLoop::new().unwrap();
-    let parking = Arc::new(Parking::new());
+    let parking = Arc::new(Parking::new(events.sender()));
     let mut handle = VmHandle::<crate::mock_vm::MockVm> {
         parking: parking.clone(),
         stop: StopHandle(events.sender()),
@@ -858,7 +870,7 @@ mod snapshot;
 fn paused_supervision_does_not_broadcast_without_a_transition() {
     let events = EventLoop::new().unwrap();
     let sender = events.sender();
-    let parking = Parking::new();
+    let parking = Parking::new(events.sender());
     let result = park(&parking);
     parking.supervise(1, &sender);
     ack(&parking, 1, 0);
@@ -875,60 +887,93 @@ fn paused_supervision_does_not_broadcast_without_a_transition() {
     );
 }
 
-#[test]
-fn pause_resume_and_export_commands_interrupt_the_supervisor_wait() {
-    let parking = Parking::new();
-    for kind in 0..3 {
-        parking.mailbox.lock().unwrap().status = if kind == 0 {
+fn command_wakes_real_poller(kind: u8) {
+    let mut events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let parking = Parking::new(events.sender());
+    {
+        let mut state = parking.mailbox.lock().unwrap();
+        state.status = if kind == 0 {
             VmStatus::Running
         } else {
             VmStatus::Paused
         };
-        thread::scope(|scope| {
-            let (ready, waiting) = mpsc::channel();
-            let parking = &parking;
-            *parking.ack_wait_ready.lock().unwrap() = Some(ready);
-            let waiter = scope.spawn(move || parking.wait_for_ack(Duration::from_secs(5)));
-            waiting.recv().unwrap();
-            // The ready signal is sent with this lock held inside wait_for_ack.
-            // Acquiring it proves the condvar wait has released the mailbox.
-            drop(parking.mailbox.lock().unwrap());
-            let (tx, _rx) = mpsc::channel();
-            let command = match kind {
-                0 => ParkCommand::Park(Arc::new(()), tx),
-                1 => ParkCommand::Resume(1, tx),
-                _ => {
-                    let (tx, _rx) = mpsc::channel();
-                    ParkCommand::Export("unused".into(), tx)
-                }
-            };
-            let sent = Instant::now();
-            let broadcasts = parking.broadcasts.load(Ordering::Relaxed);
-            parking.send(command);
-            // A waiter whose own timeout already expired also returns zero
-            // elapsed; the broadcast makes the wake independent of that.
-            assert!(
-                parking.broadcasts.load(Ordering::Relaxed) > broadcasts,
-                "command {kind} did not broadcast"
-            );
-            assert_eq!(
-                waiter.join().unwrap(),
-                Duration::ZERO,
-                "command {kind} did not wake supervisor"
-            );
-            assert!(
-                sent.elapsed() < Duration::from_secs(1),
-                "command {kind} waited for the poll timeout"
-            );
-        });
-        parking.mailbox.lock().unwrap().commands.clear();
+        state.generation = 1;
+        state.requested = kind != 0;
     }
+    let (ready, release) = crate::events::tests::PollGate::install(&mut events);
+    let (tx, rx) = mpsc::channel();
+    let (export, exported) = mpsc::channel();
+    thread::scope(|scope| {
+        let waiter = scope.spawn(|| events.wait(Some(crate::events::RECHECK)));
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        parking.send(match kind {
+            0 => ParkCommand::Park(Arc::new(()), tx),
+            1 => ParkCommand::Resume(1, tx),
+            _ => ParkCommand::Export("unused".into(), export),
+        });
+        release.send(()).unwrap();
+        assert!(waiter.join().unwrap().unwrap().is_none());
+    });
+    assert_eq!(events.wake_polls, 1, "command did not wake mio poll");
+    assert_eq!(events.poll_calls, 1, "command wake was swallowed");
+    assert!(!sender.is_stopping());
+    let (kick, wait) = parking.supervise(1, &sender);
+    match kind {
+        0 => {
+            assert!(kick);
+            assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Pausing);
+        }
+        1 => assert_eq!(rx.try_recv().unwrap(), Ok(1)),
+        _ => {
+            assert_eq!(
+                wait,
+                Duration::ZERO,
+                "Export must reach export_pending without sleeping"
+            );
+            // Device admission is checked by the real exporter without capture I/O.
+            #[cfg(target_arch = "x86_64")]
+            {
+                let ram =
+                    crate::memory::GuestRam::new(&[(vm_memory::GuestAddress(0), 4096)]).unwrap();
+                crate::Vm::export_pending(&parking, &crate::mock_vm::MockVm::new(), &ram, 1, true);
+                assert!(matches!(
+                    exported.recv().unwrap(),
+                    Err(Error::Control {
+                        reason: ControlReason::UnsupportedDevice,
+                        ..
+                    })
+                ));
+                assert_eq!(parking.mailbox.lock().unwrap().status, VmStatus::Paused);
+                assert!(parking.mailbox.lock().unwrap().commands.is_empty());
+                assert_eq!(parking.supervise(1, &sender).1, crate::events::RECHECK);
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            drop(exported);
+        }
+    }
+}
+
+#[test]
+fn park_command_wakes_real_poller() {
+    command_wakes_real_poller(0);
+}
+
+#[test]
+fn resume_command_wakes_real_poller() {
+    command_wakes_real_poller(1);
+}
+
+#[test]
+fn export_command_wakes_real_poller() {
+    command_wakes_real_poller(2);
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn export_supervisor_rechecks_lifecycle_and_device_admission() {
-    let parking = Parking::new();
+    let events = EventLoop::new().unwrap();
+    let parking = Parking::new(events.sender());
     let ram = crate::memory::GuestRam::new(&[(vm_memory::GuestAddress(0), 4096)]).unwrap();
     let host = crate::mock_vm::MockVm::new();
     let dir = tempfile::tempdir().unwrap();
@@ -966,7 +1011,8 @@ fn export_supervisor_rechecks_lifecycle_and_device_admission() {
 
 #[test]
 fn terminal_parking_rejects_queued_and_new_export_commands() {
-    let parking = Parking::new();
+    let events = EventLoop::new().unwrap();
+    let parking = Parking::new(events.sender());
     let (tx, rx) = mpsc::channel();
     parking.send(ParkCommand::Export("unused".into(), tx));
     parking.stop();
@@ -992,7 +1038,8 @@ fn terminal_parking_rejects_queued_and_new_export_commands() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn cancelled_capture_returns_a_terminal_error_without_an_image() {
-    let parking = Parking::new();
+    let events = EventLoop::new().unwrap();
+    let parking = Parking::new(events.sender());
     {
         let mut state = parking.mailbox.lock().unwrap();
         state.status = VmStatus::Paused;
@@ -1051,4 +1098,73 @@ fn control_and_snapshot_errors_keep_their_public_messages_and_causes() {
     let error = Error::Snapshot(io::Error::new(io::ErrorKind::PermissionDenied, "denied"));
     assert_eq!(error.to_string(), "memory snapshot failed");
     assert_eq!(error.source().unwrap().to_string(), "denied");
+}
+
+#[test]
+fn parking_stop_wakes_without_forging_a_terminal_event() {
+    let mut events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let parking = Parking::new(events.sender());
+    let (ready, release) = crate::events::tests::PollGate::install(&mut events);
+    thread::scope(|scope| {
+        let waiter = scope.spawn(|| events.wait(Some(crate::events::RECHECK)));
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        parking.stop();
+        release.send(()).unwrap();
+        assert!(waiter.join().unwrap().unwrap().is_none());
+    });
+    assert_eq!(events.wake_polls, 1);
+    assert_eq!(events.poll_calls, 1);
+    assert!(!sender.is_stopping());
+    sender.send(Event::GuestReset);
+    sender.send(Event::StopRequested);
+    assert!(matches!(
+        events.wait(Some(Duration::ZERO)).unwrap(),
+        Some(Event::GuestReset)
+    ));
+}
+
+#[test]
+fn checkpoint_ack_wakes_real_poller() {
+    let mut events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let parking = Parking::new(events.sender());
+    let result = park(&parking);
+    parking.supervise(1, &sender);
+    // Consume the command wake before observing the independent ACK wake.
+    assert!(events.wait(Some(crate::events::RECHECK)).unwrap().is_none());
+    let previous = events.wake_polls;
+    let (ready, release_poll) = crate::events::tests::PollGate::install(&mut events);
+    let (progress, observed) = mpsc::channel();
+    let (release_io, io_gate) = mpsc::channel();
+    thread::scope(|scope| {
+        let _abort = AbortParking(&parking);
+        let _release = ReleaseIo(release_io.clone());
+        let worker = scope.spawn(|| {
+            parking.checkpoint(
+                0,
+                &mut FakeVcpu {
+                    io_done: progress,
+                    release_io: io_gate,
+                    fail: false,
+                },
+            )
+        });
+        assert_eq!(
+            observed.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "completing"
+        );
+        thread::scope(|poll_scope| {
+            let waiter = poll_scope.spawn(|| events.wait(Some(crate::events::RECHECK)));
+            ready.recv_timeout(Duration::from_secs(1)).unwrap();
+            release_io.send(()).unwrap();
+            release_poll.send(()).unwrap();
+            assert!(waiter.join().unwrap().unwrap().is_none());
+        });
+        assert_eq!(events.wake_polls, previous + 1, "ACK did not wake poll");
+        parking.supervise(1, &sender);
+        assert_eq!(result.try_recv().unwrap(), Ok(1));
+        parking.stop();
+        worker.join().unwrap().unwrap();
+    });
 }
