@@ -1,5 +1,5 @@
 /*
- * `mstage state unlock`, against the keys SST actually writes.
+ * `mstage state unlock`, against the keys Pulumi actually writes.
  *
  * The fake starts at the S3 and SSM calls rather than at the backend, because
  * the whole job of this command is to remove one specific object: a fake that
@@ -12,8 +12,8 @@ import { unlock } from '../src/cli/handlers/state.ts'
 import { awsBackend } from '../src/environment/aws-backend.ts'
 import type { StoreBackend } from '../src/environment/backend.ts'
 
-const LOCK_KEY = 'lock/boxlite/dev.json'
-const CHECKPOINT_KEY = 'app/boxlite/dev.json'
+const LOCK_KEY = '.pulumi/locks/organization/boxlite/dev/operation.json'
+const CHECKPOINT_KEY = '.pulumi/stacks/boxlite/dev.json'
 const STATE_BUCKET = 'sst-state-x'
 
 /** What SST records while a deploy holds the lock (`lockData`). */
@@ -48,6 +48,11 @@ const bucket = ({ lock, meanwhile }: { lock?: string; meanwhile?: () => void } =
     },
     s3: {
       send: async (command: any) => {
+        if (command.constructor.name === 'ListObjectsV2Command') {
+          return {
+            Contents: [...objects.keys()].filter((key) => key.startsWith(command.input.Prefix)).map((Key) => ({ Key })),
+          }
+        }
         const key: string = command.input.Key
         if (command.constructor.name === 'DeleteObjectCommand') {
           deleted.push(key)
@@ -86,7 +91,7 @@ const drop = ({
   }
 }
 
-test('the object removed is the lock SST writes, and only that one', async () => {
+test('the object removed is the Pulumi operation lock, and only that one', async () => {
   const store = bucket({ lock: HELD })
   const attempt = drop({ backend: store.backend })
   assert.equal(await attempt.run(), 0)
@@ -149,7 +154,7 @@ test('a protected stage keeps its lock until --confirm says otherwise', async ()
   assert.deepEqual(store.deleted, [LOCK_KEY])
 })
 
-test("a Pulumi lock is described by what it records, not by what SST would have", async () => {
+test('a Pulumi lock is described by what it records, not by what SST would have', async () => {
   // `lockContent` (pkg/backend/diy/lock.go) records the person and the machine
   // where SST records the command and the run. A renderer that read only SST's
   // fields answered "an unrecorded command" and dropped all four, on the one

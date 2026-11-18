@@ -28,7 +28,7 @@ const USAGE = [
   '       npm run mdeploy -- --stage <stage> --diff',
   '       npm run mdeploy -- --stage <stage> --refresh',
   '       npm run mdeploy -- --stage <stage> --remove --confirm',
-  '       [--components api+runner|api|runner] (GCP scoped preview/apply only)',
+  '       [--components api+runner|api|runner] (scoped preview/apply only)',
   '',
   '--refresh reconciles the state with the cloud and clears the operations an',
   'interrupted run left pending. It changes no resource; it rewrites what this',
@@ -107,7 +107,7 @@ export const run = async ({
     throw new UsageError(`Stage "${scope.stage}" is protected in ${config.path}. Add --confirm to deploy it.`)
   }
   // A teardown is the one thing no flag should be able to talk a protected
-  // stage into: `protect` also stops SST mid-run, and discovering that twenty
+  // stage into: `protect` also stops Pulumi mid-run, and discovering that twenty
   // minutes in is worse than being told now. Removing prod is an edit to
   // mstage.config.json, made deliberately and reviewed.
   if (intent === 'remove' && scope.protect) {

@@ -14,8 +14,8 @@ import { edit, editorCommand } from '../src/cli/handlers/state.ts'
 import { awsBackend } from '../src/environment/aws-backend.ts'
 import type { StoreBackend } from '../src/environment/backend.ts'
 
-const LOCK_KEY = 'lock/boxlite/dev.json'
-const CHECKPOINT_KEY = 'app/boxlite/dev.json'
+const LOCK_KEY = '.pulumi/locks/organization/boxlite/dev/operation.json'
+const CHECKPOINT_KEY = '.pulumi/stacks/boxlite/dev.json'
 const STATE_BUCKET = 'sst-state-x'
 
 /** A checkpoint a cancelled deploy left behind: one operation still recorded as in flight. */
@@ -55,6 +55,11 @@ const bucket = ({ checkpoint = STUCK, lock }: { checkpoint?: string | null; lock
     },
     s3: {
       send: async (command: any) => {
+        if (command.constructor.name === 'ListObjectsV2Command') {
+          return {
+            Contents: [...objects.keys()].filter((key) => key.startsWith(command.input.Prefix)).map((Key) => ({ Key })),
+          }
+        }
         const key: string = command.input.Key
         if (command.constructor.name === 'PutObjectCommand') {
           const body = Buffer.from(command.input.Body)

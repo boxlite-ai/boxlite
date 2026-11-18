@@ -337,7 +337,9 @@ export const artifactFetchCommand = ({
     return `gcloud storage cp "${url}" "${destination}"`
   }
   if (!AWS_REGION_NAME.test(region ?? '')) {
-    throw new RunnerBinaryError(`reading ${url} needs the region that bucket lives in, got ${JSON.stringify(region ?? '')}`)
+    throw new RunnerBinaryError(
+      `reading ${url} needs the region that bucket lives in, got ${JSON.stringify(region ?? '')}`,
+    )
   }
   return `aws --cli-connect-timeout 10 --cli-read-timeout 300 s3 cp --region ${region} "${url}" "${destination}"`
 }
@@ -385,7 +387,7 @@ echo "runner tarball checksum verified ($ACTUAL)"`
 /**
  * One deploy's runner binary, from the checkout to the addresses a host reads.
  *
- * Called by both composition roots — `sst.config.ts` and `pulumi/program.ts` —
+ * Called by both composition roots — the AWS and GCP native programs —
  * rather than by each provider, for the same reason `readStackEnvironment` is:
  * two copies that drifted would install a different binary on one cloud, found
  * months later with nothing reporting it. The roots are also where the

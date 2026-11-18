@@ -35,10 +35,14 @@ const SYNTHETIC_PROVIDER_TOKEN = 'synthetic-provider-token-for-regression-only'
 const INFRA_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 function spawnWrapper(args: any, options: any) {
-  return spawn(process.execPath, ['--import', 'tsx', 'deployment/sst.ts', ...args], {
-    cwd: INFRA_ROOT,
-    ...options,
-  })
+  return spawn(
+    process.execPath,
+    ['--import', 'tsx', '--import', './deployment/fixtures/aws-ownership.ts', 'deployment/sst.ts', ...args],
+    {
+      cwd: INFRA_ROOT,
+      ...options,
+    },
+  )
 }
 
 async function fixtureRoot() {
@@ -608,7 +612,11 @@ writeFileSync(process.env.SYNTHETIC_ENV_PATH, JSON.stringify(process.env))
        * without this the unreadable-store case passes with its guard deleted: `stored` stays undefined,
        * hydration throws a TypeError, and every assertion above is satisfied by a stack trace.
        */
-      assert.doesNotMatch(stderr, /^\s+at |\b(TypeError|ReferenceError|SyntaxError)\b/m, `${description} must be refused, not crashed`)
+      assert.doesNotMatch(
+        stderr,
+        /^\s+at |\b(TypeError|ReferenceError|SyntaxError)\b/m,
+        `${description} must be refused, not crashed`,
+      )
       // The fake sst writes that file only on its fall-through, so its absence is the proof no plan was
       // ever started — the refusal has to land before sst is asked to build anything.
       assert.equal(await fileExists(capturedEnv), false, `sst must not run with ${description}`)
@@ -727,7 +735,11 @@ writeFileSync(process.env.SYNTHETIC_PLAN_PATH, args[0])
 
   try {
     const deploying = spawnWrapper(['deploy', '--stage', 'ci'], { env: environment, stdio: 'ignore' })
-    assert.deepEqual(await waitForExit(deploying), { code: 1, signal: null }, 'a deploy must stop when the store cannot be read')
+    assert.deepEqual(
+      await waitForExit(deploying),
+      { code: 1, signal: null },
+      'a deploy must stop when the store cannot be read',
+    )
     assert.equal(await fileExists(planCalled), false, 'no plan may run without the stage configuration')
 
     // Each subcommand individually rather than assumed from `deploy`: remove tears the stack down,

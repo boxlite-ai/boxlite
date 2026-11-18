@@ -1,70 +1,54 @@
 ## TL;DR
 
-AWS bootstrap reconciles the legacy deployment's prerequisite policies, registry and artifact bucket; inspect naming before using mdeploy.
+AWS bootstrap prepares native Pulumi prerequisites using the declared app, registry, region and stage.
 
-# AWS bootstrap reference
+## Details
 
 [Infrastructure index](../../README.md) · [Deployment](../../docs/aws/deployment.md) · [Security](../../docs/aws/security.md)
 
-Run `npm run bootstrap -- --stage <stage>` from `apps/infra` with an authorized AWS identity,
-authenticated `gh`, and reviewed `.env` input. The operator needs IAM write privileges beyond the
-deploy role this command creates. AWS bootstrap reads the legacy environment's region; align it
-with the intended stage declaration and verify the printed account/region/repository.
+Run `npm run bootstrap -- --stage <stage>` from `apps/infra` with an authorized administrator and authenticated `gh`.
+Protected stages require `--confirm`; local edits alone do not update cloud IAM or deploy workloads.
 
-## Ownership
+### Ownership
 
-| Resource | Implementation / purpose |
+| Resource | Contract |
 | --- | --- |
-| `boxlite-<stage>-github-deploy` | Stage-bound GitHub OIDC deployment role |
-| `boxlite-<stage>-runtime-boundary` | Maximum permissions for legacy SST-created workload roles |
-| API ECR repository | Immutable tags and scan-on-push, named by `artifacts/api.ts` |
-| Runner artifact bucket | Private, versioned commit artifacts, named by `artifacts/runner.ts` |
-| GitHub Environment and stage values | Orchestrated by `bootstrap/bootstrap.ts` |
+| `<app>-<stage>-pulumi-deploy` | Distinct, stage-bound GitHub OIDC role |
+| `<app>-<stage>-runtime-boundary` | Ceiling for workload IAM permissions |
+| Declared ECR repository | One immutable, scanned repository holding the stage's tagged artifacts |
+| `<app>-<stage>-artifacts-<account>` | Private, versioned Runner build artifacts |
+| Regional state bucket | Existing `/sst/bootstrap` bucket or a native bucket when absent |
+| Encryption keys | Existing SSM environment key and native Pulumi passphrase are preserved |
 
-[`../aws.ts`](../aws.ts) renders the checked-in JSON through the AWS CLI; these resources are not
-created by a CloudFormation stack or by the application deploy. Re-running reconciles policies.
-Repository identity defaults to `gh repo view`; `--repo owner/name` selects it explicitly.
+The bootstrap writes `AWS_PULUMI_DEPLOY_ROLE_ARN`, `AWS_ACCOUNT_ID` and `AWS_REGION` to the stage's GitHub Environment.
+Native mbuild and mdeploy workflows use that distinct role.
 
-## AWS mdeploy compatibility
+It initializes the encrypted environment envelope without installing SST.
+Configure declared mstage groups and AWS secret ARNs before previewing the application.
 
-The checked-in bootstrap uses the legacy app name `boxlite`. The current
-[`mdeploy/sst.config.ts`](../../mdeploy/sst.config.ts) uses `boxlite-app`, including its state identity
-and runtime-boundary name. The [stage example](../../.mstage.config.example.json) also declares
-mbuild repositories separately from the legacy API repository.
+### AWS mdeploy compatibility
 
-Consequently, bootstrap completion alone does not prepare a fresh AWS mdeploy stage, and mdeploy
-must not be described as automatically adopting the legacy state. Verify the app/state key, runtime
-boundary, registry, artifact bucket and role grants before previewing a migration. The existing
-[legacy AWS path](../../docs/aws/deployment.md#retained-legacy-aws-deployment) remains documented.
+Existing SST stages need the [adoption runbook](../../docs/aws/migration.md).
+Bootstrap does not import resources, fence historical workflows, migrate Runner files or transfer ownership.
 
-## Policy documents
+`--legacy-sst` explicitly selects the retained bootstrap and its `boxlite` app conventions.
+Its Auth0/SES provisioning switches remain specific to that path.
+
+### Policy documents
 
 | File | Contract |
 | --- | --- |
-| [`deploy-role-trust.json`](deploy-role-trust.json) | GitHub OIDC subject pinned to repository and stage Environment |
-| [`runtime-boundary-policy.json`](runtime-boundary-policy.json) | Runtime data-plane ceiling; no IAM mutation |
-| [`deploy-role-policy.json`](deploy-role-policy.json) | Deployment permissions and bounded runtime-role creation |
+| [deploy-role-trust.json](deploy-role-trust.json) | GitHub repository and stage Environment trust |
+| [native-deploy-role-policy.json](native-deploy-role-policy.json) | Native state, ownership, deployment and bounded IAM permissions |
+| [native-runtime-boundary-policy.json](native-runtime-boundary-policy.json) | Checkpoints, registry credentials, tagged EBS growth and existing runtime channels |
+| [deploy-role-policy.json](deploy-role-policy.json) | Retained SST role permissions and shared ownership lease |
+| [runtime-boundary-policy.json](runtime-boundary-policy.json) | Retained SST runtime ceiling |
 
-Trust uses `repo:<owner>/<repo>:environment:<stage>`, not a branch-form subject. Jobs assuming the
-role must bind that Environment. The role uses short-lived federation; review required reviewers
-and branch protection separately in GitHub.
+The native role cannot change its own permissions, runtime boundary policies or historical deployment-role fences.
+Runtime boundaries cap grants; separate task and instance policies supply each workload's actual permissions.
 
-`CreateBoundedBoxLiteRoles` and `SetBoxLiteRoleBoundary` require the stage boundary.
-`DenySelfPrivilegeEscalation` protects deploy roles and boundary policies across stages.
-A boundary update creates a managed-policy version; bootstrap prunes the oldest non-default version
-when needed to stay within IAM's version limit.
+Reconciliation creates policy versions and prunes old non-default versions at IAM's version limit.
+Artifact lifecycle expires superseded object versions, preserving current commit artifacts for later boots.
 
-Stage state/secrets grants coexist with shared asset buckets, volume-prefix access, account-wide
-SSM instance targets and SES identity management. [Security](../../docs/aws/security.md#policy-scope-and-shared-grants)
-records those limits. `cloudfront-keyvaluestore:*` is separate from `cloudfront:*`; the latter's
-wildcard does not cover another service prefix.
-
-## Artifact retention and changes
-
-Bootstrap creates missing ECR/artifact stores but does not delete or replace them. Its bucket
-lifecycle expires superseded object versions, not the current commit-keyed object a later runner
-boot may need. Application teardown does not imply these stores were removed.
-
-Edit and review policy documents, run `make test:apps:infra` from the repository root, then reconcile
-with bootstrap under the intended operator identity. A local policy edit is not a live IAM update;
-read back the resulting policy and run a deployment preview before applying application changes.
+Review the live trust policy and GitHub Environment protections separately.
+Run `make test:apps:infra` before an approved bootstrap reconciliation, then read back IAM and preview application changes.

@@ -13,10 +13,8 @@
  * organization adds and removes a login at run time, and a channel is fixed at
  * deploy.
  *
- * Deployed on one cloud. The handle says so rather than the bundle throwing: a
- * stage on the other cloud deploys everything else and reports no proxy, which
- * is true, where a throw would take the whole stage down for a service nothing
- * there calls.
+ * Both clouds provide a private HTTPS endpoint and a separate credential-reader
+ * identity. The provider owns the load balancer and network admission rules.
  */
 
 export type RegistryProxyRequest = {

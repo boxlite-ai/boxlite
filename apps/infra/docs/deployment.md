@@ -68,7 +68,11 @@ gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f compo
 Run a preview of the chosen ref first. On GCP, `components=api` deploys the API image and its existing API environment
 through a new Cloud Run revision; `components=runner` converges the binary and Runner environment through OS Policies.
 Both include the workload's required read grants and leave unrelated infrastructure outside the targets.
-The default `api+runner` retains full-stack deployment; AWS/SST supports only that selection for now.
+
+On AWS, `api` updates the existing ECS API task/service; `runner` uses SSM readiness checks and batched updates.
+Both clouds preview the refreshed full graph and refuse shared changes during component deployments.
+The default `api+runner` retains full-stack deployment.
+
 Individual selection requires existing workloads; Runner fleet changes require a full deployment.
 Existing stage protection, configuration checks and per-stage queuing still apply; do not cancel a healthy apply to start another.
 

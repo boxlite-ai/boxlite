@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,7 +154,11 @@ func TestSchemeArchiveStoreTransfersThroughBothHTTPBackends(t *testing.T) {
 		defer mu.Unlock()
 		switch r.Method {
 		case http.MethodPut:
-			content, err := io.ReadAll(r.Body)
+			var body io.Reader = r.Body
+			if r.Header.Get("X-Amz-Decoded-Content-Length") != "" {
+				body = httputil.NewChunkedReader(r.Body)
+			}
+			content, err := io.ReadAll(body)
 			if err != nil {
 				http.Error(w, "read failed", http.StatusBadRequest)
 				return
@@ -180,7 +185,7 @@ func TestSchemeArchiveStoreTransfersThroughBothHTTPBackends(t *testing.T) {
 		}
 	}))
 	defer s3Server.Close()
-	s3, err := NewS3ArchiveStore(S3ArchiveStoreConfig{EndpointUrl: s3Server.URL, Region: "us-east-1", Bucket: "archives"})
+	s3, err := NewS3ArchiveStore(S3ArchiveStoreConfig{EndpointUrl: s3Server.URL, Region: "us-east-1", Bucket: "archives", AccessKeyId: "fixture-key", SecretAccessKey: "fixture-secret"})
 	if err != nil {
 		t.Fatal(err)
 	}

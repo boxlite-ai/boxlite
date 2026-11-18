@@ -43,12 +43,27 @@ func TestServiceDataDiskRefAssemblyContract(t *testing.T) {
 
 	for _, tc := range []struct {
 		name     string
+		provider string
 		project  string
 		zone     string
 		diskName string
 		diskType string
 		wantSent bool
 	}{
+		{
+			name:     "AWS reports the complete EBS identity",
+			provider: "aws", project: "123456789012", zone: "us-east-1a",
+			diskName: "vol-0123456789abcdef0", diskType: "gp3", wantSent: true,
+		},
+		{
+			name:     "partial AWS identity does not fall back to another provider",
+			provider: "aws", zone: "us-east-1a", diskName: "vol-0123456789abcdef0", wantSent: false,
+		},
+		{
+			name:     "unknown providers omit the disk reference",
+			provider: "unknown", project: "123456789012", zone: "us-east-1a",
+			diskName: "vol-0123456789abcdef0", wantSent: false,
+		},
 		{
 			name:     "all three env values present sends the complete ref",
 			project:  "boxlite-prod-project",
@@ -88,16 +103,27 @@ func TestServiceDataDiskRefAssemblyContract(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			expectedProvider := tc.provider
+			if expectedProvider == "" {
+				expectedProvider = "gcp"
+			}
+			legacyProject, legacyZone := tc.project, tc.zone
+			if tc.provider != "" {
+				legacyProject, legacyZone = "boxlite-gcp-project", "us-central1-a"
+			}
 			service, err := NewService(&HealthcheckServiceConfig{
-				Logger:             slog.Default(),
-				Domain:             "runner.example.com",
-				ApiPort:            8080,
-				ProxyPort:          8080,
-				Boxlite:            &blclient.Client{},
-				GCPProjectID:       tc.project,
-				GCPZone:            tc.zone,
-				RunnerDataDiskName: tc.diskName,
-				RunnerDataDiskType: tc.diskType,
+				Logger:                 slog.Default(),
+				Domain:                 "runner.example.com",
+				ApiPort:                8080,
+				ProxyPort:              8080,
+				Boxlite:                &blclient.Client{},
+				GCPProjectID:           legacyProject,
+				GCPZone:                legacyZone,
+				RunnerDataDiskProvider: tc.provider,
+				RunnerDataDiskProject:  tc.project,
+				RunnerDataDiskZone:     tc.zone,
+				RunnerDataDiskName:     tc.diskName,
+				RunnerDataDiskType:     tc.diskType,
 			})
 			if err != nil {
 				t.Fatalf("NewService failed: %v", err)
@@ -112,8 +138,8 @@ func TestServiceDataDiskRefAssemblyContract(t *testing.T) {
 				if service.dataDiskRef == nil {
 					t.Fatalf("dataDiskRef not assembled from a complete env set")
 				}
-				if got := service.dataDiskRef.GetProvider(); got != "gcp" {
-					t.Fatalf("provider = %q, want gcp", got)
+				if got := service.dataDiskRef.GetProvider(); got != expectedProvider {
+					t.Fatalf("provider = %q, want %q", got, expectedProvider)
 				}
 				if got := service.dataDiskRef.GetProject(); got != tc.project {
 					t.Fatalf("project = %q, want %q", got, tc.project)
@@ -155,8 +181,8 @@ func TestServiceDataDiskRefAssemblyContract(t *testing.T) {
 					t.Fatalf("dataDiskRef missing %q: %v", want, m)
 				}
 			}
-			if m["provider"] != "gcp" {
-				t.Fatalf("provider = %v, want gcp", m["provider"])
+			if m["provider"] != expectedProvider {
+				t.Fatalf("provider = %v, want %q", m["provider"], expectedProvider)
 			}
 			if m["diskName"] != tc.diskName {
 				t.Fatalf("diskName = %v, want %q", m["diskName"], tc.diskName)

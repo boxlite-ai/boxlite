@@ -120,7 +120,9 @@ import { resolveHome } from 'mstage/home'
 import { resolveScope } from 'mstage/scope'
 import { loadBuildConfig, registryFor } from 'mbuild/config'
 import { bootstrapGcp, promotionSourceFor, type GitHubRepository } from './gcp.js'
-import { bootstrapAws } from './aws.js'
+import { bootstrapAws, nativeAwsNames } from './aws.js'
+import { bootstrapAwsState } from './aws-state.js'
+import { clientsFor as awsClientsFor } from 'mstage/env'
 
 // The one stage that must never end up with an unreviewed deploy path. Matches
 // PRODUCTION_STAGE in stack/settings.ts, which gates retain-on-removal.
@@ -258,7 +260,19 @@ function ssmParameterExists(awsCliPath: any, region: any, name: any) {
 function putSsmSecureParameter(awsCliPath: any, region: any, name: any, value: any) {
   execFileSync(
     awsCliPath,
-    ['ssm', 'put-parameter', '--region', region, '--type', 'SecureString', '--name', name, '--value', 'file:///dev/stdin', '--overwrite'],
+    [
+      'ssm',
+      'put-parameter',
+      '--region',
+      region,
+      '--type',
+      'SecureString',
+      '--name',
+      name,
+      '--value',
+      'file:///dev/stdin',
+      '--overwrite',
+    ],
     { input: value, encoding: 'utf8', stdio: ['pipe', 'ignore', 'pipe'], timeout: 15_000, killSignal: 'SIGTERM' },
   )
 }
@@ -450,7 +464,6 @@ function runSst(args: any, { input, timeout, label }: { input?: string; timeout:
   }
 }
 
-
 async function ensureOidcClientId(stage: any) {
   // `?.trim() || undefined` rather than `??`: an env var set to the empty
   // string is a misconfiguration, not a choice to store nothing, and `??` would
@@ -527,9 +540,10 @@ function ensureStageConfig(stage: any, { payload: config, storedKeys, excluded }
  * deliberately omitted: since July 2023 IAM validates GitHub's OIDC endpoint
  * against trusted root CAs, so pinning one would only create rotation work.
  */
-function ensureGitHubOidcProvider({ awsCliPath, region }: any) {
+function ensureGitHubOidcProvider({ awsCliPath, region, environment = process.env }: any) {
   const listOutput = JSON.parse(
     execFileSync(awsCliPath, ['iam', 'list-open-id-connect-providers', '--region', region, '--output', 'json'], {
+      env: environment,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 15_000,
@@ -554,7 +568,7 @@ function ensureGitHubOidcProvider({ awsCliPath, region }: any) {
       '--client-id-list',
       'sts.amazonaws.com',
     ],
-    { stdio: ['ignore', 'ignore', 'pipe'], timeout: 30_000, killSignal: 'SIGTERM' },
+    { env: environment, stdio: ['ignore', 'ignore', 'pipe'], timeout: 30_000, killSignal: 'SIGTERM' },
   )
   console.log('==> GitHub OIDC provider')
   console.log('    created')
@@ -644,7 +658,9 @@ function requireAuth0Session() {
   try {
     execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
   } catch (cause) {
-    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
+    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', {
+      cause,
+    })
   }
 }
 
@@ -826,7 +842,9 @@ const SES_USE_CASE_DESCRIPTION =
   'or bulk mail. Bounces and complaints are handled through the SES account-level suppression list.'
 
 function firstLine(error: any) {
-  return String(error?.stderr || error?.message || error).trim().split('\n')[0]
+  return String(error?.stderr || error?.message || error)
+    .trim()
+    .split('\n')[0]
 }
 
 // The CLI reports a missing identity as a NotFoundException on stderr and exits 254.
@@ -855,10 +873,7 @@ function sesIdentityVerification({ awsCliPath, region, senderDomain }: any) {
     // permission, a region that rejects the call — must not read as "not created yet",
     // which would defer the production-access request and say the domain is the reason.
     if (isSesNotFound(cause)) return 'NOT_STARTED'
-    throw new Error(
-      `could not read the SES identity ${senderDomain} in ${region}: ${firstLine(cause)}`,
-      { cause },
-    )
+    throw new Error(`could not read the SES identity ${senderDomain} in ${region}: ${firstLine(cause)}`, { cause })
   }
   return JSON.parse(stdout).VerifiedForSendingStatus === true ? 'SUCCESS' : 'PENDING'
 }
@@ -892,9 +907,7 @@ function requestSesProductionAccess({ awsCliPath, region, senderDomain }: any) {
   }
   if (access.state === 'pending') {
     console.log('==> SES production access')
-    console.log(
-      `    review already open${access.caseId ? ` (case ${access.caseId})` : ''}; leaving it alone`,
-    )
+    console.log(`    review already open${access.caseId ? ` (case ${access.caseId})` : ''}; leaving it alone`)
     return
   }
   if (access.state === 'closed') {
@@ -1083,9 +1096,7 @@ async function bootstrapGcpStage({
   const reviewerIds = parseReviewerIds(options.reviewers)
   const effectiveReviewerIds = reviewerIds.length > 0 ? reviewerIds : [authenticatedGitHubUserId()]
 
-  console.log(
-    `stage=${stage} home=gcp project=${declared.project} region=${declared.region} repo=${repo}`,
-  )
+  console.log(`stage=${stage} home=gcp project=${declared.project} region=${declared.region} repo=${repo}`)
   ensureGithubEnvironment({ repo, stage, reviewerIds: effectiveReviewerIds })
 
   const [owner, repositoryName] = repo.split('/')
@@ -1173,12 +1184,80 @@ async function bootstrapGcpStage({
   // not one.
   ghVariableDeleteIfPresent({ repo, name: 'GCP_IMAGE_PUBLISHER' })
   console.log(`==> GitHub ${stage} environment`)
-  console.log(
-    '    GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOYER, GCP_IMAGE_PUBLISHER set',
-  )
+  console.log('    GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOYER, GCP_IMAGE_PUBLISHER set')
 
   console.log(
     `done. Preview next: gh workflow run mdeploy-all.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
+  )
+}
+
+/** Native AWS follows the same prerequisite-only bootstrap contract as GCP. */
+async function bootstrapNativeAwsStage({
+  stage,
+  options,
+  config,
+}: {
+  stage: string
+  options: any
+  config: MstageConfig
+}): Promise<void> {
+  const declared = config.stages[stage]
+  if (declared.protect && !options.confirm)
+    throw new Error(`Stage "${stage}" is protected. Add --confirm to bootstrap it.`)
+  if (options['provision-auth0'] || options['provision-ses']) {
+    throw new Error(
+      'Native bootstrap uses secret ARNs configured with mstage; provision-auth0/provision-ses are available only with --legacy-sst',
+    )
+  }
+  const scope = resolveScope({ options: { stage }, config, environment: process.env })
+  const home = await resolveHome({ scope })
+  if (home.identity.home !== 'aws') throw new Error('Native AWS bootstrap requires an AWS stage')
+  const { env: credentials } = await home.identity.childEnvironment()
+  const caller = await home.identity.whoami()
+  if (!caller.tenant) throw new Error('AWS identity returned no account ID')
+  nativeAwsNames({ app: config.app, stage, accountId: caller.tenant })
+  const buildConfig = loadBuildConfig({ cwd: INFRA_ROOT, environment: process.env })
+  const registry = registryFor(buildConfig, stage)
+  if (registry.kind !== 'ecr') throw new Error('An AWS stage needs an ECR registry declaration')
+  const deployment = declared.deploy as { storage?: { volumePrefix?: string } } | undefined
+  const volumePrefix = deployment?.storage?.volumePrefix ?? 'boxlite-volume'
+  if (!/^[a-z0-9][a-z0-9-]{1,45}$/.test(volumePrefix)) throw new Error('Invalid AWS volume bucket prefix')
+  requireGhAuthenticated()
+  const repo = resolveRepo(options.repo)
+  const reviewers = parseReviewerIds(options.reviewers)
+  ensureGithubEnvironment({ repo, stage, reviewerIds: reviewers.length ? reviewers : [authenticatedGitHubUserId()] })
+  ensureGitHubOidcProvider({ awsCliPath: resolveAwsCliPath(), region: scope.region, environment: credentials })
+  const stateBucket = await bootstrapAwsState({
+    clients: awsClientsFor(home.identity),
+    app: config.app,
+    stage,
+    accountId: caller.tenant,
+    region: scope.region,
+  })
+  const result = await bootstrapAws({
+    run: runAs(credentials),
+    repo,
+    stage,
+    accountId: caller.tenant,
+    region: scope.region,
+    log: console.log,
+    native: {
+      app: config.app,
+      repository: registry.repository,
+      volumePrefix,
+      stateBucket,
+      immutableTags: registry.immutableTags,
+      scanOnPush: registry.scanOnPush,
+    },
+  })
+  ghEnvironmentVariableSet({ repo, stage, name: 'AWS_ACCOUNT_ID', value: caller.tenant })
+  ghEnvironmentVariableSet({ repo, stage, name: 'AWS_REGION', value: scope.region })
+  ghEnvironmentVariableSet({ repo, stage, name: 'AWS_PULUMI_DEPLOY_ROLE_ARN', value: result.roleArn })
+  console.log(
+    'Native AWS prerequisites ready. Configure declared mstage environment groups and secret ARNs before previewing.',
+  )
+  console.log(
+    'Existing SST stages also require docs/aws/migration.md; bootstrap does not fence the legacy role or transfer ownership.',
   )
 }
 
@@ -1200,6 +1279,7 @@ async function main() {
   if (homeFor(mstageConfig, stage) === 'gcp') {
     return await bootstrapGcpStage({ stage, options, config: mstageConfig })
   }
+  if (!options['legacy-sst']) return bootstrapNativeAwsStage({ stage, options, config: mstageConfig })
 
   const force = Boolean(options.force)
   const region = resolveAwsRegion()
@@ -1282,9 +1362,7 @@ async function main() {
       requestSesProductionAccess({ awsCliPath, region, senderDomain })
     } catch (cause: any) {
       console.warn('==> SES production access')
-      console.warn(
-        `    could not be requested: ${cause.message?.split('\n')[0] ?? cause}`,
-      )
+      console.warn(`    could not be requested: ${cause.message?.split('\n')[0] ?? cause}`)
     }
   }
   ensureStageConfig(stage, stageConfigLoad)

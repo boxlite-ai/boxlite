@@ -213,7 +213,9 @@ const bindingsFor = ({
       // time and a per-secret binding would need `setIamPolicy`, with which
       // the API could grant itself the read it is denied. The create stands
       // unconditioned for the reason `registry-credentials.ts` gives.
-      const { createRole, writeRole, condition } = capability.store.binding
+      const binding = capability.store.binding
+      if (binding.cloud !== 'gcp') throw new Error('The GCP API needs a GCP registry credential store')
+      const { createRole, writeRole, condition } = binding
       return [
         new gcp.projects.IAMMember(`ApiCapability${index}Create`, {
           project,

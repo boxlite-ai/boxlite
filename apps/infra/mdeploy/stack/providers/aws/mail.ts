@@ -1,59 +1,48 @@
-/*
- * SES, reached over SMTP.
- *
- * SMTP rather than the SESv2 SDK so the application keeps one vendor-neutral
- * contract — host, port, credential, From — that a self-hosted deploy can point
- * at any provider. Only this file knows the backend is SES.
- *
- * The component publishes the DKIM CNAMEs and the DMARC TXT through the DNS
- * adapter and then blocks the deploy until SES has observed them. That wait is
- * the point: a domain whose zone this token cannot write fails here, once,
- * rather than at the first invitation nobody was there to see bounce.
- *
- * A domain identity is unique per account and region, so exactly one stage may
- * create a given sender domain. Give a stage its own subdomain when its bounces
- * should not touch the shared domain's reputation.
- *
- * Port 465 rather than 587: the session is encrypted from the first byte, so
- * there is no cleartext handshake for a downgrade to strip — and EC2 throttles
- * outbound 25, which the NAT instances these tasks egress through inherit.
- */
-
-import type { Mail, MailProvider, MailRequest } from '../../mail.ts'
+import type { MailProvider } from '../../mail.ts'
+import { awsDnsName } from './certificate.ts'
 import { instanceFor } from 'naming'
 
-/** SES's regional SMTP endpoint. The one place the backend is named. */
-const smtpHost = (region: string): string => `email-smtp.${region}.amazonaws.com`
-
+/** SES owns the sender identity; SMTP credentials arrive through workload secret references. */
 export const awsMailProvider =
-  ({ region, dns }: { region: string; dns: ReturnType<typeof sst.cloudflare.dns> }): MailProvider =>
-  (request: MailRequest): Mail => {
+  ({ region, zoneId }: { region: string; zoneId: string }): MailProvider =>
+  (request) => {
     if (!request.senderDomain) return { sending: false }
-
-    const identity = new sst.aws.Email('Mail', {
-      sender: request.senderDomain,
-      dns,
-      transform: {
-        // The deploy role's SES grant is scoped by name prefix, and SST would
-        // satisfy it on its own. Naming it here says so out loud rather than
-        // leaving the grant resting on a prefix applied elsewhere — and it is
-        // what an operator reading a bounce metric sees.
-        configurationSet: (args: any) => {
-          args.configurationSetName = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'mail' })
-        },
-      },
+    const configuration = new aws.sesv2.ConfigurationSet('MailConfig', {
+      configurationSetName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'mail' }),
     })
-
+    const identity = new aws.sesv2.EmailIdentity('MailIdentity', {
+      emailIdentity: request.senderDomain,
+      configurationSetName: configuration.configurationSetName,
+    })
+    const records = [0, 1, 2].map((index) => {
+      const token = identity.dkimSigningAttributes.tokens.apply((tokens: string[]) => tokens[index]!)
+      return awsDnsName(
+        `MailDkim${index}`,
+        $interpolate`${token}._domainkey.${request.senderDomain}`,
+        zoneId,
+        $interpolate`${token}.dkim.amazonses.com`,
+      )
+    })
+    const dmarc = new cloudflare.Record('MailDmarc', {
+      zoneId,
+      name: `_dmarc.${request.senderDomain}`,
+      type: 'TXT',
+      content: 'v=DMARC1; p=none;',
+      ttl: 60,
+    })
+    const verified = new aws.ses.DomainIdentityVerification(
+      'MailVerified',
+      {
+        domain: identity.emailIdentity,
+      },
+      { dependsOn: records },
+    )
     return {
       sending: true,
-      // SES observed the records before this resource settled, which is what
-      // makes the claim true rather than assumed.
       verified: true,
-      host: smtpHost(region),
+      host: `email-smtp.${region}.amazonaws.com`,
       port: '465',
-      // Derived rather than configurable: SES rejects a From address outside
-      // the verified identity, so the two must not be able to drift apart.
       senderAddress: `no-reply@${request.senderDomain}`,
-      ready: [identity],
+      ready: [verified, dmarc],
     }
   }

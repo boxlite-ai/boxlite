@@ -31,7 +31,7 @@
  * answer that repairs a host whose last upgrade half-finished.
  */
 
-import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
+import { RUNNER_ENV_FILE, RUNNER_HOME, runnerApiUrl } from './runner-boot.ts'
 import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
 import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
 import { dirname } from 'node:path'
@@ -174,6 +174,10 @@ export type UpgradeTarget = {
   registryProxyHost?: string | null
   /** JSON map of additional Runner process settings, owned by stage configuration. */
   runnerEnv?: string
+  /** Deployment-owned storage and disk identity, validated before shell construction. */
+  deploymentEnvironment?: Record<string, string>
+  /** Read-only canary observation after successful convergence. */
+  observeSeconds?: number
   /** Force an older binary over a newer one. A real rollback, asked for. */
   allowDowngrade?: boolean
 }
@@ -273,6 +277,14 @@ const assertUpgradeTarget = (target: UpgradeTarget): void => {
     throw new RunnerUpgradeError(`the health port must be a whole number from 1 to 65535; got ${target.port}`)
   }
   assertUnitEnvironment(target)
+  checkedDeploymentEnvironment(target.deploymentEnvironment)
+  if (
+    !Number.isInteger(target.observeSeconds ?? 0) ||
+    (target.observeSeconds ?? 0) < 0 ||
+    (target.observeSeconds ?? 0) > 300
+  ) {
+    throw new RunnerUpgradeError('Runner canary observation must be between 0 and 300 seconds')
+  }
 }
 
 /**
@@ -365,7 +377,9 @@ const assertDataDiskIdentity = ({ project, zone, hosts }: RunnerDataDiskIdentity
   const seen = new Set<string>()
   for (const host of hosts) {
     if (!GCE_NAME.test(host)) {
-      throw new RunnerUpgradeError(`a runner host reaches a case pattern a root shell runs; got ${JSON.stringify(host)}`)
+      throw new RunnerUpgradeError(
+        `a runner host reaches a case pattern a root shell runs; got ${JSON.stringify(host)}`,
+      )
     }
     if (seen.has(host)) {
       throw new RunnerUpgradeError(`${host} names two hosts of the fleet; a case cannot tell them apart`)
@@ -548,28 +562,52 @@ exit 101
  * restart is the cost and it is not hidden: boxes on the host take it, which is
  * why nothing runs until the two checks above say the file actually disagrees.
  */
+const DEPLOYMENT_ENVIRONMENT = new Set([
+  'AWS_DEFAULT_BUCKET',
+  'RUNNER_DATA_DISK_PROVIDER',
+  'RUNNER_DATA_DISK_PROJECT',
+  'RUNNER_DATA_DISK_ZONE',
+  'RUNNER_DATA_DISK_NAME',
+  'RUNNER_DATA_DISK_TYPE',
+  'RUNNER_DATA_DISK_DEVICE',
+])
+
+const checkedDeploymentEnvironment = (values: Record<string, string> = {}): [string, string][] => {
+  const entries = Object.entries(values).sort(([a], [b]) => a.localeCompare(b))
+  for (const [key, value] of entries) {
+    if (!DEPLOYMENT_ENVIRONMENT.has(key) || typeof value !== 'string' || !/^[A-Za-z0-9_./:-]+$/.test(value)) {
+      throw new RunnerUpgradeError('Runner deployment environment contains an unsupported key or unsafe value')
+    }
+  }
+  return entries
+}
+
 export const unitEnvironmentBlock = ({
   apiUrl,
   otlpUrl,
   volumeBackend,
   registryProxyHost,
   runnerEnv,
+  deploymentEnvironment,
   dataDiskIdentity = null,
-}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv' | 'deploymentEnvironment'> & {
   apiUrl: string
   /**
-   * The fleet's data-disk identity, or null where the cloud's runners keep box
-   * state on the root disk and have no disk to name. Only the GCP policy names
-   * one: the transports that carry a whole host payload read no stage
-   * environment, so a host payload has nothing to select the row with.
+   * The fleet's data-disk identity, or null for callers using
+   * per-host deploymentEnvironment values. GCP policy selects from a fleet
+   * table; AWS host payloads already carry the assigned EBS identity.
    */
   dataDiskIdentity?: RunnerDataDiskIdentity | null
 }): string => {
   assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
   if (dataDiskIdentity) assertDataDiskIdentity(dataDiskIdentity)
-  const custom = renderRunnerEnvironment(runnerEnv)
-  // An array, so an optional key is absent rather than empty: an AWS host's
-  // boot script writes no backend, a caller that supplied no collector has no
+  const deployment = checkedDeploymentEnvironment(deploymentEnvironment)
+  const custom = renderRunnerEnvironment(
+    runnerEnv,
+    deployment.map(([key]) => key),
+  )
+  // An array, so an optional key is absent rather than empty: a caller with no
+  // backend to enforce, a caller that supplied no collector has no
   // endpoint to enforce, and a stage without a registry proxy has no host to
   // pin. Pinning any of them as a blank line would leave every such host
   // disagreeing with itself forever, or restart it onto nothing.
@@ -579,7 +617,10 @@ export const unitEnvironmentBlock = ({
     ...(otlpUrl ? [`'OTEL_EXPORTER_OTLP_ENDPOINT=${otlpUrl}'`] : []),
     ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
     ...(registryProxyHost ? [`'REGISTRY_PROXY_HOST=${registryProxyHost}'`] : []),
-    ...(dataDiskIdentity ? [`'GCP_PROJECT_ID=${dataDiskIdentity.project}'`, `'GCP_ZONE=${dataDiskIdentity.zone}'`] : []),
+    ...(dataDiskIdentity
+      ? [`'GCP_PROJECT_ID=${dataDiskIdentity.project}'`, `'GCP_ZONE=${dataDiskIdentity.zone}'`]
+      : []),
+    ...deployment.map(([key, value]) => `'${key}=${value}'`),
   ].join(' ')
   /*
    * Prefixed names, because this block is concatenated after the binary half,
@@ -747,14 +788,15 @@ export const renderUnitEnvironmentPolicyScripts = ({
   volumeBackend,
   registryProxyHost,
   runnerEnv,
+  deploymentEnvironment,
   dataDiskIdentity = null,
-}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv' | 'deploymentEnvironment'> & {
   apiUrl: string
   /** See `unitEnvironmentBlock`. The GCP policy names one; nothing else does. */
   dataDiskIdentity?: RunnerDataDiskIdentity | null
 }): UpgradePolicyScripts => {
   const block = `set -euo pipefail
-${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost, runnerEnv, dataDiskIdentity })}`
+${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost, runnerEnv, deploymentEnvironment, dataDiskIdentity })}`
   return {
     validate: `${SHEBANG}${block}
 if unit_environment_settled; then exit 100; fi
@@ -798,13 +840,49 @@ ${guards('return 0')}${swapSequence(target, 'return 0')}}
         volumeBackend: target.volumeBackend,
         registryProxyHost: target.registryProxyHost,
         runnerEnv: target.runnerEnv,
+        deploymentEnvironment: target.deploymentEnvironment,
       })}
 converge_unit_environment
 `
     : ''
-  return `${preamble(target)}${binary}upgrade_binary
+  const device = target.deploymentEnvironment?.RUNNER_DATA_DISK_DEVICE
+  const dataHome = device
+    ? `assert_data_home() {
+  [ -e '${device}' ] || { echo 'FATAL: the assigned data disk is not mounted; explicit state migration is required' >&2; return 1; }
+  source_device=$(findmnt -n -o SOURCE --target '${RUNNER_HOME}') || return 1
+  resolved_source=$(readlink -f "$source_device") || return 1
+  resolved_data=$(readlink -f '${device}') || return 1
+  [ -n "$resolved_source" ] && [ "$resolved_source" = "$resolved_data" ] || {
+    echo 'FATAL: Runner home is on another disk; refusing to hide existing state' >&2; return 1;
+  }
+}
+assert_data_home
+`
+    : ''
+  const verify =
+    target.deploymentEnvironment || target.observeSeconds
+      ? `verify_runner() {
+  systemctl is-active --quiet boxlite-runner || return 1
+  [ "$(probe_identity)" = "$TARGET" ] || return 1
+  ${target.apiUrl ? 'unit_environment_matches || return 1' : ''}
+  ${device ? 'assert_data_home || return 1' : ''}
+}
+verify_runner || { echo 'FATAL: Runner did not converge to the requested binary and environment' >&2; exit 1; }
+canary_deadline=$((SECONDS + ${target.observeSeconds ?? 0}))
+while [ "$SECONDS" -lt "$canary_deadline" ]; do
+  sleep 5
+  verify_runner || { echo 'FATAL: Runner failed during canary observation' >&2; exit 1; }
+done
+`
+      : ''
+  return `${preamble(target)}
+# A command accepted before its supervisor exits can outlive a retry.
+exec 9>/run/lock/boxlite-runner-update.lock
+flock -n 9 || { echo 'FATAL: another Runner update holds the host lock' >&2; exit 1; }
+${dataHome}${binary}upgrade_binary
 ${environment}
-${kernelDeployment(target.kernel, target.port).enforce}`
+${kernelDeployment(target.kernel, target.port).enforce}
+${verify}`
 }
 
 /**

@@ -22,8 +22,7 @@ import { resolveHome } from 'mstage/home'
 import type { Cloud, MstageConfig } from 'mstage/config'
 import type { StoreBackend } from 'mstage/env'
 import type { Scope } from 'mstage/scope'
-import { awsTarget } from './sst.ts'
-import { gcpTarget } from './pulumi.ts'
+import { awsTarget, gcpTarget } from './pulumi.ts'
 import type { Components } from './components.ts'
 
 /**
@@ -37,7 +36,7 @@ import type { Components } from './components.ts'
 export type Intent = 'deploy' | 'diff' | 'remove' | 'refresh'
 
 /** Which engine drives a run. One per cloud, and not a preference. */
-export type Engine = 'sst' | 'pulumi'
+export type Engine = 'pulumi'
 
 /** One run, in the words every engine understands. */
 export type DeployRequest = {
@@ -93,7 +92,7 @@ export type DeployTargetInput = {
  *
  * The switch is on what mstage answered rather than on the config a second
  * time. Narrowing there is also what hands each engine the identity it actually
- * needs — SST a resolved AWS key triple, Pulumi the cloud-neutral questions —
+ * needs through the same cloud-neutral questions —
  * with no cast and no runtime check for methods that are always there.
  */
 export const resolveDeployTarget = async ({
@@ -107,7 +106,7 @@ export const resolveDeployTarget = async ({
   // whichever engine happened to be the else branch.
   switch (home.identity.home) {
     case 'aws':
-      return awsTarget({ config, scope, identity: home.identity, backend: home.backend })
+      return awsTarget({ config, scope, identity: home.identity, backend: home.backend, stateBucket: home.stateBucket })
     case 'gcp':
       return gcpTarget({
         config,

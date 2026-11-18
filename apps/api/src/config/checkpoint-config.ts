@@ -12,14 +12,20 @@ export function checkpointConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   const raw = env.CHECKPOINT_ARCHIVE_PREFIX?.trim()
   if (!raw) return { archivePrefix: undefined as string | undefined, maxPerOrganization, enabled: false }
-  const match = /^gs:\/\/([a-z0-9][a-z0-9._-]{1,61}[a-z0-9])(?:\/(.*))?$/.exec(raw)
-  const suffix = match?.[2]?.replace(/\/+$/, '') ?? ''
+  const match = /^(gs|s3):\/\/([a-z0-9][a-z0-9._-]{1,61}[a-z0-9])(?:\/(.*))?$/.exec(raw)
+  const suffix = match?.[3]?.replace(/\/+$/, '') ?? ''
   const segments = suffix ? suffix.split('/') : []
-  if (!match || !segments.every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))) {
-    throw new Error('CHECKPOINT_ARCHIVE_PREFIX must be gs://<bucket>/<prefix> without empty or traversal segments')
+  if (
+    !match ||
+    (match[1] === 's3' && (match[2].includes('_') || match[2].includes('..'))) ||
+    !segments.every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+  ) {
+    throw new Error(
+      'CHECKPOINT_ARCHIVE_PREFIX must be gs://<bucket>/<prefix> or s3://<bucket>/<prefix> without empty or traversal segments',
+    )
   }
   return {
-    archivePrefix: `gs://${match[1]}/${segments.length ? segments.join('/') + '/' : ''}`,
+    archivePrefix: `${match[1]}://${match[2]}/${segments.length ? segments.join('/') + '/' : ''}`,
     maxPerOrganization,
     enabled,
   }

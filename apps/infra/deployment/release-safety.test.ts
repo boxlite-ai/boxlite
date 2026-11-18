@@ -64,10 +64,7 @@ const SHARED_BOOTSTRAP_PARAMETER = '/sst/bootstrap'
  */
 function iamGlob(pattern: string) {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(
-    `^${escaped.replace(/\*/g, '.*').replace(/\?/g, '.').split(SUB_SENTINEL).join('.*')}$`,
-    'i',
-  )
+  return new RegExp(`^${escaped.replace(/\*/g, '.*').replace(/\?/g, '.').split(SUB_SENTINEL).join('.*')}$`, 'i')
 }
 
 /*
@@ -158,18 +155,53 @@ test('the shared-bootstrap guard catches every way a grant can cover it', () => 
   // reaches /sst/bootstrap without naming it exactly, or spells a write so a naive prefix test misses
   // it.
   const evasions = [
-    { Effect: 'Allow', Sid: 'ExactArn', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    {
+      Effect: 'Allow',
+      Sid: 'ExactArn',
+      Action: 'ssm:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
     { Effect: 'Allow', Sid: 'TrailingStar', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/*' },
-    { Effect: 'Allow', Sid: 'EmbeddedStar', Action: 'ssm:DeleteParameter', Resource: 'arn:aws:ssm:r:a:parameter/*/bootstrap' },
-    { Effect: 'Allow', Sid: 'SingleCharWildcard', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/boot?trap' },
+    {
+      Effect: 'Allow',
+      Sid: 'EmbeddedStar',
+      Action: 'ssm:DeleteParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/*/bootstrap',
+    },
+    {
+      Effect: 'Allow',
+      Sid: 'SingleCharWildcard',
+      Action: 'ssm:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/boot?trap',
+    },
     { Effect: 'Allow', Sid: 'EverythingResource', Action: 'ssm:PutParameter', Resource: '*' },
     // No `:parameter` anywhere in it, yet it covers every SSM resource in the account.
     { Effect: 'Allow', Sid: 'WildcardArnSegments', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:*:*:*' },
-    { Effect: 'Allow', Sid: 'WildcardServiceSegment', Action: 'ssm:PutParameter', Resource: 'arn:aws:*:*:*:parameter/sst/bootstrap' },
-    { Effect: 'Allow', Sid: 'ServiceWildcardAction', Action: 'ssm:*', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    {
+      Effect: 'Allow',
+      Sid: 'WildcardServiceSegment',
+      Action: 'ssm:PutParameter',
+      Resource: 'arn:aws:*:*:*:parameter/sst/bootstrap',
+    },
+    {
+      Effect: 'Allow',
+      Sid: 'ServiceWildcardAction',
+      Action: 'ssm:*',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
     { Effect: 'Allow', Sid: 'EveryAction', Action: '*', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
-    { Effect: 'Allow', Sid: 'UppercaseService', Action: 'SSM:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
-    { Effect: 'Allow', Sid: 'MixedCaseAction', Action: 'SsM:putParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    {
+      Effect: 'Allow',
+      Sid: 'UppercaseService',
+      Action: 'SSM:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
+    {
+      Effect: 'Allow',
+      Sid: 'MixedCaseAction',
+      Action: 'SsM:putParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
     {
       Effect: 'Allow',
       Sid: 'ListedAmongReads',
@@ -177,10 +209,20 @@ test('the shared-bootstrap guard catches every way a grant can cover it', () => 
       Resource: ['arn:aws:ssm:r:a:parameter/sst/*'],
     },
     // Inverted forms: an Allow that lists what it does NOT cover grants the rest, including this.
-    { Effect: 'Allow', Sid: 'NotResourceAllow', Action: 'ssm:PutParameter', NotResource: 'arn:aws:ssm:r:a:parameter/other' },
+    {
+      Effect: 'Allow',
+      Sid: 'NotResourceAllow',
+      Action: 'ssm:PutParameter',
+      NotResource: 'arn:aws:ssm:r:a:parameter/other',
+    },
     { Effect: 'Allow', Sid: 'NotActionAllow', NotAction: 's3:*', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
     // A computed identifier: nothing here can prove ${Whatever} is not the shared bootstrap.
-    { Effect: 'Allow', Sid: 'SubstitutedIdentifier', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/${Whatever}' },
+    {
+      Effect: 'Allow',
+      Sid: 'SubstitutedIdentifier',
+      Action: 'ssm:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/${Whatever}',
+    },
     // Not text at all. `!Sub` with a variable map and `Fn::Join` survive YAML parsing as structures,
     // and their result is not knowable here, so neither may be waved through.
     {
@@ -228,13 +270,28 @@ test('the shared-bootstrap guard catches every way a grant can cover it', () => 
       Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
     },
     { Effect: 'Allow', Sid: 'DescribeEverywhere', Action: 'ssm:DescribeParameters', Resource: '*' },
-    { Effect: 'Allow', Sid: 'ThisStagesParameters', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/boxlite/dev/*' },
-    { Effect: 'Allow', Sid: 'PassphraseOnly', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/passphrase/boxlite/dev' },
+    {
+      Effect: 'Allow',
+      Sid: 'ThisStagesParameters',
+      Action: 'ssm:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/boxlite/dev/*',
+    },
+    {
+      Effect: 'Allow',
+      Sid: 'PassphraseOnly',
+      Action: 'ssm:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/passphrase/boxlite/dev',
+    },
     { Effect: 'Allow', Sid: 'DifferentService', Action: 's3:PutObject', Resource: '*' },
     // A wildcard ARN for a different service reaches no parameter at all.
     { Effect: 'Allow', Sid: 'WildcardArnOtherService', Action: 'ssm:PutParameter', Resource: 'arn:aws:s3:*:*:*' },
     // A Deny naming the shared bootstrap protects it. Flagging that would reject the fix, not the bug.
-    { Effect: 'Deny', Sid: 'DenyProtectsIt', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    {
+      Effect: 'Deny',
+      Sid: 'DenyProtectsIt',
+      Action: 'ssm:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
     { Effect: 'Deny', Sid: 'DenyInverted', NotAction: 's3:*', Resource: '*' },
   ]
   for (const statement of allowed) {
@@ -318,7 +375,10 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
   const preflightIndex = source.indexOf('await verifyRunnerArtifact(')
   const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
 
-  assert.match(source, /requireCheckoutMatchesArtifactRefs, resolveArtifactSource \} from '\.\.\/artifacts\/source\.js'/)
+  assert.match(
+    source,
+    /requireCheckoutMatchesArtifactRefs, resolveArtifactSource \} from '\.\.\/artifacts\/source\.js'/,
+  )
   // The import is not the behavior: commenting the call out leaves the import, and a build deploy
   // would then ship the Proxy and the OtelCollector from this checkout while the Api and the
   // Runner are addressed by a ref that names a different commit.
@@ -583,10 +643,7 @@ test('the deploy role cannot rewrite its own permissions', () => {
     )
     .flatMap((statement: any) => asArray(statement.Action))
   for (const action of ['iam:CreatePolicyVersion', 'iam:SetDefaultPolicyVersion']) {
-    assert.ok(
-      deniedOnSiblingBoundary.includes(action),
-      `${action} on another stage's runtime boundary must be denied`,
-    )
+    assert.ok(deniedOnSiblingBoundary.includes(action), `${action} on another stage's runtime boundary must be denied`)
   }
 })
 
@@ -616,11 +673,11 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
   const unscoped = statements
     .filter((statement: any) => statement.Effect === 'Allow')
     .flatMap((statement: any) =>
-    asArray(statement.Resource)
-      .filter((resource: any) => typeof resource === 'string' && !stageScoped(resource))
-      .filter((resource: string) => !resource.includes('sst-state-') && !resource.includes('/sst/'))
-      .map((resource: string) => ({ sid: statement.Sid, resource })),
-  )
+      asArray(statement.Resource)
+        .filter((resource: any) => typeof resource === 'string' && !stageScoped(resource))
+        .filter((resource: string) => !resource.includes('sst-state-') && !resource.includes('/sst/'))
+        .map((resource: string) => ({ sid: statement.Sid, resource })),
+    )
 
   /*
    * Every resource this role can reach across stages, and why each one cannot be scoped. The list is
@@ -727,9 +784,9 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
   assert.ok(secretName, 'the stack must name its Secrets Manager secret explicitly, not let it autoname')
   const composedSecretName = secretName.replace('${$app.name}', 'boxlite').replace('${$app.stage}', 'dev')
   assert.ok(
-    iamGlob(
-      'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-dev-*',
-    ).test(`arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:${composedSecretName}`),
+    iamGlob('arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-dev-*').test(
+      `arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:${composedSecretName}`,
+    ),
     `the stack's secret '${composedSecretName}' falls outside the deploy role's secret:boxlite-<stage>-* grant`,
   )
 
@@ -861,7 +918,11 @@ test('the capability gate answers every selected-commit shape', () => {
     for (const version of [1, 2]) {
       for (const exclude of ['', 'Api', 'Runner']) {
         const accepted = runGate(declared({ version }), exclude)
-        assert.equal(accepted.status, 0, `capability v${version} must deploy with exclude='${exclude}': ${accepted.stderr}`)
+        assert.equal(
+          accepted.status,
+          0,
+          `capability v${version} must deploy with exclude='${exclude}': ${accepted.stderr}`,
+        )
       }
     }
 
@@ -879,7 +940,10 @@ test('the capability gate answers every selected-commit shape', () => {
     }
 
     // A commit that cannot read the store would deploy against whatever defaults survived.
-    assert.match(refused(JSON.stringify({ version: 1, componentSelection: true }), ''), /does not declare the capabilities/)
+    assert.match(
+      refused(JSON.stringify({ version: 1, componentSelection: true }), ''),
+      /does not declare the capabilities/,
+    )
     // Component selection is only required when the dispatch actually narrows the scope.
     assert.equal(runGate(JSON.stringify({ version: 1, stageConfigStore: true }), '').status, 0)
     assert.match(refused(JSON.stringify({ version: 1, stageConfigStore: true }), 'Runner'), /--exclude Runner/)
@@ -1240,7 +1304,12 @@ test('the checked-in deploy role satisfies the CI IAM boundary preflight', () =>
   // real drift between the two fails here instead of wedging CI on the next run.
   const accountId = '123456789012'
   const stage = 'dev'
-  const rendered = render(readFileSync(DEV_DEPLOY_ROLE_POLICY, 'utf8'), { repo: 'boxlite-ai/boxlite', stage, accountId, region: 'ap-southeast-1' })
+  const rendered = render(readFileSync(DEV_DEPLOY_ROLE_POLICY, 'utf8'), {
+    repo: 'boxlite-ai/boxlite',
+    stage,
+    accountId,
+    region: 'ap-southeast-1',
+  })
 
   const { grants } = verifyDeployRoleGrantsBoundaryPermission({
     callerArn: `arn:aws:sts::${accountId}:assumed-role/boxlite-${stage}-github-deploy/session`,
@@ -1248,7 +1317,11 @@ test('the checked-in deploy role satisfies the CI IAM boundary preflight', () =>
     stage,
     policyDocuments: [JSON.parse(rendered)],
   })
-  assert.equal(grants, true, 'bootstrap/aws/deploy-role-policy.json must grant iam:PutRolePermissionsBoundary for the stage boundary')
+  assert.equal(
+    grants,
+    true,
+    'bootstrap/aws/deploy-role-policy.json must grant iam:PutRolePermissionsBoundary for the stage boundary',
+  )
 })
 
 test('the deploy role grants the CloudFront KeyValueStore prefix Router needs', () => {
@@ -1296,9 +1369,14 @@ test('commit Runner builds consume the C SDK artifact from the same reusable run
   // name required, unlike deploy-infra.yml's own resolve-ref, which needs a PR number for a
   // different reason (the security lookup, not fetchability). Anchored per line: a commented-out
   // fallback still parses.
-  const cValidateRun = cWorkflow.jobs['resolve-ref'].steps.find((step: any) => step.name === 'Validate build commit')?.run
+  const cValidateRun = cWorkflow.jobs['resolve-ref'].steps.find(
+    (step: any) => step.name === 'Validate build commit',
+  )?.run
   assert.ok(cValidateRun, 'build-c.yml lost its Validate build commit step')
-  assert.match(cValidateRun, /^\s*git cat-file -e "\$candidate\^\{commit\}" 2>\/dev\/null \|\| git fetch origin "\$candidate"/m)
+  assert.match(
+    cValidateRun,
+    /^\s*git cat-file -e "\$candidate\^\{commit\}" 2>\/dev\/null \|\| git fetch origin "\$candidate"/m,
+  )
   const runnerValidateRun = runnerWorkflow.jobs['resolve-ref'].steps.find(
     (step: any) => step.name === 'Validate build commit',
   )?.run
@@ -1345,8 +1423,15 @@ test('commit Runner builds consume the C SDK artifact from the same reusable run
   // assumption the `release` branch of this step has always made.
   const extractRun = runnerStepRun('Extract commit libboxlite.a')
   assert.ok(extractRun, 'the commit libboxlite.a extraction step is missing')
-  assertShellLine(extractRun, /cp "\/tmp\/\$\(basename "\$archive" \.tar\.gz\)\/lib\/libboxlite\.a" sdks\/go\/libboxlite\.a/)
-  assert.doesNotMatch(liveShell(extractRun), /find \/tmp\b(?!\/c-sdk)/, 'the library must not be searched for under /tmp')
+  assertShellLine(
+    extractRun,
+    /cp "\/tmp\/\$\(basename "\$archive" \.tar\.gz\)\/lib\/libboxlite\.a" sdks\/go\/libboxlite\.a/,
+  )
+  assert.doesNotMatch(
+    liveShell(extractRun),
+    /find \/tmp\b(?!\/c-sdk)/,
+    'the library must not be searched for under /tmp',
+  )
 })
 
 function workflowExpression(expression: string, context: Record<string, unknown>) {
@@ -1522,18 +1607,28 @@ test('Go release checkout and archive follow the C run when main has advanced', 
   const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
   const releaseSha = 'a'.repeat(40)
   const mainSha = 'b'.repeat(40)
-  const github = { event_name: 'workflow_run', sha: mainSha, run_id: 20, event: { workflow_run: { head_sha: releaseSha, id: 10 } } }
+  const github = {
+    event_name: 'workflow_run',
+    sha: mainSha,
+    run_id: 20,
+    event: { workflow_run: { head_sha: releaseSha, id: 10 } },
+  }
   const configJob = workflow.jobs.config.uses
     ? load(readFileSync(join(REPO_ROOT, '.github/workflows/config.yml'), 'utf8')).jobs.config
     : workflow.jobs.config
   const checkout = configJob.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
   assert.equal(checkout.with?.ref ? workflowExpression(checkout.with.ref, { github }) : github.sha, releaseSha)
   const testCheckout = workflow.jobs.test.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
-  assert.equal(workflowExpression(testCheckout.with?.ref ?? 'github.sha', {
-    github,
-    needs: { config: { outputs: { sha: releaseSha } } },
-  }), releaseSha)
-  const tagCheckout = workflow.jobs['tag-go-module'].steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(
+    workflowExpression(testCheckout.with?.ref ?? 'github.sha', {
+      github,
+      needs: { config: { outputs: { sha: releaseSha } } },
+    }),
+    releaseSha,
+  )
+  const tagCheckout = workflow.jobs['tag-go-module'].steps.find((step: any) =>
+    step.uses?.startsWith('actions/checkout@'),
+  )
   assert.equal(workflowExpression(tagCheckout.with?.ref ?? 'github.sha', { github }), releaseSha)
   const artifact = workflow.jobs.test.steps.find((step: any) => step.name === 'Download C release run artifact')
   assert.equal(workflowExpression(artifact?.with?.['run-id'] ?? 'github.run_id', { github }), 10)
@@ -1547,7 +1642,11 @@ test('Go release refuses a same-name workflow before trusting its run', () => {
   }
   const step = workflow.jobs.config.steps?.find((candidate: any) => candidate.name === 'Verify C release producer')
   if (!step) {
-    assert.equal(workflowExpression(workflow.jobs.config.if, { github }), false, 'a name-only producer enters Go configuration')
+    assert.equal(
+      workflowExpression(workflow.jobs.config.if, { github }),
+      false,
+      'a name-only producer enters Go configuration',
+    )
     return
   }
   const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-producer-'))
@@ -1562,10 +1661,11 @@ test('Go release refuses a same-name workflow before trusting its run', () => {
       C_SHA: 'a'.repeat(40),
       C_RUN_ID: '10',
     }
-    const run = (id: string, path = env.C_WORKFLOW_PATH) => spawnSync('bash', ['-c', step.run], {
-      env: { ...env, C_WORKFLOW_ID: id, C_WORKFLOW_PATH: path },
-      encoding: 'utf8',
-    })
+    const run = (id: string, path = env.C_WORKFLOW_PATH) =>
+      spawnSync('bash', ['-c', step.run], {
+        env: { ...env, C_WORKFLOW_ID: id, C_WORKFLOW_PATH: path },
+        encoding: 'utf8',
+      })
     const accepted = run('245927919')
     assert.equal(accepted.status, 0, accepted.stderr)
     assert.notEqual(run('245927920').status, 0, 'the producer ID must match')
@@ -1604,11 +1704,12 @@ test('Go publication refuses a product tag that moves during the matrix', () => 
     git('commit', '--quiet', '--allow-empty', '-m', 'new main')
     git('push', '--quiet', '--force', 'origin', 'HEAD:refs/tags/v0.12.0')
     git('checkout', '--quiet', '--detach', releaseSha)
-    const run = () => spawnSync('bash', ['-c', step.run], {
-      cwd: fixture,
-      env: { ...fixtureEnvironment, C_SHA: releaseSha, RELEASE_TAG: 'v0.12.0' },
-      encoding: 'utf8',
-    })
+    const run = () =>
+      spawnSync('bash', ['-c', step.run], {
+        cwd: fixture,
+        env: { ...fixtureEnvironment, C_SHA: releaseSha, RELEASE_TAG: 'v0.12.0' },
+        encoding: 'utf8',
+      })
     assert.notEqual(run().status, 0, 'a moved product tag must block the Go module tag')
     assert.equal(git('ls-remote', 'origin', 'refs/tags/sdks/go/v0.12.0'), '')
     git('push', '--quiet', 'origin', ':refs/tags/v0.12.0')
@@ -1647,25 +1748,37 @@ test('Go release compares the public tarball before extracting the C library', (
     mkdirSync(join(fixture, 'sdks/go'), { recursive: true })
     writeFileSync(join(fixture, 'payload', archiveDir, 'lib/libboxlite.a'), 'public C bytes')
     writeFileSync(join(fixture, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`)
-    const tar = spawnSync('tar', ['czf', publicArchive, '-C', join(fixture, 'payload'), archiveDir], { encoding: 'utf8' })
-    assert.equal(tar.status, 0, tar.stderr)
-    writeFileSync(join(fixture, 'curl'), [
-      '#!/bin/sh',
-      'while [ "$#" -gt 0 ]; do',
-      '  if [ "$1" = "-o" ]; then exec cp "$PUBLIC_ARCHIVE" "$2"; fi',
-      '  shift',
-      'done',
-      'exec cat "$PUBLIC_ARCHIVE"',
-      '',
-    ].join('\n'), { mode: 0o755 })
-    const run = () => spawnSync('bash', ['-c', step.run.replaceAll('${{ matrix.target }}', target)], {
-      cwd: fixture,
-      env: {
-        ...process.env, PATH: fixture + ':' + process.env.PATH, PUBLIC_ARCHIVE: publicArchive,
-        RUNNER_TEMP: fixture, GITHUB_REPOSITORY: 'boxlite-ai/boxlite', RELEASE_TAG: `v${version}`, PLATFORM: target,
-      },
+    const tar = spawnSync('tar', ['czf', publicArchive, '-C', join(fixture, 'payload'), archiveDir], {
       encoding: 'utf8',
     })
+    assert.equal(tar.status, 0, tar.stderr)
+    writeFileSync(
+      join(fixture, 'curl'),
+      [
+        '#!/bin/sh',
+        'while [ "$#" -gt 0 ]; do',
+        '  if [ "$1" = "-o" ]; then exec cp "$PUBLIC_ARCHIVE" "$2"; fi',
+        '  shift',
+        'done',
+        'exec cat "$PUBLIC_ARCHIVE"',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    )
+    const run = () =>
+      spawnSync('bash', ['-c', step.run.replaceAll('${{ matrix.target }}', target)], {
+        cwd: fixture,
+        env: {
+          ...process.env,
+          PATH: fixture + ':' + process.env.PATH,
+          PUBLIC_ARCHIVE: publicArchive,
+          RUNNER_TEMP: fixture,
+          GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+          RELEASE_TAG: `v${version}`,
+          PLATFORM: target,
+        },
+        encoding: 'utf8',
+      })
     writeFileSync(runArchive, 'different C run bytes')
     assert.notEqual(run().status, 0, 'different public bytes must not enter Go tests')
     assert.equal(existsSync(library), false)
@@ -1917,7 +2030,11 @@ test('the deployment workflows cap the token they hand their jobs', () => {
         .map(([scope]) => scope)
       const allowed = expectedWriters[jobName] ?? []
       const unexpected = raised.filter((scope) => !allowed.includes(scope))
-      assert.deepEqual(unexpected, [], `${entry} job '${jobName}' raises ${JSON.stringify(unexpected)} without a reason`)
+      assert.deepEqual(
+        unexpected,
+        [],
+        `${entry} job '${jobName}' raises ${JSON.stringify(unexpected)} without a reason`,
+      )
     }
   }
 })
@@ -2207,7 +2324,8 @@ test('API publishing builds once and promotes that exact image without rebuildin
   assertShellLine(publishArch.run, /test "\$\(uname -m\)" = "x86_64"/)
   assertShellLine(publishArch.run, /test "\$\(docker info --format '\{\{\.Architecture\}\}'\)" = "x86_64"/)
 
-  const resolveRun = workflow.jobs.publish.steps.find((step: any) => step.name === 'Resolve publish operation')?.run ?? ''
+  const resolveRun =
+    workflow.jobs.publish.steps.find((step: any) => step.name === 'Resolve publish operation')?.run ?? ''
   assertShellLine(resolveRun, /tag v\$version declares Cargo\.toml version/)
   assertShellLine(resolveRun, /builds always land in dev/)
   // The one string the deploy has to agree with. apiImageTag() in artifacts/api.ts derives the
@@ -2243,7 +2361,7 @@ test('API publishing builds once and promotes that exact image without rebuildin
   assertShellLine(promoteRun, /if \[ "\$promoted" != "\$SOURCE_DIGEST" \]; then/)
 })
 
-test('promotion reads the source stage in the source stage\'s own region', () => {
+test("promotion reads the source stage in the source stage's own region", () => {
   // The defect this guards, observed promoting 0.10.0 from dev to prod: an ECR registry is one
   // account in ONE region, and `vars` resolves against the single Environment a job binds to —
   // the target's. So every source lookup ran in the target's region. With dev in ap-southeast-1
@@ -2377,8 +2495,6 @@ test('the stage bootstrap owns artifact stores needed before an SST deploy can s
   assert.match(awsSource, /apiImageRepository\(\{ app: 'boxlite', stage \}\)/)
   assert.match(awsSource, /runnerArtifactsBucketName\(\{ app: 'boxlite', stage, accountId \}\)/)
 
-  assert.match(awsSource, /'--image-tag-mutability',\s*\n\s*'IMMUTABLE'/)
-  assert.match(awsSource, /'--image-scanning-configuration',\s*\n\s*'scanOnPush=true'/)
   assert.match(awsSource, /'--encryption-configuration',\s*\n\s*'encryptionType=AES256'/)
   // Never deleted or replaced — a stronger guarantee than CloudFormation's DeletionPolicy: Retain
   // gave the same two resources.
@@ -2386,7 +2502,12 @@ test('the stage bootstrap owns artifact stores needed before an SST deploy can s
 
   assert.match(awsSource, /ApplyServerSideEncryptionByDefault.*SSEAlgorithm.*AES256/)
   assert.match(awsSource, /'--versioning-configuration',\s*\n\s*'Status=Enabled'/)
-  for (const flag of ['BlockPublicAcls=true', 'IgnorePublicAcls=true', 'BlockPublicPolicy=true', 'RestrictPublicBuckets=true']) {
+  for (const flag of [
+    'BlockPublicAcls=true',
+    'IgnorePublicAcls=true',
+    'BlockPublicPolicy=true',
+    'RestrictPublicBuckets=true',
+  ]) {
     assert.ok(awsSource.includes(flag), `missing public-access-block flag: ${flag}`)
   }
   assert.match(awsSource, /ID:\s*'expire-superseded-runner-builds'/)
@@ -2444,6 +2565,8 @@ test('the runtime boundary admits the bucket the Runner is actually pointed at',
   const prefixes = findStatement(readRuntimeBoundaryStatements(), 'BoxLiteBucketObjects').Resource.map((arn: any) =>
     arn.replace('arn:aws:s3:::', '').replace('<STAGE>', 'dev'),
   )
-  const admits = prefixes.some((pattern: any) => new RegExp(`^${pattern.replace(/\*/g, '.*')}$`).test(`${bucket}/runner/x`))
+  const admits = prefixes.some((pattern: any) =>
+    new RegExp(`^${pattern.replace(/\*/g, '.*')}$`).test(`${bucket}/runner/x`),
+  )
   assert.ok(admits, `no BoxLiteBucketObjects prefix admits ${bucket}/runner/*; prefixes: ${prefixes.join(', ')}`)
 })

@@ -166,17 +166,14 @@ export type StackProviders = {
    * silently matched nothing.
    */
   resizeRunnerDisks: () => boolean
-  /**
-   * No host, like the runner: on the cloud that deploys it this is a managed
-   * service rather than a cluster task, so it takes its placement from the
-   * network directly. The other cloud answers with the inactive handle.
-   */
+  /** Place the credential reader on its own workload identity and private network path. */
   registryProxy: (input: {
+    host: WorkloadHost
     network: Network
     dependsOn: any[]
     registryCredentials: RegistryCredentialStore
   }) => RegistryProxyProvider
-  /** Where registry passwords live: on the proxy's cloud, and inactive on the other. */
+  /** The credential store the API writes and the proxy reads on the selected cloud. */
   registryCredentials: RegistryCredentialStoreProvider
   /**
    * One host's registration token, minted so it survives the next deploy.
@@ -407,6 +404,7 @@ export const deployStack = ({
    * nothing while looking healthy.
    */
   const registryProxy: RegistryProxy = providers.registryProxy({
+    host: cluster.hostFor('registry-proxy'),
     network,
     dependsOn: placed,
     registryCredentials,

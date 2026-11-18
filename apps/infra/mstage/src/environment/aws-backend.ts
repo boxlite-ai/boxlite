@@ -1,24 +1,7 @@
-/*
- * The store on AWS, in SST v3.19.3's own layout.
- *
- * This backend does not get to choose how things are named. `sst deploy` reads
- * and writes the same objects, so every path here matches what SST does —
- * `pkg/project/provider/aws.go:541` and `:545` — and a change to any of them
- * would give this platform two stores that disagree.
- *
- *   SSM  /sst/bootstrap                    → the state bucket's name
- *   S3   secret/<app>/<stage>.json         → the sealed map
- *   SSM  /sst/passphrase/<app>/<stage>     → the key
- *   S3   app/<app>/<stage>.json            → the deployment checkpoint
- *   S3   lock/<app>/<stage>.json           → the lock a deploy holds on it
- *
- * The last two are what a stopped deploy leaves behind. SST names all of them
- * `<kind>/<app>/<stage>.json` through one `pathForData` and picks the kind at
- * the call site (`pkg/project/provider/provider.go`).
- *
- * The bucket's name ends in twelve characters chosen at bootstrap, so nothing
- * but that first parameter knows it, and it is never logged — a log is read by
- * more people than an account is. Objects are named by their key instead.
+/**
+ * AWS environment values retain the existing SSM bootstrap/passphrase and S3 secret keys.
+ * Deployment checkpoints and locks use Pulumi DIY paths in the same bucket.
+ * SST checkpoints are read only as migration evidence; this backend never rewrites them.
  */
 
 import {
@@ -26,23 +9,28 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectVersionsCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
+import { IAMClient } from '@aws-sdk/client-iam'
+import { awsOwnership } from './aws-ownership.ts'
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm'
 import { EnvError, objectKey, type StoreBackend, type StoredVersion } from './backend.ts'
 import type { AwsIdentity } from '../aws/identity.ts'
+import { pulumiCheckpointKey as checkpointKey, pulumiLockPrefix } from './pulumi-state.ts'
 
 const BOOTSTRAP_PARAMETER = '/sst/bootstrap'
 
 export type AwsClients = {
+  iam?: { send: (command: any) => Promise<any> }
   s3: { send: (command: any) => Promise<any> }
   ssm: { send: (command: any) => Promise<any> }
 }
 
 export const clientsFor = (identity: Pick<AwsIdentity, 'credentials' | 'region'>): AwsClients => {
   const config = { region: identity.region, credentials: identity.credentials }
-  return { s3: new S3Client(config), ssm: new SSMClient(config) }
+  return { s3: new S3Client(config), ssm: new SSMClient(config), iam: new IAMClient(config) }
 }
 
 /**
@@ -50,6 +38,7 @@ export const clientsFor = (identity: Pick<AwsIdentity, 'credentials' | 'region'>
  * holding a task role, where the SDK's own chain is already the right answer.
  */
 export const ambientClients = (region: string): AwsClients => ({
+  iam: new IAMClient({ region }),
   s3: new S3Client({ region }),
   ssm: new SSMClient({ region }),
 })
@@ -80,9 +69,25 @@ export const readStateBucket = async (clients: AwsClients): Promise<string> => {
   return bootstrap.state
 }
 
-/** The other two objects SST keeps per stage, in the same `<kind>/<app>/<stage>.json` shape. */
-const checkpointKey = (app: string, stage: string): string => `app/${app}/${stage}.json`
-const lockKey = (app: string, stage: string): string => `lock/${app}/${stage}.json`
+/** Discover every operation lock, including listings larger than a single S3 page. */
+const lockFiles = async (clients: AwsClients, app: string, stage: string): Promise<string[]> => {
+  const bucket = await readStateBucket(clients)
+  const prefix = pulumiLockPrefix(app, stage)
+  const keys: string[] = []
+  let token: string | undefined
+  do {
+    const answer = await clients.s3.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }),
+    )
+    for (const object of answer.Contents ?? []) {
+      if (typeof object.Key === 'string' && object.Key.startsWith(prefix)) keys.push(object.Key)
+    }
+    const next = answer.IsTruncated ? answer.NextContinuationToken : undefined
+    if (answer.IsTruncated && (!next || next === token)) throw new EnvError('The S3 lock listing returned no next page')
+    token = next
+  } while (token)
+  return [...new Set(keys)].sort()
+}
 
 /** One object as stored, or null when it is not there. Neither of these is sealed. */
 const readObject = async (clients: AwsClients, key: string): Promise<Buffer | null> => {
@@ -100,6 +105,15 @@ const readObject = async (clients: AwsClients, key: string): Promise<Buffer | nu
 
 export const awsBackend = (clients: AwsClients): StoreBackend => ({
   home: 'aws',
+  ownership: awsOwnership({
+    s3: clients.s3,
+    stateBucket: () => readStateBucket(clients),
+    iam: clients.iam ?? {
+      send: async () => {
+        throw new EnvError('AWS ownership requires an IAM client')
+      },
+    },
+  }),
 
   async read({ app, stage, versionId }) {
     const bucket = await readStateBucket(clients)
@@ -197,6 +211,7 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
   },
 
   state: {
+    readLegacyCheckpoint: ({ app, stage }) => readObject(clients, `app/${app}/${stage}.json`),
     readCheckpoint: ({ app, stage }) => readObject(clients, checkpointKey(app, stage)),
 
     async writeCheckpoint({ app, stage, checkpoint }) {
@@ -211,13 +226,19 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
       )
     },
 
-    readLock: ({ app, stage }) => readObject(clients, lockKey(app, stage)),
+    async readLock({ app, stage }) {
+      const held = await lockFiles(clients, app, stage)
+      if (!held.length) return null
+      if (held.length > 1)
+        throw new EnvError(`${app}/${stage} has ${held.length} locks; inspect the bucket before dropping any`)
+      return readObject(clients, held[0]!)
+    },
 
     async removeLock({ app, stage }) {
       const bucket = await readStateBucket(clients)
-      // S3 deletes a key that was never there without complaint, so whether a
-      // lock existed is the caller's question and is answered by reading first.
-      await clients.s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: lockKey(app, stage) }))
+      for (const key of await lockFiles(clients, app, stage)) {
+        await clients.s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+      }
     },
   },
 })

@@ -305,7 +305,11 @@ test('the runner unit names the project a bare secret id is resolved against', (
    * one travels in the same block for the same reason.
    */
   const source = sourceOf('runners')
-  assert.match(source, /gcloud secrets versions access "\$version" --secret="\$secret"/, 'the wrapper no longer fetches by id')
+  assert.match(
+    source,
+    /gcloud secrets versions access "\$version" --secret="\$secret"/,
+    'the wrapper no longer fetches by id',
+  )
   assert.match(source, /CLOUDSDK_CORE_PROJECT: project/, 'so the unit must name the project it resolves against')
 })
 
@@ -648,7 +652,11 @@ test('the regional certificate is named after the authorization it is issued aga
   // And the provider keys it that way rather than on the host.
   const source = sourceOf('api')
   assert.match(source, /const internalAuthorizationName = internalAuthorizationNameFor\(/)
-  assert.match(source, /name: internalAuthorizationName,/, 'the authorization must use the name the certificate keys on')
+  assert.match(
+    source,
+    /name: internalAuthorizationName,/,
+    'the authorization must use the name the certificate keys on',
+  )
   assert.match(source, /key: internalAuthorizationName,/, 'the certificate must be keyed on the authorization')
 })
 
@@ -727,7 +735,11 @@ test('the telemetry database admits both of its callers, because both egress fro
   // range the runner and ClickHouse rules admit.
   for (const module of ['api', 'collector', 'runners', 'clickhouse', 'edge', 'registry-proxy']) {
     const reads = (sourceOf(module).match(/placement\.egressSubnetwork/g) ?? []).length
-    assert.equal(reads, module === 'api' || module === 'collector' ? 1 : 0, `${module} reads egressSubnetwork ${reads}x`)
+    assert.equal(
+      reads,
+      module === 'api' || module === 'collector' ? 1 : 0,
+      `${module} reads egressSubnetwork ${reads}x`,
+    )
   }
 
   /*
@@ -1388,11 +1400,7 @@ test('the proxy key reaches the container as a Secret this stack writes', () => 
   assert.match(source, /stringData: \{ \[PROXY_API_KEY\]: \$util\.secret\(apiKeyPayload\) \}/)
   assert.match(source, /delete plainEnvironment\[PROXY_API_KEY\]/, 'the key must not reach the plain environment')
   assert.match(source, /valueFrom: \{ secretKeyRef: \{ name: PROXY_API_KEY_SECRET, key: PROXY_API_KEY \} \}/)
-  assert.equal(
-    /secretObjects: \[/.test(source),
-    false,
-    'the sync this provider ignores must not come back',
-  )
+  assert.equal(/secretObjects: \[/.test(source), false, 'the sync this provider ignores must not come back')
   assert.equal(
     /SecretProviderClass|secrets-store-gke\.csi\.k8s\.io/.test(source),
     false,
@@ -1431,7 +1439,13 @@ test('a zone GKE has not created a NEG in yet is skipped, and nothing else is', 
    * endpoints, leaving a short backend with every resource green.
    */
   const name = 'boxlite-app-dev-proxy'
-  assert.equal(isMissingNeg(new Error(`The resource 'projects/p/zones/us-east5-c/networkEndpointGroups/${name}' was not found`), name), true)
+  assert.equal(
+    isMissingNeg(
+      new Error(`The resource 'projects/p/zones/us-east5-c/networkEndpointGroups/${name}' was not found`),
+      name,
+    ),
+    true,
+  )
   assert.equal(isMissingNeg(new Error(`googleapi: Error 404: not found: ${name}, notFound`), name), true)
   /*
    * The bare two-word form, which is what the *invoke* path answers with and
@@ -1445,9 +1459,15 @@ test('a zone GKE has not created a NEG in yet is skipped, and nothing else is', 
     true,
   )
   // Another resource's absence says nothing about this one.
-  assert.equal(isMissingNeg(new Error("The resource 'projects/p/zones/us-east5-c/instances/other' was not found"), name), false)
+  assert.equal(
+    isMissingNeg(new Error("The resource 'projects/p/zones/us-east5-c/instances/other' was not found"), name),
+    false,
+  )
   // And a failure that is not an absence stays fatal.
-  assert.equal(isMissingNeg(new Error(`Error 403: Required 'compute.networkEndpointGroups.get' on ${name}`), name), false)
+  assert.equal(
+    isMissingNeg(new Error(`Error 403: Required 'compute.networkEndpointGroups.get' on ${name}`), name),
+    false,
+  )
   assert.equal(isMissingNeg(new Error(`Error 429: Quota exceeded for ${name}`), name), false)
 
   const source = sourceOf('edge')
@@ -1495,10 +1515,7 @@ test('the workload identity binding waits for the cluster whose pool it names', 
    * than merely somewhere in the file, so the match may not cross into the
    * next `new gcp.` construction.
    */
-  assert.match(
-    sourceOf('edge'),
-    /'ProxyWorkloadIdentity',(?:(?!new gcp\.)[\s\S])*?\{ dependsOn: host\.ready \}/,
-  )
+  assert.match(sourceOf('edge'), /'ProxyWorkloadIdentity',(?:(?!new gcp\.)[\s\S])*?\{ dependsOn: host\.ready \}/)
 })
 
 test('the standalone NEG exists before the old load balancer backend is switched', () => {
@@ -1526,7 +1543,10 @@ test('GKE Pod addresses, not the workload GSA, are admitted to runners', () => {
   assert.match(edge, /new gcp\.compute\.Firewall\('ProxyToRunnerFirewall'/)
   assert.match(edge, /sourceRanges: \[GKE_POD_CIDR\]/)
   assert.match(edge, /targetServiceAccounts: \[runnerServiceAccount\]/)
-  assert.equal(/sourceServiceAccounts: \[accounts\.api\.email, accounts\.proxy\.email\]/.test(sourceOf('network')), false)
+  assert.equal(
+    /sourceServiceAccounts: \[accounts\.api\.email, accounts\.proxy\.email\]/.test(sourceOf('network')),
+    false,
+  )
 })
 
 // ── what an alarm watches ───────────────────────────────────────────────────
@@ -1622,7 +1642,11 @@ test('run.app answers privately, through Private Google Access', () => {
   // The addresses only answer through the network if the subnets the callers
   // leave from have Private Google Access; both do, and both must keep it.
   const withGoogleAccess = (source.match(/privateIpGoogleAccess: true,/g) ?? []).length
-  assert.equal(withGoogleAccess, 2, 'the workload subnet and the Cloud Run egress subnet both need Private Google Access')
+  assert.equal(
+    withGoogleAccess,
+    2,
+    'the workload subnet and the Cloud Run egress subnet both need Private Google Access',
+  )
 
   // And workloads wait for the records, or one that starts early resolves the
   // public address and keeps it for as long as its resolver caches it.
@@ -1885,7 +1909,7 @@ test('the API can write registry passwords and cannot read one back', () => {
   assert.match(
     sourceOf('registry-credentials'),
     /resource\.name\.startsWith\("projects\/\$\{projectNumber\}\/secrets\/\$\{REGISTRY_SECRET_PREFIX\}"\)/,
-    'the condition no longer bounds the grant to the credentials\' secrets',
+    "the condition no longer bounds the grant to the credentials' secrets",
   )
 })
 
@@ -1916,8 +1940,8 @@ test('the registry proxy can read registry passwords and write none', () => {
 
   const grants = projectIamBlocks(withoutComments(sourceOf('registry-proxy')))
   assert.equal(grants.length, 1, `expected the one read grant, found ${grants.length}`)
-  assert.match(grants[0], /role: registryCredentials\.binding\.readRole,/)
-  assert.match(grants[0], /condition: registryCredentials\.binding\.condition,/, 'the read is not bounded')
+  assert.match(grants[0], /role: binding\.readRole,/)
+  assert.match(grants[0], /condition: binding\.condition,/, 'the read is not bounded')
 })
 
 test('the proxy, the API and the runner read the same registries and the same host', () => {

@@ -74,7 +74,7 @@ jobs:
       - uses: ./.github/actions/mbuild
         with:
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-pulumi-deploy-role-arn: ${{ vars.AWS_PULUMI_DEPLOY_ROLE_ARN }}
           gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           command: ${{ inputs.command }}

@@ -1,13 +1,13 @@
 /**
  * How long the credentials a run holds have to stay valid.
  *
- * One rule, in one place, because both engines apply it. It lives here rather
+ * One rule, in one place, because both cloud deployments apply it. It lives here rather
  * than in either of them: `deploy.ts` imports both engines, so a constant kept
  * there and read back by them would be a cycle, and a copy in each is the same
  * policy spelled twice.
  */
 
-/** SST holds a per-stage lock and a deploy runs long; fail now rather than mid-rollout. */
+/** Pulumi holds a per-stage lock and a deploy runs long; fail now rather than mid-rollout. */
 export const REQUIRED_CREDENTIAL_SECONDS = 20 * 60
 
 /**

@@ -71,7 +71,7 @@ const USAGE = [
   'has to decide whether to spend a build. It reaches the same bucket, so an',
   'unreachable one is still a failure rather than an "absent".',
   '',
-  '--tag asks about a commit other than this checkout\'s, the way `mbuild verify',
+  "--tag asks about a commit other than this checkout's, the way `mbuild verify",
   '--tag` does. A caller that resolved which commit it deploys must pass it, or',
   'the answer is about whatever happens to be checked out. Reading only, so it',
   'is refused without --check: a build stages what it compiled.',
@@ -212,7 +212,20 @@ const awsListing = ({
     // and listing it cost one grant here. Cloud Storage prices them apart —
     // `buckets describe` wants `storage.buckets.get`, which no object role
     // carries — which is why only the GCP source is read by listing alone.
-    ['s3api', 'list-objects-v2', '--region', region, '--bucket', bucket, '--prefix', `${prefix}/`, '--query', 'Contents[].Key', '--output', 'text'],
+    [
+      's3api',
+      'list-objects-v2',
+      '--region',
+      region,
+      '--bucket',
+      bucket,
+      '--prefix',
+      `${prefix}/`,
+      '--query',
+      'Contents[].Key',
+      '--output',
+      'text',
+    ],
     `listing what is staged under ${prefix}/`,
   )
   return new Set(listed.split(/\s+/).filter((key) => key && key !== 'None'))
@@ -225,15 +238,7 @@ const awsListing = ({
  * that holds nothing exits non-zero with `matched no objects`, which is the
  * answer rather than a failure.
  */
-const gcpListing = ({
-  run,
-  bucket,
-  prefix,
-}: {
-  run: RunCommand
-  bucket: string
-  prefix: string
-}): Set<string> => {
+const gcpListing = ({ run, bucket, prefix }: { run: RunCommand; bucket: string; prefix: string }): Set<string> => {
   const listed = run('gcloud', ['storage', 'ls', `gs://${bucket}/${prefix}/`])
   if (!listed.ok) {
     if (/matched no objects|not found|404/i.test(`${listed.stderr}${listed.stdout}`)) return new Set()
@@ -440,7 +445,8 @@ export const buildRunner = async ({
   const stage = scope.stage as string
 
   const signedIn = await checkLogin({ argv: ['login', '--stage', stage], environment, cwd, log })
-  if (signedIn !== 0) throw new RunnerBuildError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
+  if (signedIn !== 0)
+    throw new RunnerBuildError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
 
   const home = await resolveHomeWith({ scope })
   const cloud = home.identity.home
@@ -484,7 +490,7 @@ export const buildRunner = async ({
    *
    * Each cloud's qualifier comes from where the deploy reads it: AWS's account
    * from the session mstage resolved, Google's project from the stage's own
-   * declaration — the same values `sst.config.ts` and `pulumi/program.ts` name
+   * declaration — the same values the AWS and GCP native programs name
    * the bucket from. A build that staged into one and a deploy that read
    * another would 404 on the host, from a boot script that is never rewritten.
    */

@@ -62,14 +62,40 @@ const VOLUME_OBJECT_ACTIONS = [
 export const volumeAccessRoleName = (): string => `${$app.name}-${$app.stage}-s3-access`
 
 export const awsStorageProvider =
-  ({ accountId }: { accountId: string }): StorageProvider =>
+  ({ accountId, existingVolumeRoleName }: { accountId: string; existingVolumeRoleName?: string }): StorageProvider =>
   (request: StorageRequest): Storage => {
-    const bucket = new sst.aws.Bucket('Storage', { versioning: request.versioning })
-    const roleName = volumeAccessRoleName()
+    const bucket = new aws.s3.BucketV2('Storage', {})
+    const versioning = new aws.s3.BucketVersioningV2('StorageVersioning', {
+      bucket: bucket.id,
+      versioningConfiguration: { status: request.versioning ? 'Enabled' : 'Suspended' },
+    })
+    const protections = [bucket].map(
+      (value) =>
+        new aws.s3.BucketPublicAccessBlock('StoragePrivate', {
+          bucket: value.id,
+          blockPublicAcls: true,
+          blockPublicPolicy: true,
+          ignorePublicAcls: true,
+          restrictPublicBuckets: true,
+        }),
+    )
+    const checkpoints = new aws.s3.BucketV2('Checkpoints', {}, { protect: true, retainOnDelete: true })
+    const checkpointPrivacy = new aws.s3.BucketPublicAccessBlock('CheckpointsPrivate', {
+      bucket: checkpoints.id,
+      blockPublicAcls: true,
+      blockPublicPolicy: true,
+      ignorePublicAcls: true,
+      restrictPublicBuckets: true,
+    })
+    const checkpointEncryption = new aws.s3.BucketServerSideEncryptionConfigurationV2('CheckpointsEncryption', {
+      bucket: checkpoints.id,
+      rules: [{ applyServerSideEncryptionByDefault: { sseAlgorithm: 'AES256' } }],
+    })
+    const roleName = existingVolumeRoleName ?? volumeAccessRoleName()
     const roleArn = $interpolate`arn:aws:iam::${accountId}:role/${roleName}`
 
     return {
-      name: bucket.name,
+      name: bucket.bucket,
       binding: {
         cloud: 'aws',
         bucketArn: bucket.arn,
@@ -95,9 +121,11 @@ export const awsStorageProvider =
         ),
         credentialVending: { roleName, roleArn },
       },
-      // Reserved: the API has no S3 checkpoint store yet, so this cloud keeps
-      // no checkpoint bucket, so no archive prefix is supplied to the API.
-      checkpoints: { active: false },
-      ready: [],
+      checkpoints: {
+        active: true,
+        bucket: checkpoints.bucket,
+        archivePrefix: checkpoints.bucket.apply((name: string) => `s3://${name}/checkpoints/`),
+      },
+      ready: [versioning, ...protections, checkpointPrivacy, checkpointEncryption],
     }
   }

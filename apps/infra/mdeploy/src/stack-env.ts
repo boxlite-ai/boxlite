@@ -7,8 +7,7 @@
  * with each other, which get composed into a single value the service's schema
  * accepts.
  *
- * Both engines call this — `sst.config.ts` on the AWS path and
- * `pulumi/program.ts` on the GCP one — and that is the whole point. Two copies
+ * Both native cloud programs call this — and that is the whole point. Two copies
  * that drifted would deploy a control plane behaving differently on one cloud,
  * which is the kind of difference found months later, with a matching digest
  * and nothing reporting it. `test/stack-env.test.ts` asserts that only one copy
@@ -235,11 +234,8 @@ export type StackEnvironment = {
   /**
    * The DNS zone every public record is written into.
    *
-   * Required on both clouds even though only one of them reads it here: SST's
-   * Cloudflare adapter discovers the zone from the domain, and the Pulumi path
-   * has no adapter to discover anything — so a GCP stage names it. Read for
-   * both so a stage that moves clouds does not discover a missing key on the
-   * far side of the move.
+   * Both native cloud programs use this explicit Cloudflare zone for DNS and
+   * certificate validation, rather than discovering it from a domain.
    */
   dnsZoneId: string
   /**

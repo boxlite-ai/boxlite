@@ -429,9 +429,8 @@ function boundedNumber(
  * placement and heartbeat paths read.
  *
  * The `expansion` block drives the runner-disk-expansion cron: it grows a
- * GCP runner's data disk through `disks.update` when free space falls below a
- * water level, rate-limited to GCP's own budget (2 expansions per 4 hours)
- * and a configured cap. `enabled` defaults to true; only an explicit
+ * deployment-owned cloud data disk when free space falls below a water level,
+ * bounded by provider budgets and a configured cap. `enabled` defaults to true; only an explicit
  * `RUNNER_DISK_EXPANSION_ENABLED=false` keeps the cron dormant. The cap is its
  * own key rather than reusing `expandLimitGiB` because that key feeds the
  * placement admission formula: sharing it would widen the admission ceiling
@@ -445,6 +444,12 @@ function boundedNumber(
  */
 export function runnerDiskConfig(env: NodeJS.ProcessEnv = process.env) {
   return {
+    aws: {
+      region: env.AWS_REGION?.trim(),
+      accountId: env.AWS_ACCOUNT_ID?.trim(),
+      app: env.RUNNER_DISK_APP?.trim(),
+      stage: env.RUNNER_DISK_STAGE?.trim(),
+    },
     // Hard disk admission for runner selection; see RunnerService.findAvailableRunners.
     overcommitRatio: boundedNumber(
       env.RUNNER_DISK_OVERCOMMIT_RATIO,
@@ -516,12 +521,11 @@ export function runnerDiskConfig(env: NodeJS.ProcessEnv = process.env) {
         4,
         'RUNNER_DISK_EXPANSION_GROWTH_WINDOW_HOURS',
       ),
-      // Local count of accepted expansions per trailing window. GCP's hard
-      // limit is 2 per ~4h (a third returns 400); this is the conservative
-      // local mirror that avoids hitting it.
+      // AWS counts at most four accepted modifications per rolling 24h.
+      // GCP retains its two-per-four-hour budget; smaller configured limits win.
       maxExpansionsPerWindow: requiredCount(
         env.RUNNER_DISK_EXPANSION_MAX_PER_WINDOW,
-        2,
+        env.RUNNER_DISK_CLOUD === 'aws' ? 4 : 2,
         'RUNNER_DISK_EXPANSION_MAX_PER_WINDOW',
       ),
       // Usage-sample bucket size for the growth calculation.
@@ -731,6 +735,9 @@ const configuration = {
     // leaves private registries off. `file` is for a local stack only.
     store: process.env.REGISTRY_SECRET_STORE?.trim(),
     directory: process.env.REGISTRY_SECRET_DIR?.trim(),
+    region: process.env.AWS_REGION?.trim(),
+    accountId: process.env.REGISTRY_SECRET_ACCOUNT_ID?.trim(),
+    prefix: process.env.REGISTRY_SECRET_PREFIX?.trim(),
   },
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',

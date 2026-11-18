@@ -46,6 +46,8 @@ test('the API is given two roles, and only the version writes are bounded', () =
     ],
   )
   assert.ok(store.active)
+  assert.equal(store.binding.cloud, 'gcp')
+  if (store.binding.cloud !== 'gcp') throw new Error('Expected GCP credentials')
   assert.equal(store.binding.createRole, roles[0].name)
   assert.equal(store.binding.writeRole, roles[1].name)
   assert.equal(
