@@ -134,6 +134,8 @@ fn unplugging_part_of_a_mapped_slot_discards_those_blocks() {
     assert_eq!(slot_calls(&vm).len(), 1, "the slot stays registered");
     assert_eq!(memory.mapped_bytes(), SLOT_SIZE);
     assert_eq!(memory.plugged_bytes(), BLOCK_SIZE);
+    // Darwin's MADV_DONTNEED discards only under memory pressure.
+    #[cfg(target_os = "linux")]
     assert_eq!(view.memory().read_obj::<u8>(block_addr(1)).unwrap(), 0);
 }
 

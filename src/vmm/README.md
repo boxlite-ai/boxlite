@@ -97,7 +97,7 @@ for the scope and interface trade-offs.
 
 `memory::ram_ranges` places one region: at guest address 0 on x86_64, below
 the 32-bit MMIO hole at `0xC000_0000`, and at `0x8000_0000` on arm64. The
-3072 MiB bound keeps every layout inside that region; the region above 4 GiB
+3072 MiB bound keeps every layout inside that region; boot RAM above 4 GiB
 and the arm64 address-space limit are later changes.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
