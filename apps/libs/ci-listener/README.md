@@ -535,6 +535,8 @@ For each label, the pool subtracts workers already starting or available from
 verified demand before choosing which unissued reservations may create a Box.
 With one queued job, two unissued reservations and no started workers, only one
 reservation may create. The other waits for new demand or a complete surplus check.
+If the execution queue rejects the first reservation during retry backoff, the
+next eligible reservation for that label can use the same grant.
 
 Queued notices remain pending while their jobs are eligible. GitHub-confirmed
 non-queued jobs or complete background snapshots settle captured notice versions.

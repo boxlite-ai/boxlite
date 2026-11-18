@@ -397,6 +397,52 @@ describe('CI shared worker lifecycle', () => {
       }
     },
   )
+  it('grants retained unsent demand to a healthy reservation after WorkQueue backoff rejects the first', async () => {
+    supplyInventory()
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    await journal.reserve(lease, key, demand, capacity, { labels: settings.labels })
+    await journal.reserve(lease, key, { ...demand, job: 56 }, capacity, { labels: settings.labels })
+    const [first, second] = (await journal.workers(lease, key)).rows
+    const rejected = new Error('retry this reservation later')
+    const failures: unknown[] = []
+    const queue = new WorkQueue(1, (error) => failures.push(error))
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now())
+    let failed!: () => void, release!: () => void, completed!: () => void
+    const backoffReady = new Promise<void>((resolve) => {
+      failed = resolve
+    })
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const finished = new Promise<void>((resolve) => {
+      completed = resolve
+    })
+    queue.enqueue(first.record.key, 'failed', async () => {
+      throw rejected
+    })
+    queue.enqueue('after-failure', '1', async () => failed())
+    await backoffReady
+    queue.enqueue('barrier', '1', () => held)
+    const enqueue = jest.spyOn(queue, 'enqueue')
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    try {
+      await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+      queue.enqueue('after-dispatch', '1', async () => completed())
+      release()
+      await finished
+      expect(failures).toEqual([rejected])
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(backend.workers.create).toHaveBeenCalledWith(expect.objectContaining({ name: second.value.name }))
+      expect(enqueue.mock.calls.filter(([key]) => key === first.record.key)).toHaveLength(1)
+      expect(enqueue.mock.calls.filter(([key]) => key === second.record.key)).toHaveLength(2)
+      expect(await journal.used(definition.organization)).toBe(2)
+      expect((await journal.workers(lease, key)).rows.every((row) => !row.value.closing)).toBe(true)
+    } finally {
+      release()
+      await queue.close()
+      clock.mockRestore()
+    }
+  })
   it.each([false, true])(
     'keeps retained unsent reservations unissued when started supply covers demand (async=%s)',
     async (asynchronous) => {

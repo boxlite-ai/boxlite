@@ -502,7 +502,7 @@ export class WorkerPool {
       const creationBudget = new Map<string, number>()
       for (const [label, target] of requested)
         creationBudget.set(label, Math.max(0, target.count - ((supplied.get(label) ?? 0) - (unissued.get(label) ?? 0))))
-      // Both dispatch passes use one selection, so retained reservations share the same demand budget.
+      // Only accepted work consumes a grant; both dispatch passes reuse that selection.
       const creationChecks = new Map<string, StateCheck[]>()
       if (verified)
         for (const row of allocations) {
@@ -512,7 +512,9 @@ export class WorkerPool {
           const target = requested.get(label)
           const remaining = creationBudget.get(label) ?? 0
           if (!target || remaining <= 0) continue
-          creationChecks.set(row.record.key, [...(policy.checks ?? []), ...target.checks])
+          const checks = [...(policy.checks ?? []), ...target.checks]
+          if (this.execution && !this.dispatch(lease, row, backend, scope.scope, signal, false, checks)) continue
+          creationChecks.set(row.record.key, checks)
           creationBudget.set(label, remaining - 1)
         }
       const proof = (row: AllocationRow, retire: boolean): readonly StateCheck[] | undefined => {
@@ -521,12 +523,6 @@ export class WorkerPool {
         if (row.value.box.phase !== 'none' || row.value.closing) return []
         return creationChecks.get(row.record.key)
       }
-      if (this.execution)
-        for (const row of allocations) {
-          if (row.value.box.phase !== 'none' || row.value.closing) continue
-          const checks = proof(row, false)
-          if (checks) this.dispatch(lease, row, backend, scope.scope, signal, false, checks)
-        }
       let pending = verified
       while (pending) {
         pending = false
