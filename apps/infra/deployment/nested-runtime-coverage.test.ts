@@ -50,7 +50,7 @@ if [[ "$1" == '_ensure-kvm' ]]; then
   exit
 fi
 [[ "$1" == 'coverage:go' ]]
-[[ "$2" == 'GOTEST_FILTER=-count=1 -run NestedVirtualization' ]]
+[[ "$2" == 'GOTEST_FILTER=-count=1 -run "NestedVirtualization|CopyInStreamOverwritePreservesExistingBytes|RunnerUploadOverwritePreservesBytes"' ]]
 [[ "$BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS" == '1' ]]
 for module in go-sdk gvproxy runner image-service; do
   printf 'mode: %s\\nexample/%s/source.go:2.1,2.2 1 5\\n' "$NESTED_TEST_FOCUSED_MODE" "$module" > "target/coverage/$module.out"

@@ -6,6 +6,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
@@ -34,9 +37,24 @@ func (probe *uploadReadProbe) Read(_ []byte) (int, error) {
 func TestRunnerUploadOverwritePreservesBytes(t *testing.T) {
 	const child = "BOXLITE_UPLOAD_OVERWRITE_TEST_CHILD"
 	if os.Getenv(child) == "" {
+		runtime, err := sdk.NewRuntime(sdk.WithHomeDir(t.TempDir()))
+		if err != nil {
+			var runtimeErr *sdk.Error
+			if errors.As(err, &runtimeErr) && runtimeErr.Code == sdk.ErrUnsupported {
+				t.Skipf("virtualization prerequisite unavailable: %v", err)
+			}
+			t.Fatal(err)
+		}
+		if err := runtime.Close(); err != nil {
+			t.Fatal(err)
+		}
 		for _, scenario := range []string{"preserve", "query"} {
 			t.Run(scenario, func(t *testing.T) {
 				cmd := exec.Command(os.Args[0], "-test.run=^TestRunnerUploadOverwritePreservesBytes$", "-test.v")
+				// Share the collector directory so go test merges child counters.
+				if directory := flag.Lookup("test.gocoverdir"); directory != nil && directory.Value.String() != "" {
+					cmd.Args = append(cmd.Args, "-test.gocoverdir="+directory.Value.String())
+				}
 				cmd.Env = append(os.Environ(), child+"="+scenario)
 				output, err := cmd.CombinedOutput()
 				t.Logf("Runner upload subprocess:\n%s", output)

@@ -4,6 +4,17 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
+## Upload policy tests
+
+`make test:apps:runner FILTER=TestRunnerUploadOverwritePreservesBytes` checks
+upload overwrite policy against actual guest files. The parent process probes
+virtualization before launching isolated test children and skips only when the
+runtime reports `ErrUnsupported`; other initialization errors fail the test.
+Coverage runs share the collector directory with both child processes so their
+handler executions contribute to the parent report.
+Linux x64 CI also runs this test after enabling KVM access, alongside the Go SDK
+overwrite test, and merges that coverage into the hosted test report.
+
 ## Memory quotas
 
 Create and recovery `memoryQuota` values are GiB numbers, including exact fractions:
