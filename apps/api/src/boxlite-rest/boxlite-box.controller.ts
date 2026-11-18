@@ -52,6 +52,7 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
+import { emitTiming, startTiming } from '../common/utils/tti-timing.util'
 import { BoxPageQuery } from './dto/box-page-query.dto'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -133,6 +134,30 @@ export class BoxliteBoxController {
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
+    const startedAt = startTiming()
+    try {
+      const res = request?.res
+      if (res) {
+        let recorded = false
+        const record = (closed: boolean) => {
+          if (recorded) return
+          recorded = true
+          try {
+            const boxId = request?.[AUDIT_TARGET_ID]
+            emitTiming(
+              'create',
+              'create.request',
+              closed || res.statusCode >= 400 ? 'error' : 'ok',
+              startedAt,
+              boxId ? { box_id: boxId } : {},
+            )
+          } catch {}
+        }
+        res.once('finish', () => record(false))
+        res.once('close', () => record(true))
+      }
+    } catch {}
+
     if (dto.checkpoint_id !== undefined) {
       return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
     }
@@ -152,7 +177,17 @@ export class BoxliteBoxController {
     let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
     if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      const boxId = box.id
+      const waitStartedAt = startTiming()
+      let status: 'ok' | 'error' = 'error'
+      try {
+        box = await this.boxStateWaiter.waitForStarted(boxId, organization.id, 30)
+        status = 'ok'
+      } finally {
+        try {
+          emitTiming('create', 'create.wait_started', status, waitStartedAt, { box_id: boxId })
+        } catch {}
+      }
     }
     return boxToBoxResponse(box)
   }
@@ -293,7 +328,13 @@ export class BoxliteBoxController {
     @Param('boxId') boxId: string,
     @UserContext() ctx: Context,
   ) {
+    const startedAt = startTiming()
     await this.boxService.destroy(boxId, authContext.organizationId, ctx)
+    if (startedAt !== undefined) {
+      try {
+        emitTiming('destroy', 'destroy.request', 'ok', startedAt, { box_id: boxId })
+      } catch {}
+    }
   }
 
   @Post(':boxId/start')
