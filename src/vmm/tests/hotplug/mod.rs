@@ -191,3 +191,26 @@ fn drop_unregisters_every_mapped_slot() {
         ]
     );
 }
+
+#[test]
+fn unplug_after_a_poisoned_view_lock_still_removes_the_slot_everywhere() {
+    let (vm, view, mut memory) = window(MockVm::new(), 128);
+    let blocks = memory.blocks(HOTPLUG_START, 1).unwrap();
+    memory.plug(blocks.clone()).unwrap();
+    let poisoner = view.clone();
+    std::thread::spawn(move || {
+        let _guard = poisoner.lock().unwrap();
+        panic!("poison the view lock");
+    })
+    .join()
+    .unwrap_err();
+
+    memory.unplug(blocks).unwrap();
+
+    assert_eq!(
+        slot_calls(&vm),
+        [(true, HOTPLUG_START, SLOT), (false, HOTPLUG_START, SLOT)]
+    );
+    assert_eq!(memory.mapped_bytes(), 0);
+    assert!(!view.memory().address_in_range(GuestAddress(HOTPLUG_START)));
+}
