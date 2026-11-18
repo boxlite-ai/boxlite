@@ -266,15 +266,25 @@ epoch and changes both records atomically.
 
 Execution checks hold a shared `FOR SHARE` lock on `@owner` before reading
 `@lease`, so unrelated readers and allocation transactions can overlap.
-Activation, acquisition, bootstrap and renewal take the owner lock exclusively.
+Standby ticks and webhook receipts validate an initialized journal's roots and
+requested seeds in a consistent snapshot. A missing or legacy owner sends
+initialization through serialized bootstrap, which rereads the roots before
+creating or migrating them. Missing seeds in an existing journal fail validation.
+During a standby tick, acquisition reads the owner and deadline without a row
+lock. A live lease or a different deployment ends the probe immediately.
+Activation, takeover, bootstrap and renewal take the owner lock exclusively.
 An identity change therefore waits for guarded transactions to finish; renewal
 serializes deadline updates without upgrading a shared lock.
 Adapters without shared point reads fall back to the exclusive lock; SQLite
 serializes transactions at the file boundary.
 Renewal rejects an expired or replaced owner and never shortens its deadline,
-even if a caller requests a shorter TTL. A contender checks the committed deadline
-after obtaining the owner lock, so it cannot take over a live renewed lease.
+even if a caller requests a shorter TTL. A takeover candidate rechecks the
+deployment and deadline against database time after obtaining the owner lock.
 The lock is held until the database transaction commits or rolls back.
+
+A failed renewal cancels in-flight work for that Listener session. The
+`listener-renewal` warning identifies that operation before the session drains.
+Hosted database failures include the SQLSTATE code without query text or parameters.
 
 Snapshot checks read the deadline without locking that frequently updated row.
 For example, a snapshot can precede a renewal from 10:00:30 to 10:00:40 and still
@@ -394,8 +404,7 @@ Each effect records an operation UUID first. Resource IDs are immutable, and an
 unknown create cannot be reset, retried or settled through a missing-resource result.
 
 `WorkerPool` drives boot, JIT registration/delivery and cleanup through host-bound
-capabilities. It keeps JIT configuration in memory and never republishes an uncertain
-delivery. A triggering job supplies demand rather than an exclusive assignment:
+capabilities. JIT configuration stays in memory and is sent at most once. A triggering job supplies demand rather than an exclusive assignment:
 the Box may execute another authorized matching job. A completed notification alone
 does not stop it. An elapsed timeout or runner absence alone does not prove
 that its Box is idle. Delivered workers remain until actual exit or confirmed
@@ -466,7 +475,7 @@ periodic recovery for 60 seconds. Version conflicts reload without consuming tha
 revision received during a conflicting operation remains queued; allocation work
 revisions include their admission/retirement proof, so refreshed guards replace
 stale pending work. A retry reconciles the original intent: it does not
-repeat an uncertain create, runner registration or JIT delivery.
+repeat an uncertain create, runner registration or JIT configuration upload.
 
 A confirmed creation refusal returns quota immediately and delays replacement
 admission at the stable scope/resource-label boundary: one second, then two,
@@ -649,10 +658,20 @@ candidate only after 300 seconds from registration. This is a startup grace, not
 evidence of continuous idle time. Busy workers and capacity still needed by the
 queue remain.
 
-A lost JIT upload acknowledgement can leave an online runner at `requested`,
-including after restart. That delivery state remains unchanged: the scheduler
-neither fabricates an acknowledgement nor repeats JIT delivery. Confirmed surplus
-can enter the same retirement protocol below.
+A lost JIT upload acknowledgement can leave a runner at `requested`. A Hosted
+Box with a recoverable delivery uses its original allocation, Box and platform
+runner identities. A recorded job claim or a matching online or busy runner
+proves startup. Otherwise the native record determines the next action.
+
+| Native JIT record | Recovery |
+| --- | --- |
+| Delivery unclaimed or configuration upload in progress | Seal the operation with a versioned write, then close the original allocation. A delayed upload cannot authorize ready after the seal. |
+| Configuration acknowledged and ready authorized | Recheck current authority and original Box placement, then write only the fixed ready marker. |
+| Historical single-attempt marker | Keep observing the runner through its startup grace. |
+
+The guest consumes the configuration once and removes both files before running
+the job. Repeating the ready marker can never supply another configuration.
+The scheduler checks current queued demand when it replaces a closed allocation.
 
 Before unregistering, the scheduler persists a distinct `runner-retire` intent
 under the original allocation, identity and execution lease. `retireIdle()` reads

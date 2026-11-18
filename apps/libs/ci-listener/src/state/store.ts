@@ -91,6 +91,23 @@ export class ListenerState {
 
   async initialize(initial: { key: string; payload: Json }[] = []): Promise<void> {
     const seeds = initial.length ? this.prepare(initial.map((row) => ({ ...row, expected: null }))) : []
+    // Every standby tick checks the journal. Only creation or migration needs the bootstrap lock.
+    const initialized = await this.database.transaction(
+      this.namespace,
+      async (tx) => {
+        const owner = await tx.get('@owner')
+        if (!owner || owner.schema === 1) return false
+        this.owner(owner)
+        const keys = ['@anchor', '@lease', ...seeds.map((seed) => seed.key)]
+        const rows = await this.lookup(tx, keys)
+        if (rows.length !== keys.length) throw new StateCorrupt()
+        this.anchor(rows[0])
+        this.until(rows[1])
+        return true
+      },
+      'snapshot',
+    )
+    if (initialized) return
     await this.database.transaction(
       this.namespace,
       async (tx) => {
@@ -127,7 +144,13 @@ export class ListenerState {
     this.ttl(ttlMs)
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(ownerId)) throw new Error('Invalid Listener owner')
     return this.database.transaction(this.namespace, async (tx) => {
-      this.anchor(await tx.get('@anchor'))
+      const [anchor, observedOwner, observedLease] = await this.lookup(tx, ['@anchor', '@owner', '@lease'])
+      this.anchor(anchor)
+      const deployment = this.owner(observedOwner).deployment
+      const deadline = this.until(observedLease)
+      if (deployment !== this.deployment || deadline > (await tx.now())) return undefined
+
+      // A renewal or another contender may have committed since the unlocked observation.
       const row = await tx.get('@owner', true),
         previous = this.owner(row),
         expiry = await tx.get('@lease'),

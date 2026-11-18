@@ -797,6 +797,28 @@ export class WorkerPool {
         if (observed.box_id !== row.value.box.id) throw new Error('Original CI Box identity changed')
         status = observed.status
         exitCode = observed.exit_code
+        if (
+          status === 'running' &&
+          !row.value.closing &&
+          row.value.runner.phase === 'known' &&
+          row.value.delivery === 'requested' &&
+          row.value.effect?.kind === 'jit-deliver' &&
+          observed.recoverableJit &&
+          backend.workers.recoverJit
+        ) {
+          const id = row.value.runner.id!
+          const claimed = await this.journal.claimedRunners(lease, scope, [id])
+          const runner = claimed.has(id)
+            ? undefined
+            : (await backend.inventory?.(signal))?.find((item) => item.id === id)
+          if (runner && runner.name !== row.value.name) throw new StateCorrupt()
+          if (claimed.has(id) || runner?.busy || runner?.status === 'online') await update({ delivery: 'done' })
+          else {
+            const result = await backend.workers.recoverJit(row.value.name, row.value.effect.id, signal)
+            if (result === 'replace') await update({ closing: true })
+            if (result === 'delivered') await update({ delivery: 'done' })
+          }
+        }
       } catch (error) {
         if (error instanceof Error && (error as Error & { confirmedBoxAbsent?: boolean }).confirmedBoxAbsent === true) {
           const unexpected = !row.value.closing

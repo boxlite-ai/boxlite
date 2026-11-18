@@ -103,6 +103,14 @@ export class GitHubExecutionBackend implements PoolBackend {
         this.assertOpen()
         return host.workers.deliverJit(name, configuration, signal)
       },
+      recoverJit:
+        host.workers.recoverJit &&
+        (async (name, effect, signal) => {
+          await this.check('admission', signal)
+          await this.repositoryPolicy(name, signal)
+          this.assertOpen()
+          return host.workers.recoverJit!(name, effect, signal)
+        }),
     }
   }
   private async repositoryPolicy(name: string, signal?: AbortSignal): Promise<void> {
