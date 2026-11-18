@@ -1071,3 +1071,102 @@ fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
     assert!(before.1 != after.1);
     assert!(linux_timer_changed(&before.0, &after.0));
 }
+
+// The reader stops at the first RAM byte, independently of RAM size or timing.
+struct RamGuard {
+    file: File,
+    ram_start: u64,
+}
+impl io::Read for RamGuard {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let position = std::io::Seek::stream_position(&mut self.file)?;
+        assert!(position < self.ram_start, "RAM read before vCPU admission");
+        let len = bytes.len().min((self.ram_start - position) as usize);
+        io::Read::read(&mut self.file, &mut bytes[..len])
+    }
+}
+
+fn reject_before_ram(count: u32, payload: &[u8], reason: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    image::write(&path, count, payload, &ram).unwrap();
+    let mut reader = RamGuard {
+        file: File::open(&path).unwrap(),
+        ram_start: 32 + payload.len() as u64,
+    };
+    let len = reader.file.metadata().unwrap().len();
+    let error = from_reader::<Backend, _>(
+        &mut reader,
+        len,
+        false,
+        |_| -> Result<fn() -> boxlite_hypervisor::Result<Backend>> {
+            panic!("host prepared before vCPU admission")
+        },
+    )
+    .expect_err("invalid vCPU structure admitted");
+    assert!(
+        matches!(error, Error::Snapshot(ref e)
+        if e.kind() == io::ErrorKind::InvalidInput && e.to_string() == reason),
+        "unexpected admission error: {error:?}"
+    );
+    let position = std::io::Seek::stream_position(&mut reader.file).unwrap();
+    assert!(position >= 32 && position <= reader.ram_start);
+    if count == 0 || count > u32::from(crate::config::MAX_VCPUS) {
+        assert_eq!(position, 32, "invalid header must not read byte 33");
+    } else {
+        assert!(position > 32, "machine admission must read past the header");
+    }
+}
+
+#[test]
+fn zero_vcpus_are_rejected_before_ram() {
+    let mut state = machine();
+    state.vcpus.clear();
+    reject_before_ram(0, &state.encode().unwrap(), "vCPU count must be in 1..=64");
+}
+
+#[test]
+fn excessive_vcpus_are_rejected_before_ram() {
+    let mut state = machine();
+    let cpu = state.vcpus[0].state.clone();
+    state.vcpus = (0..65)
+        .map(|id| VcpuRecord {
+            id,
+            state: cpu.clone(),
+        })
+        .collect();
+    reject_before_ram(65, &state.encode().unwrap(), "vCPU count must be in 1..=64");
+}
+
+#[test]
+fn forged_outer_list_length_is_rejected_before_decoding_records_or_ram() {
+    // Postcard's first field is the sequence length. There are deliberately no
+    // records: admission must reject the length, not attempt to decode one.
+    for count in [0usize, 65, usize::MAX] {
+        let payload = postcard::to_allocvec(&count).unwrap();
+        reject_before_ram(1, &payload, "vCPU count must be in 1..=64");
+    }
+}
+
+#[test]
+fn duplicate_ids_are_rejected_before_ram() {
+    let mut state = machine();
+    state.vcpus[1].id = 0;
+    reject_before_ram(
+        3,
+        &state.encode().unwrap(),
+        "vCPU records must be contiguous and ordered by id",
+    );
+}
+
+#[test]
+fn unordered_ids_are_rejected_before_ram() {
+    let mut state = machine();
+    state.vcpus.swap(0, 1);
+    reject_before_ram(
+        3,
+        &state.encode().unwrap(),
+        "vCPU records must be contiguous and ordered by id",
+    );
+}

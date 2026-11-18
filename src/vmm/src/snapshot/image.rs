@@ -87,9 +87,15 @@ pub(crate) struct Header {
 }
 
 impl Header {
+    #[cfg(test)]
     pub(crate) fn read(file: &mut File) -> Result<Self> {
+        let file_len = file.metadata().map_err(Error::Snapshot)?.len();
+        Self::read_from(file, file_len)
+    }
+
+    pub(crate) fn read_from(reader: &mut impl Read, file_len: u64) -> Result<Self> {
         let mut bytes = [0; HEADER_LEN as usize];
-        file.read_exact(&mut bytes).map_err(Error::Snapshot)?;
+        reader.read_exact(&mut bytes).map_err(Error::Snapshot)?;
         if &bytes[..8] != MAGIC || u32::from_le_bytes(bytes[8..12].try_into().unwrap()) != VERSION {
             return Err(invalid("unknown image magic or version"));
         }
@@ -98,11 +104,13 @@ impl Header {
             ram_len: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
             machine_len: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
         };
+        if !(1..=u32::from(crate::config::MAX_VCPUS)).contains(&header.vcpus) {
+            return Err(invalid("vCPU count must be in 1..=64"));
+        }
         if header.machine_len > MAX_MACHINE_STATE_LEN {
             return Err(invalid("machine state exceeds length limit"));
         }
         // Restore validates the RAM layout and KVM's GPA limit before allocating RAM.
-        let file_len = file.metadata().map_err(Error::Snapshot)?.len();
         if HEADER_LEN
             .checked_add(header.machine_len)
             .and_then(|n| n.checked_add(header.ram_len))
@@ -114,17 +122,36 @@ impl Header {
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    pub(crate) fn read_machine(&self, file: &mut File) -> Result<super::state::MachineState> {
+    pub(crate) fn read_machine(
+        &self,
+        reader: &mut impl Read,
+    ) -> Result<super::state::MachineState> {
         let mut bytes = vec![
             0;
             usize::try_from(self.machine_len)
                 .map_err(|_| invalid("machine length exceeds address space"))?
         ];
-        file.read_exact(&mut bytes).map_err(Error::Snapshot)?;
+        reader.read_exact(&mut bytes).map_err(Error::Snapshot)?;
+        // Version 1 starts with the Postcard sequence length (a usize varint).
+        // Check it before Vec deserialization can reserve or decode any records;
+        // the byte-length limit alone does not bound the number of elements.
+        let (count, _) = postcard::take_from_bytes::<usize>(&bytes)
+            .map_err(|error| Error::Snapshot(io::Error::other(error)))?;
+        if !(1..=usize::from(crate::config::MAX_VCPUS)).contains(&count) {
+            return Err(invalid("vCPU count must be in 1..=64"));
+        }
+        if count as u64 != u64::from(self.vcpus) {
+            return Err(invalid("vCPU count differs from machine state"));
+        }
         let state: super::state::MachineState = postcard::from_bytes(&bytes)
             .map_err(|error| Error::Snapshot(io::Error::other(error)))?;
-        if state.vcpus.len() as u64 != u64::from(self.vcpus) {
-            return Err(invalid("vCPU count differs from machine state"));
+        if state
+            .vcpus
+            .iter()
+            .enumerate()
+            .any(|(id, record)| usize::from(record.id) != id)
+        {
+            return Err(invalid("vCPU records must be contiguous and ordered by id"));
         }
         Ok(state)
     }

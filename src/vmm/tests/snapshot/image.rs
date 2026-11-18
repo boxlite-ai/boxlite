@@ -102,6 +102,26 @@ fn reader_checks_magic_version_and_length_bounds() {
 }
 
 #[test]
+fn header_rejects_out_of_range_vcpu_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    for count in [0, 65, u32::MAX] {
+        if path.exists() {
+            fs::remove_file(&path).unwrap();
+        }
+        image::write(&path, count, b"machine", &ram).unwrap();
+        let mut file = File::open(&path).unwrap();
+        let error =
+            image::Header::read(&mut file).expect_err("header admitted an out-of-range vCPU count");
+        assert!(matches!(error, crate::Error::Snapshot(ref e)
+            if e.kind() == io::ErrorKind::InvalidInput
+                && e.to_string() == "vCPU count must be in 1..=64"));
+        assert_eq!(std::io::Seek::stream_position(&mut file).unwrap(), 32);
+    }
+}
+
+#[test]
 fn machine_state_length_limit_is_checked_in_the_header() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");

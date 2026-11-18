@@ -629,9 +629,9 @@ checksum, hash, signature, feature negotiation or compatibility metadata:
 | `32..32+M` | Postcard: vCPU records (ID + `X86VcpuState`), then `X86VmState` |
 | `32+M..` | Raw RAM bytes |
 
-The internal reader checks the magic and version, rejects declared lengths
-that overflow or extend past the file, and caps machine state at 32 MiB + 64 KiB
-before allocating its buffer.
+The internal reader checks the magic, version and header vCPU count (1–64).
+It rejects declared lengths that overflow or extend past the file and caps the
+encoded machine-state buffer at 32 MiB + 64 KiB.
 
 `make test:unit:vmm` covers the container, layout refusal, partial-write/final-flush
 cleanup and handle admission on every host. Linux x86_64 mock tests exercise
@@ -654,17 +654,22 @@ execution.join()?;
 ```
 
 Images are created with owner-only permissions (`0600`, subject to the caller's
-umask). After decoding the Postcard machine state, the reader checks that its
-vCPU count matches the header and falls within 1–64. It requires vCPU records
-in contiguous ID order starting at 0.
+umask). Restore validates metadata before mapping or reading RAM or creating a
+host VM.
 
-Before allocating RAM or creating a host VM, restore requires a nonzero,
-page-aligned RAM payload. The x86 RAM layout checks that each range fits the
-host's address size and that computing its end GPA does not overflow. Restore
-then checks the ranges against the prepared KVM handle's GPA limit. It streams
-packed RAM in ascending GPA order in 1 MiB chunks into fresh private-anonymous
-regions. When the payload exceeds 3 GiB, the remaining bytes go into high RAM
-starting at 4 GiB.
+1. Validate the 32-byte header and read the bounded encoded machine state.
+2. Decode its leading Postcard sequence-length varint before deserializing any
+   vCPU record. Require 1–64 records and agreement with the header count.
+3. Decode the machine state and require contiguous, ordered vCPU IDs starting
+   at 0.
+4. Require a nonzero, page-aligned RAM payload. The x86 layout checks that each
+   range fits the host address space and that its end GPA can be computed
+   without overflow. Restore checks the ranges against the prepared KVM
+   handle's GPA limit.
+
+Restore streams packed RAM in ascending GPA order in 1 MiB chunks into fresh
+private-anonymous regions. When the payload exceeds 3 GiB, the remaining bytes
+go into high RAM starting at 4 GiB.
 
 Restore installs captured state without loading a kernel or initramfs or
 applying boot CPUID, MSRs or registers.

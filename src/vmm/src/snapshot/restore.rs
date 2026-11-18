@@ -3,7 +3,11 @@
 
 //! Read admission precedes host creation. Imported machines never boot.
 
-use std::{fs::File, io, path::Path};
+use std::{
+    fs::File,
+    io::{self, Read},
+    path::Path,
+};
 
 use boxlite_hypervisor::{KvmVm, X86Vm};
 use vm_memory::GuestAddress;
@@ -49,9 +53,22 @@ where
     Create: FnOnce() -> boxlite_hypervisor::Result<H>,
 {
     let mut file = File::open(path).map_err(Error::Snapshot)?;
-    let header = Header::read(&mut file)?;
-    let machine = header.read_machine(&mut file)?;
-    let count = vcpu_count(&machine)?;
+    let file_len = file.metadata().map_err(Error::Snapshot)?.len();
+    from_reader(&mut file, file_len, fresh_vm, prepare)
+}
+
+fn from_reader<H, Create>(
+    reader: &mut impl Read,
+    file_len: u64,
+    fresh_vm: bool,
+    prepare: impl FnOnce(&[(GuestAddress, usize)]) -> Result<Create>,
+) -> Result<VmHandle<H>>
+where
+    H: X86Vm + 'static,
+    Create: FnOnce() -> boxlite_hypervisor::Result<H>,
+{
+    let header = Header::read_from(reader, file_len)?;
+    let machine = header.read_machine(reader)?;
     if header.ram_len == 0 {
         return Err(Error::Snapshot(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -61,39 +78,17 @@ where
     let ranges = X86_LAYOUT.ranges(header.ram_len).map_err(Error::Snapshot)?;
     let create = prepare(&ranges)?;
     let ram = GuestRam::new(&ranges)?;
-    ram.read_image(&mut file)?;
-    start(ram, machine, count, create, fresh_vm)
-}
-
-fn vcpu_count(machine: &MachineState) -> Result<u8> {
-    let count = machine.vcpus.len();
-    if !(1..=usize::from(crate::config::MAX_VCPUS)).contains(&count) {
-        return Err(Error::Snapshot(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "vCPU count must be in 1..=64",
-        )));
-    }
-    if machine
-        .vcpus
-        .iter()
-        .enumerate()
-        .any(|(id, record)| usize::from(record.id) != id)
-    {
-        return Err(Error::Snapshot(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "vCPU records must be contiguous and ordered by id",
-        )));
-    }
-    Ok(count as u8)
+    ram.read_image(reader)?;
+    start(ram, machine, create, fresh_vm)
 }
 
 fn start<H: X86Vm + 'static>(
     ram: GuestRam,
     machine: MachineState,
-    count: u8,
     create: impl FnOnce() -> boxlite_hypervisor::Result<H>,
     fresh_vm: bool,
 ) -> Result<VmHandle<H>> {
+    let count = machine.vcpus.len() as u8;
     Vm::with_ram(
         ram,
         count,
@@ -120,8 +115,7 @@ fn from_ram<H: X86Vm + 'static>(
     machine: MachineState,
     create: impl FnOnce() -> boxlite_hypervisor::Result<H>,
 ) -> Result<VmHandle<H>> {
-    let count = vcpu_count(&machine)?;
-    start(ram, machine, count, create, false)
+    start(ram, machine, create, false)
 }
 
 #[cfg(test)]
