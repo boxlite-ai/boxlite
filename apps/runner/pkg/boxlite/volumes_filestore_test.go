@@ -66,9 +66,22 @@ func installFakeMountpoint(t *testing.T, exitCode int) string {
 	return logPath
 }
 
-// probeLog reads the fake mountpoint's log as the ordered list of paths it
-// was asked about. A missing log means the probe never ran.
-func probeLog(t *testing.T, logPath string) []string {
+func installFakeUmount(t *testing.T) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "umounts.log")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$1\" >> \"%s\"\n", logPath)
+	if err := os.WriteFile(filepath.Join(binDir, "umount"), []byte(script), 0755); err != nil {
+		t.Fatalf("failed to write fake umount: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+// commandLog reads a fake command's log as the ordered list of paths it was
+// asked to operate on. A missing log means the command never ran.
+func commandLog(t *testing.T, logPath string) []string {
 	t.Helper()
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -558,7 +571,7 @@ func TestRecordWriteHappensUnderTheInstanceLock(t *testing.T) {
 		t.Error("reclaim completed while the record writer held the instance lock")
 	case <-time.After(100 * time.Millisecond):
 	}
-	if got := probeLog(t, probeLogPath); got != nil {
+	if got := commandLog(t, probeLogPath); got != nil {
 		t.Errorf("reclaim probed %v before the record write completed", got)
 	}
 
@@ -567,7 +580,7 @@ func TestRecordWriteHappensUnderTheInstanceLock(t *testing.T) {
 		t.Fatalf("getVolumeMounts failed: %v", err)
 	}
 	<-reclaimDone
-	if got := probeLog(t, probeLogPath); got != nil {
+	if got := commandLog(t, probeLogPath); got != nil {
 		t.Errorf("reclaim probed %v after the record became visible", got)
 	}
 }
@@ -603,7 +616,7 @@ func TestReclaimRescansRecordsUnderTheInstanceLock(t *testing.T) {
 
 	c.reclaimFilestoreMount(ctx, root)
 
-	if got := probeLog(t, probeLogPath); got != nil {
+	if got := commandLog(t, probeLogPath); got != nil {
 		t.Errorf("reclaim probed %v; the in-lock rescan must see the reference and skip before any probe or umount", got)
 	}
 }
@@ -661,7 +674,7 @@ func TestCleanupOrphanedVolumeMountsEndToEnd(t *testing.T) {
 		if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 			t.Errorf("the orphaned object-storage directory %s was not reclaimed (stat err: %v)", orphan, err)
 		}
-		if got, want := probeLog(t, probeLogPath), []string{orphan}; !reflect.DeepEqual(got, want) {
+		if got, want := commandLog(t, probeLogPath), []string{orphan}; !reflect.DeepEqual(got, want) {
 			t.Errorf("probe log = %v, want exactly [%s]; the referenced root must not be probed at all", got, orphan)
 		}
 	})
@@ -687,7 +700,7 @@ func TestCleanupOrphanedVolumeMountsEndToEnd(t *testing.T) {
 		if _, err := os.Stat(root); !os.IsNotExist(err) {
 			t.Errorf("the orphaned filestore root %s was not reclaimed (stat err: %v)", root, err)
 		}
-		if got, want := probeLog(t, probeLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		if got, want := commandLog(t, probeLogPath), []string{root}; !reflect.DeepEqual(got, want) {
 			t.Errorf("probe log = %v, want exactly [%s]; the reclaim must have reached the probe on the root", got, root)
 		}
 	})
@@ -773,13 +786,9 @@ func TestFilestoreVolumeRejectsSubpath(t *testing.T) {
 	}
 }
 
-// A create that fails partway through its volume list must not leave the
-// partial record behind. Filestore volumes write their record entries inside
-// the instance critical section, so a failure at a later volume leaves an
-// earlier volume's entry already on disk. Without deletion no box ever exists
-// to destroy, the dangling entry counts a reference forever, and the
-// reclaimer never reclaims the NFS mount. This pins the rollback wiring on
-// Create's getVolumeMounts failure path.
+// A create that fails partway through its volume list must remove the partial
+// record and reclaim the NFS mount when no box references it. A reference from
+// another box must keep the mount intact through the same rollback.
 func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()
@@ -787,15 +796,19 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 
 	c := filestoreTestClient(t)
 	installFakeFilestoreMounts(c)
-
+	umountLogPath := installFakeUmount(t)
+	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
+	boxID := "abc123def456"
 	outbound := true
+	volumes := []dto.VolumeDTO{
+		{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+	}
+
 	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
-		Id:              "abc123def456",
+		Id:              boxID,
 		OutboundEnabled: &outbound,
-		Volumes: []dto.VolumeDTO{
-			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
-			{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
-		},
+		Volumes:         volumes,
 	})
 	if err == nil {
 		t.Fatal("expected the volume-id guard failure from the second volume, got nil")
@@ -804,13 +817,40 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 		t.Fatalf("expected the volume-id guard error, got %q", err)
 	}
 
-	// The first volume's entry was already on disk inside its instance
-	// critical section. The failed create must remove it: no box exists to
-	// ever destroy, so the dangling entry would count a reference forever and
-	// keep the NFS mount from ever reclaiming.
-	recordPath := filepath.Join(getVolumeMountRecordDir(), "abc123def456.json")
+	recordPath := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
 	if _, statErr := os.Stat(recordPath); !os.IsNotExist(statErr) {
 		t.Fatalf("volume mount record survived the failed create: %v", statErr)
+	}
+	if got, want := commandLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		t.Errorf("umount log = %v, want %v; the failed create left its unreferenced mount behind", got, want)
+	}
+	if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+		t.Errorf("unreferenced filestore root survived the failed create: %v", statErr)
+	}
+
+	c = filestoreTestClient(t)
+	installFakeFilestoreMounts(c)
+	umountLogPath = installFakeUmount(t)
+	if _, err := c.getVolumeMounts(ctx, "box-other", volumes[:1]); err != nil {
+		t.Fatalf("failed to establish another box's mount reference: %v", err)
+	}
+
+	_, _, err = c.Create(ctx, dto.CreateBoxDTO{
+		Id:              boxID,
+		OutboundEnabled: &outbound,
+		Volumes:         volumes,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("Create with an existing reference returned %v, want volume-id failure", err)
+	}
+	if got := commandLog(t, umountLogPath); got != nil {
+		t.Errorf("rollback unmounted %v despite another box's reference", got)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Errorf("filestore root referenced by another box was removed: %v", statErr)
+	}
+	if _, readErr := c.readBoxVolumeMountRecord("box-other"); readErr != nil {
+		t.Errorf("another box's reference did not survive rollback: %v", readErr)
 	}
 }
 

@@ -591,8 +591,11 @@ admission are outside this runner-only slice.
   is named by volume ID, so boxes sharing a volume share data. Destroy removes
   the box reference, not the volume data.
 - Per-instance mutexes serialize mount, record, and reclaim decisions. Create
-  rolls back records written before a later volume or final record write fails;
-  start replay retains existing entries until their replacements are durable.
+  rolls back records written before a later volume or final record write fails,
+  then immediately reclaims any resulting unreferenced Filestore mounts,
+  independently of scheduled cleanup and its dry-run mode. Reclaim rechecks
+  references and pending operations under the instance lock; start replay
+  retains existing entries until their replacements are durable.
 - Prepare failures return `FILESTORE_VOLUME_PREPARE_FAILED` with box, volume,
   and instance IDs plus the mount error. Logs do not include box environment
   variables, secrets, authorization headers, or job payloads.
