@@ -138,6 +138,24 @@ vm-memory and registers it with the host VM. These rules keep the backend's
   created host VM with exclusive ownership is closed before `run` starts.
   If registrations may still exist, `GuestRam` retains the backing.
 
+A map replaced while a worker event runs reaches the next event, not the
+current one:
+
+```mermaid
+sequenceDiagram
+  participant W as Virtio worker
+  participant V as GuestMemoryView
+  participant H as Map owner
+  W->>V: memory() at event start
+  V-->>W: snapshot S1 (regions A, B)
+  H->>V: replace with S2 (region A only)
+  Note over W: event still reads B through S1
+  W->>W: drop S1 at event end
+  Note over V: B stays mapped until its last reference drops
+  W->>V: memory() at next event start
+  V-->>W: snapshot S2: a descriptor into B fails translation
+```
+
 `Vm::new` validates the configuration, then opens and checks the KVM system fd
 and reads supported CPUID once. It preflights the RAM addresses and boot leaf
 before spawning the console worker or allocating RAM. The VM builder
