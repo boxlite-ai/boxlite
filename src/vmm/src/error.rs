@@ -8,15 +8,27 @@ use std::{error, fmt, io, path::PathBuf};
 /// Result of a VMM operation.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A failure that ends the VM.
+/// A failure that ends the VM, or a rejected vCPU control request.
 ///
 /// The cause chain stays intact through [`error::Error::source`], so callers
 /// can tell a host that cannot run VMs from other failures.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// The vCPU count is outside `1..=config::MAX_VCPUS`.
+    /// The vCPU count is outside `1..=config::MAX_VCPUS`, or a requested
+    /// online count is outside `1..=` the VM's maximum.
     InvalidVcpuCount(u8),
+    /// The maximum vCPU count is below the online count or above
+    /// `config::MAX_VCPUS`.
+    InvalidMaxVcpus { max: u8, online: u8 },
+    /// A grant found vCPU `vcpu` not parked.
+    VcpuNotParked { vcpu: u32 },
+    /// A revoke found vCPU `vcpu` not running.
+    VcpuNotRunning { vcpu: u32 },
+    /// A revoked vCPU `vcpu` did not park in time.
+    ParkTimedOut { vcpu: u32 },
+    /// A vCPU control request arrived after the VM ended.
+    VmNotRunning,
     /// Opening or configuring filesystem exports failed.
     Filesystem(io::Error),
     /// Binding or configuring the host bridges failed.
@@ -82,6 +94,13 @@ impl fmt::Display for Error {
             Self::Vsock(_) => f.write_str("failed to configure vsock bridges"),
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
+            Self::InvalidMaxVcpus { max, online } => {
+                write!(f, "invalid maximum vCPU count {max} for {online} online")
+            }
+            Self::VcpuNotParked { vcpu } => write!(f, "vCPU {vcpu} is not parked"),
+            Self::VcpuNotRunning { vcpu } => write!(f, "vCPU {vcpu} is not running"),
+            Self::ParkTimedOut { vcpu } => write!(f, "vCPU {vcpu} did not park in time"),
+            Self::VmNotRunning => f.write_str("the VM is not running"),
             Self::InvalidMemorySize(mib) => write!(f, "invalid memory size: {mib} MiB"),
             Self::AllocateMemory { bytes, .. } => {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
@@ -138,6 +157,11 @@ impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
             Self::InvalidVcpuCount(_)
+            | Self::InvalidMaxVcpus { .. }
+            | Self::VcpuNotParked { .. }
+            | Self::VcpuNotRunning { .. }
+            | Self::ParkTimedOut { .. }
+            | Self::VmNotRunning
             | Self::InvalidMemorySize(_)
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)

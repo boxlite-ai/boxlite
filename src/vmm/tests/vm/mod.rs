@@ -38,6 +38,7 @@ fn bare<H: boxlite_hypervisor::Vm + 'static>(
 fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
     VmConfig {
         vcpu_count,
+        max_vcpus: vcpu_count,
         memory_mib,
         kernel: "vmlinux".into(),
         cmdline: "console=ttyS0".into(),
@@ -619,7 +620,10 @@ mod lifecycle {
         let (exit, mut vm) = run(mock(1, MockVm::with_scripts(vec![vec![Step::Reset]])));
         exit.unwrap();
 
-        assert_eq!(format!("{vm:?}"), "Vm { vcpus: 1, state: Exited, .. }");
+        assert_eq!(
+            format!("{vm:?}"),
+            "Vm { vcpus: 1, max_vcpus: 1, state: Exited, .. }"
+        );
         assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
     }
 
@@ -1200,7 +1204,10 @@ fn lifecycle_errors_describe_themselves() {
 fn debug_shows_the_vm_shape_without_its_internals() {
     let vm = bare(config(2, 16), || Ok(MockVm::new())).unwrap();
 
-    assert_eq!(format!("{vm:?}"), "Vm { vcpus: 2, state: Created, .. }");
+    assert_eq!(
+        format!("{vm:?}"),
+        "Vm { vcpus: 2, max_vcpus: 2, state: Created, .. }"
+    );
     assert!(format!("{:?}", vm.stop_handle()).starts_with("StopHandle("));
 }
 
@@ -1307,4 +1314,149 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
     drop(vm);
     console.finish();
     std::fs::remove_dir(path).unwrap();
+}
+
+/// Parked vCPUs and [`crate::VcpuControl`] on the mock backend, whose vCPUs
+/// without a script wait in the guest until kicked.
+#[cfg(target_arch = "x86_64")]
+mod vcpu_control {
+    use std::{
+        sync::{Arc, Mutex},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use super::*;
+    use crate::VmExit;
+
+    /// A VM with `online` vCPUs running at boot out of `max`, running on its
+    /// own thread until [`Running::stop`].
+    struct Running {
+        control: crate::VcpuControl,
+        stop: crate::StopHandle,
+        entries: Arc<Mutex<Vec<u32>>>,
+        log: Arc<Mutex<Vec<Call>>>,
+        thread: thread::JoinHandle<crate::Result<VmExit>>,
+    }
+
+    impl Running {
+        fn start(online: u8, max: u8) -> Self {
+            let backend = MockVm::new();
+            let (entries, log) = (backend.entries(), backend.log());
+            let config = VmConfig {
+                max_vcpus: max,
+                ..config(online, 16)
+            };
+            let mut vm = bare(config, || Ok(backend)).unwrap();
+            Self {
+                control: vm.vcpu_control(),
+                stop: vm.stop_handle(),
+                entries,
+                log,
+                thread: thread::spawn(move || vm.run()),
+            }
+        }
+
+        fn calls(&self) -> Vec<Call> {
+            self.log.lock().unwrap().clone()
+        }
+
+        /// Waits until vCPU `id` has entered the guest.
+        fn wait_entered(&self, id: u32) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !self.entries.lock().unwrap().contains(&id) {
+                assert!(
+                    Instant::now() < deadline,
+                    "vCPU {id} never entered the guest"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn stop(self) -> crate::Result<VmExit> {
+            self.stop.stop();
+            self.thread.join().unwrap()
+        }
+    }
+
+    fn parks(calls: &[Call]) -> Vec<u32> {
+        calls
+            .iter()
+            .filter_map(|call| match call {
+                Call::ParkVcpu { id } => Some(*id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn vcpus_past_the_online_count_are_configured_then_parked_without_entering() {
+        let vm = Running::start(1, 3);
+        // An answered request means every boot thread has settled.
+        assert_eq!(vm.control.set_online_vcpus(1).unwrap(), 1);
+        vm.wait_entered(0);
+        let calls = vm.calls();
+        let entries = vm.entries.lock().unwrap().clone();
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+
+        let configured = calls
+            .iter()
+            .filter(|call| matches!(call, Call::SetCpuFeatures { .. }))
+            .count();
+        assert_eq!(
+            configured, 3,
+            "every possible vCPU is configured: {calls:?}"
+        );
+        let mut parked = parks(&calls);
+        parked.sort_unstable();
+        assert_eq!(parked, [1, 2]);
+        assert!(entries.iter().all(|&id| id == 0), "{entries:?}");
+    }
+
+    #[test]
+    fn grants_reset_before_resuming_and_revokes_park_the_highest_first() {
+        let vm = Running::start(1, 3);
+        assert_eq!(vm.control.set_online_vcpus(3).unwrap(), 3);
+        vm.wait_entered(1);
+        vm.wait_entered(2);
+        let grants: Vec<_> = vm
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::ResetVcpu { .. } | Call::ResumeVcpu { .. }))
+            .collect();
+        assert_eq!(
+            grants,
+            [
+                Call::ResetVcpu { id: 1 },
+                Call::ResumeVcpu { id: 1 },
+                Call::ResetVcpu { id: 2 },
+                Call::ResumeVcpu { id: 2 },
+            ]
+        );
+
+        let before = parks(&vm.calls()).len();
+        assert_eq!(vm.control.set_online_vcpus(2).unwrap(), 2);
+        assert_eq!(vm.control.set_online_vcpus(1).unwrap(), 1);
+        assert_eq!(parks(&vm.calls())[before..], [2, 1]);
+        // A revoked vCPU can be granted again.
+        assert_eq!(vm.control.set_online_vcpus(2).unwrap(), 2);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+    }
+
+    #[test]
+    fn counts_outside_one_to_max_and_requests_after_the_end_are_refused() {
+        let vm = Running::start(1, 2);
+        for count in [0, 3] {
+            assert!(matches!(
+                vm.control.set_online_vcpus(count),
+                Err(Error::InvalidVcpuCount(c)) if c == count
+            ));
+        }
+        let control = vm.control.clone();
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+        assert!(matches!(
+            control.set_online_vcpus(2),
+            Err(Error::VmNotRunning)
+        ));
+    }
 }

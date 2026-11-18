@@ -175,6 +175,11 @@ impl WorkerSignal {
         self.handle.clone()
     }
 
+    /// The realtime signal this reservation blocks on its worker.
+    pub(super) fn signal(&self) -> i32 {
+        self.handle.signal
+    }
+
     pub(super) fn drain(&self) -> io::Result<()> {
         let mut target = self
             .handle

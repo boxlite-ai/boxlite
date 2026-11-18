@@ -41,6 +41,15 @@ pub(crate) enum Call {
     DropVcpu {
         id: u32,
     },
+    ParkVcpu {
+        id: u32,
+    },
+    ResetVcpu {
+        id: u32,
+    },
+    ResumeVcpu {
+        id: u32,
+    },
 }
 
 /// One exit of a scripted mock vCPU. A vCPU whose script has run out waits
@@ -170,7 +179,12 @@ impl MockVm {
                 source,
             },
             Call::SetIrqLine { line, .. } => Error::SetIrqLine { line, source },
-            Call::SetCpuFeatures { .. } | Call::SetBootRegisters { .. } | Call::DropVcpu { .. } => {
+            Call::SetCpuFeatures { .. }
+            | Call::SetBootRegisters { .. }
+            | Call::DropVcpu { .. }
+            | Call::ParkVcpu { .. }
+            | Call::ResetVcpu { .. }
+            | Call::ResumeVcpu { .. } => {
                 unreachable!("only memory and interrupt calls fail by index")
             }
         })
@@ -326,5 +340,38 @@ impl boxlite_hypervisor::X86Vcpu for MockVcpu {
     fn set_boot_registers(&mut self, _state: &boxlite_hypervisor::X86BootRegisters) -> Result<()> {
         self.record(Call::SetBootRegisters { id: self.id });
         Ok(())
+    }
+}
+
+/// A parked mock vCPU; it keeps its script and kick state for the next resume.
+#[cfg(target_arch = "x86_64")]
+pub(crate) struct ParkedMockVcpu(MockVcpu);
+
+#[cfg(target_arch = "x86_64")]
+impl boxlite_hypervisor::X86ParkVcpu for MockVcpu {
+    type Parked = ParkedMockVcpu;
+
+    fn park(self) -> Result<ParkedMockVcpu> {
+        self.record(Call::ParkVcpu { id: self.id });
+        Ok(ParkedMockVcpu(self))
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl boxlite_hypervisor::X86ParkedVcpu for ParkedMockVcpu {
+    type Vcpu = MockVcpu;
+
+    fn is_halted(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.0.record(Call::ResetVcpu { id: self.0.id });
+        Ok(())
+    }
+
+    fn resume(self) -> Result<MockVcpu> {
+        self.0.record(Call::ResumeVcpu { id: self.0.id });
+        Ok(self.0)
     }
 }

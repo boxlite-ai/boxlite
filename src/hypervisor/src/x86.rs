@@ -59,7 +59,7 @@ pub struct X86BootRegisters {
 }
 
 /// The x86 operations a VM offers the machine's boot loader.
-pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
+pub trait X86Vm: Vm<Vcpu: X86ParkVcpu> {
     /// Host-supported CPUID values, before the VMM applies guest topology and
     /// policy. They are a ceiling: a guest must not see features beyond them.
     fn supported_cpuid(&self) -> &[X86CpuidEntry];
@@ -76,4 +76,34 @@ pub trait X86Vcpu: Vcpu {
     /// Installs the entry registers. Only the boot vCPU needs them; the others
     /// keep their reset state until INIT/SIPI.
     fn set_boot_registers(&mut self, state: &X86BootRegisters) -> Result<()>;
+}
+
+/// An x86 vCPU the machine can take off its worker thread and later resume on
+/// another one, so a vCPU the host has not granted has no thread at all.
+pub trait X86ParkVcpu: X86Vcpu + Sized {
+    /// This vCPU while no thread runs it.
+    type Parked: X86ParkedVcpu<Vcpu = Self>;
+
+    /// Completes any pending device access, then releases the calling
+    /// thread's binding. Handles taken before parking become inert.
+    fn park(self) -> Result<Self::Parked>;
+}
+
+/// A parked x86 vCPU: it runs no guest code until [`resume`](Self::resume).
+///
+/// The guest can still send it INIT and SIPI, which KVM latches; call
+/// [`reset`](Self::reset) before resuming it.
+pub trait X86ParkedVcpu: Send + Sized {
+    /// The thread-bound vCPU that [`resume`](Self::resume) returns.
+    type Vcpu;
+
+    /// Whether the guest left the vCPU halted, as an offlined CPU does.
+    fn is_halted(&self) -> Result<bool>;
+
+    /// Drops any INIT and SIPI received while parked; the vCPU then waits for
+    /// a fresh INIT, as a CPU that never ran does.
+    fn reset(&mut self) -> Result<()>;
+
+    /// Binds the vCPU to the calling thread.
+    fn resume(self) -> Result<Self::Vcpu>;
 }

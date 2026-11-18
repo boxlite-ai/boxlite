@@ -307,7 +307,7 @@ _ensure-kvm:
 test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
 	@status=0; \
-	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	timeout 60s cargo test -p boxlite-hypervisor --lib -- --ignored --test-threads=1 kvm::vm::tests:: kvm::park::tests:: || status=1; \
 	timeout 60s cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: || status=1; \
 	exit $$status
 
@@ -320,6 +320,14 @@ VMM_BALLOON_INIT ?= $(CURDIR)/target/vmm/boot/balloon-init
 export VMM_BALLOON_INIT
 
 $(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
+	@mkdir -p "$(@D)"
+	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
+
+# Freestanding CPU scaling scenario: the guest's part of vCPU grants and revokes.
+VMM_CPU_SCALING_INIT ?= $(CURDIR)/target/vmm/boot/cpu-scaling-init
+export VMM_CPU_SCALING_INIT
+
+$(VMM_CPU_SCALING_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/cpu_scaling_init.c
 	@mkdir -p "$(@D)"
 	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
 
@@ -340,7 +348,7 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_CPU_SCALING_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
 

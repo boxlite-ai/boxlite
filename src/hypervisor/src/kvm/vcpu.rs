@@ -92,6 +92,26 @@ impl KvmVcpu {
     }
 }
 
+impl KvmVcpu {
+    /// Completes pending I/O, then releases this worker's kick reservation and
+    /// returns the descriptor, its ID, its run mapping size and the kick signal.
+    pub(super) fn into_parts(mut self) -> Result<(VcpuFd, u32, usize, i32)> {
+        self.complete_pending_io()?;
+        let Self {
+            fd,
+            id,
+            run_size,
+            kick,
+            ..
+        } = self;
+        let signal = kick.signal();
+        // Dropping the reservation drains its signal, restores this worker's
+        // mask and makes earlier handles inert.
+        drop(kick);
+        Ok((fd, id, run_size, signal))
+    }
+}
+
 impl crate::Vcpu for KvmVcpu {
     type Handle = KvmVcpuHandle;
 

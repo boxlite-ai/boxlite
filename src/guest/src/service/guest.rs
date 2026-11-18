@@ -1,16 +1,67 @@
 //! Guest service implementation.
 //!
 //! Handles guest initialization and management (Init, Ping, Shutdown,
-//! Quiesce, Thaw RPCs).
+//! Quiesce, Thaw, SetOnlineCpus RPCs).
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
     guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
     GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
-    QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
+    QuiesceResponse, SetOnlineCpusRequest, SetOnlineCpusResponse, ShutdownRequest,
+    ShutdownResponse, ThawRequest, ThawResponse,
 };
+use std::{path::PathBuf, time::Duration};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
+
+/// The longest one SetOnlineCpus call takes. Onlining a CPU the host has not
+/// granted blocks in the kernel for about 10 seconds before it fails.
+const SET_ONLINE_CPUS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Why a SetOnlineCpus call failed.
+#[derive(Debug)]
+enum SetOnlineCpusError {
+    /// The CPUs did not change within this time.
+    TimedOut(Duration),
+    /// The count is outside one to the number of present CPUs.
+    InvalidCount(String),
+    /// Reading or writing sysfs failed.
+    Failed(String),
+}
+
+impl From<SetOnlineCpusError> for Status {
+    fn from(error: SetOnlineCpusError) -> Self {
+        match error {
+            SetOnlineCpusError::TimedOut(timeout) => Status::deadline_exceeded(format!(
+                "CPUs did not change within {timeout:?}; has the host granted them?"
+            )),
+            SetOnlineCpusError::InvalidCount(reason) => Status::invalid_argument(reason),
+            SetOnlineCpusError::Failed(reason) => Status::internal(reason),
+        }
+    }
+}
+
+/// Sets the online CPU count under the sysfs CPU directory `root`, giving up
+/// after `timeout`. A write still blocked in the kernel finishes on its own.
+async fn set_online_cpus_at(
+    root: PathBuf,
+    count: u32,
+    timeout: Duration,
+) -> Result<Vec<u32>, SetOnlineCpusError> {
+    let count = usize::try_from(count)
+        .map_err(|_| SetOnlineCpusError::InvalidCount(format!("{count} CPUs")))?;
+    let work =
+        tokio::task::spawn_blocking(move || crate::cpus::Cpus::new(root).set_online_count(count));
+    match tokio::time::timeout(timeout, work).await {
+        Err(_) => Err(SetOnlineCpusError::TimedOut(timeout)),
+        Ok(Err(join)) => Err(SetOnlineCpusError::Failed(join.to_string())),
+        Ok(Ok(Err(error))) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            Err(SetOnlineCpusError::InvalidCount(error.to_string()))
+        }
+        Ok(Ok(Err(error))) => Err(SetOnlineCpusError::Failed(error.to_string())),
+        Ok(Ok(Ok(online))) => Ok(online),
+    }
+}
 
 #[tonic::async_trait]
 impl GuestService for GuestServer {
@@ -214,6 +265,23 @@ impl GuestService for GuestServer {
 
         Ok(Response::new(ThawResponse { thawed_count }))
     }
+
+    /// Brings CPUs online or offline so the lowest `count` are online.
+    async fn set_online_cpus(
+        &self,
+        request: Request<SetOnlineCpusRequest>,
+    ) -> Result<Response<SetOnlineCpusResponse>, Status> {
+        let count = request.into_inner().count;
+        info!(count, "Setting online CPUs");
+        let online = set_online_cpus_at(
+            crate::cpus::SYSFS_CPUS.into(),
+            count,
+            SET_ONLINE_CPUS_TIMEOUT,
+        )
+        .await
+        .map_err(Status::from)?;
+        Ok(Response::new(SetOnlineCpusResponse { online }))
+    }
 }
 
 #[cfg(test)]
@@ -250,3 +318,7 @@ mod tests {
         assert_eq!(written.map(|record| record.exit_code), Some(7));
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/set_online_cpus.rs"]
+mod set_online_cpus_tests;

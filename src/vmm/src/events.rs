@@ -75,6 +75,14 @@ impl EventSender {
         }
     }
 
+    /// Wakes the loop without sending an event or setting the stop latch, so
+    /// its owner can serve a vCPU control request.
+    pub(crate) fn wake(&self) {
+        if let Err(error) = self.waker.wake() {
+            tracing::warn!(%error, "event loop wake-up failed; the request waits for the next recheck");
+        }
+    }
+
     /// Whether any event has been sent, so the VM is ending.
     pub(crate) fn is_stopping(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
@@ -112,10 +120,31 @@ impl EventLoop {
         self.sender.clone()
     }
 
+    /// The oldest queued event, or `None` once the loop is woken without one
+    /// or [`RECHECK`] passes, so the caller can serve other requests.
+    pub(crate) fn wait_once(&mut self) -> io::Result<Option<Event>> {
+        if let Ok(event) = self.events.try_recv() {
+            return Ok(Some(event));
+        }
+        match self.poll.poll(&mut self.readiness, Some(RECHECK)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+        Ok(self.events.try_recv().ok())
+    }
+
     /// The oldest queued event, waiting up to `timeout`, or forever with
     /// `None`. Returns `Ok(None)` once the timeout passes; a zero timeout
     /// never enters the poller. The poller is re-entered every [`RECHECK`],
     /// so an event whose wake-up failed is still found.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Vm::run waits with wait_once so it can serve vCPU control requests."
+        )
+    )]
     pub(crate) fn wait(&mut self, timeout: Option<Duration>) -> io::Result<Option<Event>> {
         // A timeout too long to add counts as forever.
         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
