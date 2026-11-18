@@ -793,7 +793,7 @@ describe('BoxService inbound defaults', () => {
     })
 
     it('inserts no box when the budget refuses the create', async () => {
-      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+      const { service, redis, boxRepository } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
       redis.eval.mockResolvedValue([7, 'gen-1', 30000])
 
       await expect(
@@ -804,21 +804,12 @@ describe('BoxService inbound defaults', () => {
         ),
       ).rejects.toThrow(/Too many image pulls/)
 
-      expect((service as any).boxRepository.insert).not.toHaveBeenCalled()
+      expect(boxRepository.insert).not.toHaveBeenCalled()
     })
 
-    /**
-     * The box limit settles inside the insert, after the budget, and the replay
-     * layer marks that rejection retryable — so the refund has to reach back to
-     * the exact window the spend charged. The ticket proves the binding: an
-     * unbound decrement could discount a newer window the retry never paid for.
-     */
-    it('hands the charged units back, ticket-bound, when the box limit refuses', async () => {
+    it('refunds the charged generation when the box limit refuses insertion', async () => {
       const { service, redis, boxRepository } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
-      redis.eval
-        .mockResolvedValueOnce([1, 'gen-7', 60000]) // the spend lands in window generation 7
-        .mockResolvedValueOnce(0) // the refund answers with the window's new count
-
+      redis.eval.mockResolvedValueOnce([1, 'gen-7', 60000]).mockResolvedValueOnce(0)
       boxRepository.insert.mockRejectedValue(new BoxCreationLimitExceededError(3, 3))
 
       await expect(
@@ -829,24 +820,18 @@ describe('BoxService inbound defaults', () => {
         ),
       ).rejects.toThrow(BoxCreationLimitExceededError)
 
-      const refundCall = redis.eval.mock.calls[1]
-      expect(refundCall[1]).toBe(2)
-      expect(refundCall[2]).toBe('image:coldpull:org-1')
-      expect(refundCall[3]).toBe('image:coldpull:org-1:gen')
-      expect(refundCall[4]).toBe('gen-7')
-      expect(refundCall[5]).toBe(1)
+      expect(redis.eval.mock.calls[1].slice(1)).toEqual([
+        2,
+        'image:coldpull:org-1',
+        'image:coldpull:org-1:gen',
+        'gen-7',
+        1,
+      ])
     })
 
-    it('does not reach the refund without a ticket from the spend', async () => {
+    it('does not refund when spending fails before returning a ticket', async () => {
       const { service, redis, boxRepository } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
-      // The spend answers normally but throws before returning: the ticket is
-      // lost in flight, which is what a dying pipe looks like to the caller.
-      redis.eval.mockImplementationOnce(async () => {
-        await Promise.resolve([1, 'gen-7', 60000])
-        throw new Error('connection dropped before the answer landed')
-      })
-
-      boxRepository.insert.mockRejectedValue(new BoxCreationLimitExceededError(3, 3))
+      redis.eval.mockRejectedValueOnce(new Error('connection dropped'))
 
       await expect(
         service.create(
@@ -855,9 +840,8 @@ describe('BoxService inbound defaults', () => {
           Context.user(),
         ),
       ).rejects.toThrow('connection dropped')
-
-      // No ticket means nothing to bind a decrement to; the spend died with it.
       expect(redis.eval).toHaveBeenCalledTimes(1)
+      expect(boxRepository.insert).not.toHaveBeenCalled()
     })
 
     it('spends one on a ref the catalog has not seen', async () => {

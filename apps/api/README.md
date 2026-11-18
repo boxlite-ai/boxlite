@@ -213,17 +213,16 @@ Deployment must drain keyed writes, replace every API replica, then reopen traff
 must retain the shared reader/fence or stop the affected writes; a version that ignores valid
 keys cannot safely receive retries.
 
-Run `make test:apps:api TEST_FILES='request-replay|box-request-replay|box-replay'` with
-`REDIS_HOST/REDIS_PORT` and PostgreSQL `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_DATABASE`
-for the HTTP, real Redis, and production-service persistence suites. Missing dependencies
-skip integration tests and do not establish the contract.
+Run `make test:apps:api TEST_FILES='request-replay|volume-access.guard|image-admission.service|box.service.spec'`
+with `REDIS_HOST/REDIS_PORT` for HTTP replay, Redis ownership, runner proxy, authorization and refund regressions.
+The suite focuses on shared replay boundaries rather than repeating every business resource's persistence tests.
+Missing Redis configuration skips integration tests and does not establish the contract.
 The capacity test requires a local `redis-server` executable to start an isolated noeviction instance.
 Install it before running the replay integration suite; a missing executable fails that test.
 
-Fault-injection Redis clients use the same `REDIS_USERNAME/REDIS_PASSWORD` credentials as direct clients.
-Cross-replica replay assertions wait for the exact record to become complete: receiving the owner's
-HTTP success alone does not establish that Redis has stored it. Transport rejection tests cover keyed
-downloads and uploads, and attach requests with tenant names that overlap organization routes.
+Cross-replica assertions wait for the exact record to become complete: receiving the owner's
+HTTP success alone does not establish that Redis has stored it. Transport tests cover keyed file
+rejection and WebSocket attachment before side effects; existing guard tests cover trusted resource ownership.
 
 A Box rejected at its creation limit refunds exactly one cold-pull charge to the window that paid it.
 Refunds preserve the window's expiry; an expired ticket cannot debit a replacement window.

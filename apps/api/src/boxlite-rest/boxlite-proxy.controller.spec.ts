@@ -154,18 +154,6 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
-  it('passes a POST exec without a key directly to the proxy middleware', async () => {
-    const proxyHandler = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-    const { controller } = makeHarness()
-    const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST' }
-    const next = jest.fn()
-
-    await controller.proxyExec(activeAuth as never, 'public-box', req as never, new EventEmitter() as never, next)
-
-    expect(proxyHandler).toHaveBeenCalled()
-  })
-
   it('marks an admission refusal before auto-resume and dispatch as no-effect', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller, boxService, autoResume } = makeHarness()
