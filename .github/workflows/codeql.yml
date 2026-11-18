@@ -55,7 +55,7 @@ jobs:
             runner: boxlite-4vcpu-16gbmem-30gbdisk
           - language: javascript-typescript
             build-mode: none
-            runner: boxlite-4vcpu-16gbmem-30gbdisk
+            runner: ubuntu-latest
           - language: python
             build-mode: none
             runner: boxlite-4vcpu-16gbmem-30gbdisk
@@ -69,11 +69,7 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-boxlite-runner
-        if: matrix.language == 'go' || matrix.language == 'javascript-typescript'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        if: matrix.language == 'javascript-typescript'
-        with:
-          node-version: '22'
+        if: matrix.language == 'go'
       - name: Install Go autobuild dependencies
         if: matrix.language == 'go'
         run: sudo apt-get install -y --no-install-recommends gcc libc6-dev
