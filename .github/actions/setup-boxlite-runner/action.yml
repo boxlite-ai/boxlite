@@ -1,0 +1,11 @@
+name: Set up BoxLite runner tools
+description: Install Make, ripgrep and archive tools on the minimal Linux runner image.
+
+runs:
+  using: composite
+  steps:
+    - name: Install workflow tools
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends make ripgrep xz-utils zstd

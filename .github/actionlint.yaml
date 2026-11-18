@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - boxlite
+    - gcp-e2e
