@@ -29,7 +29,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
+import { pendingDeletionTarget } from '../constants/checkpoint-deletion'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -1429,11 +1429,12 @@ export class BoxService {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
+    const target = pendingDeletionTarget(this.configService.get('ci.githubClientId'))
     const result = await this.boxRepository
       .createQueryBuilder()
       .delete()
       .where({ state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED, updatedAt: LessThan(sevenDaysAgo) })
-      .andWhere(`NOT ${CANCELLED_CHECKPOINT_TARGET_SQL}`)
+      .andWhere(`NOT ${target.sql}`, target.parameters)
       .execute()
 
     if (result.affected > 0) {

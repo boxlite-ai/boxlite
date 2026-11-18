@@ -172,6 +172,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     return Object.assign(Object.create(BoxService.prototype), {
       findOneByIdOrName: (id: string, organizationId: string) => boxes.findOneByOrFail({ id, organizationId }),
       boxRepository: repository,
+      configService: { get: () => undefined },
       eventEmitter: events,
       logger: { debug: jest.fn() },
     })
@@ -840,6 +841,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       {} as never,
       destroy as never,
       {} as never,
+      { get: () => undefined } as never,
     )
     await manager.syncStates()
     expect(

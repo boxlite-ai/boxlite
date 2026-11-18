@@ -12,7 +12,8 @@ import { BoxConflictError } from '../errors/box-conflict.error'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
+import { TypedConfigService } from '../../config/typed-config.service'
+import { pendingDeletionTarget } from '../constants/checkpoint-deletion'
 import { RunnerService } from '../services/runner.service'
 import { BoxActivityService } from '../services/box-activity.service'
 
@@ -62,6 +63,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     private readonly boxStopAction: BoxStopAction,
     private readonly boxDestroyAction: BoxDestroyAction,
     private readonly imagePullFailureService: ImagePullFailureService,
+    private readonly configService: TypedConfigService,
   ) {}
 
   async onApplicationShutdown() {
@@ -246,6 +248,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     }
 
     try {
+      const target = pendingDeletionTarget(this.configService.get('ci.githubClientId'))
       const queryBuilder = this.boxRepository
         .createQueryBuilder('box')
         .select(['box.id'])
@@ -253,9 +256,10 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         .where(
           `(box.state NOT IN (:...excludedStates) OR (
           box.state = :errorState AND box."desiredState" = :destroyedState
-          AND ${CANCELLED_CHECKPOINT_TARGET_SQL}
+          AND ${target.sql}
         ))`,
           {
+            ...target.parameters,
             excludedStates: [BoxState.DESTROYED, BoxState.ERROR, BoxState.RESIZING],
             errorState: BoxState.ERROR,
             destroyedState: BoxDesiredState.DESTROYED,
