@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BoxLite</title>
+  <link rel="icon" href="/ui/logo.svg">
+  <link rel="stylesheet" href="/ui/app.css">
+  <link rel="stylesheet" href="/ui/vendor/xterm/xterm.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <aside class="sidebar" id="sidebar" hidden>
+      <div class="sidebar-top">
+        <a href="#/boxes" class="brand" aria-label="BoxLite home"><img src="/ui/logo.svg" alt="BoxLite" width="28" height="32"></a>
+        <nav class="nav" aria-label="Sections">
+          <a href="#/boxes" data-nav="boxes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>Boxes</a>
+          <a href="#/images" data-nav="images"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v4H4zM4 14h16v4H4z"/></svg>Images</a>
+          <a href="#/volumes" data-nav="volumes"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6"/></svg>Volumes</a>
+          <a href="#/access" data-nav="access"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8 8 9 4.6-1 8-4.5 8-9V6z"/></svg>Access</a>
+        </nav>
+      </div>
+      <div class="server" id="server"><span class="dot ok"></span><span class="mono" id="server-addr"></span></div>
+    </aside>
+    <main class="main" id="main" aria-live="polite"></main>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="/ui/vendor/xterm/xterm.js"></script>
+  <script src="/ui/vendor/xterm/addon-fit.js"></script>
+  <script type="module" src="/ui/app.js"></script>
+</body>
+</html>

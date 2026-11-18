@@ -1159,6 +1159,8 @@ logging still applies.
 
 Run a long-running REST API server. The server holds a single `BoxliteRuntime` and exposes the full REST surface for `boxlite --url ...` clients and the language SDKs' REST mode.
 
+Open `http://127.0.0.1:8100/` for the web console, which manages boxes, images and volumes through the same API. With `--api-key`, the console asks for the key once and keeps an `HttpOnly` session cookie until `serve` restarts.
+
 A browser guard runs before auth and answers `403` when the `Origin` header differs from `Host`, blocking cross-site pages and their WebSocket upgrades. SDK and CLI clients send no `Origin` and are unaffected; see the [serve README](../../../src/cli/src/commands/serve/README.md#auth--config).
 
 **Options:**

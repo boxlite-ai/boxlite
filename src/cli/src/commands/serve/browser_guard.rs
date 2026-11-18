@@ -36,12 +36,17 @@ pub(super) struct BrowserGuard {
 }
 
 impl BrowserGuard {
+    /// `extra_hosts` may be written with or without a port; only the name
+    /// is compared. The bind address itself is always accepted, so
+    /// `--host 127.0.0.2` answers to `127.0.0.2`.
     pub(super) fn new(bind_host: &str, extra_hosts: &[String]) -> Self {
         let allowed_hosts = is_loopback_host(bind_host).then(|| {
             LOOPBACK_NAMES
                 .iter()
-                .map(|name| name.to_string())
-                .chain(extra_hosts.iter().map(|host| normalize_host(host)))
+                .copied()
+                .chain(std::iter::once(bind_host))
+                .chain(extra_hosts.iter().map(|host| host_name(host)))
+                .map(normalize_host)
                 .collect()
         });
         Self { allowed_hosts }
@@ -156,6 +161,21 @@ mod tests {
             Ok(())
         );
         assert!(guard.check(&headers(Some("other.internal"), None)).is_err());
+    }
+
+    #[test]
+    fn allowed_host_written_with_a_port_still_matches() {
+        let guard = BrowserGuard::new("127.0.0.1", &["box.internal:8100".to_string()]);
+        assert_eq!(
+            guard.check(&headers(Some("box.internal:8100"), None)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn loopback_bind_accepts_its_own_address() {
+        let guard = BrowserGuard::new("127.0.0.2", &[]);
+        assert_eq!(guard.check(&headers(Some("127.0.0.2:8100"), None)), Ok(()));
     }
 
     #[test]

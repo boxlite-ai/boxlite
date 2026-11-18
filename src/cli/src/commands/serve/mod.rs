@@ -6,6 +6,7 @@
 mod browser_guard;
 mod handlers;
 mod types;
+mod web_console;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -125,6 +126,9 @@ struct AppState {
     /// Recovered exit status, scoped by canonical box ID and retained for the
     /// same grace period as executions whose output this server owns.
     recovered_terminals: RwLock<HashMap<TerminalKey, TerminalSlot>>,
+    /// Signed-in browsers of the web console, which present a session cookie
+    /// instead of the API key. Empty unless `--api-key` is set.
+    browser_sessions: web_console::BrowserSessions,
 }
 
 /// Scope of a terminal record: the box a client addresses plus the execution.
@@ -1587,7 +1591,11 @@ async fn require_api_key(State(state): State<Arc<AppState>>, req: Request, next:
             v.strip_prefix("Bearer ")
                 .or_else(|| v.strip_prefix("bearer "))
         });
-    if auth_allows(state.api_key.as_deref(), req.uri().path(), bearer) {
+    let path = req.uri().path();
+    if auth_allows(state.api_key.as_deref(), path, bearer)
+        || web_console::is_console_path(path)
+        || state.browser_sessions.admits(req.headers())
+    {
         next.run(req).await
     } else {
         error_response(
@@ -1908,6 +1916,15 @@ fn build_router(state: Arc<AppState>) -> Router {
     };
 
     Router::new()
+        // Web console: the page, its files, and browser sign-in
+        .route("/", get(web_console::index))
+        .route(
+            "/ui/session",
+            get(web_console::session_status)
+                .post(web_console::sign_in)
+                .delete(web_console::sign_out),
+        )
+        .route("/ui/{*file}", get(web_console::asset))
         // Identity (no tenant prefix)
         .route("/v1/me", get(me::get_me))
         .route("/v1/config", get(config::get_config))
@@ -2092,6 +2109,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
+        browser_sessions: Default::default(),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -2106,6 +2124,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
 
     tracing::info!("boxlite serve listening on {}", addr);
     eprintln!("BoxLite REST API server listening on http://{addr}");
+    eprintln!("Web console: http://{addr}/");
 
     // Graceful shutdown on ctrl-c
     let shutdown_state = state.clone();
@@ -2474,6 +2493,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         }
     }
 
@@ -3305,6 +3325,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         let (control_status, control_error) =
             upload_v3_archive(state.clone(), serde_json::json!({})).await;
@@ -3682,7 +3703,7 @@ mod tests {
     /// Serve the guarded app, as `execute` does for a loopback bind, and send
     /// one raw HTTP/1.1 request carrying `headers`. Returns the status code.
     /// Raw bytes, because HTTP clients fill `Host` in from the URL.
-    async fn guarded_status(path: &str, headers: &[(&str, &str)]) -> u16 {
+    async fn guarded_status(method: &str, path: &str, headers: &[(&str, &str)]) -> u16 {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3693,7 +3714,7 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
 
-        let mut request = format!("GET {path} HTTP/1.1\r\n");
+        let mut request = format!("{method} {path} HTTP/1.1\r\n");
         if !headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("connection"))
@@ -3736,7 +3757,7 @@ mod tests {
     /// own domain in `Host`; the served app must refuse it.
     #[tokio::test]
     async fn serve_refuses_a_rebound_host() {
-        let status = guarded_status("/v1/config", &[("Host", "evil.example:8100")]).await;
+        let status = guarded_status("GET", "/v1/config", &[("Host", "evil.example:8100")]).await;
         assert_eq!(status, 403);
     }
 
@@ -3745,6 +3766,7 @@ mod tests {
     #[tokio::test]
     async fn serve_refuses_a_cross_site_websocket_upgrade() {
         let status = guarded_status(
+            "GET",
             "/v1/boxes/some-box/attach",
             &[
                 ("Host", "127.0.0.1:8100"),
@@ -3759,12 +3781,135 @@ mod tests {
         assert_eq!(status, 403);
     }
 
+    /// A cross-site form POST needs no preflight, so the browser sends it; the
+    /// server must refuse it by `Origin` before it can stop a box.
+    #[tokio::test]
+    async fn serve_refuses_a_cross_site_post() {
+        let status = guarded_status(
+            "POST",
+            "/v1/boxes/some-box/stop",
+            &[
+                ("Host", "127.0.0.1:8100"),
+                ("Origin", "http://evil.example"),
+                ("Content-Length", "0"),
+            ],
+        )
+        .await;
+        assert_eq!(status, 403);
+    }
+
     /// SDK and CLI requests carry a loopback `Host` and no `Origin`; the guard
     /// must leave them alone.
     #[tokio::test]
     async fn serve_admits_a_loopback_client_without_origin() {
-        let status = guarded_status("/v1/config", &[("Host", "127.0.0.1:8100")]).await;
+        let status = guarded_status("GET", "/v1/config", &[("Host", "127.0.0.1:8100")]).await;
         assert_eq!(status, 200);
+    }
+
+    /// Serve the guarded app with `--api-key s3cret` and return its base URL.
+    async fn serve_with_key() -> (String, tokio::task::JoinHandle<()>) {
+        let mut state = lifecycle_state();
+        state.api_key = Some("s3cret".to_string());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let guard = browser_guard::BrowserGuard::new(LOCAL_SERVE_HOST, &[]);
+        let app = serve_app(Arc::new(state), guard);
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    /// A browser cannot put the API key on a WebSocket upgrade, so it signs in
+    /// once and the cookie it receives stands in for the key on every route.
+    #[tokio::test]
+    async fn console_sign_in_issues_a_cookie_that_authorizes_the_api() {
+        let (url, server) = serve_with_key().await;
+        let client = reqwest::Client::new();
+
+        let anonymous = client.get(format!("{url}/v1/me")).send().await.unwrap();
+        assert_eq!(anonymous.status(), 401);
+
+        let wrong = client
+            .post(format!("{url}/ui/session"))
+            .json(&serde_json::json!({"token": "guess"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(wrong.status(), 401);
+        assert!(wrong.headers().get("set-cookie").is_none());
+
+        let signed_in = client
+            .post(format!("{url}/ui/session"))
+            .json(&serde_json::json!({"token": "s3cret"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(signed_in.status(), 204);
+        let set_cookie = signed_in.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Strict"));
+        let cookie = set_cookie.split(';').next().unwrap().to_string();
+
+        let with_cookie = client
+            .get(format!("{url}/v1/me"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(
+            with_cookie.status(),
+            401,
+            "the session cookie must authorize the API"
+        );
+
+        let status: serde_json::Value = client
+            .get(format!("{url}/ui/session"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["key_required"], true);
+        assert_eq!(status["signed_in"], true);
+
+        client
+            .delete(format!("{url}/ui/session"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        let after_sign_out = client
+            .get(format!("{url}/v1/me"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(after_sign_out.status(), 401);
+        server.abort();
+    }
+
+    /// The page and its files hold no data, so they load before sign-in;
+    /// they carry a same-origin content security policy.
+    #[tokio::test]
+    async fn console_page_loads_without_a_key() {
+        let (url, server) = serve_with_key().await;
+        let page = reqwest::get(format!("{url}/")).await.unwrap();
+        assert_eq!(page.status(), 200);
+        assert!(
+            page.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("default-src 'self'")
+        );
+        assert!(page.text().await.unwrap().contains("/ui/app.js"));
+        let script = reqwest::get(format!("{url}/ui/app.js")).await.unwrap();
+        assert_eq!(script.status(), 200);
+        server.abort();
     }
 
     /// Serve `state` on an ephemeral port and return its base URL.
@@ -3795,6 +3940,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         let (url, server) = serve_router(state).await;
         let remote =
@@ -3863,6 +4009,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         state
             .set_lifecycle(
@@ -3929,6 +4076,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         state
             .set_lifecycle(
@@ -3987,6 +4135,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         };
         state
             .set_lifecycle(
@@ -4032,6 +4181,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4086,6 +4236,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4149,6 +4300,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
         let client = reqwest::Client::new();
@@ -4260,6 +4412,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4306,6 +4459,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         };
         state
             .set_lifecycle(
@@ -4349,6 +4503,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         };
         state
             .set_lifecycle(
@@ -4392,6 +4547,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         };
         // The canned box's `last_updated` is a fixed date in the past, so its
         // time at rest grows as the calendar does. A century-long window
@@ -4443,6 +4599,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         state
             .set_lifecycle(
@@ -4502,6 +4659,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4550,6 +4708,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4835,6 +4994,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         };
 
         // The box's main command, and an ordinary exec running beside it.
