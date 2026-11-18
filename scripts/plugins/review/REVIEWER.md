@@ -29,8 +29,12 @@ For Local, use a supported virtualization-capable host and the packaged launcher
 
 ## Eight review cases
 
-Run every prompt in `cases.json` from a fresh verified session.
-Use returned IDs, inspect the live schemas, and retain evidence of expected outputs, errors, and cleanup.
+Start each mode in a fresh session and complete P1 to verify its connection.
+Run P2, P3, P4, and N2 in that session using the Box ID returned by P2; run N3 there for OAuth only.
+Run P5 last to remove that Box, then retain evidence of expected outputs, errors, and cleanup.
+
+Run N1 separately after prior OAuth use, selecting API-key mode with a missing or empty key.
+Inspect the live schemas before calling tools; the case list is not the execution order.
 Five positive and three negative cases are definitions, not pre-recorded passing results.
 
 Repeat the applicable lifecycle/file/update cases through both cloud credentials and through Local.

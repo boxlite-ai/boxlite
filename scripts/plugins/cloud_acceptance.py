@@ -87,7 +87,9 @@ def archive_bytes(content):
     return base64.b64encode(buffer.getvalue()).decode()
 
 
-def exercise(client, report):
+def exercise(client, report, *, expected_sub, expected_path_prefix):
+    if not expected_sub or not expected_path_prefix:
+        raise RuntimeError('Set BOXLITE_EXPECTED_SUB and BOXLITE_EXPECTED_PATH_PREFIX for the dedicated test account and organization')
     tools = client.connect()
     report['tools'] = [tool['name'] for tool in tools]
     report['review_findings'] = [tool['name'] + ': missing title' for tool in tools
@@ -95,9 +97,14 @@ def exercise(client, report):
     if 'invoke_api_endpoint' in report['tools']:
         report['review_findings'].append('Review catch-all invoke_api_endpoint against Claude read/write separation requirement')
     required = {'createBox', 'getBox', 'startExecution', 'uploadFiles', 'downloadFiles', 'stopBox', 'removeBox',
-                'read_api_endpoint', 'write_api_endpoint'}
+                'read_api_endpoint', 'write_api_endpoint', 'get_api_endpoint_schema'}
     if not required.issubset(report['tools']):
         raise RuntimeError('Required tools were not discovered')
+    client.call('get_api_endpoint_schema', {'operationId': 'getCurrentPrincipal'})
+    principal = client.call('read_api_endpoint', {'operationId': 'getCurrentPrincipal'})
+    if not isinstance(principal, dict) or principal.get('sub') != expected_sub or principal.get('path_prefix') != expected_path_prefix:
+        raise RuntimeError('Cloud identity or organization differs from the expected test context; no workload was created')
+    report['checks'].append('expected-principal-and-organization')
     name = 'plugin-check-' + uuid.uuid4().hex[:12]
     report['resource_name'] = name
     box = None
@@ -201,7 +208,9 @@ def main():
     output = Path('target/plugins/evidence/cloud-api.json')
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        exercise(McpClient(os.environ.get('BOXLITE_API_KEY', '')), report)
+        exercise(McpClient(os.environ.get('BOXLITE_API_KEY', '')), report,
+                 expected_sub=os.environ.get('BOXLITE_EXPECTED_SUB', ''),
+                 expected_path_prefix=os.environ.get('BOXLITE_EXPECTED_PATH_PREFIX', ''))
         report['status'] = 'failed' if report.get('failures') else 'passed'
     except Exception as error:
         # Raw server/transport exceptions can contain request data; never log them.

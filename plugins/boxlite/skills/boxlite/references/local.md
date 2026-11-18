@@ -37,8 +37,12 @@ Read installed CLI help before using additional flags or port mappings.
 Use returned IDs, verify output and exit status, and inspect uncertain execution before retrying.
 Transfer reviewed files with the launcher's `cp` and verify a round trip.
 
-For a local HTTP service, create its Box with explicit inbound access and a host port, for example `create --inbound enabled -p 18080:8000 IMAGE`.
-Inbound is disabled by default; a port mapping alone does not make the service reachable.
+For a local HTTP service, publish a host port, for example `create -p 18080:8000 IMAGE`.
+This binds `0.0.0.0:18080` on the host, so LAN clients can reach it when the host firewall allows access.
+
+The CLI's `-p` syntax currently accepts port numbers, not a host bind address; do not describe this as loopback-only access.
+If loopback-only access is required, stop before publishing until an appropriate host firewall restriction is in place.
+Inbound policy does not gate local port mappings in the embedded runtime.
 
 Bind the guest server to its guest interface and verify the actual localhost endpoint without claiming cloud HTTPS or creating a tunnel.
 Update in the same local Box and preserve persistent paths.

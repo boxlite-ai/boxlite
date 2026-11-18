@@ -61,7 +61,10 @@ Never write an expanded header into shared configuration, plugin caches, reposit
 
 ## Verify and switch
 
-Inspect schemas and call `listBoxes`; discover `getCurrentPrincipal` through the catalog when identity verification is needed.
+Inspect schemas and call `listBoxes` to verify access, then discover and call `getCurrentPrincipal` through the same selected connection.
+Before the first workload write, compare its `sub` and `path_prefix` with the user's selected identity and organization.
+If either is missing, mismatched, or unconfirmed, stop without switching connections; a successful list does not establish the intended identity.
+
 Record the connection, authentication kind, and intended organization without the token.
 Missing credentials or denial stops work; do not try another connection or cached OAuth.
 
