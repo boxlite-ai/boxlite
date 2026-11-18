@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,9 +45,10 @@ type outboundPolicyController struct {
 	nicOps  nicOperations
 
 	tcpInspectionSlots chan struct{}
+	udpFlows           *udpFlowPool
 }
 
-func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, initialRevision string) (*outboundPolicyController, error) {
+func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, initialRevision string) (*outboundPolicyController, error) {
 	s, err := stackOf(vn)
 	if err != nil {
 		return nil, err
@@ -58,6 +60,7 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 	p := &outboundPolicyController{
 		config: config, guestIP: guestIP, stack: s, nicOps: s,
 		tcpInspectionSlots: make(chan struct{}, 10),
+		udpFlows:           newUDPFlowPool(ctx),
 	}
 	for id := range nics {
 		p.nic = id
@@ -76,7 +79,7 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 		return nil, err
 	}
 	p.publish(snapshot, "pending")
-	if err := installOutboundHandlers(p.stack, config, config.Ec2MetadataAccess, p.active.Load, p.tcpInspectionSlots, ca, secrets); err != nil {
+	if err := installOutboundHandlers(p.stack, config, config.Ec2MetadataAccess, p.active.Load, p.tcpInspectionSlots, p.udpFlows, ca, secrets); err != nil {
 		return nil, err
 	}
 	if initial.Mode == "disabled" {
@@ -183,7 +186,7 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			http.Error(w, err.Error(), status)
 			return
 		}
-		if current.tcpPolicy != nil {
+		if current.extended != nil {
 			http.Error(w, "extended TCP policy requires a complete trusted replacement", http.StatusConflict)
 			return
 		}

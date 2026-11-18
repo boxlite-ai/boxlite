@@ -24,9 +24,9 @@ func forwardExtendedTCP(r *tcp.ForwarderRequest, target egressTarget, snapshot *
 	slots chan struct{}, ca *BoxCA, secrets *SecretHostMatcher) {
 	ctx, cancel := context.WithTimeout(context.Background(), upstreamDialTimeout)
 	defer cancel()
-	address := snapshot.tcpAddressFacts(target.PolicyIP, false)
+	address := snapshot.egressAddressFacts(target.PolicyIP, false)
 	names := outboundNameFacts{inspectionPending: true, secretsPossible: secrets != nil && target.Port == 443}
-	decision := snapshot.tcpPolicy.evaluate(target, address, names)
+	decision := snapshot.extended.evaluate(target, address, names)
 	if decision.reason != outboundAllowed && decision.reason != outboundInspectName {
 		logrus.WithField("reason", decision.reason).Debug("extended TCP denied")
 		r.Complete(true)
@@ -60,18 +60,18 @@ func forwardExtendedTCP(r *tcp.ForwarderRequest, target egressTarget, snapshot *
 			return
 		}
 		names = outboundNameFacts{secretsMatch: tlsName && names.secretsPossible && secrets.Matches(target.Hostname)}
-		decision = snapshot.tcpPolicy.evaluate(target, address, names)
+		decision = snapshot.extended.evaluate(target, address, names)
 	}
 
 	dialer := snapshot.dialer
 	if (decision.checkAssociation || decision.route == outboundAddressRoute) &&
-		snapshot.tcpAddressFacts(target.ConnectionIP, false).platformDenied {
+		snapshot.egressAddressFacts(target.ConnectionIP, false).platformDenied {
 		logrus.WithField("reason", outboundPlatformDeny).Debug("extended TCP translated address denied")
 		return
 	}
 	if decision.checkAssociation {
 		names.associatedAddress = dialer.associateAddress(ctx, target)
-		decision = snapshot.tcpPolicy.evaluate(target, address, names)
+		decision = snapshot.extended.evaluate(target, address, names)
 	}
 	if decision.reason != outboundAllowed {
 		logrus.WithField("reason", decision.reason).Debug("extended TCP denied")
@@ -80,7 +80,7 @@ func forwardExtendedTCP(r *tcp.ForwarderRequest, target egressTarget, snapshot *
 
 	dial := func(ctx context.Context) (net.Conn, error) {
 		return dialer.dialHost(ctx, target, func(candidate netip.Addr) outboundReason {
-			return snapshot.tcpPolicy.checkCandidate(snapshot.tcpAddressFacts(candidate, true), target.Port)
+			return snapshot.extended.checkCandidate(snapshot.egressAddressFacts(candidate, true), target.Port)
 		})
 	}
 	switch decision.route {

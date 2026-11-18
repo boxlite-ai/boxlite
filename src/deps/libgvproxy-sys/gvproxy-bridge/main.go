@@ -462,7 +462,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		if config.OutboundDisabled {
 			mode = "disabled"
 		}
-		policy, err := newOutboundPolicyController(vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, config.OutboundRevision)
+		policy, err := newOutboundPolicyController(ctx, vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, config.OutboundRevision)
 		if err != nil {
 			initErr <- fmt.Errorf("initialize outbound policy: %w", err)
 			return
@@ -526,7 +526,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				logrus.WithFields(logrus.Fields{"id": id, "remote": wrappedConn.RemoteAddr().String()}).Info("VFKit connection accepted")
 
 				// Handle the VFKit protocol with the wrapped connection
-				if err := vn.AcceptVfkit(ctx, wrapConn(wrappedConn, 0, config.RateLimit)); err != nil {
+				if err := runGuestLink(ctx, wrappedConn, 0, config.RateLimit, vn.AcceptVfkit); err != nil {
 					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptVfkit error")
 					}
@@ -552,7 +552,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				listener.Close()
 
 				// Handle the Qemu protocol
-				if err := vn.AcceptQemu(ctx, wrapConn(acceptedConn, 4, config.RateLimit)); err != nil {
+				if err := runGuestLink(ctx, acceptedConn, 4, config.RateLimit, vn.AcceptQemu); err != nil {
 					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptQemu error")
 					}

@@ -1,21 +1,9 @@
 package main
 
-// forked_udp.go — UDP forwarding gated by the allow_net allowlist.
-//
-// Unlike the TCP path, this is not a fork of upstream's forwarder. The policy
-// check runs at the protocol-handler level, before upstream's forwarder
-// creates an endpoint, and allowed datagrams are handed to that forwarder
-// untouched — same shape as Tailscale's wrapUDPProtocolHandler.
-//
-// Traffic that never reaches here: upstream's DNS server (bound to
-// GatewayIP:53, services.go:62) and DHCP (bound to :67, dhcp.go:93) are
-// registered endpoints, and gVisor's demuxer matches those before falling back
-// to this default handler (gvisor stack/nic.go:863-871). The global mode gate
-// precedes endpoint demultiplexing, so disabled mode also blocks those services.
-// In enabled mode, DNS stays outside allow_net destination matching.
-
 import (
+	"math"
 	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/services/forwarder"
@@ -23,37 +11,70 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
 
-// UDPWithFilter returns a UDP protocol handler that drops datagrams whose
-// destination is outside the allowlist and forwards the rest through
-// upstream's forwarder. Enabled snapshots without an allowlist delegate to
-// that forwarder; disabled snapshots consume the packet without forwarding.
-func UDPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
-	natLock *sync.Mutex, snapshot snapshotSource) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
-
+// outboundUDPHandler runs after the global mode gate and gVisor endpoint demux.
+// Registered services and established flows are delivered by the stack.
+func outboundUDPHandler(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
+	natLock *sync.Mutex, snapshot snapshotSource, flows *udpFlowPool) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
 	upstream := forwarder.UDP(s, nat, natLock)
 	blocked := newBlockedDestinationLog()
+	var registration sync.Mutex
 	return func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+		registration.Lock()
+		defer registration.Unlock()
 		current := snapshot()
 		if current.policy.Mode == "disabled" {
 			return true
 		}
-		filter := current.filter
-		if filter == nil {
-			return upstream.HandlePacket(id, pkt)
+		// Two packets may miss demux before one registers the endpoint.
+		if endpoint := s.FindTransportEndpoint(pkt.NetworkProtocolNumber, udp.ProtocolNumber, id, pkt.NICID); endpoint != nil {
+			endpoint.HandlePacket(id, pkt)
+			return true
 		}
-		// Policy sees the pre-NAT destination, matching the TCP path
-		// (resolveTCPDestination, forked_tcp.go:83). Upstream applies NAT
-		// itself once the datagram is allowed through.
-		if !udpDestinationAllowed(id.LocalAddress, filter) {
-			blocked.note(id.LocalAddress, id.LocalPort)
-			// Consumed: a silent drop. Returning false would make gVisor
-			// emit ICMP port-unreachable, handing the guest a probe oracle.
+		if current.extended != nil {
+			target, reason := udpAdmission(id, nat, natLock, current)
+			if reason != outboundAllowed {
+				blocked.note(id.LocalAddress, id.LocalPort, reason)
+			} else if !flows.admit(s, id, pkt, target, current.dialer.dial) && flows.ctx.Err() == nil {
+				blocked.note(id.LocalAddress, id.LocalPort, "flow-capacity")
+			}
+			return true
+		}
+		filter := current.filter
+		if filter != nil && !udpDestinationAllowed(id.LocalAddress, filter) {
+			blocked.note(id.LocalAddress, id.LocalPort, outboundAllowMiss)
 			return true
 		}
 		return upstream.HandlePacket(id, pkt)
 	}
+}
+
+func udpAdmission(id stack.TransportEndpointID, nat map[tcpip.Address]tcpip.Address,
+	natLock *sync.Mutex, snapshot *outboundSnapshot) (egressTarget, outboundReason) {
+	original := id.LocalAddress
+	translated := original
+	natLock.Lock()
+	if address, ok := nat[original]; ok {
+		translated = address
+	}
+	natLock.Unlock()
+	if original.Len() != net.IPv4len || translated.Len() != net.IPv4len {
+		return egressTarget{}, outboundInvalidTarget
+	}
+	target := egressTarget{
+		PolicyIP: netip.AddrFrom4(original.As4()), ConnectionIP: netip.AddrFrom4(translated.As4()),
+		Port: id.LocalPort, Protocol: "udp", PolicyRevision: snapshot.revision,
+	}
+	decision := snapshot.extended.evaluate(target, snapshot.egressAddressFacts(target.PolicyIP, false), outboundNameFacts{})
+	if decision.reason != outboundAllowed {
+		return egressTarget{}, decision.reason
+	}
+	if snapshot.egressAddressFacts(target.ConnectionIP, false).platformDenied {
+		return egressTarget{}, outboundPlatformDeny
+	}
+	return target, outboundAllowed
 }
 
 // udpDestinationAllowed applies the same link-local and broadcast guards as
@@ -102,11 +123,13 @@ func newBlockedDestinationLog() *blockedDestinationLog {
 	}
 }
 
-func (b *blockedDestinationLog) note(addr tcpip.Address, port uint16) {
+func (b *blockedDestinationLog) note(addr tcpip.Address, port uint16, reason outboundReason) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.dropped++
+	if b.dropped < math.MaxUint64 {
+		b.dropped++
+	}
 
 	key := udpDestination{addr: addr, port: port}
 	newDestination := !b.seen[key] && len(b.seen) < maxLoggedDestinations
@@ -114,18 +137,27 @@ func (b *blockedDestinationLog) note(addr tcpip.Address, port uint16) {
 		b.seen[key] = true
 	}
 
-	milestone := b.dropped >= b.nextMilestone
+	milestone := b.nextMilestone != 0 && b.dropped >= b.nextMilestone
 	if milestone {
-		b.nextMilestone *= 10
+		if b.nextMilestone <= math.MaxUint64/10 {
+			b.nextMilestone *= 10
+		} else {
+			b.nextMilestone = 0
+		}
 	}
 
 	if !newDestination && !milestone {
 		return
 	}
 
+	message := "outbound UDP: blocked"
+	if reason == outboundAllowMiss {
+		message = "allowNet UDP: blocked (no matching rule)"
+	}
 	logrus.WithFields(logrus.Fields{
 		"dst_ip":        addr,
 		"dst_port":      port,
+		"reason":        reason,
 		"dropped_total": b.dropped,
-	}).Info("allowNet UDP: blocked (no matching rule)")
+	}).Info(message)
 }
