@@ -147,6 +147,7 @@ test('GCP honors an explicit data disk capacity and retains the default and disk
 
 const awsProvider = () =>
   awsRunnerProvider({
+    stateBucket: 'fixture-state',
     ...common,
     accountId: '123456789012',
     region: 'us-east-1',

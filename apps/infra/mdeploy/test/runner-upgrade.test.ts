@@ -228,7 +228,7 @@ test('an SSM command not yet accepted is retried, and a denied one is not', () =
     if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
     if (args[1] === 'send-command') {
       attempts += 1
-      return attempts < 3 ? failed('An error occurred (InvalidInstanceId)') : ok('cmd-1')
+      return attempts < 3 ? failed('An error occurred (InvalidInstanceId)') : ok('00000000-0000-4000-a000-000000000001')
     }
     if (args.includes('Status')) return ok('Success')
     return ok('')
@@ -236,7 +236,7 @@ test('an SSM command not yet accepted is retried, and a denied one is not', () =
   assert.equal(upgradeRunner({ environment: awsEnvironment, run, sleep: () => {}, log: () => {} }), 0)
   assert.equal(attempts, 3)
   assert.ok(
-    calls.some((args) => args.includes('cmd-1')),
+    calls.some((args) => args.includes('00000000-0000-4000-a000-000000000001')),
     'the accepted command id is what is polled',
   )
 
@@ -260,13 +260,13 @@ test('a non-Success terminal status fails the roll rather than continuing it', (
   // the hosts not yet visited still serving the old binary.
   const run = (_file: string, args: string[]): CommandResult => {
     if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
-    if (args[1] === 'send-command') return ok('cmd-1')
+    if (args[1] === 'send-command') return ok('00000000-0000-4000-a000-000000000001')
     if (args.includes('Status')) return ok('Failed')
     return ok('upgrade failed; rolling back')
   }
   assert.throws(
     () => upgradeRunner({ environment: awsEnvironment, run, sleep: () => {}, log: () => {} }),
-    /the SSM command cmd-1 finished Failed/,
+    /the SSM command 00000000-0000-4000-a000-000000000001 finished Failed/,
   )
 })
 
@@ -278,7 +278,7 @@ test('an InProgress status is not a verdict', () => {
   let polls = 0
   const run = (_file: string, args: string[]): CommandResult => {
     if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
-    if (args[1] === 'send-command') return ok('cmd-1')
+    if (args[1] === 'send-command') return ok('00000000-0000-4000-a000-000000000001')
     if (args.includes('Status')) {
       polls += 1
       return ok(polls < 4 ? 'InProgress' : 'Success')

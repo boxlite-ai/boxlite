@@ -252,6 +252,7 @@ test('AWS scoped Runner targets require the emitted host, disk and attachment in
     identity: '0.11.0',
   } as const
   const runners = awsRunnerProvider({
+    stateBucket: 'fixture-state',
     placement: network.placementFor('runner') as any,
     region: 'us-east-1',
     accountId: '123456789012',
@@ -346,6 +347,7 @@ test('native Pulumi program composes every AWS service and preserves the deploye
   }
   const start = resources.length
   const program = awsProgram({
+    stateBucket: 'fixture-state',
     cwd,
     app: 'boxlite-app',
     stage: 'dev',
@@ -359,6 +361,15 @@ test('native Pulumi program composes every AWS service and preserves the deploye
     return outputs
   })
   const graph = resources.slice(start)
+  const upgradeEnv = graph.find((r) => r.name === 'UpgradeRunnerBinary')!.inputs.environment
+  assert.deepEqual(
+    [upgradeEnv.RUNNER_UPGRADE_STATE_BUCKET, upgradeEnv.RUNNER_UPGRADE_APP, upgradeEnv.RUNNER_UPGRADE_STAGE],
+    ['fixture-state', 'boxlite-app', 'dev'],
+  )
+  assert.equal(
+    graph.find((r) => r.name === 'CheckRunnerHealth')!.inputs.environment.RUNNER_UPGRADE_STATE_BUCKET,
+    undefined,
+  )
   const taskImage = (name: string) =>
     JSON.parse(graph.find((r) => r.name === name + 'Task')!.inputs.containerDefinitions)[0].image
   assert.match(taskImage('Api'), /b{40}/)

@@ -284,7 +284,7 @@ export const pulumiDeploy = async ({
         retainedImages: retained?.retainedImages,
       }
       return scope.home === 'aws'
-        ? awsProgram({ ...common, protectedStage: scope.protect })()
+        ? awsProgram({ ...common, stateBucket: state.bucket, protectedStage: scope.protect })()
         : gcpProgram({ ...common, project: project!, zone: scope.zone })()
     },
     /*

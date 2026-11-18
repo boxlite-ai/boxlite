@@ -37,6 +37,7 @@ import { loadConfig } from 'mstage/config'
 import { resolveHome } from 'mstage/home'
 import { run as mstage } from 'mstage/run'
 import { resolveScope } from 'mstage/scope'
+import { runnerJournal } from './runner-journal.ts'
 import { deployRoot } from './config.ts'
 import {
   sleepSeconds,
@@ -62,6 +63,8 @@ const USAGE = [
   'usage: npm run runner:update -- --stage <stage> [--version <X.Y.Z>] [--host <name>[,<name>…]]',
   '                                [--allow-downgrade] [--confirm]',
   '',
+  '  --rollout-status   inspect one AWS Runner operation by EC2 instance ID (--host).',
+  '  --force-unlock ID  supersede that exact operation; requires --host, --reason and --confirm.',
   '  --version          a published release. Defaults to the checkout’s own version.',
   '  --host             only these hosts, by the name the console shows. Default: every one.',
   '  --allow-downgrade  replace a host serving something NEWER. This is the rollback.',
@@ -75,7 +78,7 @@ const USAGE = [
  * which is worth having rather than shadowing: its own guard catches the
  * `npm run … --version 0.9.5` that npm swallows before this ever runs.
  */
-const OWN_OPTIONS = { flags: ['allow-downgrade'], values: ['host'] }
+const OWN_OPTIONS = { flags: ['allow-downgrade', 'rollout-status'], values: ['host', 'force-unlock', 'reason'] }
 
 /**
  * How each cloud names a runner, which is also how each is found.
@@ -113,16 +116,18 @@ const numbered = (label: string, prefix: string): number | null => {
 }
 
 /** The comparator for one stage's fleet, which is the only fleet it explains. */
-export const compareHostsIn = (prefix: string) => (left: Host, right: Host): number => {
-  const [a, b] = [numbered(left.label, prefix), numbered(right.label, prefix)]
-  // A host neither pattern explains — renamed by hand, or from another fleet —
-  // goes last, in its own stable order, rather than jumping the queue.
-  if (a === null || b === null) {
-    if (a === null && b === null) return left.label.localeCompare(right.label)
-    return a === null ? 1 : -1
+export const compareHostsIn =
+  (prefix: string) =>
+  (left: Host, right: Host): number => {
+    const [a, b] = [numbered(left.label, prefix), numbered(right.label, prefix)]
+    // A host neither pattern explains — renamed by hand, or from another fleet —
+    // goes last, in its own stable order, rather than jumping the queue.
+    if (a === null || b === null) {
+      if (a === null && b === null) return left.label.localeCompare(right.label)
+      return a === null ? 1 : -1
+    }
+    return a - b
   }
-  return a - b
-}
 
 /** Every running runner in the stage's region, in a stable order. */
 const awsHosts = (region: string, run: RunCommand, prefix: string): Host[] => {
@@ -242,10 +247,40 @@ export const updateRunners = async ({
   // repository declares while doing it.
   const scope = resolveScope({ options: options as Options, config, environment })
 
+  const inspect = options['rollout-status'] === true
+  const unlock = options['force-unlock'] as string | undefined
+  if (inspect || unlock !== undefined || options.reason !== undefined) {
+    if (
+      scope.home !== 'aws' ||
+      !options.host ||
+      inspect === (unlock !== undefined) ||
+      options.version ||
+      options['allow-downgrade']
+    )
+      throw new RunnerUpdateError('Choose rollout status or force unlock with one AWS --host instance ID')
+    if (unlock !== undefined && (!options.confirm || !(options.reason as string | undefined)?.trim()))
+      throw new RunnerUpdateError('Force unlock requires --confirm and a nonempty --reason')
+    if (inspect && options.reason !== undefined) throw new RunnerUpdateError('--reason only applies to force unlock')
+    const home = await resolveHomeWith({ scope })
+    const { env: credentials } = await home.identity.childEnvironment()
+    const run = injectedRun ?? spawnWith({ ...environment, ...credentials })
+    const journal = runnerJournal(
+      { app: config.app, stage: scope.stage!, bucket: await home.stateBucket() },
+      scope.region!,
+      options.host as string,
+      run,
+    )
+    const current = unlock !== undefined ? journal.release(unlock, options.reason as string) : journal.read()
+    log(JSON.stringify(current?.entry ?? null))
+    return 0
+  }
+
   // Same gate a deploy applies, for the same reason: this restarts every runner
   // in the fleet, and boxes on a host take the restart.
   if (scope.protect && options.confirm !== true) {
-    throw new RunnerUpdateError(`Stage "${scope.stage}" is protected in ${config.path}. Add --confirm to roll its fleet.`)
+    throw new RunnerUpdateError(
+      `Stage "${scope.stage}" is protected in ${config.path}. Add --confirm to roll its fleet.`,
+    )
   }
 
   // Named with the stage, because which sign-ins this needs is the stage's
@@ -253,14 +288,16 @@ export const updateRunners = async ({
   // without the stage an expired session in the cloud this fleet does not live
   // in would refuse the roll.
   const signedIn = await checkLogin({ argv: ['login', '--stage', scope.stage as string], environment, cwd, log })
-  if (signedIn !== 0) throw new RunnerUpdateError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
+  if (signedIn !== 0)
+    throw new RunnerUpdateError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
 
   const version = (options.version as string | undefined)?.trim()
   const allowDowngrade = options['allow-downgrade'] === true
-  const named = (options.host as string | undefined)
-    ?.split(',')
-    .map((name) => name.trim())
-    .filter(Boolean) ?? []
+  const named =
+    (options.host as string | undefined)
+      ?.split(',')
+      .map((name) => name.trim())
+      .filter(Boolean) ?? []
 
   /*
    * The same resolution the stack does, forced to release.
@@ -401,20 +438,17 @@ export const updateRunners = async ({
     return 0
   }
 
+  const journal = { app: config.app, stage: scope.stage!, bucket: await home.stateBucket() }
   for (const [index, host] of hosts.entries()) {
     log(`==> [${index + 1}/${hosts.length}]`)
     const request = {
       identity: binary.identity,
       payload,
       label: host.label,
-      ...(home.identity.home === 'aws'
-        ? { cloud: 'aws' as const, target: host.target, region: scope.region as string }
-        : {
-            cloud: 'gcp' as const,
-            target: host.target,
-            project: scope.project as string,
-            zone: zoneIn(scope.region as string, scope.zone ?? null),
-          }),
+      cloud: 'aws',
+      target: host.target,
+      region: scope.region as string,
+      journal,
     } satisfies UpgradeOneRequest
     // Sequential, and a failure stops the roll: the hosts not yet visited keep
     // serving what they were serving. The same property the deploy gets from

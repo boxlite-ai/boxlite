@@ -110,6 +110,7 @@ export const awsRunnerProvider =
     region,
     accountId,
     volumePrefix = 'boxlite-volume',
+    stateBucket,
     artifactsBucket,
     adminApiKey,
     regionId,
@@ -121,6 +122,7 @@ export const awsRunnerProvider =
     volumePrefix?: string
     /** Where a build-mode binary is staged. Read-only, and only under `runner/`. */
     artifactsBucket: string
+    stateBucket: string
     /** What registers the hosts the API does not seed. See `runner-registration.ts`. */
     adminApiKey: $util.Input<string>
     /** The region those rows go in — the same one the API seeded its own into. */
@@ -496,6 +498,9 @@ exit 1
             RUNNER_UPGRADE_CLOUD: 'aws',
             RUNNER_UPGRADE_TARGET: instance.id,
             RUNNER_UPGRADE_LABEL: slot.controlPlaneRunnerName,
+            RUNNER_UPGRADE_APP: $app.name,
+            RUNNER_UPGRADE_STAGE: $app.stage,
+            RUNNER_UPGRADE_STATE_BUCKET: stateBucket,
             RUNNER_UPGRADE_IDENTITY: request.binary.identity,
             RUNNER_UPGRADE_PAYLOAD: payload,
             AWS_REGION: region,

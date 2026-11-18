@@ -21,7 +21,7 @@ test('an accepted SSM submission with a lost response is reconciled before retry
           Commands: acceptedComment
             ? [
                 {
-                  CommandId: 'accepted-command',
+                  CommandId: '00000000-0000-4000-a000-000000000002',
                   Comment: acceptedComment,
                   InstanceIds: [environment.RUNNER_UPGRADE_TARGET],
                 },
@@ -34,7 +34,7 @@ test('an accepted SSM submission with a lost response is reconciled before retry
       acceptedComment = args[args.indexOf('--comment') + 1]
       return submissions === 1
         ? { ok: false, status: 124, stdout: '', stderr: 'response lost after acceptance' }
-        : ok('duplicate-command')
+        : ok('00000000-0000-4000-a000-000000000006')
     }
     if (args[1] === 'get-command-invocation') return ok(args.includes('Status') ? 'Success' : '')
     assert.fail('unexpected command: ' + args.join(' '))

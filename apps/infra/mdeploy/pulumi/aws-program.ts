@@ -29,6 +29,7 @@ export const awsProgram =
     app,
     stage,
     region,
+    stateBucket,
     protectedStage = false,
     environment,
     retainedImages,
@@ -39,6 +40,7 @@ export const awsProgram =
     app: string
     stage: string
     region: string
+    stateBucket: string
     protectedStage?: boolean
     environment: NodeJS.ProcessEnv
     retainedImages?: Record<string, string>
@@ -76,6 +78,7 @@ export const awsProgram =
     return {
       ...(deployStackWith ?? realDeployStack)({
         providers: awsStackProviders({
+          stateBucket,
           stage,
           region,
           accountId,
