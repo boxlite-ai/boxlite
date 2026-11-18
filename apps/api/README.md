@@ -223,6 +223,9 @@ Install it before running the replay integration suite; a missing executable fai
 Cross-replica assertions wait for the exact record to become complete: receiving the owner's
 HTTP success alone does not establish that Redis has stored it. Transport tests cover keyed file
 rejection and WebSocket attachment before side effects; existing guard tests cover trusted resource ownership.
+Storage fault regressions hold a real Redis reservation past the caller deadline and verify its release;
+corrupt records, oversized responses and unsafe eviction policies retain the request fence or reject dispatch.
+The concurrent HTTP test observes a renewed owner heartbeat before retrying on another replica.
 
 A Box rejected at its creation limit refunds exactly one cold-pull charge to the window that paid it.
 Refunds preserve the window's expiry; an expired ticket cannot debit a replacement window.

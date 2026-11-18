@@ -85,6 +85,14 @@ class ProbeController {
   }
 }
 
+@Controller('v1/boxes')
+class VolumeWriteController {
+  @Post()
+  create() {
+    return { id: ++effects }
+  }
+}
+
 const integration = process.env.REDIS_HOST ? describe : describe.skip
 integration('Replay HTTP contract with shared Redis', () => {
   const org = randomUUID()
@@ -101,7 +109,7 @@ integration('Replay HTTP contract with shared Redis', () => {
     await redis.ping()
     for (let i = 0; i < 2; i++) {
       const module = await Test.createTestingModule({
-        controllers: [ProbeController],
+        controllers: [ProbeController, VolumeWriteController],
         providers: [BoxRequestReplayService, { provide: getRedisConnectionToken(), useValue: redis }],
       }).compile()
       const app = module.createNestApplication()
@@ -185,6 +193,19 @@ integration('Replay HTTP contract with shared Redis', () => {
     expect(effects).toBe(before + 2)
   })
 
+  it('rejects unauthenticated callers, unauthorized volumes and non-JSON keyed bodies before effects', async () => {
+    const before = effects
+    expect((await send(randomUUID(), 'probe/target', {}, 0, { 'x-user': '' })).status).toBe(403)
+    expect((await send(randomUUID(), 'boxes', { volumes: [{ id: 'private-volume' }] })).status).toBe(403)
+    const response = await fetch(`${bases[0]}/api/v1/probe/target`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': randomUUID(), 'Content-Type': 'text/plain' },
+      body: 'opaque',
+    })
+    expect(response.status).toBe(400)
+    expect(effects).toBe(before)
+  })
+
   it('holds one owner across replicas and records its late success', async () => {
     entered = Promise.withResolvers<void>()
     release = Promise.withResolvers<void>()
@@ -193,6 +214,15 @@ integration('Replay HTTP contract with shared Redis', () => {
     const owner = send(key, 'probe/target/slow')
     await entered.promise
     try {
+      expect((await send(key, 'probe/target/slow', {}, 1)).status).toBe(409)
+      const hash = createHash('sha256').update(key).digest('hex')
+      const [record] = await redis.keys(`replay:${org}:*:${hash}`)
+      const initial = await redis.hget(record, 'expected_response_at')
+      const deadline = Date.now() + 3000
+      while ((await redis.hget(record, 'expected_response_at')) === initial) {
+        if (Date.now() >= deadline) throw new Error('Owner heartbeat did not renew its deadline')
+        await delay(10)
+      }
       expect((await send(key, 'probe/target/slow', {}, 1)).status).toBe(409)
       release.resolve()
       const original = await owner

@@ -57,6 +57,69 @@ integration('Replay Redis ownership and storage failures', () => {
     expect((await session(key)).isOwner).toBe(true)
   })
 
+  it('retains corrupt and oversized outcomes while allowing only completed-resource lookups', async () => {
+    const key = randomUUID()
+    const owner = await session(key)
+    expect(await service.peekCompleted(org, 'u', 'op', key, 'fingerprint')).toBeUndefined()
+    await owner.complete({ status: 201, body: 'x'.repeat(1024 * 1024) })
+    await expect(session(key)).rejects.toMatchObject({ status: 422 })
+    for (const response of [
+      null,
+      { status: 500, body: '' },
+      { status: 201, body: '', headers: { cookie: 'secret' } },
+      { status: 201, body: '', resource: { id: 'volume' } },
+    ]) {
+      await redis.hset(record(key), 'response', JSON.stringify(response))
+      expect(await service.peekCompleted(org, 'u', 'op', key, 'fingerprint')).toBeUndefined()
+    }
+    await redis.hset(
+      record(key),
+      'response',
+      JSON.stringify({ status: 204, body: '', resource: { id: 'v', organizationId: org } }),
+    )
+    expect(await service.peekCompleted(org, 'u', 'op', key, 'fingerprint')).toMatchObject({
+      status: 204,
+      resource: { id: 'v' },
+    })
+  })
+
+  it('releases a reservation arriving after the caller deadline', async () => {
+    const key = randomUUID()
+    const delayed = new BoxRequestReplayService(redis)
+    const resume = Promise.withResolvers<void>()
+    const stored = Promise.withResolvers<void>()
+    const settled = Promise.withResolvers<void>()
+    const connection = redis.duplicate()
+    const evaluate = connection.eval.bind(connection)
+    jest.spyOn(connection, 'eval').mockImplementationOnce(async (...args: Parameters<Redis['eval']>) => {
+      const result = await evaluate(...args)
+      stored.resolve()
+      await resume.promise
+      return result
+    })
+    const cleanup = jest.spyOn(connection, 'eval')
+    Object.assign(delayed, { ready: async () => connection })
+    try {
+      const pending = delayed.session(org, 'u', 'op', key, 'fingerprint')
+      await stored.promise
+      await expect(pending).rejects.toMatchObject({ status: 503 })
+      cleanup.mockImplementationOnce(async (...args: Parameters<Redis['eval']>) => {
+        try {
+          return await evaluate(...args)
+        } finally {
+          settled.resolve()
+        }
+      })
+      resume.resolve()
+      await settled.promise
+      expect(await redis.exists(record(key))).toBe(0)
+      expect((await session(key)).isOwner).toBe(true)
+    } finally {
+      resume.resolve()
+      await connection.quit()
+    }
+  })
+
   it('never sends a reservation after readiness has already timed out', async () => {
     const ready = Promise.withResolvers<Redis>()
     const settled = Promise.withResolvers<void>()
@@ -93,6 +156,14 @@ integration('Replay Redis ownership and storage failures', () => {
     try {
       await ready.promise
       isolated = new Redis({ path: socket })
+      await isolated.config('SET', 'maxmemory-policy', 'allkeys-lru')
+      const unsafe = new BoxRequestReplayService(isolated)
+      try {
+        await expect(unsafe.session(org, 'u', 'op', randomUUID(), 'fp')).rejects.toMatchObject({ status: 503 })
+      } finally {
+        unsafe.onModuleDestroy()
+      }
+      await isolated.config('SET', 'maxmemory-policy', 'noeviction')
       engine = new BoxRequestReplayService(isolated)
       const key = randomUUID()
       expect((await engine.session(org, 'u', 'op', key, 'fp')).isOwner).toBe(true)
