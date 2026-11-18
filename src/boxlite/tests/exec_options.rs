@@ -62,17 +62,70 @@ impl TestBox {
 }
 
 #[tokio::test]
-async fn test_box_env_preserves_json_quotes_and_spaces() {
-    let value = r#"{"a": "b c"}"#;
-    let t = boxlite_test_utils::box_test::BoxTestBase::with_options(boxlite::BoxOptions {
-        env: vec![("X".into(), value.into())],
-        ..common::alpine_opts()
-    })
-    .await;
+async fn test_box_env_preserves_special_values() {
+    let values = [
+        "",
+        "plain",
+        "a b",
+        " a",
+        "a ",
+        "a  b",
+        " ",
+        r#""abc"#,
+        r#"abc""#,
+        r#"a"b"c"#,
+        r#"""#,
+        r#""""#,
+        r#"" a ""#,
+        r#"a" b"#,
+        r#"{"a": "b c"}"#,
+        r#"{"a":"b"}"#,
+        r"\",
+        r"a\",
+        r"\\",
+        r"a\b",
+        r"\n",
+        r"\t",
+        r"\u0022",
+        r"\u005c",
+        r"\\u0022",
+        r#"\u0022""#,
+        r#"\u005c\"#,
+        r#""\\""#,
+        "$HOME",
+        "$(id)",
+        "`id`",
+        ";",
+        "#",
+        "*",
+        "a=b",
+        "--",
+        "root=/dev/x",
+        "init=/x",
+        "root=/dev/x now",
+    ];
+    // Linux limits the boot-time environment to 32 entries.
+    for (group, group_values) in values.chunks(24).enumerate() {
+        let env = group_values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (format!("X{group}_{index}"), (*value).to_string()))
+            .collect::<Vec<_>>();
+        let t = boxlite_test_utils::box_test::BoxTestBase::with_options(boxlite::BoxOptions {
+            env,
+            ..common::alpine_opts()
+        })
+        .await;
 
-    t.bx.start().await.expect("start box with JSON env");
-    let stdout = t.exec_stdout("printenv", &["X"]).await;
-    assert_eq!(stdout.trim_end(), value);
+        t.bx.start()
+            .await
+            .expect("start box with special env values");
+        for (index, value) in group_values.iter().enumerate() {
+            let key = format!("X{group}_{index}");
+            let stdout = t.exec_stdout("printenv", &[key.as_str()]).await;
+            assert_eq!(stdout, format!("{value}\n"), "environment entry {key}");
+        }
+    }
 }
 
 /// working_dir changes the current directory for the command.
