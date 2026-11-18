@@ -35,12 +35,7 @@ Claude's directory reads a published GitHub plugin folder; a local marketplace Z
 
 ## Real acceptance
 
-Use an API key for a dedicated test account and organization.
-Supply `BOXLITE_API_KEY`, `BOXLITE_EXPECTED_SUB`, and `BOXLITE_EXPECTED_PATH_PREFIX` through a private environment; never pass the key on argv.
-Set the expected principal ID and organization ID from the intended test setup, not automatically from whichever credential is supplied.
-
-Before creating resources, the script compares `getCurrentPrincipal.sub` and `path_prefix` with those expected values; missing configuration or a mismatch stops the run.
-
+Start the acceptance process with `BOXLITE_API_KEY` already supplied by a private environment; never pass the value on argv.
 The cloud smoke test creates a small Python Box with inbound access and uploads a synthetic text file.
 It exposes a temporary public HTTP app, updates it, and removes the exact created Box.
 
