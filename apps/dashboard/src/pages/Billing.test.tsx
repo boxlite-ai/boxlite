@@ -36,10 +36,16 @@ vi.mock('@/components/billing/PlansSection', () => ({
 }))
 vi.mock('@/components/billing/UsageSection', () => ({ UsageSection: () => <div>Usage section</div> }))
 vi.mock('@/components/billing/WalletSection', () => ({
-  WalletSection: ({ linkCouponCode, onCouponRedeemed }: { linkCouponCode?: string; onCouponRedeemed?: () => void }) => (
+  WalletSection: ({
+    linkCouponCode,
+    onCouponClaimAccepted,
+  }: {
+    linkCouponCode?: string
+    onCouponClaimAccepted?: () => void
+  }) => (
     <div data-testid="wallet-section">
       <span data-testid="wallet-link-coupon-code">{linkCouponCode ?? ''}</span>
-      <button onClick={onCouponRedeemed}>Coupon redeemed</button>
+      <button onClick={onCouponClaimAccepted}>Claim accepted</button>
     </div>
   ),
 }))
@@ -170,7 +176,7 @@ describe('Billing layout', () => {
     expect(host.querySelector('[data-testid="plan-section"]')).toBeNull()
   })
 
-  it('passes a coupon link code to Wallet and drops it from the URL once redeemed', () => {
+  it('passes a coupon link code to Wallet and drops it from the URL once accepted', () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     act(() => {
@@ -183,7 +189,7 @@ describe('Billing layout', () => {
       )
     })
     expect(host.querySelector('[data-testid="wallet-link-coupon-code"]')?.textContent).toBe('ACME50')
-    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Coupon redeemed')!.click())
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Claim accepted')!.click())
     expect(host.querySelector('output')?.textContent).toBe('?tab=wallet')
     expect(host.querySelector('[data-testid="wallet-link-coupon-code"]')?.textContent).toBe('')
   })

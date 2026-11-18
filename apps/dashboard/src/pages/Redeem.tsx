@@ -2,7 +2,7 @@
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { RoutePath } from '@/enums/RoutePath'
 
-/** A shareable coupon link (`/redeem?code=CODE`) opens the filled-in Wallet coupon form. */
+/** A shareable coupon link (`/redeem?code=CODE`) opens the Wallet reward claim. */
 export default function Redeem() {
   const [searchParams] = useSearchParams()
   const target = new URLSearchParams({ tab: 'wallet' })
