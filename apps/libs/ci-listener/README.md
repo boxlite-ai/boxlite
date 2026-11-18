@@ -663,11 +663,11 @@ Box with a recoverable delivery uses its original allocation, Box and platform
 runner identities. A recorded job claim or a matching online or busy runner
 proves startup. Otherwise the native record determines the next action.
 
-| Native JIT record                                      | Recovery                                                                                                                               |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Native JIT record | Recovery |
+| --- | --- |
 | Delivery unclaimed or configuration upload in progress | Seal the operation with a versioned write, then close the original allocation. A delayed upload cannot authorize ready after the seal. |
-| Configuration acknowledged and ready authorized        | Recheck current authority and original Box placement, then write only the fixed ready marker.                                          |
-| Historical single-attempt marker                       | Keep observing the runner through its startup grace.                                                                                   |
+| Configuration acknowledged and ready authorized | Recheck current authority and original Box placement, then write only the fixed ready marker. |
+| Historical single-attempt marker | Keep observing the runner through its startup grace. |
 
 The guest consumes the configuration once and removes both files before running
 the job. Repeating the ready marker can never supply another configuration.
@@ -680,12 +680,12 @@ Only exact HTTP 204 followed by complete original-runner absence permits recordi
 retirement and stopping its original Box. Existing cleanup then deletes that Box;
 physical quota returns only after confirmed Box absence.
 
-| Result                                                          | Recovery                                                                                                   |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Runner busy, offline or already missing                         | Keep the Box; absence alone cannot authorize idle retirement.                                              |
+| Result | Recovery |
+| --- | --- |
+| Runner busy, offline or already missing | Keep the Box; absence alone cannot authorize idle retirement. |
 | Busy refusal (422), 404, unexpected 2xx or lost acknowledgement | Preserve the intent and quota; retry eligible online-idle runners at most once per minute in that process. |
-| Confirmation write fails after unregistering                    | Keep the durable unconfirmed intent, including after restart; do not infer that stopping is safe.          |
-| Original Box actually stops or disappears                       | Continue ordinary original-resource cleanup regardless of pending retirement.                              |
+| Confirmation write fails after unregistering | Keep the durable unconfirmed intent, including after restart; do not infer that stopping is safe. |
+| Original Box actually stops or disappears | Continue ordinary original-resource cleanup regardless of pending retirement. |
 
 Pending retirement suppresses the older missing/offline bootstrap forced-stop
 path. A lost acknowledgement can therefore need operator investigation instead
@@ -815,6 +815,12 @@ capacity even when GitHub registration cleanup must retry. Other allocations
 still get reconciled after an ordinary per-worker error. Lease loss, corrupt or
 conflicting state, abort and unretired credential handles stop further work.
 
+If soft deletion frees a Hosted worker's name but the runner fails to confirm
+destruction, the Box manager retries on the original runner. It matches the
+Box ID, original name and organization in the configured Hosted App's ledger.
+Stale-error cleanup retains that row until confirmation lets CI return the slot.
+A change to the primary Hosted App ID requires draining its old namespace first.
+
 An absent Box's allocation remains in the journal until runner cleanup is confirmed.
 A new supply allocation does not exclusively reserve its trigger job.
 Unknown Box creation still occupies capacity and is never repeated. Cleanup debt
@@ -835,12 +841,6 @@ it is not an assertion that this Box executed that exact job.
 | `ci-worker-box-absent`        | Original Box absence persisted; unexpected disappearance is a warning         |
 | `ci-worker-recovery-deferred` | Cleanup/query failed; durable state remains retryable; error type only        |
 | `ci-worker-released`          | Both original resources are absent; allocation record removed                 |
-
-When a Hosted worker's deletion fails after soft deletion has released its name,
-the Box manager retries destruction on the original runner. The Hosted ledger
-must match the original Box ID, name and organization. The stale-row cleanup
-retains that Box until the runner confirms destruction. The CI allocation then
-returns its slot through the normal release transaction.
 
 Logs contain no token, PEM, JIT configuration or upstream error message. Missing
 exit codes remain unknown. These logs report infrastructure facts, do not cancel
