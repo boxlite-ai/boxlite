@@ -42,9 +42,7 @@ exists to catch those.
 It sits under `apps/` because the stack it drives — `apps/api`, `apps/runner`,
 `apps/proxy` — does. It is **not** an Nx project: there is no `project.json` or
 Jest config for Nx to infer, and pytest invokes its polyglot SDK drivers. It is
-also **not** what `npm run e2e:local` starts — that command brings up the local
-Dex environment for the dashboard. Drive this suite through the
-`make test:e2e*` targets.
+driven by npm scripts: use the `make test:e2e*` targets.
 
 The wider REST API test flow, from the contract inventory and this suite to the
 CLI matrix and both authentication modes, is in
@@ -155,7 +153,7 @@ unsupported executable names are rejected before creating a new environment.
 
 The source-run API reads the repository's `openapi/` through `BOXLITE_OPENAPI_DIR`; packaged deployments retain the bundled-assets default. This avoids requiring generated copies beneath `apps/api/src/assets` for local startup.
 
-Host API, Runner and proxy listeners bind to loopback through `BOXLITE_LISTEN_HOST=127.0.0.1`. Other deployments retain their existing all-interface default when this variable is unset. Credentials and encryption keys are generated once in `target/e2e/credentials.json` (mode 0600); preserve this file with the stack's data. Initial `POSTGRES_PASSWORD` and `MINIO_PASSWORD` overrides are persisted and later environment changes do not rotate existing credentials. Generated Compose `.env` files contain no passwords.
+Host API, Runner and proxy listeners bind to loopback through `BOXLITE_LISTEN_HOST=127.0.0.1`. Other deployments retain their existing all-interface default when this variable is unset. Credentials and encryption keys are generated once in `target/e2e/credentials.json` (mode 0600); preserve this file with the stack's data. Initial `POSTGRES_PASSWORD` and `RUSTFS_PASSWORD` overrides are persisted and later environment changes do not rotate existing credentials. Generated Compose `.env` files contain no passwords.
 
 `setup`, `up` and `test:e2e` reuse an unchanged healthy stack. The launcher hashes tracked and non-ignored untracked working-tree inputs, including submodule sources, and the launch environment/interpreter. Test directories and Markdown documentation are excluded; changing pytest cases, `FILTER` or `E2E_ARGS` therefore does not reinstall dependencies or restart services. Product or configuration changes conservatively rebuild components and restart all host services. Dependency manifests have a separate fingerprint, so source-only changes skip dependency installation when the Python environment and package directories still exist.
 

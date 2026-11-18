@@ -161,4 +161,29 @@ describe('JwtStrategy.verifyToken', () => {
 
     await expect(strategy.verifyToken('verified-token')).resolves.toMatchObject(payload)
   })
+
+  // Rauthy signs tokens for MCP clients it registers dynamically with EdDSA.
+  async function signedBy(alg: 'EdDSA' | 'RS256' | 'ES256') {
+    const { strategy } = buildStrategy()
+    const { publicKey, privateKey } = await jose.generateKeyPair(alg, { crv: alg === 'EdDSA' ? 'Ed25519' : undefined })
+    const jwk = { ...(await jose.exportJWK(publicKey)), alg, kid: 'k1' }
+    ;(strategy as unknown as { JWKS: unknown }).JWKS = jose.createLocalJWKSet({ keys: [jwk] })
+    const token = await new jose.SignJWT({ sub: 'u1', scope: 'write:boxes' })
+      .setProtectedHeader({ alg, kid: 'k1' })
+      .setIssuer('iss')
+      .setAudience(['dyn$client', 'http://localhost:3001/mcp'])
+      .setExpirationTime('5m')
+      .sign(privateKey)
+    return { strategy, token }
+  }
+
+  it.each(['EdDSA', 'RS256'] as const)('accepts an MCP token signed with %s', async (alg) => {
+    const { strategy, token } = await signedBy(alg)
+    await expect(strategy.verifyToken(token, 'http://localhost:3001/mcp')).resolves.toMatchObject({ sub: 'u1' })
+  })
+
+  it('rejects an MCP token signed with another algorithm', async () => {
+    const { strategy, token } = await signedBy('ES256')
+    await expect(strategy.verifyToken(token, 'http://localhost:3001/mcp')).rejects.toThrow(jose.errors.JOSEError)
+  })
 })

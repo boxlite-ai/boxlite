@@ -38,7 +38,7 @@ status: $(READY)   ## one-screen L1 + L2 health
 logs: $(READY)   ## tail a component log (COMPONENT=api|all)
 	$(PY) -m compose logs $(COMPONENT)
 
-restart: $(READY)   ## restart L2 proc(s) / recreate L1 box(es) (COMPONENTS="runner dex")
+restart: $(READY)   ## restart L2 proc(s) / recreate L1 box(es) (COMPONENTS="runner rauthy")
 	$(PY) -m compose restart $(COMPONENTS)
 
 reset: $(READY)   ## wipe L2 runtime state (ARGS=--hard also rebuilds the schema)

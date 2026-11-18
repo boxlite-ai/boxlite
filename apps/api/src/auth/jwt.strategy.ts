@@ -142,7 +142,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const { payload } = await jwtVerify(token, this.JWKS, {
       audience,
       issuer: this.options.issuer,
-      algorithms: ['RS256'],
+      // EdDSA: Rauthy signs tokens for dynamically registered MCP clients with Ed25519.
+      algorithms: ['RS256', 'EdDSA'],
     })
     return payload
   }

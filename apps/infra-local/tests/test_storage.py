@@ -39,7 +39,7 @@ class StorageBootstrap(unittest.TestCase):
             thread.join(timeout=2)
 
         self.addCleanup(cleanup)
-        return InfraConfig(minio_host_port=server.server_port), requests
+        return InfraConfig(rustfs_host_port=server.server_port), requests
 
     def test_existing_bucket_only_checks_access(self):
         cfg, requests = self.serve([(200, None)])
@@ -62,7 +62,7 @@ class StorageBootstrap(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "bootstrap failed") as failure:
             ensure_bucket(cfg)
         self.assertEqual(len(requests), 1)
-        self.assertNotIn(cfg.minio_password, str(failure.exception))
+        self.assertNotIn(cfg.rustfs_password, str(failure.exception))
 
     def test_foreign_create_conflict_is_not_success(self):
         cfg, requests = self.serve([(404, None), (409, "BucketAlreadyExists")])

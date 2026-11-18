@@ -834,8 +834,6 @@ test\:e2e\:deps\:node:
 test\:e2e\:build\:python:
 	@"$(E2E_PYTHON)" -m uv pip install --python "$(E2E_PYTHON)" --no-deps --no-build-isolation --config-settings 'build-args=--locked --profile dev' --editable sdks/python
 
-test\:e2e\:build\:minio:
-	@python3 apps/e2e/minio.py --state-dir "$(E2E_STATE_DIR)"
 
 # Go's build cache does not track external CGO archives.
 test\:e2e\:build\:runner:

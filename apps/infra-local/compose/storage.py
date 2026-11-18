@@ -11,9 +11,9 @@ def storage_client(config: InfraConfig):
 
     return closing(boto3.client(
         "s3",
-        endpoint_url=f"http://127.0.0.1:{config.minio_host_port}",
-        aws_access_key_id=config.minio_user,
-        aws_secret_access_key=config.minio_password,
+        endpoint_url=f"http://127.0.0.1:{config.rustfs_host_port}",
+        aws_access_key_id=config.rustfs_user,
+        aws_secret_access_key=config.rustfs_password,
         region_name="us-east-1",
         config=Config(
             signature_version="s3v4", s3={"addressing_style": "path"},
@@ -43,6 +43,6 @@ def ensure_bucket(config: InfraConfig) -> None:
     except (BotoCoreError, ClientError):
         # Remote messages and SDK exceptions can contain credentials or bodies.
         raise RuntimeError(
-            f"S3 bucket boxlite at 127.0.0.1:{config.minio_host_port}: "
+            f"S3 bucket boxlite at 127.0.0.1:{config.rustfs_host_port}: "
             "bootstrap failed; check storage health and credentials"
         ) from None

@@ -33,7 +33,8 @@ export default [
         'error',
         {
           enforceBuildableLibDependency: true,
-          allow: ['^.*/eslint(\\.base)?\\.config\\.[cm]?js$'],
+          // The filestore parser is a dependency-free module shared by apps/api and mdeploy.
+          allow: ['^.*/eslint(\\.base)?\\.config\\.[cm]?js$', '^(\\.\\./)+shared/filestore-instances(\\.ts)?$'],
           // Bootstrap and deployment load these helpers eagerly; mdeploy CLI entry points stay lazy.
           checkDynamicDependenciesExceptions: [
             'mdeploy/hosts',

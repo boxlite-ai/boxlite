@@ -374,8 +374,8 @@ export class ApiClient {
       },
       (error) => {
         // A 401 means the access token is no longer accepted — it expired, or
-        // (the common case in the local Dex stack) it was signed by a key that
-        // rotated when the Dex box was recreated. oidc-client-ts only tracks
+        // (the common case in the local stack) it was signed by a key that
+        // rotated when the Rauthy box was recreated. oidc-client-ts only tracks
         // local expiry, so it still believes the user is signed in and keeps
         // replaying the dead token on every reload. Drop the session and bounce
         // to a fresh login instead of a dead-end "Unauthorized" screen.

@@ -3,8 +3,8 @@
 Brings up the full cloud-MVP control plane on one Apple Silicon Mac, dogfooding
 BoxLite. One Python orchestrator (`compose`) drives both layers:
 
-- **L1 — 11 BoxLite microVM boxes**: postgres, redis, minio (RustFS S3),
-  registry, dex, jaeger, pgadmin, registry-ui, maildev, otel-collector, caddy —
+- **L1 — 11 BoxLite microVM boxes**: postgres, redis, rustfs (S3),
+  registry, rauthy (OIDC), jaeger, pgadmin, registry-ui, maildev, otel-collector, caddy —
   via the BoxLite SDK (`orchestrator.py` / `services.py`).
 - **L2 — 5 native macOS processes**: API (NestJS, `:3001`), registry proxy (Go,
   `:4100`), Runner (Go, `:3003`), Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) —
@@ -30,7 +30,12 @@ make down      # stop L2 (add ARGS=--all to also stop L1)
 
 First run pulls 11 images; later runs reuse their cache. Before the first login,
 configure [local registration](#local-registration), then sign in at
-<http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
+<http://localhost:3000> through Rauthy (`admin@boxlite.dev` / `password`).
+
+Upgrading from a stack that still runs `dex` or `minio` boxes: run
+`make down ARGS=--all` once first. Those boxes hold the host ports the `rauthy`
+and `rustfs` boxes need. Rauthy assigns new user ids, so the first login creates
+a new local user; `make reset ARGS=--hard` drops the old rows.
 
 ### Local registration
 
@@ -65,7 +70,7 @@ source of truth — `python -m compose --help`):
 | `make up [COMPONENTS="api runner"]` | ensure L1 boxes + start L2 (self-healing: installs deps, builds missing binaries, seeds) |
 | `make status` | one-screen L1 + L2 health |
 | `make down [ARGS=--all]` | stop L2 processes (`--all` also stops/removes L1 boxes; data kept) |
-| `make restart COMPONENTS="runner dex"` | restart L2 proc(s) (the Go ones — runner, proxy, registry-proxy — rebuild) **and/or** recreate L1 box(es) |
+| `make restart COMPONENTS="runner rauthy"` | restart L2 proc(s) (the Go ones — runner, proxy, registry-proxy — rebuild) **and/or** recreate L1 box(es) |
 | `make logs COMPONENT=api` | tail a component log (`all` for everything) |
 | `make reset [ARGS=--hard]` | wipe L2 runtime state (`--hard` also drops + rebuilds the schema) |
 | `make nuke` | tear down **everything** — destroy L1 boxes + wipe data + logs (cold start) |
@@ -76,16 +81,16 @@ source of truth — `python -m compose --help`):
 |---|---|---|
 | postgres | `postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite` | trust auth (local only) |
 | redis | `redis://127.0.0.1:26379` | none |
-| minio (RustFS S3 / console) | `http://127.0.0.1:29000` / `:29001` | `minioadmin` / `minioadmin` |
+| rustfs (S3 / console) | `http://127.0.0.1:29000` / `:29001` | `rustfsadmin` / `rustfsadmin` |
 | registry | `http://127.0.0.1:25000/v2/` | none |
-| dex (OIDC) | `http://localhost:25556/dex` | `admin@boxlite.dev` / `password` (also `test01@boxlite.dev`) |
+| rauthy (OIDC) | `http://localhost:25556/auth/v1` | `admin@boxlite.dev` / `password` (also `test01@boxlite.dev`) |
 | jaeger | `http://127.0.0.1:26686/` | — |
 | pgadmin | `http://127.0.0.1:25051/` | `admin@boxlite.dev` / `boxlite` |
 | registry-ui | `http://127.0.0.1:25052/` | — |
 | maildev (caught mail) | `http://127.0.0.1:25053/` (UI) / SMTP `:25054` | none — accepts any sender |
 | otel (OTLP HTTP) | `http://127.0.0.1:24318/v1/traces` | — |
 | caddy (unified entry) | `http://127.0.0.1:28080/` | reverse-proxies all of the above |
-| Dashboard / API | `http://localhost:3000` / `:3001/api` | login via Dex |
+| Dashboard / API | `http://localhost:3000` / `:3001/api` | login via Rauthy |
 
 Inside a box, reach the host via `host.boxlite.internal:<port>` (gvproxy DNS —
 only resolvable in a box). `InfraConfig` in `compose/config.py` is the source of
@@ -113,15 +118,28 @@ still require the full-stack smoke and API/runner end-to-end checks.
 failed, stopped, or unhealthy boxes are recreated once, retaining host volumes.
 An unsuccessful replacement fails startup before native apps start.
 
-The legacy `minio` service now uses pinned RustFS 1.0.4. Host-side Boto3 creates
-and verifies the `boxlite` bucket, replacing the unavailable `minio/mc` image.
-Only a missing bucket permits creation; authentication and other errors fail
-startup. Storage lives in `data/rustfs`; existing `data/minio` remains untouched
-and needs an explicit object migration if its contents matter.
+The `rustfs` service runs pinned RustFS 1.0.4, storing data in `data/rustfs`.
+Host-side Boto3 creates the `boxlite` bucket only when it is missing; any other
+error fails startup.
+
+`BOXLITE_RUSTFS_USER` and `BOXLITE_RUSTFS_PASSWORD` override the credentials.
 
 RustFS runs as root inside its development VM to support a host-owned writable
-directory without changing host ownership. The credentials and ports retain the
-`BOXLITE_MINIO_*` names and defaults for compatibility.
+directory without changing host ownership.
+
+### Identity provider
+
+The `rauthy` box runs [Rauthy](https://github.com/sebadob/rauthy) 0.37.2 from
+[`apps/rauthy/`](../rauthy/), shared with the `apps/e2e` local stack:
+
+- `config.toml` holds the static settings. The launcher sets the issuer host and
+  random encryption secrets per Box.
+- `bootstrap/` seeds both users, the `boxlite` client (PKCE, device code) and the
+  MCP scopes. Rauthy reads it only into an empty database, so run
+  `make restart COMPONENTS=rauthy` after editing it.
+
+pgAdmin listens on 5050 inside its Box: it runs as a non-root user, and a Box
+lets no non-root process bind a port below 1024.
 
 Before linking the runner, startup asks the existing C build target to check
 Rust inputs and prepares changed Go symbols. The archive digest becomes a cgo
@@ -141,9 +159,11 @@ and uses HTTP probes for native services that expose them.
 
 ### Local MCP testing
 
-Use an API key with `Authorization: Bearer <key>` at `http://localhost:3001/mcp`.
-Dex remains the dashboard's login provider; Dex 2.42 lacks the MCP permission
-scopes and client-metadata discovery needed for MCP browser sign-in.
+MCP clients sign in at `http://localhost:3001/mcp` through Rauthy, registering by
+client ID metadata document or dynamic registration. Rauthy must be able to
+fetch a client metadata document.
+
+An API key with `Authorization: Bearer <key>` also works.
 
 Postgres intentionally retains `statement_timeout=30s`. Incident integration
 tests compare the restored setting with the database's configured baseline.
@@ -152,7 +172,7 @@ tests compare the restored setting with the database's configured baseline.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Dashboard `Unauthorized` / `401` right after login | dex box clock drifted behind the host after the Mac slept → tokens are born expired | `make restart COMPONENTS=dex` + clear browser storage |
+| Dashboard `Unauthorized` / `401` right after login | rauthy box clock drifted behind the host after the Mac slept → tokens are born expired | `make restart COMPONENTS=rauthy` + clear browser storage |
 | Box `pulling` stuck for minutes | registry box's process hung (TCP still listens) | `make restart COMPONENTS=registry` |
 | All API calls `401` | `PROXY_API_KEY` empty in `apps/api/.env` | set it non-empty |
 | Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `.apps-local/boxlite-runner/.lock` | `lsof` the lock, kill the stale PID |
