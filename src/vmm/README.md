@@ -165,7 +165,9 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
   mapping and KVM registration when its first block is plugged.
 - Unplugging the last block of a slot removes its KVM registration, publishes
   a view without it, then drops the mapping. A held snapshot keeps the mapping
-  alive until it drops.
+  alive until it drops, as the [Guest RAM](#guest-ram) diagram shows.
+- Publishing a removal cannot fail: a poisoned view lock is still used, and a
+  region already missing from the view counts as removed.
 - Unplugging blocks in a slot that stays mapped discards them with
   `MADV_DONTNEED`, so the host bound is the mapped slots, not the plugged
   blocks.

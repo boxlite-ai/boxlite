@@ -15,7 +15,13 @@
 //! their next snapshot on. Removal runs KVM unregistration, then the view
 //! update, then drops the mapping, which a snapshot still in use keeps alive.
 
-use std::{io, ops::Range, ptr::NonNull, sync::Arc};
+use std::{
+    convert::Infallible,
+    io,
+    ops::Range,
+    ptr::NonNull,
+    sync::{Arc, PoisonError},
+};
 
 use boxlite_hypervisor::{MemoryRegion, Vm};
 use vm_memory::{GuestAddress, GuestAddressSpace, GuestMemoryRegion, GuestRegionMmap};
@@ -180,14 +186,16 @@ impl<V: Vm + ?Sized> HotplugMemory<V> {
         }
         if !emptied.is_empty() {
             let removed: Vec<_> = emptied.iter().map(|(_, r)| r.start_addr()).collect();
-            self.publish(|map| {
-                removed.iter().try_fold(map, |map, &start| {
-                    Ok(map
-                        .remove_region(start, SLOT_SIZE)
-                        .map_err(io::Error::other)?
-                        .0)
-                })
-            })?;
+            // Removal cannot fail: KVM no longer maps these slots, so the view
+            // and the slot records must follow. A region already missing from
+            // the view counts as removed.
+            let Ok(()) = self.publish::<Infallible>(|map| {
+                Ok(removed.iter().fold(map, |map, &start| {
+                    map.remove_region(start, SLOT_SIZE)
+                        .map(|(map, _)| map)
+                        .unwrap_or(map)
+                }))
+            });
             for (slot, _) in emptied {
                 self.slots[slot] = None;
             }
@@ -220,14 +228,15 @@ impl<V: Vm + ?Sized> HotplugMemory<V> {
         }
     }
 
-    fn publish(
+    /// Replaces the view with `update` applied to the current map. Only
+    /// `update` can fail.
+    fn publish<E>(
         &self,
-        update: impl FnOnce(GuestMemoryMmap) -> io::Result<GuestMemoryMmap>,
-    ) -> io::Result<()> {
-        let guard = self
-            .view
-            .lock()
-            .map_err(|_| io::Error::other("memory view lock"))?;
+        update: impl FnOnce(GuestMemoryMmap) -> Result<GuestMemoryMmap, E>,
+    ) -> Result<(), E> {
+        // The lock only orders writers; a writer that panicked left the view
+        // whole, so a poisoned lock is still safe to use.
+        let guard = self.view.lock().unwrap_or_else(PoisonError::into_inner);
         let current = GuestMemoryMmap::clone(&self.view.memory());
         guard.replace(update(current)?);
         Ok(())
