@@ -78,6 +78,12 @@
       ]
     },
     {
+      "Sid": "RunnerRollout",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": ["arn:aws:s3:::<STATE_BUCKET>/rollouts/aws/<APP>/<STAGE>/<REGION>/i-*.json"]
+    },
+    {
       "Sid": "LegacyCheckpointEvidence",
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:GetObjectVersion"],

@@ -42,6 +42,7 @@ installGlobals()
 
 const aws = () =>
   awsStackProviders({
+    stateBucket: 'fixture-state',
     stage: 'dev',
     region: 'ap-southeast-1',
     accountId: '123456789012',

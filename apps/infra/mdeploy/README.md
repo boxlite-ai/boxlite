@@ -201,6 +201,8 @@ It is the public rollout entrypoint; the internal CLI receives the same `compone
 | `api+runner` (default) | Full infrastructure graph, including shared resources and topology changes |
 
 AWS `api` targets its existing ECS API task/service and required grants; `runner` targets SSM readiness/update commands and artifact/checkpoint grants.
+For an interrupted AWS Runner rollout, inspect the per-instance record or use the [emergency replacement procedure](../docs/aws/runners.md#emergency-replacement).
+
 Both clouds require existing workloads for scoped updates.
 A refreshed, unfiltered preview rejects changes outside the selected component before a targeted apply.
 

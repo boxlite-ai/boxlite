@@ -40,6 +40,8 @@ Pulumi event logs.
 Those legacy controls should not be attributed to every mdeploy invocation.
 Runner updates use [SSM](runners.md). The legacy deployment also has a runner policy pack and scope restrictions.
 
+The native deploy role can read and conditionally update Runner rollout records under its app, stage and region in the versioned state bucket. Runner instance roles need no access to these records.
+
 Registry task identities can read pinned credential versions but cannot write credentials.
 The API can create/write/revoke those credentials without reading their values or changing resource policies.
 

@@ -162,6 +162,11 @@ test('native AWS bootstrap follows declared identities and preserves the legacy 
   const policy = JSON.parse(policyCall[policyCall.indexOf('--policy-document') + 1])
   assert.ok(JSON.stringify(policy).length < 10_240, 'inline role policy exceeds the IAM aggregate size limit')
   assert.doesNotMatch(JSON.stringify(policy), /<[A-Z_]+>/)
+  const rollout = policy.Statement.find((s: any) => s.Sid === 'RunnerRollout')
+  assert.deepEqual(rollout.Action, ['s3:GetObject', 's3:PutObject'])
+  assert.deepEqual(rollout.Resource, [
+    'arn:aws:s3:::existing-state-bucket/rollouts/aws/community-app/dev/ap-southeast-1/i-*.json',
+  ])
   for (const action of ['route53:CreateHostedZone', 'route53:GetHostedZone', 'route53:ListHostedZonesByName']) {
     assert.ok(
       policy.Statement.some((s: any) => s.Effect === 'Allow' && s.Action.includes(action)),

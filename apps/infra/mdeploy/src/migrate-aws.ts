@@ -118,12 +118,14 @@ export const migrateAws = async ({
   if (!envVars.PULUMI_CONFIG_PASSPHRASE)
     throw new Error('Migration requires the native Pulumi passphrase in the stage store')
   const migrationStack = async () => {
+    const stateBucket = await home.stateBucket()
     const stack = await createStackWith({
       projectName: app,
       stackName: stage,
-      backendUrl: 's3://' + (await home.stateBucket()),
+      backendUrl: 's3://' + stateBucket,
       envVars,
       program: awsProgram({
+        stateBucket,
         app,
         stage,
         region: scope.region,

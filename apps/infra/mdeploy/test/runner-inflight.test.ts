@@ -24,7 +24,7 @@ test('an interrupted supervision resumes the accepted command instead of submitt
             : [
                 {
                   InstanceIds: [environment.RUNNER_UPGRADE_TARGET],
-                  CommandId: 'accepted-command',
+                  CommandId: '00000000-0000-4000-a000-000000000002',
                   Comment: comment,
                   Status: 'InProgress',
                   DocumentName: 'AWS-RunShellScript',
@@ -35,7 +35,7 @@ test('an interrupted supervision resumes the accepted command instead of submitt
     if (args[1] === 'send-command') {
       submissions++
       comment = args[args.indexOf('--comment') + 1]
-      return ok('accepted-command')
+      return ok('00000000-0000-4000-a000-000000000002')
     }
     if (args[1] === 'get-command-invocation') {
       return ok(args.includes('Status') ? (interrupted ? 'InProgress' : 'Success') : '')
@@ -97,7 +97,7 @@ test('SSM settles a different payload and requires another invocation before rep
               JSON.stringify({
                 Commands: [
                   {
-                    CommandId: 'previous-command',
+                    CommandId: '00000000-0000-4000-a000-000000000003',
                     Comment: 'boxlite-runner upgrade to 0.10.0',
                     InstanceIds: ['i-0123456789abcdef0'],
                   },
@@ -109,14 +109,14 @@ test('SSM settles a different payload and requires another invocation before rep
         sleep: () => {},
         log: () => {},
       }),
-    /previous payload previous-command settled Success/,
+    /previous payload 00000000-0000-4000-a000-000000000003 settled Success/,
   )
   assert.equal(
     calls.some((args) => args[1] === 'send-command'),
     false,
   )
   assert.equal(
-    calls.some((args) => args.includes('previous-command') && args.includes('Status')),
+    calls.some((args) => args.includes('00000000-0000-4000-a000-000000000003') && args.includes('Status')),
     true,
   )
 })
@@ -137,18 +137,20 @@ test('SSM retains every command ID when multiple previous updates overlap', () =
           if (args[1] === 'send-command') sent++
           return ok(
             JSON.stringify({
-              Commands: ['first', 'second'].map((CommandId) => ({
-                CommandId,
-                Comment: 'boxlite-runner upgrade to 0.10.0',
-                InstanceIds: ['i-0123456789abcdef0'],
-              })),
+              Commands: ['00000000-0000-4000-a000-000000000001', '00000000-0000-4000-a000-000000000002'].map(
+                (CommandId) => ({
+                  CommandId,
+                  Comment: 'boxlite-runner upgrade to 0.10.0',
+                  InstanceIds: ['i-0123456789abcdef0'],
+                }),
+              ),
             }),
           )
         },
         sleep: () => {},
         log: () => {},
       }),
-    /reconcile commands first, second/,
+    /reconcile commands 00000000-0000-4000-a000-000000000001, 00000000-0000-4000-a000-000000000002/,
   )
   assert.equal(sent, 0)
 })
@@ -171,7 +173,7 @@ test("SSM bounds remote execution and ignores another host's active command", ()
             JSON.stringify({
               Commands: [
                 {
-                  CommandId: 'another-host',
+                  CommandId: '00000000-0000-4000-a000-000000000005',
                   Comment: 'boxlite-runner upgrade to 0.11.0',
                   InstanceIds: ['i-11111111111111111'],
                 },
@@ -179,7 +181,7 @@ test("SSM bounds remote execution and ignores another host's active command", ()
               ],
             }),
           )
-        if (args[1] === 'send-command') return ok('new-command')
+        if (args[1] === 'send-command') return ok('00000000-0000-4000-a000-000000000004')
         return ok(args.includes('Status') ? 'Success' : '')
       },
       sleep: () => {},

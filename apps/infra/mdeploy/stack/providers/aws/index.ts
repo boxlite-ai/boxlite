@@ -46,6 +46,7 @@ export const awsStackProviders = ({
   accountId,
   domain,
   dashboardDomain = null,
+  stateBucket,
   artifactsBucket,
   volumePrefix = 'boxlite-volume',
   zoneId,
@@ -64,6 +65,7 @@ export const awsStackProviders = ({
   dashboardDomain?: string | null
   /** Where a build-mode runner binary is staged, for the runner's read grant. */
   artifactsBucket: string
+  stateBucket: string
   volumePrefix?: string
   zoneId: string
   /**
@@ -120,6 +122,7 @@ export const awsStackProviders = ({
     // refuses anything else rather than creating a host that cannot pull.
     runners: ({ network, adminApiKey, regionId, dependsOn }) =>
       awsRunnerProvider({
+        stateBucket,
         placement: placement(network.placementFor('runner')),
         region,
         accountId,
