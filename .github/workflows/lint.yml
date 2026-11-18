@@ -118,7 +118,7 @@ jobs:
     name: Run Clippy on ${{ matrix.os }}
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.quality == 'true' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: true
       matrix:
@@ -126,6 +126,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
+      - name: Install native build dependencies
+        if: runner.environment == 'self-hosted'
+        run: sudo apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config
 
       - uses: ./.github/actions/setup-rust
         with:

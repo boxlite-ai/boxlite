@@ -33,7 +33,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
     permissions:
       # Required to upload code scanning results.
       security-events: write
@@ -61,6 +61,16 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: matrix.language == 'go'
+      - name: Install Go autobuild dependencies
+        if: matrix.language == 'go'
+        run: sudo apt-get install -y --no-install-recommends gcc libc6-dev
+      - uses: ./.github/actions/setup-go
+        if: matrix.language == 'go'
+        with:
+          cache: 'false'
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2

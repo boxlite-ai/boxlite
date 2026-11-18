@@ -109,7 +109,7 @@ jobs:
       !cancelled() &&
       needs.config.result == 'success' &&
       (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +120,13 @@ jobs:
         with:
           ref: ${{ needs.config.outputs.sha }}
           persist-credentials: false
+
+      # The selected checkout can predate the shared BoxLite setup action.
+      - name: Install BoxLite runner tools
+        if: runner.environment == 'self-hosted'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev xz-utils zstd
 
       - uses: ./.github/actions/setup-go
         with:
@@ -189,7 +196,7 @@ jobs:
       needs.test.result == 'success' &&
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'release'
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions:
       contents: write
 

@@ -371,7 +371,7 @@ jobs:
     name: Rust Tests (${{ matrix.platform.target }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.rust == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -383,6 +383,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
+      - name: Install native build dependencies
+        if: runner.environment == 'self-hosted'
+        run: sudo apt-get install -y --no-install-recommends build-essential libssl-dev patchelf pkg-config
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -399,7 +405,10 @@ jobs:
       # them by default. This setting lasts only for the disposable runner.
       - name: Enable unprivileged user namespaces (Linux)
         if: runner.os == 'Linux'
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -557,7 +566,7 @@ jobs:
     name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.python == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -569,6 +578,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - uses: ./.github/actions/setup-python
         with:
@@ -591,7 +603,7 @@ jobs:
     name: Node.js Tests (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.node == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -603,6 +615,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -688,7 +703,7 @@ jobs:
     name: Go Tests (${{ matrix.platform.target }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.go == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -700,6 +715,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - uses: ./.github/actions/setup-go
 
@@ -775,7 +793,7 @@ jobs:
     needs: changes
     # Qualify all five builds periodically without repeating them on routine CI runs.
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -803,6 +821,9 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -840,7 +861,7 @@ jobs:
     name: Nix flake build
     needs: changes
     if: needs.changes.outputs.nix == 'true'
-    runs-on: ubuntu-latest
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
     # A cold build took 27 minutes on 12 local cores; the runner has 4.
     timeout-minutes: 90
     permissions:
@@ -852,9 +873,13 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - uses: ./.github/actions/setup-boxlite-runner
+
       # No /nix/store cache: it comes from the cache.nixos.org CDN, and
       # restoring 3 GB from the Actions cache would save little.
       - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+        with:
+          enable_kvm: 'false' # The worker exposes /dev/kvm and the job sets its permissions.
 
       - uses: ./.github/actions/sccache
 
@@ -878,12 +903,14 @@ jobs:
             --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
             -c make cli
 
-      # The jailer runs bwrap, which Ubuntu 24.04's AppArmor blocks without the
-      # bwrap profile (docs/guides/troubleshooting.md); the runner is discarded.
+      # The jailer needs user namespaces. AppArmor-enabled kernels can restrict
+      # them, so adjust that setting when the disposable runner exposes it.
       - name: Enable KVM and unprivileged user namespaces
         run: |
           sudo chmod a+rw /dev/kvm
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Boot a box
         timeout-minutes: 10
@@ -894,7 +921,7 @@ jobs:
     name: API Tests
     needs: changes
     if: ${{ needs.changes.outputs.api == 'true' }}
-    runs-on: "ubuntu-latest"
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
     permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
       id-token: write
@@ -935,6 +962,11 @@ jobs:
         with: # Native workspace dependencies are submodules.
           submodules: "recursive"
           persist-credentials: ${{ false }}
+
+      - uses: ./.github/actions/setup-boxlite-runner
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Enable Corepack
         run: "corepack enable"
       - uses: actions/setup-node@v4
@@ -963,7 +995,7 @@ jobs:
     name: Dashboard Tests
     needs: changes
     if: ${{ needs.changes.outputs.dashboard == 'true' }}
-    runs-on: "ubuntu-latest"
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
     permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
       id-token: write
@@ -974,6 +1006,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: ${{ false }}
+
+      - uses: ./.github/actions/setup-boxlite-runner
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Enable Corepack
         run: "corepack enable"
       - uses: actions/setup-node@v4
