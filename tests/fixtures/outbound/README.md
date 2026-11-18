@@ -14,3 +14,10 @@ Consume them through each production parser, forwarding path, or replacement ope
 `bootstrap-v1.json` is a minimal shim launch message with a disabled network and a private restored revision.
 The Runtime launch encoder, shim parser, and gvproxy startup encoder consume it to verify metadata propagation while keeping the existing public configuration shapes.
 Its paths are example values; live integration tests use temporary directories they own.
+
+`proxy-contract-v1.json` lists proposed [proxy contract](../../../docs/contributing/architecture/outbound-proxy-contract.md) cases.
+Each case names its input or starting state and expected outcome. An absent field models omission, while a JSON `null` models explicit clearing.
+
+The proxy cases use synthetic registration names, credentials, and hosts. Later implementation
+tests should observe the applicable production boundary, such as Runner dispatch, proxy relay,
+or host resolver queries. The shared `contract-v1.json` cases describe the current foundation.

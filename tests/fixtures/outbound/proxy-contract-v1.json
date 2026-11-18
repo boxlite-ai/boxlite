@@ -1,0 +1,83 @@
+{
+  "contract_version": 1,
+  "registration_cases": [
+    {"id": "create-in-own-organization", "operation": "create", "proxy_url": "https://proxy.example.com", "authorized": true, "expected": "registration_created"},
+    {"id": "forbid-registry-write-without-permission", "operation": "patch", "authorized": false, "expected": "permission_denied"},
+    {"id": "reject-url-userinfo", "operation": "create", "proxy_url": "https://fixture-user@proxy.example.com", "expected": "invalid_argument"},
+    {"id": "reject-url-scheme", "operation": "create", "proxy_url": "socks4://proxy.example.com", "expected": "invalid_argument"},
+    {"id": "reject-url-path-query-and-fragment", "operation": "create", "invalid_urls": ["https://proxy.example.com/path", "https://proxy.example.com/?option=value", "https://proxy.example.com/#fragment"], "expected": "invalid_argument"},
+    {"id": "reject-invalid-proxy-port", "operation": "create", "proxy_url": "https://proxy.example.com:65536", "expected": "invalid_argument"},
+    {"id": "preserve-omitted-credential", "operation": "patch", "credential_configured": true, "input": {}, "expected": "preserve_credential"},
+    {"id": "clear-null-credential", "operation": "patch", "credential_configured": true, "input": {"credential": null}, "expected": "clear_credential"},
+    {"id": "require-credential-choice-on-authority-change", "operation": "patch", "credential_configured": true, "input": {"url": "https://replacement.example.com"}, "expected": "invalid_argument"},
+    {"id": "redact-credential-readback", "operation": "read", "credential_configured": true, "expected": {"credential_configured": true, "plaintext": false, "ciphertext": false}},
+    {"id": "block-registration-delete-while-referenced", "operation": "delete", "references": ["committed", "pending"], "expected": {"http_status": 409, "retire": false}}
+  ],
+  "binding_cases": [
+    {"id": "create-omitted-is-unbound", "operation": "create", "input": {"mode": "enabled"}, "expected": "unbound"},
+    {"id": "create-null-is-unbound", "operation": "create", "input": {"mode": "enabled", "proxy": null}, "expected": "unbound"},
+    {"id": "eligible-create-binds-fresh-box", "operation": "create", "input": {"mode": "enabled", "proxy": "build-egress"}, "runner": "enrolled_https_v0", "expected": {"route": "build-egress", "claim_warm_box": false}},
+    {"id": "unknown-registration", "operation": "create", "input": {"mode": "enabled", "proxy": "missing"}, "expected": {"http_status": 404, "dispatch": false}},
+    {"id": "cross-organization-registration", "operation": "create", "input": {"mode": "enabled", "proxy": "other-organization"}, "expected": {"http_status": 404, "dispatch": false}},
+    {"id": "reject-omission-on-bound-replacement", "operation": "replace", "current_proxy": "build-egress", "input": {"mode": "disabled"}, "expected": {"outcome": "incomplete_replacement", "mutation": false}},
+    {"id": "accept-explicit-unbind", "operation": "replace", "current_proxy": "build-egress", "input": {"mode": "enabled", "proxy": null}, "expected": {"route": "direct", "check_destination_policy": true}},
+    {
+      "id": "refuse-unbind-without-runner-route-evidence",
+      "operation": "replace",
+      "current_proxy": "build-egress",
+      "input": {"mode": "enabled", "proxy": null},
+      "runner": "http_only_v0",
+      "expected": {"route": "build-egress", "reserve": false, "dispatch": false, "release_references": false}
+    },
+    {"id": "retain-binding-while-disabled", "operation": "replace", "input": {"mode": "disabled", "proxy": "build-egress"}, "expected": {"route": "build-egress", "new_egress": "blocked"}},
+    {"id": "http-only-runner-rejects-credential-free-binding", "operation": "create", "input": {"mode": "enabled", "proxy": "build-egress"}, "runner": "http_only_v0", "credential_configured": false, "expected": {"dispatch": false, "diagnostic": "runner_proxy_tls_unsupported"}},
+    {"id": "v2-runner-rejects-bound-restart", "operation": "restart", "current_proxy": "build-egress", "runner": "v2", "expected": {"dispatch": false, "diagnostic": "runner_proxy_unsupported"}},
+    {"id": "legacy-unbound-replacement-stays-supported", "operation": "replace", "runner": "legacy", "input": {"mode": "enabled"}, "expected": "unbound"}
+  ],
+  "transport_cases": [
+    {"id": "http-connect-without-auth", "proxy_url": "http://proxy.example.com", "expected": {"connector": "http_connect", "port": 80, "auth": "none"}},
+    {"id": "http-connect-with-basic-auth", "proxy_url": "http://proxy.example.com", "credential": {"username": "fixture-user", "password": "fixture-password"}, "expected": {"connector": "http_connect", "port": 80, "auth": "basic"}},
+    {"id": "tls-connect-without-auth", "proxy_url": "https://proxy.example.com", "expected": {"connector": "tls_connect", "port": 443, "auth": "none", "verify_proxy_name": true}},
+    {"id": "tls-connect-with-basic-auth", "proxy_url": "https://proxy.example.com", "credential": {"username": "fixture-user", "password": "fixture-password"}, "expected": {"connector": "tls_connect", "port": 443, "auth": "basic", "verify_proxy_name": true}},
+    {"id": "socks5-connect-without-auth", "proxy_url": "socks5://proxy.example.com", "expected": {"connector": "socks5_connect", "port": 1080, "auth": "none"}},
+    {"id": "socks5-connect-with-password", "proxy_url": "socks5://proxy.example.com", "credential": {"username": "fixture-user", "password": "fixture-password"}, "expected": {"connector": "socks5_connect", "port": 1080, "auth": "username_password"}},
+    {"id": "reject-colon-in-basic-username", "proxy_url": "http://proxy.example.com", "credential": {"username": "fixture:user", "password": "fixture-password"}, "expected": "invalid_argument"},
+    {"id": "reject-socks5-auth-downgrade", "proxy_url": "socks5://proxy.example.com", "credential_configured": true, "peer_selected_auth": "none", "expected": {"diagnostic": "proxy_auth_failed", "direct_dials": 0}},
+    {"id": "reject-wrong-proxy-tls-identity", "proxy_url": "https://proxy.example.com", "tls_peer_name": "wrong.example.com", "expected": {"diagnostic": "proxy_handshake_failed", "direct_dials": 0}},
+    {"id": "unreachable-proxy-no-direct-fallback", "proxy_url": "https://proxy.example.com", "peer_behavior": "unreachable", "expected": {"diagnostic": "proxy_unreachable", "direct_dials": 0}},
+    {"id": "refuse-business-loopback-before-proxy", "hostname": "packages.example.com", "connection_ip": "127.0.0.1", "expected": {"proxy_requests": 0, "direct_dials": 0}},
+    {"id": "limit-setup-time", "setup_budget_ms": 30000, "peer_behavior": "stall", "expected": {"diagnostic": "proxy_timeout", "direct_dials": 0}},
+    {"id": "share-approved-target-across-tcp-paths", "paths": ["ordinary", "inspected", "secrets_mitm"], "expected": {"target": "approved_literal_and_port", "retain_origin_hostname": true}}
+  ],
+  "dns_udp_cases": [
+    {"id": "bootstrap-resolves-registered-proxy-only", "lookup": "registered_proxy_hostname", "expected": {"host_resolver": true}},
+    {"id": "external-business-dns-uses-selected-proxy", "lookups": ["guest_udp_dns", "guest_tcp_dns", "host_business_dns"], "expected": {"resolver": "pinned_doh", "transport": "captured_proxy", "host_business_queries": 0}},
+    {"id": "proxy-outage-blocks-business-dns", "failure": "proxy_unreachable", "lookups": ["guest_udp_dns", "guest_tcp_dns", "host_business_dns"], "expected": {"lookup_budget_ms": 5000, "host_business_queries": 0, "outcome": "failed"}},
+    {"id": "doh-outage-blocks-business-dns", "failure": "doh_unreachable", "lookups": ["guest_udp_dns", "guest_tcp_dns", "host_business_dns"], "expected": {"lookup_budget_ms": 5000, "host_business_queries": 0, "outcome": "failed"}},
+    {"id": "block-existing-udp-before-bind-ack", "phase": "binding", "external_udp_endpoint": "open", "expected": {"external_relay": false, "deliver_late_reply": false, "endpoint": "closed_before_ack"}},
+    {"id": "bound-udp-preserves-gateway-services", "phase": "bound", "expected": {"external_udp": "blocked", "external_quic": "blocked", "gateway_dns": "available", "dhcp": "available"}},
+    {"id": "unbind-permits-new-udp-only", "phase": "unbound", "expected": {"new_udp": "allowed_by_policy", "old_closed_endpoint": "closed"}}
+  ],
+  "replacement_cases": [
+    {"id": "stale-public-precondition-no-dispatch", "if_match_revision": "policy-a", "committed_policy_revision": "policy-b", "expected": {"http_status": 412, "mutation": false, "dispatch": false}},
+    {"id": "matching-policy-ack-wrong-proxy-route", "ack_policy_revision": "policy-b", "expected_registration_revision": "registration-b", "observed_registration_revision": "registration-a", "expected": {"application": "uncertain", "retain": ["registration-a", "registration-b"]}},
+    {
+      "id": "matching-policy-and-route-ack-wrong-epoch",
+      "candidate": {"policy_revision": "policy-b", "registration_revision": "registration-b", "runtime_epoch": "epoch-current"},
+      "acknowledgement": {"policy_revision": "policy-b", "registration_revision": "registration-b", "runtime_epoch": "epoch-old"},
+      "expected": {"application": "uncertain", "retain": ["registration-a", "registration-b"]}
+    },
+    {"id": "ack-lost-exact-durable-readback", "ack": "lost", "readback": "exact_installed_and_durable", "epoch": "same", "pending_runtime_attempt": false, "expected": {"application": "confirmed"}},
+    {"id": "readback-with-pending-runtime-attempt-stays-uncertain", "ack": "lost", "readback": "exact_installed_and_durable", "epoch": "same", "pending_runtime_attempt": true, "expected": {"application": "uncertain", "retain": ["registration-a", "registration-b"]}},
+    {"id": "uncertain-replacement-retains-versions", "ack": "lost", "readback": "previous_route", "epoch": "same", "expected": {"application": "uncertain", "conflicting_write_http_status": 409, "retain": ["registration-a", "registration-b"]}},
+    {"id": "rotation-preserves-established-tcp", "previous_registration_revision": "registration-a", "confirmed_registration_revision": "registration-b", "expected": {"established_tcp": "registration-a", "new_tcp": "registration-b"}},
+    {"id": "legacy-policy-write-rejects-protected-box", "operation": "legacy_replace", "binding": "pending", "expected": {"outcome": "refused", "mutation": false}},
+    {"id": "legacy-recovery-refuses-before-destroy", "operation": "legacy_recover", "binding": "unresolved", "expected": {"outcome": "refused", "destroy": false, "retain_evidence": true}}
+  ],
+  "recovery_cases": [
+    {"id": "reassignment-with-unconfirmed-old-termination", "operation": "reassign", "old_epoch_termination": "unconfirmed", "expected": {"new_egress": "blocked", "release_references": false}},
+    {"id": "terminated-without-durable-evidence", "operation": "reassign", "old_epoch_termination": "confirmed", "durable_evidence": "missing", "expected": {"new_egress": "blocked", "release_references": false}},
+    {"id": "enable-after-exact-reconciliation", "operation": "reassign", "old_epoch_termination": "confirmed", "durable_evidence": "exact_reconciled", "expected": {"new_egress": "allowed_by_policy"}},
+    {"id": "generic-runner-404-does-not-settle-deletion", "operation": "delete_box", "runner_result": 404, "old_epoch_termination": "unconfirmed", "expected": {"retain_evidence": true, "release_references": false}}
+  ]
+}
