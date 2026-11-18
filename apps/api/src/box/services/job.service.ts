@@ -18,6 +18,7 @@ import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import { runnerJobQueueKey } from '../constants/runner-job-queue'
+import { emitTiming, startTiming } from '../../common/utils/tti-timing.util'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
@@ -47,6 +48,7 @@ export class JobService {
     resourceId: string,
     payload?: string | Record<string, any>,
   ): Promise<Job> {
+    const startedAt = type === JobType.CREATE_BOX ? startTiming() : undefined
     // Use provided manager if available, otherwise use default repository
     const repo = manager ? manager.getRepository(Job) : this.jobRepository
 
@@ -67,6 +69,12 @@ export class JobService {
       })
 
       await repo.insert(job)
+
+      if (startedAt !== undefined) {
+        try {
+          emitTiming('create', 'create.job_inserted', 'ok', startedAt, { box_id: resourceId, job_id: job.id })
+        } catch {}
+      }
 
       // Log with context-specific info
       const contextInfo = resourceId ? `${resourceType} ${resourceId}` : 'N/A'

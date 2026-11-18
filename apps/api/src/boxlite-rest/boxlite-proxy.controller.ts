@@ -51,6 +51,7 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import { emitTiming, startTiming, TimingStatus } from '../common/utils/tti-timing.util'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -136,6 +137,22 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    const startedAt = startTiming()
+    let end: { at: ReturnType<typeof startTiming>; status: TimingStatus } | undefined
+    const captureEnd = (closed: boolean) => {
+      if (end) return
+      try {
+        end = { at: startTiming(), status: closed || res.statusCode >= 400 ? 'error' : 'ok' }
+      } catch {}
+    }
+    // Capture the response end even while admission is pending; don't write yet.
+    try {
+      res.once('finish', () => captureEnd(false))
+      res.once('close', () => captureEnd(true))
+      if (res.writableFinished) captureEnd(false)
+      else if (res.destroyed || res.closed) captureEnd(true)
+    } catch {}
+
     return this.proxyToRunner(
       authContext,
       boxId,
@@ -147,6 +164,48 @@ export class BoxliteProxyController {
       {
         operation: req.method === 'POST' ? 'box.exec' : undefined,
         admit: req.method === 'POST' ? requireExecReady : undefined,
+        timing: (resolvedBoxId) => {
+          let forwardedAt: ReturnType<typeof startTiming>
+          let execId: string | undefined
+          let recorded = false
+          const ids = () => ({ box_id: resolvedBoxId, ...(execId ? { exec_id: execId } : {}) })
+          const recordForwarded = (status: TimingStatus) => {
+            if (forwardedAt === undefined) return
+            const started = forwardedAt
+            forwardedAt = undefined
+            try {
+              emitTiming('exec', 'exec.forwarded', status, started, ids())
+            } catch {}
+          }
+          const record = () => {
+            if (recorded || !end) return
+            recorded = true
+            recordForwarded('error')
+            if (end.at === undefined) return
+            try {
+              emitTiming('exec', 'exec.request', end.status, startedAt, ids(), end.at)
+            } catch {}
+          }
+          try {
+            if (end) record()
+            else {
+              res.once('finish', record)
+              res.once('close', record)
+            }
+          } catch {}
+
+          return {
+            start: () => {
+              forwardedAt = startTiming()
+            },
+            proxyRes: (upstream) => {
+              try {
+                execId = upstream.headers.location?.match(/\/executions\/([^/?#]+)(?:[?#]|$)/)?.[1]
+                recordForwarded((upstream.statusCode ?? 500) >= 400 ? 'error' : 'ok')
+              } catch {}
+            },
+          }
+        },
       },
     )
   }
@@ -520,7 +579,13 @@ export class BoxliteProxyController {
     policy: ProxyActivityPolicy,
     // admit throws to refuse the request after activity is recorded and before
     // any resume.
-    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission; operation?: ProxiedOperation },
+    opts?: {
+      ws?: boolean
+      proxyTimeoutMs?: number
+      admit?: ProxyAdmission
+      operation?: ProxiedOperation
+      timing?: (boxId: string) => Pick<NonNullable<Options['on']>, 'start' | 'proxyRes'>
+    },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
@@ -586,6 +651,7 @@ export class BoxliteProxyController {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
         },
+        ...opts?.timing?.(box.id),
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }
