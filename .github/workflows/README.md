@@ -12,16 +12,28 @@ support subdirectories under `.github/workflows/`, so composite actions are wher
 
 ## Runner placement
 
-`runs-on: boxlite` queues lightweight Linux x64 checks on ephemeral workers.
-The repository needs an active [BoxLite CI connection](../../apps/github-ci-runner/README.md)
-with access to register workers for its jobs. The default worker has a 10 GiB disk.
-Jobs that need Make or archive tools install them through the
-[runner setup action](../actions/setup-boxlite-runner/action.yml).
+Ubuntu x64 jobs use ephemeral workers through the
+[BoxLite CI connection](../../apps/github-ci-runner/README.md).
+The connection needs permission to register workers and quota for the requested
+[resources](../../apps/libs/ci-listener/README.md#resource-labels).
 
-The SDK matrices use native macOS and Linux ARM64 runners and qualified Linux x64
-runners. Local E2E uses its GCP runner pool for KVM and disk capacity. Deployment
-and release orchestration use GitHub-hosted runners so they can recover BoxLite CI
-when its workers are unavailable.
+| Runner label | Jobs |
+| --- | --- |
+| `boxlite` | Lightweight lint, setup, status and release uploads using the default 10 GiB disk |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Application tests, client drift, CodeQL, Python and Node SDK tests, and release package checks |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, native SDK and guest builds, Rust and Go coverage, Nix, and multi-architecture image builds |
+
+The platform matrix controls check names and artifacts. The Ubuntu x64 leg selects
+a BoxLite label, and Linux ARM64 and macOS legs run on their native platforms.
+BoxLite jobs install Make and archive tooling through the
+[runner setup action](../actions/setup-boxlite-runner/action.yml) where needed.
+The x64 Rust, Go and Nix hardware tests require an organization with nested
+virtualization and usable `/dev/kvm`.
+
+The local E2E workflow uses its GCP runner pool for persistent caches and VM
+lifecycle. Deployment recovery uses GitHub-hosted runners, including shared
+configuration, x64-only C builds and Runner binary builds. npm publishing uses
+GitHub-hosted capacity for its [provenance requirement](https://docs.npmjs.com/generating-provenance-statements/).
 
 ## How they fit together
 
