@@ -23,7 +23,7 @@ import { OrganizationService } from '../services/organization.service'
 import { OrganizationUserService } from '../services/organization-user.service'
 import { CouponClaimsController } from './coupon-claims.controller'
 
-const organizationId = randomUUID()
+const organizationId = 'abcde000-0000-4000-8000-000000000001'
 const otherOrganizationId = randomUUID()
 const claim = { eventId: randomUUID(), couponCode: 'ABCD-EFGH' }
 const receipt = {
@@ -43,14 +43,18 @@ const credited = {
   walletTransactionId: randomUUID(),
 }
 const serviceToken = 'test-commerce-service'
+type Delivery = { method: string; path: string; authorization: string; body: Record<string, unknown> }
+type CommerceReply = { status: number; body: unknown }
 
 describe('POST /api/organizations/:organizationId/coupon-claims', () => {
   let app: INestApplication
   let server: Server
   let upstream: string
   let endpoint: string
-  let commerceReply: { status: number; body: unknown } | 'disconnect'
-  const deliveries: { method: string; path: string; authorization: string; body: Record<string, unknown> }[] = []
+  let commerceReply: CommerceReply | ((delivery: Delivery) => CommerceReply | 'disconnect')
+  const deliveries: Delivery[] = []
+  const roles = new Map<string, OrganizationMemberRole>()
+  const cache = new Map<string, string>()
   const tokens: Record<string, string> = {}
   const settings: Record<string, unknown> = {}
 
@@ -72,18 +76,20 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
         res.writeHead(400).end()
         return
       }
-      deliveries.push({
+      const delivery = {
         method: req.method,
         path: req.url,
         authorization: req.headers.authorization,
         body,
-      })
-      if (commerceReply === 'disconnect') {
+      }
+      deliveries.push(delivery)
+      const reply = typeof commerceReply === 'function' ? commerceReply(delivery) : commerceReply
+      if (reply === 'disconnect') {
         res.destroy()
         return
       }
-      res.statusCode = commerceReply.status
-      res.end(JSON.stringify(commerceReply.body))
+      res.statusCode = reply.status
+      res.end(JSON.stringify(reply.body))
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     upstream = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -112,9 +118,7 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
     }
     const membership = {
       findOne: (org: string, userId: string) =>
-        org === organizationId
-          ? { role: userId === 'member' ? OrganizationMemberRole.MEMBER : OrganizationMemberRole.OWNER }
-          : null,
+        org.toLowerCase() === organizationId && roles.has(userId) ? { role: roles.get(userId) } : null,
     }
     const module = await Test.createTestingModule({
       controllers: [CouponClaimsController],
@@ -123,9 +127,10 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
         { provide: JwtStrategy, useValue: jwt },
         { provide: UserService, useValue: users },
         { provide: TypedConfigService, useValue: config },
-        { provide: OrganizationService, useValue: { findOne: (id: string) => ({ id }) } },
+        // PostgreSQL UUID lookups return the canonical lowercase ID for either spelling.
+        { provide: OrganizationService, useValue: { findOne: (id: string) => ({ id: id.toLowerCase() }) } },
         { provide: OrganizationUserService, useValue: membership },
-        { provide: getRedisConnectionToken(), useValue: { get: () => null, set: () => 'OK' } },
+        { provide: getRedisConnectionToken(), useValue: cache },
       ],
     })
       .overrideGuard(AuthenticatedRateLimitGuard)
@@ -141,6 +146,11 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
 
   beforeEach(() => {
     deliveries.length = 0
+    cache.clear()
+    roles.set('owner', OrganizationMemberRole.OWNER)
+    roles.set('member', OrganizationMemberRole.MEMBER)
+    roles.set('unverified', OrganizationMemberRole.OWNER)
+    roles.set('admin', OrganizationMemberRole.OWNER)
     commerceReply = { status: 202, body: receipt }
     Object.assign(settings, {
       billingApiUrl: `${upstream}/api/billing`,
@@ -197,6 +207,14 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
     expect(response.data).toEqual({ status, result })
   })
 
+  it('uses the resolved organization UUID for Commerce when the route uses uppercase', async () => {
+    const response = await post(claim, tokens.owner, organizationId.toUpperCase())
+    expect(deliveries.map(({ path }) => path)).toEqual([
+      `/gateway/internal/organization/${organizationId}/billing-events`,
+    ])
+    expect(response.status).toBe(202)
+  })
+
   it.each([
     [404, 'coupon_not_found', 'Coupon not found'],
     [403, 'coupon_wrong_organization', 'This coupon is not available to this organization'],
@@ -226,12 +244,23 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
   })
 
   it('resolves a lost response by sending the original delivery ID and code on retry', async () => {
-    commerceReply = 'disconnect'
+    const receipts = new Map<string, Omit<typeof receipt, 'result'> & { result: typeof credited | null }>()
+    commerceReply = ({ path, body }) => {
+      const identity = JSON.stringify([path, body.eventId, body.type, body.data])
+      const saved = receipts.get(identity)
+      if (!saved) {
+        receipts.set(identity, { ...receipt, billingEventId: randomUUID() })
+        return 'disconnect'
+      }
+      return { status: 202, body: { ...saved, replayed: true } }
+    }
     expect((await post()).status).toBe(503)
-    commerceReply = { status: 202, body: { ...receipt, status: 'done', result: credited, replayed: true } }
+    expect(receipts.size).toBe(1)
+    Object.assign([...receipts.values()][0], { status: 'done', result: credited })
     const replay = await post()
     expect(replay.status).toBe(202)
     expect(replay.data).toEqual({ status: 'done', result: credited })
+    expect(receipts.size).toBe(1)
     expect(deliveries.map(({ body }) => [body.eventId, body.data])).toEqual([
       [claim.eventId, { coupon_code: claim.couponCode }],
       [claim.eventId, { coupon_code: claim.couponCode }],
@@ -276,6 +305,14 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
 
   it('accepts a system administrator who owns the target organization', async () => {
     expect((await post(claim, tokens.admin)).status).toBe(202)
+    expect(deliveries).toHaveLength(1)
+  })
+
+  it.each(['removed', 'demoted'])('denies a cached owner whose membership was %s', async (change) => {
+    expect((await post()).status).toBe(202)
+    if (change === 'removed') roles.delete('owner')
+    else roles.set('owner', OrganizationMemberRole.MEMBER)
+    expect((await post()).status).toBe(403)
     expect(deliveries).toHaveLength(1)
   })
 

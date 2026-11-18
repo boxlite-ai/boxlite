@@ -35,8 +35,9 @@ export class CouponClaimsController {
   @Post()
   @HttpCode(202)
   async claim(@AuthContext() actor: OrganizationAuthContext, @Body() body: unknown) {
-    // System administrators pass the organization guard without a membership lookup.
-    const membership = actor.organizationUser ?? (await this.memberships.findOne(actor.organizationId, actor.userId))
+    const organizationId = actor.organization.id
+    // The guard caches memberships. Billing actions require current ownership.
+    const membership = await this.memberships.findOne(organizationId, actor.userId)
     if (membership?.role !== OrganizationMemberRole.OWNER) throw new ForbiddenException('Organization owner required')
     const user = await this.users.findOne(actor.userId)
     if (!user?.emailVerified) {
@@ -45,6 +46,6 @@ export class CouponClaimsController {
 
     const input = claimBody.safeParse(body)
     if (!input.success) throw new BadRequestException('Expected a valid eventId and couponCode')
-    return this.claims.submit(actor.organizationId, input.data.eventId, input.data.couponCode)
+    return this.claims.submit(organizationId, input.data.eventId, input.data.couponCode)
   }
 }

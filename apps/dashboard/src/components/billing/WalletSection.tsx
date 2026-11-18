@@ -264,8 +264,12 @@ export function WalletSection({
   linkCouponCode,
   onCouponClaimAccepted,
 }: { linkCouponCode?: string; onCouponClaimAccepted?: () => void } = {}) {
-  const { selectedOrganization, authenticatedUserOrganizationMember, organizationMembersStatus } =
-    useSelectedOrganization()
+  const {
+    selectedOrganization,
+    authenticatedUserOrganizationMember,
+    organizationMembersStatus,
+    refreshOrganizationMembers,
+  } = useSelectedOrganization()
   const { organizations } = useOrganizations()
   const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
@@ -408,6 +412,14 @@ export function WalletSection({
     <div className="flex flex-col gap-8">
       {linkCouponCode && !user?.profile.email_verified && (
         <Panel className="px-[22px] py-4">Verify your email to claim coupon code {linkCouponCode}.</Panel>
+      )}
+      {linkCouponCode && user?.profile.email_verified && organizationMembersStatus === 'error' && (
+        <Panel className="flex flex-wrap items-center justify-between gap-3 px-[22px] py-4">
+          <p role="alert">Couldn’t verify your organization role.</p>
+          <AsciiButton onClick={() => void refreshOrganizationMembers().catch(() => undefined)}>
+            Retry verification
+          </AsciiButton>
+        </Panel>
       )}
       {user?.profile.email_verified &&
         organizationMembersStatus === 'ready' &&
@@ -703,7 +715,7 @@ export function WalletSection({
 
               <BalanceThresholdBanner wallet={wallet} plan={planQuery.data} />
 
-              {user?.profile.email_verified && !linkCouponCode && (
+              {user?.profile.email_verified && (
                 <>
                   <div className="my-5 h-px bg-border" />
 

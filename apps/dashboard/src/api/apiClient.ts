@@ -100,6 +100,8 @@ export interface PromptDraft {
 
 const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
 
+class ReauthenticationStartError extends BoxliteError {}
+
 export class ApiClient {
   public async claimCoupon(
     organizationId: string,
@@ -111,6 +113,7 @@ export class ApiClient {
         timeout: 10_000,
       })
       .catch((error: BoxliteError) => {
+        if (error instanceof ReauthenticationStartError) throw error
         const { cause } = error
         if (axios.isAxiosError(cause) && cause.response && cause.response.status < 500) throw error
         throw new CouponClaimUnconfirmedError()
@@ -492,8 +495,8 @@ export class ApiClient {
     } catch (handlerError) {
       isHandlingUnauthorized = false
       clearReauthAttempted()
-      throw BoxliteError.fromString('Failed to start re-authentication.', {
-        cause: handlerError instanceof Error ? handlerError : undefined,
+      throw new ReauthenticationStartError('Failed to start re-authentication. Please sign in again.', {
+        cause: handlerError,
       })
     }
 

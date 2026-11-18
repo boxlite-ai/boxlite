@@ -204,7 +204,14 @@ and `make build:apps:api` to validate the production bundle and dependency impor
 organization owner. The API sends a `RedeemCouponAfterBindCard` event to
 `POST /internal/organization/:organizationId/billing-events` with a UTC
 `occurredAt`, the supplied event ID, and `data: { "coupon_code": "ABCD-EFGH" }`.
-It uses the internal Commerce destination and `USAGE_EXPORT_TOKEN`.
+It checks the current owner membership and uses the organization's stored UUID in the Commerce path.
+
+Set `BILLING_API_URL` to enable claims and `USAGE_EXPORT_TOKEN` to authenticate
+the internal request. The destination defaults to the origin of `BILLING_API_URL`.
+For example, `https://commerce.example/api/billing` sends claims to
+`https://commerce.example/internal/organization/:organizationId/billing-events`.
+`USAGE_EXPORT_URL` overrides that origin and preserves any configured path prefix.
+With `BILLING_API_URL` unset, the endpoint returns HTTP 503 even when both usage export settings are present.
 
 The first accepted delivery returns HTTP 202 with `status: "pending"` and
 `result: null`. Retrying the same event ID reads its current status and saved

@@ -360,14 +360,21 @@ route opens `/dashboard/billing?tab=wallet&code=CODE`. Signed-out visitors sign
 in first, and the sign-in return path keeps the query.
 
 Wallet submits a reward claim when the signed-in user has a verified email and
-owns their only organization. An owner with multiple organizations confirms
-the receiving organization. A rejected claim shows the reason. Retrying an
-unconfirmed claim in the same tab reuses the event ID, including after a reload.
+owns their only organization. An owner with multiple organizations can switch
+organizations from Wallet and confirm the claim there. The link keeps its coupon
+code across the switch. If Wallet cannot verify membership, use **Retry verification**.
+Codes entered under **Have a coupon code?** redeem independently.
 
 When Commerce accepts the claim, Wallet clears `code` from the URL and prompts
 the user to add a card. An organization with a card on file can proceed directly
-to processing. Commerce checks coupon eligibility again before crediting the
-wallet. A coupon can expire or reach its redemption limit while the claim waits.
+to processing. Reopening Wallet in the same tab checks pending claims for the
+active account and organization using their original event IDs. Coupon codes
+with different capitalization or surrounding spaces share an event ID.
+
+An unconfirmed claim can be retried. A rejection at submission keeps the code
+available for another attempt. Once Commerce records a failed or skipped outcome,
+Wallet closes the claim form and shows the failure. For example, a coupon can
+expire or reach its redemption limit while the organization waits to add a card.
 In the mock preview, `ACME50` returns a pending claim and an unknown code returns
 `coupon_not_found`.
 

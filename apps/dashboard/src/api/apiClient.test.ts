@@ -25,6 +25,18 @@ describe('coupon link claims', () => {
     await expect(api.claimCoupon('org', claim)).rejects.toThrow('This coupon has expired.')
   })
 
+  it('asks the owner to sign in again when a 401 cannot start reauthentication', async () => {
+    const failure = new Error('Could not clear the expired session')
+    const removeUser = vi.fn().mockRejectedValue(failure)
+    const api = await makeClient(removeUser, 401)
+
+    await expect(api.claimCoupon('org', claim)).rejects.toMatchObject({
+      message: expect.stringMatching(/sign in again/i),
+      cause: failure,
+    })
+    expect(removeUser).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['disconnected', {}],
     [503, {}],
