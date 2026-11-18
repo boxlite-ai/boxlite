@@ -338,6 +338,39 @@ PR11 validates native Guest forwarding and hostname dials against permitted and 
 
 Advertise each capability after its own acceptance. [Full dual-stack plan](https://github.com/boxlite-ai/boxlite/issues/2733)
 
+### Go rule matching
+
+`compileExtendedOutboundPolicy` validates both lists before returning an immutable policy.
+The evaluator takes a pre-NAT target and platform facts for the same normalized address.
+It returns a decision and selects a route after applying deny precedence.
+
+An address allow can resolve a pending flow immediately when only a hostname allow could also match.
+A possible secrets grant or a hostname deny for the actual port instead requests inspection.
+The caller evaluates the completed observation against the same policy.
+
+```mermaid
+flowchart LR
+    T[Typed target and address facts] --> E[Evaluate captured policy]
+    E -->|Inspection pending| I[Caller inspects TCP]
+    I --> E
+    E -->|Address association required| A[Caller verifies name and socket address]
+    A -->|Verified| E
+    A -->|Unavailable or mismatched| X[Refuse]
+    E -->|Name or secrets route| C[Check normalized DNS candidate]
+    E -->|Deny or allow miss| X
+```
+
+For example, a matching address allow and an applicable hostname deny require the observed name to resolve to the actual socket address.
+An association for a different address leaves the decision denied.
+
+`checkCandidate` evaluates one normalized DNS candidate and its classification.
+For a restricted local candidate and nonempty allow list, the candidate needs an IP rule covering its actual port.
+The caller selects the connector and enforces transport eligibility.
+
+Existing TCP and UDP callers continue to use the legacy filter until their integration slices.
+The new functions are exercised through the shared rule fixtures.
+[Design and handoff](https://github.com/boxlite-ai/boxlite/issues/2874)
+
 ## Revisions and acknowledgements
 
 A revision is an opaque, Box-scoped token; clients compare for equality rather than ordering tokens or interpreting timestamps.
