@@ -829,7 +829,7 @@ to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcemen
 height consistently. Preserve `min-w-0` on the content region when adding routes.
 
 Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
-section label. Applications contains CI → Runners / Connects, including compact-rail expansion, hover preview, active-child highlighting and mobile menu destinations. Management remains a separate primary entry. Compact navigation
+section label. Applications contains one CI destination, active on both the runner inventory and GitHub connections routes. The CI page exposes persistent Runners and GitHub connections tabs on desktop and mobile, backed by the existing routes. Both routes retain multi-resource inventories within the selected organization. Management remains a separate primary entry. Compact navigation
 keeps the group accessible name without squeezing in a visual label.
 
 Expanded navigation highlights only the current child, using the same full row
@@ -977,13 +977,12 @@ A new verified connection can reconnect later. Switching BoxLite organizations
 does not redirect an in-flight delete. Legacy Organization `?tab=ci` links and
 successful browser authorization lead to Connects. `start:mock` includes synthetic
 JIT Boxes and deletable connections for local presentation checks.
-Neither tab has a manual Refresh control. Connects fetches on entry and after
+Neither CI page has a manual Refresh control. Connects fetches on entry and after
 successful additions/updates/deletions; it does not poll the connection list.
 
-**Run workflows on BoxLite** on Connects and **How to run a job** on Runners follow the page description as an underlined button that opens
+**How to run a job** follows the stable CI page description as an underlined button that opens
 the guide sheet; it wraps below the description on narrow screens. Each Runners empty state
-uses a single title, concise explanation and at most one primary action. Workflow
-steps live in the guide rather than being repeated below a second empty-state heading. Successful browser
+uses a single title, concise explanation and at most one primary action. The empty inventory exposes the minimal workflow diff inline; the guide retains the complete test workflow and troubleshooting. Successful browser
 connection offers the same guide for the current BoxLite organization. The success
 entry survives removal of the authorization route parameter and clears when a new
 attempt starts, the organization changes, or a connection is successfully deleted.
@@ -1007,7 +1006,7 @@ In `start:mock`, open the workflow guide next to the CI page description. Use Co
 to inspect the installed repositories and private repository policy.
 The empty Runners page checks owner-visible connection settings before choosing
 its next step. No connections leads to **Set up GitHub**, which opens Connects in a new tab and preserves the current guide; existing
-connections lead to **Set up a job**, with repository checks still required.
+connections keep **No active runners** and show a collapsible **Configure a workflow** section, with repository checks still required. The empty inventory embeds the same copyable runner diff as the side sheet. No-connection owners see the existing new-tab Connects entry beside that diff. Loading, error, member and unavailable states retain their existing feedback. See [inline setup](docs/ci-inline-setup/README.md).
 Loading, permission uncertainty, members without owner access, failed reads
 (including failed refreshes of cached empty data), and disabled CI have distinct
 messages. They never imply that GitHub is connected or disconnected.
