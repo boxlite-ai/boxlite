@@ -1,5 +1,6 @@
 # Cloud MCP and local-runtime plugin distribution; no runtime build is required.
 PLUGIN_COVERAGE_PYTHON ?= $(PLUGIN_PYTHON)
+PLUGIN_REVIEW_CHECKLIST ?= scripts/plugins/review/checklist.json
 PLUGIN_LOCAL_CLI ?= $(CURDIR)/target/plugins/tools/boxlite
 PLUGIN_COVERAGE = PYTHONDONTWRITEBYTECODE=1 COVERAGE_FILE=target/coverage/plugins/.coverage COVERAGE_RCFILE=scripts/plugins/.coveragerc $(PLUGIN_COVERAGE_PYTHON) -m coverage
 
@@ -27,3 +28,12 @@ plugin\:boxlite\:smoke\:cloud: plugin-boxlite-force
 
 plugin\:boxlite\:smoke\:local: plugin-boxlite-force
 	@$(PLUGIN_PYTHON) scripts/plugins/local_acceptance.py --cli "$(PLUGIN_LOCAL_CLI)"
+
+plugin\:boxlite\:preflight\:oauth: plugin-boxlite-force
+	@$(PLUGIN_PYTHON) scripts/plugins/oauth_preflight.py
+
+plugin\:boxlite\:review-kit: plugin-boxlite-force plugin\:boxlite\:check
+	@$(PLUGIN_PYTHON) scripts/plugins/release.py kit
+
+plugin\:boxlite\:ready: plugin-boxlite-force
+	@$(PLUGIN_PYTHON) scripts/plugins/release.py ready --checklist "$(PLUGIN_REVIEW_CHECKLIST)"

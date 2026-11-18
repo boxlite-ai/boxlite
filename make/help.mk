@@ -53,6 +53,9 @@ help:
 	@echo "    make plugin:boxlite:coverage - Collect plugin package coverage XML"
 	@echo "    make plugin:boxlite:smoke:cloud - Exercise production MCP using BOXLITE_API_KEY (creates and removes a Box)"
 	@echo "    make plugin:boxlite:smoke:local - Exercise the real local VM using PLUGIN_LOCAL_CLI (creates and removes a Box)"
+	@echo "    make plugin:boxlite:preflight:oauth - Check public OAuth prerequisites without credentials or Auth0 writes"
+	@echo "    make plugin:boxlite:review-kit - Build installable packages and public review materials"
+	@echo "    make plugin:boxlite:ready    - Check private release evidence (fails while gates are pending)"
 	@echo ""
 	@echo "  Testing (strict full-matrix default):"
 	@echo "    make test                   - Run full test matrix (same as make test:all)"
@@ -110,6 +113,7 @@ help:
 	@echo "    make test:apps:infra:mdeploy - Type-check and test deployment tooling"
 	@echo "    make test:apps:infra:mstage  - Type-check and test stage configuration tooling"
 	@echo "    make test:apps:api          - Run API unit tests (FILTER=<pattern>)"
+	@echo "    make test:apps:infra:auth0  - Typecheck infra and test Auth0 configuration and login policies locally"
 	@echo "    make test:apps:infra-local  - Test local-stack startup without VMs"
 	@echo "    make test:apps:dashboard    - Run Dashboard tests (FILTER=<pattern>)"
 
