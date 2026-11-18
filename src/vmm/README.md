@@ -113,7 +113,7 @@ MMIO hole leaves a maximum x86 RAM configuration of
 **64 TiB - 1 GiB (67,107,840 MiB)** before truncation.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
-vm-memory and registers it with the host VM. Three rules keep the backend's
+vm-memory and registers it with the host VM. These rules keep the backend's
 `map_memory` contract:
 
 - Host-side users clone the shared `GuestMemoryView`, vm-memory's
