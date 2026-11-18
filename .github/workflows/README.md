@@ -10,6 +10,19 @@ publish chain, the cloud deploy path, the local and cloud end-to-end suites, and
 Shared step bundles live one directory over, in [`.github/actions/`](../actions) — GitHub does not
 support subdirectories under `.github/workflows/`, so composite actions are where reuse goes.
 
+## Runner placement
+
+`runs-on: boxlite` queues lightweight Linux x64 checks on ephemeral workers.
+The repository needs an active [BoxLite CI connection](../../apps/github-ci-runner/README.md)
+with access to register workers for its jobs. The default worker has a 10 GiB disk.
+Jobs that need Make or archive tools install them through the
+[runner setup action](../actions/setup-boxlite-runner/action.yml).
+
+The SDK matrices use native macOS and Linux ARM64 runners and qualified Linux x64
+runners. Local E2E uses its GCP runner pool for KVM and disk capacity. Deployment
+and release orchestration use GitHub-hosted runners so they can recover BoxLite CI
+when its workers are unavailable.
+
 ## How they fit together
 
 ```text

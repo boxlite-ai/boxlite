@@ -52,13 +52,13 @@ test('release audit selection follows title changes and includes drafts', () => 
   assert.equal(selected(releaseTitle, 'merge_group'), false, 'merge queues allocate no audit runner')
 })
 
-test('release audit uses one bounded job with read-only checkout and no dependency install', () => {
+test('release audit uses a bounded job with read-only checkout and skips app dependency installation', () => {
   const spec = workflow()
   const job = auditJob()
   assert.equal(Object.keys(spec.jobs).length, 1)
   assert.equal(job.name, 'Release dependency audit')
   assert.deepEqual(spec.permissions, { contents: 'read' })
-  assert.equal(job['runs-on'], 'ubuntu-latest')
+  assert.equal(job['runs-on'], 'boxlite')
   assert.ok(job['timeout-minutes'] > 0 && job['timeout-minutes'] <= 5)
   assert.equal(job['continue-on-error'], undefined)
   assert.equal(job.steps.find((step: any) => step.uses?.startsWith('actions/checkout@')).with['persist-credentials'], false)
