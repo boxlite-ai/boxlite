@@ -51,3 +51,14 @@ Run the same descendant-held-pipe and SIGTERM-ignoring VM tests on the upstream
 base and the patch. Check process state after completion. Preserve unlimited
 collection for timeout=None and timeout=0 in synchronous and asynchronous APIs.
 Run execution and zygote lifecycle tests, Python units, and formatting checks.
+
+### Test prerequisites
+
+Python wrapper tests run asynchronous cases without the optional greenlet
+dependency and skip only synchronous cases when it is absent.
+
+Timed-group tests probe the running kernel with a signal-zero pidfd group call
+on a temporary private group, which is then killed and reaped. EINVAL or ENOSYS
+results skip those capability-dependent cases; other errors fail the probe.
+Supported kernels run
+the complete descendant-exit and watcher-lifetime assertions.

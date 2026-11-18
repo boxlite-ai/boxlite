@@ -22,6 +22,7 @@ use crate::service::exec::process_instance::{ProcessGroup, ProcessInstance};
 /// files, and exit cleanly. Mirrors the SIGTERM→wait→SIGKILL pattern
 /// used by `ExecRegistry::shutdown_all` and `Container::shutdown`.
 const TIMEOUT_GRACE: Duration = Duration::from_secs(2);
+/// Poll interval limiting how long a detached watcher outlives its last group member.
 const GROUP_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(super) struct TimeoutTarget {

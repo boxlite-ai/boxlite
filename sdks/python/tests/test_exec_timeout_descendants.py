@@ -24,7 +24,7 @@ async def test_timed_exec_terminates_descendants(shared_runtime, command):
                 box.exec("sh", "-c", command, timeout=1),
                 timeout=8,
             )
-        except asyncio.TimeoutError:  # noqa: UP041 - required on Python 3.10
+        except asyncio.TimeoutError:
             pytest.fail("timed exec did not return while a descendant held its output")
         descendant = int(result.stdout.strip())
         probe = await box.exec(

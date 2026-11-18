@@ -5,10 +5,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from boxlite.sync_api._simplebox import SyncSimpleBox
 
 from boxlite import exec as exec_api
 from boxlite import simplebox
+
+try:
+    from boxlite.sync_api._simplebox import SyncSimpleBox
+except ModuleNotFoundError as error:
+    if error.name != "greenlet":
+        raise
+    SyncSimpleBox = None
+
+sync_only = pytest.mark.skipif(SyncSimpleBox is None, reason="greenlet not installed")
 
 
 def started_box(execution):
@@ -87,6 +95,7 @@ async def test_timed_exec_returns_when_native_status_stalls(monkeypatch):
     assert result.error_message == "Timed out waiting for the command result"
 
 
+@sync_only
 def test_sync_timed_exec_returns_with_output_pipe_still_open(monkeypatch):
     monkeypatch.setattr(exec_api, "_EXEC_COMPLETION_GRACE_SECONDS", 0.05, raising=False)
 
@@ -114,7 +123,7 @@ def test_sync_timed_exec_returns_with_output_pipe_still_open(monkeypatch):
 
 
 @pytest.mark.parametrize("timeout", [None, 0.0])
-@pytest.mark.parametrize("api", ["async", "sync"])
+@pytest.mark.parametrize("api", ["async", pytest.param("sync", marks=sync_only)])
 def test_exec_without_deadline_collects_the_complete_result(monkeypatch, timeout, api):
     monkeypatch.setattr(exec_api, "_EXEC_COMPLETION_GRACE_SECONDS", 0.01)
 
