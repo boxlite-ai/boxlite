@@ -31,6 +31,21 @@ inputs:
   confirm:
     description: Protected stage confirmation
     default: 'false'
+  stage-config:
+    description: Target Environment stage declaration
+    required: true
+  aws-account-id:
+    description: Target AWS account when using ECR
+    default: ''
+  gcp-workload-identity-provider:
+    description: Target GCP workload identity provider
+    default: ''
+  gcp-deployer:
+    description: Target GCP deployer service account
+    default: ''
+  gcp-image-publisher:
+    description: Target GCP image publisher service account
+    default: ''
 runs:
   using: composite
   steps:
@@ -38,7 +53,7 @@ runs:
       id: infra
       with:
         stages: ${{ inputs.stage }}
-        stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+        stage-config: ${{ inputs.stage-config }}
 
     # What this job deploys, as an address rather than as the name it was
     # given. The runner half says which of the two artifacts the stack
@@ -109,7 +124,7 @@ runs:
         # Composed from the stage's AWS_ACCOUNT_ID, not a stored role ARN: the
         # role name is fixed per stage (bootstrap/environment.ts's
         # githubDeployRoleName), so only the account id has to be configured.
-        role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
+        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/boxlite-${{ inputs.stage }}-github-deploy
         aws-region: ${{ steps.config.outputs.region }}
         role-session-name: mdeploy-all-deploy-${{ github.run_id }}
 
@@ -117,8 +132,8 @@ runs:
       if: steps.config.outputs.kind == 'artifact-registry'
       uses: google-github-actions/auth@v2
       with:
-        workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ vars.GCP_DEPLOYER }}
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-deployer }}
 
     # The apply asks Certificate Manager what this project already holds
     # before it changes anything (`src/dns-authorization.ts`), and it asks
@@ -160,8 +175,8 @@ runs:
       if: inputs.api-route == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
       uses: google-github-actions/auth@v2
       with:
-        workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ vars.GCP_IMAGE_PUBLISHER }}
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-image-publisher }}
 
     - name: Import release images from GHCR
       if: inputs.api-route == 'release-import'
@@ -182,8 +197,8 @@ runs:
       if: inputs.api-route == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
       uses: google-github-actions/auth@v2
       with:
-        workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ vars.GCP_DEPLOYER }}
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-deployer }}
 
     - name: Verify the images
       if: inputs.components != 'runner'

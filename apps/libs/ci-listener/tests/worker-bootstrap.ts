@@ -33,17 +33,18 @@ export function executeWorkerBootstrap(entrypoint: string[], directory: string, 
   mkdirSync(bin)
   writeFileSync(trace, '')
   const scripts = {
-    sudo: `shift
-printf 'sudo:%s\\n' "$*" >> "$CI_BOOTSTRAP_TRACE"
-while [[ "$1" == -* ]]; do
-  case "$1" in -u|-g) shift 2 ;; *) shift ;; esac
-done
+    // The official image grants sudo-group members access, but excludes root.
+    sudo: `printf 'root is not in the sudoers file.\\n' >&2
+exit 1`,
+    setpriv: `[[ "$1" == --reuid=runner && "$2" == --regid=docker && "$3" == --init-groups ]] || exit 2
+shift 3
 exec "$@"`,
     timeout: 'shift; exec "$@"',
     iptables: 'exit 0',
     'apt-get': `printf 'apt-get:%s\\n' "$1" >> "$CI_BOOTSTRAP_TRACE"
 [[ "$CI_BOOTSTRAP_CASE" != install-failure ]]`,
-    docker: `if [[ "$CI_BOOTSTRAP_CASE" == existing ]]; then
+    docker: `printf '%s\\n' "$HOME" "$USER" "$LOGNAME" > "$CI_BOOTSTRAP_DIR/docker-environment"
+if [[ "$CI_BOOTSTRAP_CASE" == existing ]]; then
   touch "$CI_BOOTSTRAP_DIR/ready"
 elif [[ "$CI_BOOTSTRAP_CASE" == crash || "$CI_BOOTSTRAP_CASE" == timeout ]]; then
   exit 1
@@ -67,6 +68,7 @@ exec /bin/sleep 30`,
   writeFileSync(
     join(runner, 'run.sh'),
     `#!/bin/bash
+printf '%s\\n' "$HOME" "$USER" "$LOGNAME" > "$CI_BOOTSTRAP_DIR/runner-environment"
 if [[ -f "$CI_BOOTSTRAP_DIR/ready" ]]; then
   printf 'runner:ready\\n' >> "$CI_BOOTSTRAP_TRACE"
 else
@@ -119,6 +121,12 @@ command() {
       jit: existsSync(join(directory, 'received-jit')) ? readFileSync(join(directory, 'received-jit'), 'utf8') : null,
       jitRemoved: !existsSync(join(runner, '.boxlite-jitconfig')),
       daemonRunning: fixtureDaemonRunning(directory),
+      dockerEnvironment: existsSync(join(directory, 'docker-environment'))
+        ? readFileSync(join(directory, 'docker-environment'), 'utf8').trim().split('\n')
+        : null,
+      runnerEnvironment: existsSync(join(directory, 'runner-environment'))
+        ? readFileSync(join(directory, 'runner-environment'), 'utf8').trim().split('\n')
+        : null,
     }
   } finally {
     stopFixtureDaemon(directory)

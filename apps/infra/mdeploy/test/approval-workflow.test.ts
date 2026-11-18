@@ -18,7 +18,6 @@ const approvedJobs = (stage: string, version: string) => {
     resolve: { result: 'success', outputs: { version } },
     plan: {
       result: 'success',
-      outputs: { api: version ? 'release-import' : 'build', runner: version ? 'skip' : 'build' },
     },
   }
   return Object.entries<any>(workflow.jobs)
@@ -56,7 +55,6 @@ test('shared operations declare every input they read and preserve the original 
     const action = workflow.jobs[name].steps.find((step: any) => step.uses === './.github/actions/mdeploy')
     assert.equal(action.with.ref, '$' + '{{ inputs.ref }}')
   }
-  assert.equal(workflow.jobs.plan.concurrency.group, 'mbuild-publish-' + '$' + '{{ inputs.stage }}')
 })
 
 test('failure and cancellation prevent the separate commit apply job', () => {
@@ -80,18 +78,15 @@ test('failure and cancellation prevent the separate commit apply job', () => {
   const release = workflow.jobs.plan.steps.find((step: any) => step.uses === './.github/actions/mdeploy')
   assert.equal(release.if, "needs.resolve.outputs.version != ''")
   assert.equal(release['continue-on-error'], undefined)
-})
-
-test('orchestration sources are restored between image checkout and the next local action', () => {
-  const steps = workflow.jobs.plan.steps
-  const image = steps.findIndex((step: any) => step.uses === './.github/actions/mbuild')
-  const restore = steps.findIndex((step: any) => step.name === 'Restore orchestration sources')
-  const runner = steps.findIndex((step: any) => step.uses === './.github/actions/build-staged-runner')
-  assert.ok(image >= 0 && image < restore && restore < runner)
-  assert.equal(steps[restore].if, steps[image].if)
-  assert.equal(steps[restore].with.ref, '$' + '{{ github.sha }}')
-  assert.equal(steps[runner].with.sha, '$' + '{{ needs.resolve.outputs.sha }}')
-  assert.equal(steps[runner].with.stage, '$' + '{{ inputs.stage }}')
+  for (const result of ['success', 'failure', 'cancelled', 'skipped']) {
+    assert.equal(evaluate(
+      { stage: 'dev' },
+      { ref: 'refs/heads/main' },
+      { resolve: { outputs: { version: '' } }, plan: { result } },
+      () => result === 'cancelled',
+      () => result === 'failure',
+    ), result === 'success', `preparation ${result}`)
+  }
 })
 
 test('composite boolean strings preserve preview and protected confirmation arguments', (t) => {

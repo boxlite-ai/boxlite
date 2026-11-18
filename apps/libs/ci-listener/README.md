@@ -154,17 +154,26 @@ and the GitHub runner execute as `runner` with the docker group active.
 Privileged CI Box -> Docker API ready -> run.sh -> workflow service containers -> steps
 ```
 
-The official GitHub runner image supplies Docker binaries and passwordless sudo.
+The official GitHub runner image supplies Docker binaries and util-linux `setpriv`.
+Bootstrap switches directly to `runner:docker`, initializes the runner's
+supplementary groups and sets `HOME`, `USER` and `LOGNAME` for both probes and
+runner execution. The image's sudoers grants the sudo group access but excludes
+root, so root bootstrap must not depend on sudo for this switch.
+
+Other environment variables, including JIT configuration, are inherited.
 Bootstrap installs `iptables` with apt when missing, starts `dockerd`, and probes
 the API as the runner user. Dependency installation and readiness share a
-120-second deadline; a ready daemon is reused. Preparation failures stop startup
-and print the last 60 daemon log lines. Failed JIT delivery stops an owned daemon;
+120-second deadline; a ready daemon is reused.
+
+Preparation failures stop startup and print the last 60 daemon log lines.
+Failed JIT delivery stops an owned daemon;
 an existing daemon remains untouched. Normal teardown belongs to the Box lifecycle.
 
 Hosts need Docker-capable firmware and privileged guest support; standalone REST
 creation also requires privileged creation to be enabled. Custom worker images
-must supply Bash, Docker binaries, the docker group, sudo and GNU timeout, plus
-apt when `iptables` is absent. See [Docker inside a Box](../../../docs/guides/docker-in-docker.md).
+must supply Bash, Docker binaries, the docker group, util-linux `setpriv` and GNU
+timeout, plus apt when `iptables` is absent.
+See [Docker inside a Box](../../../docs/guides/docker-in-docker.md).
 
 ## Resource labels
 
