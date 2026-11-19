@@ -122,6 +122,7 @@ App webhook handler.
 | `CI_LISTEN_ADDR`                | `0.0.0.0:8080`                          | Health/webhook HTTP listener                                              |
 | `CI_ALLOW_PUBLIC_REPOSITORIES`  | `false`                                 | Include public repositories whose workflows you intend to run             |
 | `CI_WORKER_GROUP_NAME`          | `boxlite-ci-runner`                     | Selected organization runner group                                        |
+| `CI_SCALE_SET_BINDINGS` | Empty | Maps binding IDs to initial [scale set resource labels](../libs/ci-listener/README.md#github-runner-scale-sets). |
 | `CI_WORKER_IMAGE`               | `ghcr.io/actions/actions-runner:latest` | Image containing the official GitHub runner                               |
 | `CI_WORKER_MAX`                 | `1`                                     | Total concurrency across all installations and repositories, from 1 to 16 |
 | `CI_WORKER_CPUS`                | `2`                                     | CPUs per CI Box, from 1 to 16                                             |

@@ -12,6 +12,7 @@ export type GitHubAuth =
   | ({ kind: 'app'; applications?: AppAuth[] } & AppAuth)
   | { kind: 'pat'; token: () => string; owner: string; repository: string }
 export interface SelfConfig {
+  scaleSetBindings?: string
   endpoint: string
   apiKey: () => string
   github: GitHubAuth
@@ -129,6 +130,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
     apiKey: () => apiKey,
     github,
     stateDir,
+    scaleSetBindings: env.CI_SCALE_SET_BINDINGS,
     listen: { host: address.hostname.replace(/^\[|\]$/g, ''), port: Number(port) },
     webhookSecretFile:
       github.kind === 'app' ? (github.webhookSecretFile ?? env.CI_GITHUB_WEBHOOK_SECRET_FILE) : undefined,
