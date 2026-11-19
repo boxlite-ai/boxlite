@@ -417,6 +417,26 @@ The host must enforce authority and execution epoch
 again at actual side effects, including native Box persistence. Both host entry
 points use this kernel; runtime acceptance remains a separate deployment check.
 
+## GitHub runner scale sets
+
+Set `CI_SCALE_SET_BINDINGS` to a JSON object mapping a binding ID to an array of resource labels. Both hosts use the shared TypeScript protocol client.
+
+```json
+{"personal-token":["boxlite","boxlite-2vcpu-4gbmem-10gbdisk"]}
+```
+
+Use the hosted installation binding ID, standalone `installation:<id>`, or standalone `personal-token`. A `*` entry enables every binding. An absent setting leaves existing bindings on classic scheduling.
+
+The elected listener opens one cancellable session per binding, execution scope and worker specification. Each session sends its available capacity to GitHub and explicitly acquires eligible job requests. An authenticated queued-job observation can seed an additional supported resource label, up to 64 watched specifications per scope.
+
+GitHub reports the total assigned jobs, including running jobs. If it reports 16 and five usable workers already hold reservations, the planner can reserve up to 11 more within quota. It counts pending Box creates across restarts.
+
+A durable target precedes message acknowledgment. A dedicated JIT configuration binds each runner to its set and its original Box. Registration recovery uses a targeted name lookup and verifies the set ID.
+
+The default polling deadline is two minutes. Network waits occur outside SQL transactions and the listener bounds concurrent setup and message handling across scopes. GitHub can still throttle credentials and management requests. [Reference protocol](https://github.com/actions/scaleset/tree/v0.5.0)
+
+An owner that loses an acquisition reply reconciles the first replay against the current set statistics when the session and message disagree. A worker that exits before GitHub reports it started work triggers per-specification creation backoff. A lost upload reply is recovered using the original Box and JIT delivery intent.
+
 ## Label capacity scheduling
 
 Hosted API and standalone Listener Boxes use the same label-count scheduler.

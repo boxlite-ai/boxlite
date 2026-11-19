@@ -105,7 +105,7 @@ export class GitHubRunners {
       ? `/repos/${this.scope.repository.owner.login}/${this.scope.repository.name}`
       : `/orgs/${this.scope.account.login}`
   }
-  private async authority(admission: boolean, signal?: AbortSignal): Promise<void> {
+  async authority(admission: boolean, signal?: AbortSignal): Promise<ReadonlySet<string>> {
     const scope = this.scope
     if (scope.kind === 'repository') {
       const current = decodeRepository(
@@ -123,7 +123,7 @@ export class GitHubRunners {
       if (admission && current.private && !scope.allowPrivate)
         throw new Error('Private repository runners are disabled')
       if (admission && !current.private && !scope.allowPublic) throw new Error('Public repository runners are disabled')
-      return
+      return new Set([current.name.toLowerCase()])
     }
     const account = await this.credential.request(this.route, { signal })
     if (
@@ -133,7 +133,7 @@ export class GitHubRunners {
       account.login.toLowerCase() !== scope.account.login.toLowerCase()
     )
       throw new Error('Original runner organization authority changed')
-    if (!admission) return
+    if (!admission) return new Set()
     const group = await this.credential.request(`${this.route}/actions/runner-groups/${scope.group}`, { signal })
     if (
       !object(group) ||
@@ -151,6 +151,7 @@ export class GitHubRunners {
       signal,
     )
     const expected = new Set(scope.repositories)
+    const names = new Set<string>()
     for (const value of selected) {
       const repository = decodeRepository(value)
       if (
@@ -159,8 +160,10 @@ export class GitHubRunners {
         (repository.private ? !scope.allowPrivate : !scope.allowPublic)
       )
         throw new Error('Runner group repository authorization changed')
+      names.add(repository.name.toLowerCase())
     }
     if (expected.size) throw new Error('Runner group repository authorization is incomplete')
+    return names
   }
   async create(name: string, signal?: AbortSignal): Promise<JitRegistration> {
     if (!workerName(name)) throw new Error('Original JIT worker name required')
@@ -249,6 +252,35 @@ export class GitHubRunners {
     const current = (await this.list(signal)).find((runner) => runner.id === identity.id)
     if (current && current.name !== identity.name) throw new Error('Original runner identity changed')
     if (!current || current.status !== 'online' || current.busy) return false
+    return this.deleteIdle(identity, () => this.lookup(identity, signal), signal, checkRetirement)
+  }
+  /** Scale set recovery knows the original ID and verifies membership through the Actions service. */
+  async retireKnownIdle(
+    identity: RunnerIdentity,
+    absentAfterDelete: () => Promise<RunnerIdentity | null>,
+    signal?: AbortSignal,
+    checkRetirement?: () => void,
+  ): Promise<boolean> {
+    if (!positive(identity.id) || !workerName(identity.name)) throw new Error('Known original runner required')
+    await this.authority(false, signal)
+    let value: unknown
+    try {
+      value = await this.credential.request(this.route + '/actions/runners/' + identity.id, { signal })
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404) return false
+      throw error
+    }
+    if (!object(value) || value.id !== identity.id || value.name !== identity.name)
+      throw new Error('Original scale set runner changed')
+    if (value.status !== 'online' || value.busy !== false) return false
+    return this.deleteIdle(identity, absentAfterDelete, signal, checkRetirement)
+  }
+  private async deleteIdle(
+    identity: RunnerIdentity,
+    remaining: () => Promise<RunnerIdentity | null>,
+    signal?: AbortSignal,
+    checkRetirement?: () => void,
+  ): Promise<boolean> {
     await this.beforeMutation({ kind: 'remove', ...identity })
     checkRetirement?.()
     try {
@@ -261,7 +293,7 @@ export class GitHubRunners {
       if (error instanceof GitHubRequestError && error.status === 422) return false
       throw error
     }
-    if (await this.lookup(identity, signal)) throw new Error('Idle runner retirement is not yet confirmed')
+    if (await remaining()) throw new Error('Idle runner retirement is not yet confirmed')
     return true
   }
   private async inventory(route: string, field: 'runners' | 'repositories', signal?: AbortSignal): Promise<unknown[]> {

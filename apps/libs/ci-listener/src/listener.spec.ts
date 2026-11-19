@@ -475,7 +475,7 @@ describe('CI shared Listener orchestration', () => {
       expect(backend.workers.create).toHaveBeenCalledTimes(16)
       const rows = [...(await inspectJournal(state, lease)).allocations.values()]
       expect(rows).toHaveLength(16)
-      expect(rows.every((row) => row.value.job.run === 34)).toBe(true)
+      expect(rows.every((row) => row.value.job!.run === 34)).toBe(true)
     } finally {
       abort.abort()
       await running
@@ -760,7 +760,7 @@ describe('CI shared Listener orchestration', () => {
       await runUntil(Promise.all([checked.promise, delivered.promise]).then(() => {}))
       const rows = [...(await inspectJournal(state, lease)).allocations.values()]
       expect(rows).toHaveLength(1)
-      expect(rows[0].value.job.job).toBe(56)
+      expect(rows[0].value.job!.job).toBe(56)
       expect(backend.job).toHaveBeenCalledWith({ repository: 21, run: 33, job: 55 }, expect.any(AbortSignal))
     } finally {
       balanced.mockRestore()
@@ -1491,7 +1491,7 @@ describe('CI shared Listener orchestration', () => {
       lease,
     })
     const snapshot = await inspectJournal(state, lease)
-    expect([...snapshot.allocations.values()].map((row) => row.value.job.repository)).toEqual([22])
+    expect([...snapshot.allocations.values()].map((row) => row.value.job!.repository)).toEqual([22])
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
   })
   it.each([false, true])('handles a webhook that wins compensation publication; conflicting=%s', async (conflict) => {

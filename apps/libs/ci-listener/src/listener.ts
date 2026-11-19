@@ -1,4 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { ScaleSetBindings, ScaleSetController, ScaleSetWork } from './scale-set-controller'
+import { ActionsScaleSets } from './scale-set-client'
+import { selectRunnerLabels } from './resource-labels'
 import { parallelReads } from './parallel-reads'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -21,6 +24,8 @@ import { WorkQueue } from './execution/work-queue'
 import { NotifiedDemand } from './notified-demand'
 
 export interface ListenerBackend extends PoolBackend {
+  readonly scaleSets?: ActionsScaleSets
+  scaleSetAuthority?(signal: AbortSignal): Promise<ReadonlySet<string>>
   pending?(notices: readonly JobNotice[], signal?: AbortSignal): Promise<WorkflowJob[]>
   reader?(): Pick<ListenerBackend, 'queued' | 'pending' | 'close'>
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
@@ -39,6 +44,8 @@ export interface ListenerHost {
   close?(): Promise<void>
 }
 interface Runtime {
+  sets?: ScaleSetController
+  setHistory?: boolean
   backend: ListenerBackend
   pool: WorkerPool
   scan?: AbortController
@@ -49,6 +56,7 @@ interface QueueProof {
   check: StateCheck
 }
 interface Session {
+  setWork: ScaleSetWork
   verifying: WorkQueue
   verifiedAt: Map<string, { version: string; until: number; mismatch: boolean }>
   repairing: WorkQueue
@@ -73,6 +81,7 @@ export interface ListenerOptions {
   host: ListenerHost
   worker: PoolSettings
   capacity: CapacityProvider
+  scaleSets?: ScaleSetBindings
   timing?: { tickMs?: number; leaseMs?: number; discoveryMs?: number; compensationMs?: number }
 }
 
@@ -207,6 +216,7 @@ export class Listener {
         if (!signal.aborted || error instanceof LeaseLost) this.options.host.report(error, operation)
       },
       session: Session = {
+        setWork: new ScaleSetWork(),
         verifying: new WorkQueue(8, report('job-verification')),
         verifiedAt: new Map(),
         repairing: new WorkQueue(2, report('queue-reconciliation')),
@@ -304,6 +314,7 @@ export class Listener {
     for (const runtime of this.retiring) {
       let retired = true
       try {
+        await runtime.sets?.close()
         await runtime.pool.close()
       } catch (error) {
         retired = false
@@ -377,6 +388,16 @@ export class Listener {
           { queue: session.execution, wake: () => this.wake?.() },
         ),
       }
+      if (backend.scaleSets && !this.specs(scope)) {
+        runtime.setHistory =
+          (
+            await this.options.state.scan(session.lease, {
+              prefix: 'scale-set/' + key.slice(6) + '/',
+              after: '',
+              limit: 1,
+            })
+          ).length > 0
+      }
       session.runtimes.set(key, runtime)
     }
     return runtime
@@ -385,7 +406,8 @@ export class Listener {
     const { lease } = session,
       recovery = await this.journal.activeScopes(lease, session.recoveryAfter),
       blocked = new Set<string>(),
-      counted = new Map<string, { scope: ExecutionScope; runtime: Runtime }>()
+      counted = new Map<string, { scope: ExecutionScope; runtime: Runtime }>(),
+      scaleScopes = new Map<string, { scope: ExecutionScope; runtime: Runtime }>()
     session.recoveryAfter = recovery.after
     // Only outstanding work is paged; each pool separately fences admission until
     // its worker recovery round completes without a blocking resource failure.
@@ -393,6 +415,10 @@ export class Listener {
       const key = row.record.key
       try {
         const runtime = await this.runtime(session, key, row.scope)
+        if (this.specs(row.scope) || runtime.setHistory) {
+          scaleScopes.set(key, { scope: row.scope, runtime })
+          continue
+        }
         if (runtime.backend.inventory) {
           counted.set(key, { scope: row.scope, runtime })
           continue
@@ -513,13 +539,20 @@ export class Listener {
       )
     for (const [key, scope] of session.current) {
       const runtime = await this.runtime(session, key, scope)
-      if (runtime.backend.inventory) counted.set(key, { scope, runtime })
+      if (this.specs(scope) || runtime.setHistory || scaleScopes.has(key)) scaleScopes.set(key, { scope, runtime })
+      else if (runtime.backend.inventory) counted.set(key, { scope, runtime })
+    }
+    const recovering = new Set(recovery.rows.map((row) => row.record.key))
+    for (const [key, entry] of scaleScopes) {
+      await this.scheduleScaleSets(session, key, entry.scope, entry.runtime, records, signal, recovering.has(key))
     }
     await this.balanceCounts(session, counted, records, resolveCapacity, signal)
     const pending = records.filter((row) => row.key.startsWith('notice/')).map(pendingJob),
       candidates = pending.flatMap((job) =>
         [...session.current]
-          .filter(([key, scope]) => !counted.has(key) && !blocked.has(key) && matches(scope, job))
+          .filter(
+            ([key, scope]) => !counted.has(key) && !scaleScopes.has(key) && !blocked.has(key) && matches(scope, job),
+          )
           .map(([key, scope]) => ({ scope, value: { key, scope, job } })),
       )
     for (const { key, scope, job } of session.jobs.take(candidates, 32)) {
@@ -556,10 +589,102 @@ export class Listener {
       }
     for (const [key, runtime] of session.runtimes) {
       if (session.current.has(key) || (await this.journal.scope(lease, key)).active) continue
+      await runtime.sets?.close()
       await runtime.pool.close()
       await runtime.backend.close()
       session.runtimes.delete(key)
     }
+  }
+  private specs(scope: ExecutionScope): readonly string[] | undefined {
+    return this.options.scaleSets?.get(scope.binding) ?? this.options.scaleSets?.get('*')
+  }
+  private async scheduleScaleSets(
+    session: Session,
+    key: string,
+    scope: ExecutionScope,
+    runtime: Runtime,
+    records: readonly StateRecord[],
+    signal: AbortSignal,
+    recovering: boolean,
+  ) {
+    const configured = session.current.has(key) ? this.specs(scope) : undefined
+    const policy = (signal: AbortSignal) => this.options.capacity.resolve({ scope, lease: session.lease, signal })
+    if (configured && !runtime.sets) {
+      const backend = runtime.backend
+      if (!backend.scaleSets || !backend.scaleSetAuthority) throw new Error('Scale set service unavailable')
+      const controller = new ScaleSetController(
+        this.options.state,
+        session.lease,
+        scope,
+        this.worker.labels,
+        this.journal,
+        session.setWork,
+        {
+          service: backend.scaleSets,
+          charged: (id) => runtime.pool.chargedInSet(id),
+          authority: backend.scaleSetAuthority.bind(backend),
+          policy,
+          report: (error) => this.options.host.report(error, 'scale-set-session'),
+          wake: () => this.wake?.(),
+        },
+        signal,
+      )
+      try {
+        await controller.restore(configured)
+      } catch (error) {
+        await controller.close()
+        throw error
+      }
+      runtime.sets = controller
+    }
+    if (!configured && runtime.sets) {
+      await runtime.sets.close()
+      runtime.sets = undefined
+    }
+    if (configured && runtime.sets) {
+      const ids = new Set(repositories(scope))
+      for (const record of records) {
+        if (
+          !record.key.startsWith('demand/') ||
+          !object(record.payload) ||
+          record.payload.installationId !== scope.installation.id ||
+          record.payload.accountId !== scope.installation.account.id ||
+          !ids.has(record.payload.repositoryId as number)
+        )
+          continue
+        const demand = decodeDemand(record)
+        if (!demand.queued) continue
+        const selection = selectRunnerLabels(demand.labels, this.worker.labels)
+        if (selection) runtime.sets.watch(selection.label)
+      }
+      // A signed webhook may seed a class. Only Actions session messages admit work.
+      for (const row of records) {
+        if (row.key.startsWith('notice/') && matches(scope, pendingJob(row))) await this.settle(session.lease, row)
+      }
+    }
+    const targets = runtime.sets?.targets() ?? []
+    const demand = targets.some((target) => target.assigned > 0)
+    if (!recovering && !demand && !runtime.setHistory) return
+    const activity = await this.journal.scope(session.lease, key)
+    if (!activity.active && !configured) runtime.setHistory = false
+    if (!activity.active && !demand) return
+    session.planning.enqueue(
+      key,
+      JSON.stringify(targets.map((target) => target.check.version)) + activity.activity.version,
+      async () => {
+        let capacity = closedCapacity
+        if (demand) {
+          try {
+            capacity = captureCapacity(await policy(signal))
+          } catch (error) {
+            signal.throwIfAborted()
+            if (error instanceof LeaseLost) throw error
+            this.options.host.report(error, 'scale-set-capacity')
+          }
+        }
+        await runtime.pool.balanceScaleSets(session.lease, targets, capacity, signal, !configured)
+      },
+    )
   }
   private async balanceCounts(
     session: Session,

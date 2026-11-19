@@ -45,7 +45,7 @@ const workerId = (key: string) => {
 }
 const jobKey = (scope: ExecutionScope, job: JobNotice) => `job/${scope.installation.id}/${job.repository}/${job.job}`
 const allocationLink = (scope: ExecutionScope, value: Allocation) =>
-  value.supply ? 'supply/' + value.name.slice(7) : jobKey(scope, value.job)
+  value.supply ? 'supply/' + value.name.slice(7) : jobKey(scope, value.job!)
 const count = (record: StateRecord | undefined, field: string): number => {
   if (
     !record ||
@@ -229,14 +229,18 @@ export class ExecutionJournal {
   }
 
   async hasCapacity(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<boolean> {
+    return (await this.remainingCapacity(lease, scope, policy)) > 0
+  }
+  async remainingCapacity(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<number> {
     lease = { ...lease }
     policy = captureCapacity(policy)
-    const target = await this.scope(lease, scope),
-      ids = domains(target.scope)
+    const ids = domains((await this.scope(lease, scope)).scope)
     const usage = await this.usage(Object.values(ids), lease)
-    return policy.limits.every(
-      ({ maximum, domain }) => maximum === null || usage.find((row) => row.id === ids[domain])!.used < maximum,
-    )
+    let free = 2_147_483_647
+    for (const { maximum, domain } of policy.limits) {
+      if (maximum !== null) free = Math.min(free, maximum - usage.find((row) => row.id === ids[domain])!.used)
+    }
+    return Math.max(0, free)
   }
   async claimedRunners(lease: ExecutionLease, scope: ExecutionScope, ids: readonly number[]): Promise<Set<number>> {
     const known = new Set<number>()
@@ -276,14 +280,14 @@ export class ExecutionJournal {
   async reserve(
     lease: ExecutionLease,
     scope: string,
-    notice: JobNotice,
+    notice: JobNotice | null,
     policy: CapacityPolicy,
     supply?: Allocation['supply'],
   ): Promise<AllocationRow | undefined> {
     lease = { ...lease }
-    notice = { ...notice }
+    notice = notice && { ...notice }
     policy = captureCapacity(policy)
-    supply = supply ? { labels: [...supply.labels] } : undefined
+    supply = supply ? { ...supply, labels: [...supply.labels] } : undefined
     const target = await this.scope(lease, scope)
     return this.serializeQuota(target.scope.organization, () =>
       this.reserveCapacity(lease, scope, notice, policy, supply),
@@ -292,32 +296,40 @@ export class ExecutionJournal {
   private async reserveCapacity(
     lease: ExecutionLease,
     scope: string,
-    notice: JobNotice,
+    notice: JobNotice | null,
     policy: CapacityPolicy,
     supply?: Allocation['supply'],
   ): Promise<AllocationRow | undefined> {
     lease = { ...lease }
-    notice = { ...notice }
+    notice = notice && { ...notice }
     policy = captureCapacity(policy)
-    if (!positive(notice.repository) || !positive(notice.run) || !positive(notice.job))
+    if (
+      notice
+        ? !positive(notice.repository) ||
+          !positive(notice.run) ||
+          !positive(notice.job) ||
+          supply?.scaleSet !== undefined
+        : !positive(supply?.scaleSet)
+    )
       throw new Error('Invalid CI admission request')
     const target = await this.scope(lease, scope),
       runner = target.scope.runners
     if (
-      runner.kind === 'repository'
+      notice &&
+      (runner.kind === 'repository'
         ? runner.repository.id !== notice.repository
-        : !runner.repositories.includes(notice.repository)
+        : !runner.repositories.includes(notice.repository))
     )
       throw new Error('CI job is outside its execution scope')
-    supply = supply ? { labels: [...supply.labels] } : undefined
-    const dedupe = jobKey(target.scope, notice),
-      [previous] = supply ? [] : await this.state.read([dedupe], lease)
+    supply = supply ? { ...supply, labels: [...supply.labels] } : undefined
+    const dedupe = notice && !supply ? jobKey(target.scope, notice) : undefined,
+      [previous] = dedupe ? await this.state.read([dedupe], lease) : []
     if (previous) {
       if (!object(previous.payload) || typeof previous.payload.worker !== 'string') throw new StateCorrupt()
       const allocation = await this.allocation(lease, previous.payload.worker)
       if (!allocation) throw new StateCorrupt()
       const original = await this.scope(lease, allocation.value.scope)
-      if (jobKey(original.scope, allocation.value.job) !== dedupe) throw new StateCorrupt()
+      if (!allocation.value.job || jobKey(original.scope, allocation.value.job) !== dedupe) throw new StateCorrupt()
       return undefined
     }
     const ids = domains(target.scope),
