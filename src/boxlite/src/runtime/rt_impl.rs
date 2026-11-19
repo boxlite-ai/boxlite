@@ -1463,10 +1463,26 @@ impl RuntimeImpl {
 
     /// Recover boxes from persistent storage on runtime startup.
     fn recover_boxes(&self) -> BoxliteResult<()> {
+        self.recover_boxes_with_boot_id(BoxStore::host_boot_id().as_deref())
+    }
+
+    fn recover_boxes_with_boot_id(&self, current_boot_id: Option<&str>) -> BoxliteResult<()> {
         use crate::util::{PidFileReader, ProcessIdentity};
 
-        // Check for system reboot and reset active boxes
-        self.box_manager.check_and_handle_reboot()?;
+        // A boot ID read can succeed after frozen boxes already exist in this session.
+        self.box_manager
+            .check_and_handle_reboot_with(current_boot_id, |config, state| {
+                if let (BoxStatus::Parked | BoxStatus::Paused, Some(recorded_pid)) =
+                    (state.status, state.pid)
+                    && let Ok(box_layout) = self.layout.box_layout(config.id.as_str(), false)
+                {
+                    let pid_path = box_layout.pid_file_path();
+                    PidFileReader::at(&pid_path).process_identity()
+                        == ProcessIdentity::Verified(recorded_pid)
+                } else {
+                    false
+                }
+            })?;
 
         // Clear all locks before recovery - safe because we hold the runtime lock.
         // This ensures a clean slate for lock allocation during recovery.
@@ -3261,6 +3277,59 @@ mod tests {
         }
         let st = crate::util::process_start_time(pid).expect("OS reports start_time");
         std::fs::write(pid_file, format!("{pid}\n{st}\n")).expect("write shim.pid");
+    }
+
+    #[test]
+    fn test_recovery_preserves_live_frozen_boxes_after_delayed_boot_id() {
+        let (runtime, _dir) = create_test_runtime();
+        let db = Database::open(&runtime.layout.db_dir().join("boxlite.db")).unwrap();
+        let recorded_boot_id = || -> String {
+            db.conn()
+                .query_row("SELECT boot_id FROM alive WHERE id = 1", [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+
+        runtime.recover_boxes_with_boot_id(Some("boot-a")).unwrap();
+        runtime.recover_boxes_with_boot_id(None).unwrap();
+        assert_eq!(recorded_boot_id(), "boot-a");
+
+        let add_frozen_box = |status, pid| {
+            let config = test_box_config_in_layout(false, &runtime);
+            let layout = runtime
+                .layout
+                .box_layout(config.id.as_str(), false)
+                .unwrap();
+            write_pid_file_with_fingerprint(&layout.pid_file_path(), pid);
+            let mut state = running_state(pid);
+            state.set_status(status);
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            config.id
+        };
+        let (paused_pid, paused_child) = spawn_dummy_process();
+        let _paused_child = ChildGuard(paused_child);
+        let paused = add_frozen_box(BoxStatus::Paused, paused_pid);
+        let (parked_pid, parked_child) = spawn_dummy_process();
+        let _parked_child = ChildGuard(parked_child);
+        let parked = add_frozen_box(BoxStatus::Parked, parked_pid);
+        let (dead_pid, dead_child) = spawn_dummy_process();
+        let mut dead_child = ChildGuard(dead_child);
+        let dead = add_frozen_box(BoxStatus::Paused, dead_pid);
+        dead_child.0.kill().unwrap();
+        dead_child.0.wait().unwrap();
+
+        runtime.recover_boxes_with_boot_id(Some("boot-b")).unwrap();
+
+        assert_eq!(recorded_boot_id(), "boot-b");
+        for (id, expected) in [
+            (dead, (BoxStatus::Stopped, None)),
+            (paused, (BoxStatus::Paused, Some(paused_pid))),
+            (parked, (BoxStatus::Parked, Some(parked_pid))),
+        ] {
+            let state = runtime.box_manager.update_box(&id).unwrap();
+            assert_eq!((state.status, state.pid), expected, "box {id}");
+        }
     }
 
     #[test]

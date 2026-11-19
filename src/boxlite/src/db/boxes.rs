@@ -312,6 +312,10 @@ impl BoxStore {
     // Reboot detection via alive table
     // ========================================================================
 
+    pub(crate) fn host_boot_id() -> Option<String> {
+        get_boot_id()
+    }
+
     /// Record the current boot ID when available.
     ///
     /// Returns true when it differs from a previously recorded boot ID.
@@ -320,7 +324,10 @@ impl BoxStore {
         self.check_and_update_boot_with(current_boot_id.as_deref())
     }
 
-    fn check_and_update_boot_with(&self, current_boot_id: Option<&str>) -> BoxliteResult<bool> {
+    pub(crate) fn check_and_update_boot_with(
+        &self,
+        current_boot_id: Option<&str>,
+    ) -> BoxliteResult<bool> {
         let Some(current_boot_id) = current_boot_id else {
             return Ok(false);
         };
@@ -353,10 +360,19 @@ impl BoxStore {
     /// Called after reboot detection. VM rootfs is preserved, so boxes
     /// become Stopped (not Crashed) and can be restarted.
     pub fn reset_active_boxes_after_reboot(&self) -> BoxliteResult<Vec<BoxID>> {
-        let active = self.list_active()?;
+        self.reset_active_boxes_after_reboot_except(|_, _| false)
+    }
+
+    pub(crate) fn reset_active_boxes_after_reboot_except(
+        &self,
+        mut should_skip: impl FnMut(&BoxConfig, &BoxState) -> bool,
+    ) -> BoxliteResult<Vec<BoxID>> {
         let mut reset_ids = Vec::new();
 
-        for (config, mut state) in active {
+        for (config, mut state) in self.list_active()? {
+            if should_skip(&config, &state) {
+                continue;
+            }
             state.reset_for_reboot();
             self.update_state(config.id.as_str(), &state)?;
             reset_ids.push(config.id);

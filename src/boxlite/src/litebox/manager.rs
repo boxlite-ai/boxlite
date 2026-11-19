@@ -195,19 +195,38 @@ impl BoxManager {
     /// Check and handle system reboot.
     ///
     /// Returns true if a reboot was detected.
+    #[expect(dead_code, reason = "Unfiltered reboot recovery entry point")]
     pub fn check_and_handle_reboot(&self) -> BoxliteResult<bool> {
-        let is_reboot = self.store.check_and_update_boot()?;
-
-        if is_reboot {
-            tracing::info!("Detected system reboot, resetting active boxes to stopped");
-            let reset_ids = self.store.reset_active_boxes_after_reboot()?;
-            for id in &reset_ids {
-                tracing::info!(box_id = %id, "Reset box to stopped after reboot");
-            }
-        }
-
-        Ok(is_reboot)
+        reset_boxes_if_rebooted(self.store.check_and_update_boot()?, || {
+            self.store.reset_active_boxes_after_reboot()
+        })
     }
+
+    pub(crate) fn check_and_handle_reboot_with(
+        &self,
+        current_boot_id: Option<&str>,
+        should_skip: impl FnMut(&BoxConfig, &BoxState) -> bool,
+    ) -> BoxliteResult<bool> {
+        let is_reboot = self.store.check_and_update_boot_with(current_boot_id)?;
+        reset_boxes_if_rebooted(is_reboot, || {
+            self.store
+                .reset_active_boxes_after_reboot_except(should_skip)
+        })
+    }
+}
+
+fn reset_boxes_if_rebooted(
+    is_reboot: bool,
+    reset_boxes: impl FnOnce() -> BoxliteResult<Vec<BoxID>>,
+) -> BoxliteResult<bool> {
+    if is_reboot {
+        tracing::info!("Detected system reboot, reconciling active boxes");
+        for id in reset_boxes()? {
+            tracing::info!(box_id = %id, "Reset box to stopped after reboot");
+        }
+    }
+
+    Ok(is_reboot)
 }
 
 #[cfg(test)]
