@@ -205,12 +205,21 @@ impl LocalVolumeStore {
     }
 
     pub(crate) fn remove(&self, id: &str, force: bool) -> BoxliteResult<()> {
+        self.remove_impl(id, force, || {})
+    }
+
+    fn remove_impl(
+        &self,
+        id: &str,
+        force: bool,
+        before_cleanup: impl FnOnce(),
+    ) -> BoxliteResult<()> {
         validate_id(id)?;
-        self.with_registry_lock(true, || {
+        let Some(trash) = self.with_registry_lock(true, || {
             let path = self.root.join(id);
             if !path_exists(&path)? {
                 return if force {
-                    Ok(())
+                    Ok(None)
                 } else {
                     Err(BoxliteError::NotFound(format!("volume {id}")))
                 };
@@ -246,11 +255,16 @@ impl LocalVolumeStore {
             }
             std::fs::rename(&path, &trash)
                 .map_err(|error| storage("move volume to trash", &path, error))?;
-            if let Err(error) = remove_entry_nofollow(&trash) {
-                tracing::error!(volume_id = %id, path = %trash.display(), %error, "Failed to remove local volume payload from trash");
-            }
-            Ok(())
-        })
+            Ok(Some(trash))
+        })?
+        else {
+            return Ok(());
+        };
+        before_cleanup();
+        if let Err(error) = remove_entry_nofollow(&trash) {
+            tracing::error!(volume_id = %id, path = %trash.display(), %error, "Failed to remove local volume payload from trash");
+        }
+        Ok(())
     }
 
     pub(crate) fn add_box_with_resolved_volumes(
@@ -337,12 +351,23 @@ impl LocalVolumeStore {
         &self,
         options: &crate::runtime::options::BoxOptions,
     ) -> BoxliteResult<Vec<ResolvedLocalMount>> {
+        if !options.volumes.is_empty() && !options.mounts.is_empty() {
+            return Err(BoxliteError::InvalidArgument(
+                "volumes and mounts cannot both be non-empty".into(),
+            ));
+        }
+        let has_managed = options
+            .volumes
+            .iter()
+            .any(|mount| mount.managed_volume.is_some())
+            || options
+                .mounts
+                .iter()
+                .any(|mount| mount.mount_type == MountType::Volume);
+        if !has_managed {
+            return Ok(Vec::new());
+        }
         self.with_registry_lock(false, || {
-            if !options.volumes.is_empty() && !options.mounts.is_empty() {
-                return Err(BoxliteError::InvalidArgument(
-                    "volumes and mounts cannot both be non-empty".into(),
-                ));
-            }
             let mut resolved = Vec::new();
             let mut volume_ids = std::collections::HashSet::new();
             for mount in &options.volumes {
@@ -734,6 +759,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn boot_resolution_without_managed_volumes_skips_registry_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let store = runtime.local_volume_store.clone();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let lock_task = tokio::task::spawn_blocking(move || {
+            store.create_impl(Some("lock-holder"), move |_, _| {
+                ready_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+            })
+        });
+        ready_receiver.recv().unwrap();
+
+        let store = runtime.local_volume_store.clone();
+        let mut resolve_task = tokio::task::spawn_blocking(move || {
+            store.resolve_for_boot(&BoxOptions {
+                volumes: vec![VolumeSpec::bind_mount("/tmp", "/data")],
+                ..Default::default()
+            })
+        });
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut resolve_task).await;
+        release_sender.send(()).unwrap();
+        lock_task.await.unwrap().unwrap();
+
+        let resolved = match result {
+            Ok(result) => result.unwrap().unwrap(),
+            Err(_) => {
+                resolve_task.await.unwrap().unwrap();
+                panic!("host-only boot resolution must not wait for the registry lock");
+            }
+        };
+        assert!(resolved.is_empty());
+    }
+
+    #[tokio::test]
     async fn boot_resolution_validates_sub_path_without_changing_share_root() {
         let home = tempfile::tempdir().unwrap();
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
@@ -888,6 +954,53 @@ mod tests {
             "the test must inject a physical cleanup failure"
         );
         result.expect("logical removal succeeds after the rename to trash");
+        assert!(matches!(
+            runtime.local_volume_store.get(&volume.id),
+            Err(BoxliteError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn physical_trash_cleanup_runs_outside_registry_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        let store = runtime.local_volume_store.clone();
+        let volume_id = volume.id.clone();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let remove_task = tokio::task::spawn_blocking(move || {
+            store.remove_impl(&volume_id, false, move || {
+                ready_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+            })
+        });
+        ready_receiver.recv().unwrap();
+
+        let store = runtime.local_volume_store.clone();
+        let mut create_task =
+            tokio::task::spawn_blocking(move || store.create(Some("after-rename")));
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut create_task).await;
+        release_sender.send(()).unwrap();
+        remove_task.await.unwrap().unwrap();
+
+        match result {
+            Ok(result) => {
+                result.unwrap().unwrap();
+            }
+            Err(_) => {
+                create_task.await.unwrap().unwrap();
+                panic!("physical trash cleanup must not hold the registry lock");
+            }
+        }
         assert!(matches!(
             runtime.local_volume_store.get(&volume.id),
             Err(BoxliteError::NotFound(_))
