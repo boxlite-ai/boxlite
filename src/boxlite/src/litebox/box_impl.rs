@@ -279,10 +279,14 @@ impl BoxImpl {
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
-        let locker = self.disk_locker()?;
-        let _lock = LockGuard::new_async(locker.as_ref()).await;
-        self.ensure_box_exists()?;
+        let _lock = self.acquire_disk_admission().await?;
         fut.await
+    }
+
+    pub(crate) async fn acquire_disk_admission(&self) -> BoxliteResult<LockGuard<'static>> {
+        let lock = LockGuard::new_owned(self.disk_locker()?).await;
+        self.ensure_box_exists()?;
+        Ok(lock)
     }
 
     /// Confirm the box row still exists after acquiring disk admission, so waiters

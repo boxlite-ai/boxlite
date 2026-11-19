@@ -838,6 +838,21 @@ For example, a complete policy with `mode: enabled`, an empty `allow_net`, and `
 
 `NetworkHandle::update_outbound_policy` and `replace_outbound_policy` evolve the complete policy under the Box operation lock. `complete_outbound_snapshot` reads durable policy and `complete_outbound_status` compares it with backend observation. An explicit `deny_net: []` requires deny capability for the request and clears user denies without erasing the installed admission mode.
 
+Complete replacements, clones, and exports acquire disk admission before the operation lock. This keeps the copy's policy eligibility valid through publication.
+
+```mermaid
+sequenceDiagram
+    participant E as Export
+    participant W as Archive writer
+    participant P as Complete policy replacement
+    E->>E: Acquire disk admission and read copy options
+    E->>W: Start archive write with disk admission
+    Note over E,W: Caller cancels, writer retains disk admission
+    P->>P: Wait for disk admission
+    W->>W: Finish archive write and release admission
+    P->>P: Acquire disk admission, then the operation lock
+```
+
 The versioned request uses canonical deny rules and preserves whether the caller supplied the field. Its body budget includes framing for an existing policy accepted by the 64 KiB legacy endpoint. Recovery preserves that policy's original allow strings and historical rule count.
 
 An unresolved attempt survives restart as uncertainty. The shim installs the committed snapshot only, and a read never replays the attempt. The Runtime records restoration with its fresh revision before dispatch so a later mutation can confirm the exact restored identity if publication was interrupted.

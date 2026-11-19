@@ -247,7 +247,8 @@ impl BoxImpl {
             ));
         }
 
-        self.with_operation(async {
+        // A complete replacement can change whether a source may be copied.
+        self.with_disk_admission(self.with_operation(async {
             if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
                 return Err(BoxliteError::InvalidState("outbound policy updates require a running box".into()));
             }
@@ -339,7 +340,7 @@ impl BoxImpl {
                 return Err(error);
             }
             Ok(OutboundReplaceOutcome::Applied)
-        }).await
+        })).await
     }
 
     fn confirm_complete_outbound(&self, snapshot: &CompleteOutboundSnapshot) -> BoxliteResult<()> {

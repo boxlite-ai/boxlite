@@ -256,13 +256,21 @@ async fn outbound_complete_round_trips_through_sqlite_and_real_gvproxy_restart()
         deny_net: Some(vec![format!("{}192.0.2.7/24:443", " ".repeat(64 << 10))]),
         ..Default::default()
     };
-    assert_eq!(
-        box_impl
-            .replace_complete_outbound(request, next.clone(), Some(OutboundRevision::initial()))
-            .await
-            .unwrap(),
-        OutboundReplaceOutcome::Applied
+    let disk_locker = box_impl.disk_locker().unwrap();
+    let copy_admission = crate::lock::LockGuard::new_async(disk_locker.as_ref()).await;
+    let mut replacement = Box::pin(box_impl.replace_complete_outbound(
+        request,
+        next.clone(),
+        Some(OutboundRevision::initial()),
+    ));
+    let while_copying = tokio::time::timeout(Duration::from_millis(500), &mut replacement).await;
+    assert!(
+        while_copying.is_err(),
+        "policy replacement ran during copy admission: {while_copying:?}"
     );
+    assert_eq!(box_impl.complete_outbound_status().await.unwrap(), before);
+    drop(copy_admission);
+    assert_eq!(replacement.await.unwrap(), OutboundReplaceOutcome::Applied);
     let installed = box_impl.complete_outbound_status().await.unwrap();
     assert_eq!(
         installed.application_state,
