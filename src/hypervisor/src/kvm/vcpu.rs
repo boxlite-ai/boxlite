@@ -262,16 +262,19 @@ impl KvmVcpu {
     /// Captures an architecture- and host-version-specific CPU image.
     /// Does not enter KVM_RUN, even to complete outstanding I/O: the caller must
     /// call `complete_pending_io` first, then stop all other VM state producers.
+    ///
+    /// Read `KVM_GET_MP_STATE` first so `kvm_apic_accept_events()` can apply
+    /// pending INIT/SIPI events and update `CS:RIP` and related state. Then read
+    /// `KVM_GET_VCPU_EVENTS` before `sregs` and `debug_regs` to capture any pending
+    /// `#PF`/`#DB` payload materialized into `CR2`/`DR6`.
     pub fn save_state(&mut self) -> Result<crate::X86VcpuState> {
-        let sregs = self.fd.get_sregs().map_err(|source| Error::ConfigureVcpu {
-            id: self.id,
-            operation: "save CPU state",
-            source: source.into(),
-        })?;
         let save = || -> io::Result<crate::X86VcpuState> {
             if self.pending_io.0 {
                 return Err(io::Error::other("complete pending I/O before saving"));
             }
+            let mp_state = self.fd.get_mp_state()?;
+            let events = self.fd.get_vcpu_events()?;
+            let sregs = self.fd.get_sregs()?;
             let mut xsave = self.xsave_buffer()?;
             if self.xsave_size == 0 {
                 // SAFETY: this branch uses the fixed-size GET_XSAVE ioctl.
@@ -297,8 +300,8 @@ impl KvmVcpu {
                 xsave: words,
                 xcrs: self.fd.get_xcrs()?,
                 debug_regs: self.fd.get_debug_regs()?,
-                events: self.fd.get_vcpu_events()?,
-                mp_state: self.fd.get_mp_state()?,
+                events,
+                mp_state,
                 lapic: self.fd.get_lapic()?,
                 tsc_khz: self.fd.get_tsc_khz()?,
             })

@@ -647,6 +647,148 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires /dev/kvm"]
+    fn snapshot_restores_ap_at_pending_sipi_vector() {
+        use crate::{X86BootRegisters, X86Segment};
+        use kvm_bindings::{KVM_MP_STATE_INIT_RECEIVED, KVM_MP_STATE_RUNNABLE, kvm_mp_state};
+
+        const SIPI_VECTOR: u8 = 0x02;
+        const SIPI_ENTRY: u64 = (SIPI_VECTOR as u64) << 12;
+        const STALE_ENTRY: u64 = 0x1000;
+        const BSP_ENTRY: u64 = 0x1100;
+
+        let ram = Ram::new();
+        let sipi_ram = Ram::new();
+        let sipi_region = MemoryRegion {
+            guest_addr: SIPI_ENTRY,
+            ..sipi_ram.region()
+        };
+        // Real mode: MOV AL, byte; OUT 0x80, AL; HLT.
+        let stale_code = [0xb0, b'X', 0xe6, 0x80, 0xf4];
+        let sipi_code = [0xb0, b'S', 0xe6, 0x80, 0xf4];
+        // Flat 32-bit mode: write the xAPIC registers, then signal completion.
+        #[rustfmt::skip]
+        let bsp_code = [
+            // MOV dword [0xfee000f0], 0x1ff (enable the LAPIC).
+            0xc7, 0x05, 0xf0, 0x00, 0xe0, 0xfe, 0xff, 0x01, 0x00, 0x00,
+            // MOV dword [0xfee00310], 0x01000000 (ICR high, APIC ID 1).
+            0xc7, 0x05, 0x10, 0x03, 0xe0, 0xfe, 0x00, 0x00, 0x00, 0x01,
+            // MOV dword [0xfee00300], 0x4602 (ICR low, assert SIPI).
+            0xc7, 0x05, 0x00, 0x03, 0xe0, 0xfe, SIPI_VECTOR, 0x46, 0x00, 0x00,
+            0xe6, 0x81, 0xf4, // OUT 0x81, AL; HLT.
+        ];
+        // SAFETY: both pages are private and unmapped from the guest, and each
+        // program fits at its offset without overlapping another program.
+        unsafe {
+            std::ptr::copy_nonoverlapping(stale_code.as_ptr(), ram.0.as_ptr(), stale_code.len());
+            std::ptr::copy_nonoverlapping(
+                bsp_code.as_ptr(),
+                ram.0.as_ptr().add((BSP_ENTRY - STALE_ENTRY) as usize),
+                bsp_code.len(),
+            );
+            std::ptr::copy_nonoverlapping(sipi_code.as_ptr(), sipi_ram.0.as_ptr(), sipi_code.len());
+        }
+        let vm = KvmVm::new().unwrap();
+        // SAFETY: both pages outlive the VM and all vCPUs.
+        unsafe {
+            vm.map_memory(&ram.region()).unwrap();
+            vm.map_memory(&sipi_region).unwrap();
+        }
+        let state = thread::scope(|scope| {
+            let vm = &vm;
+            let (ap_ready, wait_for_ap) = mpsc::channel();
+            // Spawn before creating the AP so the BSP worker inherits an
+            // unblocked kick signal that it can reserve for itself.
+            let bsp = scope.spawn(move || {
+                let mut bsp = vm.create_vcpu(0).unwrap();
+                bsp.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+                bsp.set_boot_registers(&X86BootRegisters {
+                    rip: BSP_ENTRY,
+                    rflags: 2,
+                    cr0: 0x11, // Protected mode, ET, paging disabled.
+                    code: X86Segment {
+                        limit: u32::MAX,
+                        selector: 8,
+                        attributes: 0xc09b,
+                        ..Default::default()
+                    },
+                    data: X86Segment {
+                        limit: u32::MAX,
+                        selector: 16,
+                        attributes: 0xc093,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .unwrap();
+                wait_for_ap.recv().unwrap();
+                assert!(matches!(
+                    bsp.run().unwrap(),
+                    VcpuExit::IoOut { port: 0x81, .. }
+                ));
+                bsp.complete_pending_io().unwrap();
+            });
+
+            let mut ap = vm.create_vcpu(1).unwrap();
+            ap.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+            let mut segments = ap.fd.get_sregs().unwrap();
+            segments.cs.selector = 0;
+            segments.cs.base = 0;
+            ap.fd.set_sregs(&segments).unwrap();
+            ap.fd
+                .set_regs(&kvm_regs {
+                    rip: STALE_ENTRY,
+                    rflags: 2,
+                    ..Default::default()
+                })
+                .unwrap();
+            ap.fd
+                .set_mp_state(kvm_mp_state {
+                    mp_state: KVM_MP_STATE_INIT_RECEIVED,
+                })
+                .unwrap();
+
+            // The BSP queues the SIPI while the AP stays out of KVM_RUN.
+            ap_ready.send(()).unwrap();
+            bsp.join().unwrap();
+            ap.save_state().unwrap()
+        });
+
+        assert_eq!(state.mp_state.mp_state, KVM_MP_STATE_RUNNABLE);
+        assert_eq!(state.sregs.cs.selector, u16::from(SIPI_VECTOR) << 8);
+        assert_eq!(state.sregs.cs.base, SIPI_ENTRY);
+        assert_eq!(state.regs.rip, 0);
+        drop(vm);
+
+        let destination = KvmVm::new().unwrap();
+        // SAFETY: the source VM is gone, and both pages outlive the destination.
+        unsafe {
+            destination.map_memory(&ram.region()).unwrap();
+            destination.map_memory(&sipi_region).unwrap();
+        }
+        let mut ap_dst = destination.create_vcpu(1).unwrap();
+        ap_dst.restore_state(&state).unwrap();
+        let exit = thread::scope(|scope| {
+            let kick = ap_dst.handle();
+            let (finished, done) = mpsc::channel::<()>();
+            scope.spawn(move || {
+                let timeout = Duration::from_secs(5);
+                if let Err(mpsc::RecvTimeoutError::Timeout) = done.recv_timeout(timeout) {
+                    kick.kick().unwrap();
+                }
+            });
+            let exit = ap_dst.run();
+            drop(finished);
+            exit
+        });
+        match exit.unwrap() {
+            VcpuExit::IoOut { port: 0x80, bytes } => assert_eq!(bytes, b"S"),
+            exit => panic!("expected AP output at the SIPI vector, got {exit:?}"),
+        }
+        ap_dst.complete_pending_io().unwrap();
+    }
+
+    #[test]
     #[ignore = "requires Linux x86_64 with AVX and access to /dev/kvm"]
     fn snapshot_restores_ymm_high_halves_on_a_fresh_vcpu() {
         use crate::{X86BootRegisters, X86Segment};
