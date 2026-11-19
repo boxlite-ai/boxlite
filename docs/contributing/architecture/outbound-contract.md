@@ -875,7 +875,9 @@ sequenceDiagram
     end
 ```
 
-Legacy policy interfaces return `Unsupported` for protected snapshots. General Box metadata omits a network view that cannot express the policy, and `NetworkHandle::published_ports` and Go `Network.PublishedPorts` report the independent lifecycle-verified bindings. A port lookup does not start a VM or repair listeners.
+Legacy policy interfaces return `Unsupported` for protected snapshots. General Box metadata uses one durable row for the outbound policy and its visibility, even when the Box handle is cached. Metadata omits the network view when it cannot express the policy.
+
+`NetworkHandle::published_ports` and Go `Network.PublishedPorts` report the independent lifecycle-verified bindings. A port lookup does not start a VM or repair listeners.
 
 Runtime records with protected policy require a compatible Runtime. A rollback needs a legacy-compatible store with no unresolved extended requirements. Clone, export, and import refuse policy they cannot represent before provisioning or writing the resulting archive.
 

@@ -330,8 +330,11 @@ impl BoxImpl {
     /// Metadata for this box. Local reads are synchronous: everything comes
     /// from persisted state plus the bindings this handle itself published.
     pub(crate) fn info(&self) -> BoxInfo {
-        let state = self.state.read();
-        let mut info = BoxInfo::new(&self.config, &state);
+        self.info_from_state(&self.state.read())
+    }
+
+    fn info_from_state(&self, state: &BoxState) -> BoxInfo {
+        let mut info = BoxInfo::new(&self.config, state);
         // Bindings are only reportable while the shim that owns their listeners
         // is still the live one — a recycled PID must not inherit them.
         if state.status.is_active()
@@ -352,9 +355,11 @@ impl BoxImpl {
     }
 
     pub(crate) fn info_from_store(&self) -> BoxliteResult<BoxInfo> {
-        let (state, _, complete) = self.runtime.box_manager.outbound_state(&self.config.id)?;
-        self.state.write().outbound_policy = state.outbound_policy;
-        let mut info = self.info();
+        let (durable, _, complete) = self.runtime.box_manager.outbound_state(&self.config.id)?;
+        // Visibility and outbound policy must come from the same durable row.
+        let mut state = self.state.read().clone();
+        state.outbound_policy = durable.outbound_policy;
+        let mut info = self.info_from_state(&state);
         if complete.is_some() {
             info.network = None;
         }

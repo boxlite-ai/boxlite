@@ -2760,6 +2760,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_info_reads_durable_policy_without_mutating_live_state() {
+        use crate::runtime::options::OutboundNetworkConfig;
+
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config(false);
+        let cached = OutboundNetworkConfig {
+            allow_net: vec!["cached.example.com".into()],
+            ..Default::default()
+        };
+        let durable = OutboundNetworkConfig {
+            allow_net: vec!["saved.example.com".into()],
+            ..Default::default()
+        };
+        let mut state = BoxState::new();
+        state.outbound_policy = Some(cached.clone());
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        let (box_impl, _) = runtime.get_or_create_box_impl(config.clone(), state);
+        runtime
+            .box_manager
+            .save_outbound(&config.id, &durable)
+            .unwrap();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let received = std::thread::scope(|scope| {
+            let reader = box_impl.state.read();
+            let box_for_info = &box_impl;
+            scope.spawn(move || sender.send(box_for_info.info_from_store()).unwrap());
+            let result = receiver.recv_timeout(std::time::Duration::from_secs(2));
+            drop(reader);
+            result
+        });
+        let info = received.expect("metadata read waited for exclusive cached state");
+        assert_eq!(
+            info.unwrap().network.unwrap().outbound.allow_net,
+            durable.allow_net
+        );
+        assert_eq!(box_impl.state.read().outbound_policy, Some(cached));
+    }
+
+    #[tokio::test]
     async fn list_info_prefers_fresh_database_state_over_cached_box() {
         let (runtime, _dir) = create_test_runtime();
         let config = test_box_config(false);
