@@ -622,6 +622,7 @@ export class Listener {
         {
           service: backend.scaleSets,
           charged: (id) => runtime.pool.chargedInSet(id),
+          creationReady: (label) => runtime.pool.creationReady(label),
           authority: backend.scaleSetAuthority.bind(backend),
           policy,
           report: (error) => this.options.host.report(error, 'scale-set-session'),
@@ -657,9 +658,15 @@ export class Listener {
         const selection = selectRunnerLabels(demand.labels, this.worker.labels)
         if (selection) runtime.sets.watch(selection.label)
       }
-      // A signed webhook may seed a class. Only Actions session messages admit work.
+      // Authenticated job observations seed classes. Only Actions messages admit work.
       for (const row of records) {
-        if (row.key.startsWith('notice/') && matches(scope, pendingJob(row))) await this.settle(session.lease, row)
+        if (!row.key.startsWith('notice/') || !matches(scope, pendingJob(row))) continue
+        const labels = object(row.payload) ? row.payload.labels : undefined
+        if (Array.isArray(labels) && labels.every((label): label is string => typeof label === 'string')) {
+          const selection = selectRunnerLabels(labels, this.worker.labels)
+          if (selection) runtime.sets.watch(selection.label)
+        }
+        await this.settle(session.lease, row)
       }
     }
     const targets = runtime.sets?.targets() ?? []

@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { ActionsScaleSets } from './scale-set-client'
+import { ScaleSetWork } from './scale-set-controller'
 
 describe('GitHub Actions scale set transport', () => {
   const base = 'https://pipelines.actions.githubusercontent.com/tenant/42'
@@ -128,5 +129,28 @@ describe('GitHub Actions scale set transport', () => {
     await expect(client.registry(42, guard).remove(identity)).rejects.toThrow()
     expect(guard).not.toHaveBeenCalled()
     expect(requests.mock.calls.map(([, options]) => options.method)).toEqual(['POST', 'GET'])
+  })
+  it('releases the shared permit during registration propagation and then exchanges the same token', async () => {
+    const client = new ActionsScaleSets(scope, registration),
+      work = new ScaleSetWork(1)
+    const signal = new AbortController().signal
+    const beginning = Date.now()
+    const now = jest.spyOn(Date, 'now').mockReturnValue(beginning)
+    requests.mockResolvedValueOnce(new Response(null, { status: 401 }))
+    admin()
+    requests.mockResolvedValueOnce(session())
+    const open = () => work.run(signal, () => client.open(42, 'owner'))
+    const attempt = open()
+    const healthy = work.run(signal, async () => 'ready')
+    await expect(attempt).rejects.toMatchObject({ status: 401, retryAt: beginning + 1000 })
+    await expect(healthy).resolves.toBe('ready')
+    await expect(open()).rejects.toMatchObject({ retryAt: beginning + 1000 })
+    expect(requests).toHaveBeenCalledTimes(1)
+    now.mockReturnValue(beginning + 1000)
+    await expect(open()).resolves.toMatchObject({ id: sessionId })
+    expect(registration).toHaveBeenCalledTimes(1)
+    expect(
+      requests.mock.calls.slice(0, 2).map(([, options]) => new Headers(options.headers).get('authorization')),
+    ).toEqual(['RemoteAuth registration-token', 'RemoteAuth registration-token'])
   })
 })

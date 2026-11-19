@@ -352,10 +352,11 @@ concurrent overspending. Zero pauses new admission; null has no numeric ceiling.
 Missing or invalid policies fail closed. The capacity API reads the organization
 counter directly, without reading scope or worker history.
 
-Every candidate asks the provider separately, including its repository identity;
-a policy is never cached across different repositories by the controller.
+Each classic job candidate asks the provider for its own repository policy.
+
 Compensation only records pending jobs and does not query capacity. Existing worker recovery runs
 before policy lookup and continues when Commerce or settings are unavailable.
+
 Future repository rules belong in the hosted provider and candidate selection;
 strict repository limits also require runner eligibility to be partitioned.
 The triggering job alone does not identify the repository an organization worker
@@ -363,7 +364,8 @@ will actually execute. Repository-specific limits are not implemented.
 
 ```mermaid
 flowchart TD
-    L[Shared Listener] -->|resolve with scope, repository and job| P[CapacityProvider]
+    L[Classic job] -->|scope, repository and job| P[CapacityProvider]
+    G[Scale set offer] -->|scope and shared limits| P
     P --> E[Standalone: EnvironmentCapacity]
     P --> H[Hosted: CiSettingsService]
     E -->|CI_WORKER_MAX total| R[Capacity policy and version checks]
@@ -429,11 +431,39 @@ Use the hosted installation binding ID, standalone `installation:<id>`, or stand
 
 The elected listener opens one cancellable session per binding, execution scope and worker specification. Each session sends its available capacity to GitHub and explicitly acquires eligible job requests. An authenticated queued-job observation can seed an additional supported resource label, up to 64 watched specifications per scope.
 
+A workflow can request a new specification directly:
+
+```yaml
+runs-on: boxlite-1vcpu-1gbmem-10gbdisk
+```
+
+With only `boxlite` seeded for the binding, the signed queued webhook opens a set for this label in the authorized runner group. A standalone PAT listener can also discover the specification through its authorized repository scan. Once GitHub assigns the work, the Box requests 1 vCPU, 1,024 MiB of memory and 10 GiB of disk.
+
 GitHub reports the total assigned jobs, including running jobs. If it reports 16 and five usable workers already hold reservations, the planner can reserve up to 11 more within quota. It counts pending Box creates across restarts.
 
 A durable target precedes message acknowledgment. A dedicated JIT configuration binds each runner to its set and its original Box. Registration recovery uses a targeted name lookup and verifies the set ID.
 
 The default polling deadline is two minutes. Network waits occur outside SQL transactions and the listener bounds concurrent setup and message handling across scopes. GitHub can still throttle credentials and management requests. [Reference protocol](https://github.com/actions/scaleset/tree/v0.5.0)
+
+A completed long poll can carry an older capacity estimate. The listener rechecks the current policy and charges shared quota before acquiring offers. Held reservations start a Box only when GitHub confirms assigned demand.
+
+```mermaid
+sequenceDiagram
+    participant G as GitHub Actions
+    participant L as TypeScript listener
+    participant J as Quota journal
+    participant B as Original Box
+    L->>G: Poll with capacity
+    G-->>L: Offers and assigned count
+    L->>J: Reserve eligible slots against current limits
+    L->>G: Acquire only the reserved offers
+    L->>J: Persist the decision
+    L->>G: Acknowledge the message
+    G-->>L: Assigned demand
+    L->>B: Create the reserved worker
+    L->>G: Generate JIT for that worker
+    L->>B: Deliver JIT to the original Box
+```
 
 An owner that loses an acquisition reply reconciles the first replay against the current set statistics when the session and message disagree. A worker that exits before GitHub reports it started work triggers per-specification creation backoff. A lost upload reply is recovered using the original Box and JIT delivery intent.
 
