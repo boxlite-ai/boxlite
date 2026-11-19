@@ -28,7 +28,7 @@ The prototype has no server-backed eligibility or price quote. Production integr
 
 ## How it works
 
-Organization → use case → choose a plan → verify card → review subscription fee and renewal → explicitly start trial → Quickstart.
+Organization → use case → choose a plan → verify card → review subscription fee and renewal → explicitly start trial → Quickstart. Successful activation completes Welcome immediately, with no intermediate success screen.
 
 The first two steps reuse `useWelcomeOnboarding`; Back from the plan step retains the selected use case. `WelcomeJourneyArtwork` receives the existing step, selection and content anchor. Its animation implementation and styles are unchanged.
 
@@ -36,7 +36,7 @@ The left side uses the main exploring title, “Your next idea. Starts in a Box.
 
 Independent alternatives remain available:
 
-- Coupon entry expands inline; successful redemption replaces plan selection with one Console continuation.
+- Coupon entry expands inline; successful redemption immediately completes Welcome and enters Quickstart. Invalid input remains in the form.
 - “Explore console — no card required” completes Welcome without verifying a card or activating a subscription.
 - Both paths remain available when trial eligibility is unknown.
 
@@ -53,7 +53,7 @@ Independent alternatives remain available:
 | Subscription and wallet after completion | Not synchronized with simulated results; existing mock Billing data remains independent. |
 | Signup/login and production Welcome | Unchanged. The walkthrough starts from an authenticated mock session. |
 
-The simulated verified card and trial end date are review fixtures. Trial time starts at explicit activation. No trial quota is inferred from bonus credits. These screens do not prove production eligibility, free resource quantities, successful billing or actual funds.
+The simulated verified card and eligibility are review fixtures. Successful confirmation enters Quickstart directly. No trial quota is inferred from bonus credits. These screens do not prove production eligibility, free resource quantities, successful billing or actual funds.
 
 ## Validation
 
@@ -65,11 +65,11 @@ Production bundle inspection must exclude the prototype chunk and its activation
 
 ## Observed results
 
-On main b2e104c20, `make test:apps:dashboard` passed 152 files / 1,674 tests and `make build:apps:dashboard` passed. Production asset inspection excluded the prototype activation and coupon fixture strings. Independent code audit found no production billing or authentication mutations. Review advice to retain the completion callback and remove competing trial actions after coupon success was adopted.
+On main b2e104c20, `make test:apps:dashboard` passed 152 files / 1,674 tests and `make build:apps:dashboard` passed. Production asset inspection excluded the prototype activation and coupon fixture strings. Independent code audit found no production billing or authentication mutations. All success paths use the completion callback immediately; no success interstitial remains.
 
 ## Complete onboarding screenshots
 
-All captures use mock identity and data. Verified-card, trial and coupon success screens are simulated; the final screenshot proves navigation only, not available funds or runnable compute.
+All captures use mock identity and data. Verified-card and confirmation screens are simulated; the final screenshot proves navigation only, not available funds or runnable compute.
 
 ### Organization — existing form
 
@@ -91,18 +91,12 @@ All captures use mock identity and data. Verified-card, trial and coupon success
 
 ![Explicit trial confirmation — fixture quote](assets/bui-1923/05-confirm-trial.png)
 
-### Trial started — simulated result
-
-![Trial started — simulated result](assets/bui-1923/06-trial-started.png)
-
 ### Coupon entry — no card prerequisite
 
 ![Coupon entry — no card prerequisite](assets/bui-1923/07-coupon-entry.png)
 
-### Coupon redeemed — simulated result
-
-![Coupon redeemed — simulated result](assets/bui-1923/08-coupon-redeemed.png)
-
 ### No-card continuation — existing Quickstart
 
 ![No-card continuation — existing Quickstart](assets/bui-1923/09-no-card-quickstart.png)
+
+Direct-completion regression check: updated assertions failed against the preceding implementation because successful coupon/trial confirmation left the route unchanged. After switching both success paths to Welcome completion, all 1,674 tests and the build passed. Browser checks confirmed both paths reach Quickstart with no intervening success screen. No server operation was added.

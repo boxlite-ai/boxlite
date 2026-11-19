@@ -8,7 +8,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import WelcomeBoxIllustration from './WelcomeBoxIllustration'
 
 type Scenario = 'eligible' | 'ineligible' | 'unavailable'
-type Stage = 'choose' | 'verify' | 'confirm' | 'active' | 'redeemed'
+type Stage = 'choose' | 'verify' | 'confirm'
 const plans = PLAN_PRESENTATION.slice(1)
 const price = (cents: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(cents / 100)
@@ -38,7 +38,6 @@ export default function TrialWelcomePreview({
   const [couponError, setCouponError] = useState<string | null>(null)
   const continueToConsole = () => (onContinue ? onContinue() : navigate(RoutePath.QUICKSTART))
   const [verified, setVerified] = useState(false)
-  const [endsAt, setEndsAt] = useState<Date | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
   const plan = plans[selected]
   const eligible = scenario === 'eligible'
@@ -48,17 +47,9 @@ export default function TrialWelcomePreview({
   }, [stage])
   const start = () => {
     if (!verified || scenario === 'unavailable') return
-    setEndsAt(new Date(Date.now() + 3 * 86400_000))
-    setStage('active')
+    continueToConsole()
   }
   const next = () => setStage(verified ? 'confirm' : 'verify')
-  const endLabel = endsAt?.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZoneName: 'short',
-  })
 
   return (
     <>
@@ -80,21 +71,15 @@ export default function TrialWelcomePreview({
             For <span className="font-medium text-foreground">{organizationName}</span>
           </p>
           <h2 ref={heading} tabIndex={-1} className="text-section font-medium tracking-tight outline-none">
-            {stage === 'redeemed'
-              ? 'Coupon redeemed'
-              : stage === 'choose'
-                ? eligible
-                  ? 'Try a plan free for 3 days'
-                  : 'Choose how to get started'
-                : stage === 'verify'
-                  ? 'Verify your card'
-                  : stage === 'confirm'
-                    ? eligible
-                      ? 'Your trial, at a glance'
-                      : 'Review your subscription'
-                    : eligible
-                      ? 'Your trial is ready.'
-                      : 'Your plan is ready.'}
+            {stage === 'choose'
+              ? eligible
+                ? 'Try a plan free for 3 days'
+                : 'Choose how to get started'
+              : stage === 'verify'
+                ? 'Verify your card'
+                : eligible
+                  ? 'Your trial, at a glance'
+                  : 'Review your subscription'}
           </h2>
 
           {stage === 'choose' && (
@@ -196,7 +181,7 @@ export default function TrialWelcomePreview({
                           return
                         }
                         setCouponError(null)
-                        setStage('redeemed')
+                        continueToConsole()
                       }}
                     >
                       <label htmlFor="trial-coupon" className="mb-2 block text-meta">
@@ -249,21 +234,6 @@ export default function TrialWelcomePreview({
                 </div>
               </div>
             </>
-          )}
-
-          {stage === 'redeemed' && (
-            <div role="status">
-              <p className="mt-4 text-body text-muted-foreground">
-                Your credits are ready. No card or subscription required.
-              </p>
-              <AsciiButton
-                variant="primary"
-                className="mt-6 flex w-full justify-between px-5 py-3"
-                onClick={continueToConsole}
-              >
-                Continue to console <ArrowRightIcon aria-hidden className="size-4" />
-              </AsciiButton>
-            </div>
           )}
 
           {stage === 'verify' && (
@@ -348,31 +318,6 @@ export default function TrialWelcomePreview({
                 Change plan
               </button>
             </>
-          )}
-
-          {stage === 'active' && (
-            <div role="status">
-              <div className="my-6 flex size-11 items-center justify-center border border-border">
-                <Check className="size-5 text-brand" aria-hidden />
-              </div>
-              <p className="text-em leading-7">
-                {plan.name} is active for {organizationName}.
-              </p>
-              {eligible && (
-                <p className="mt-3 text-body leading-6 text-muted-foreground">
-                  Your trial ends {endLabel}. Then {charge}/month unless you cancel in Billing.
-                </p>
-              )}
-              <AsciiButton
-                variant="primary"
-                className="mt-7 flex w-full justify-between px-5 py-3"
-                onClick={continueToConsole}
-              >
-                Create your first Box
-                <ArrowRightIcon aria-hidden className="size-4" />
-              </AsciiButton>
-              <p className="mt-4 text-meta text-muted-foreground">Start with a template, your own code, or an agent.</p>
-            </div>
           )}
         </div>
       </section>

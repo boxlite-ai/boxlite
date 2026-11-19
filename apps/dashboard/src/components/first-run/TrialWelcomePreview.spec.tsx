@@ -46,8 +46,6 @@ it('keeps Team through verification and requires explicit activation before Quic
   expect(host.textContent).toContain('Subscription fee today$0')
   expect(host.textContent).not.toContain('Team is active')
   click('Start 3-day trial')
-  expect(host.textContent).toContain('Team is active for Acme')
-  click('Create your first Box')
   expect(host.querySelector('output')?.textContent).toBe('/dashboard/quickstart')
 })
 it('does not activate or verify when card setup is cancelled', () => {
@@ -64,7 +62,7 @@ it('discloses payment for an ineligible account and never offers a trial button'
   expect(host.textContent).toContain('Subscription fee today$5')
   expect(host.textContent).not.toContain('Start 3-day trial')
   click('Subscribe for $5/month')
-  expect(host.textContent).toContain('Your plan is ready.')
+  expect(host.querySelector('output')?.textContent).toBe('/dashboard/quickstart')
 })
 it('blocks unknown eligibility; retry preserves the selected plan', () => {
   render('unavailable')
@@ -106,10 +104,7 @@ it('allows a coupon without selecting or verifying a paid subscription', () => {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
   click('Redeem')
-  expect(host.textContent).toContain('Coupon redeemed')
-  expect(host.textContent).not.toContain('Continue to free trial')
   expect(host.textContent).not.toContain('Card verified')
-  click('Continue to console')
   expect(host.querySelector('output')?.textContent).toBe('/dashboard/quickstart')
 })
 
