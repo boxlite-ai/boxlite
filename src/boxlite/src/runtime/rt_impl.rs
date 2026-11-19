@@ -1470,15 +1470,18 @@ impl RuntimeImpl {
         use crate::util::{PidFileReader, ProcessIdentity};
 
         // A boot ID read can succeed after frozen boxes already exist in this session.
+        // Defer reboot reset only for frozen records whose PID file points to a live
+        // process (Verified or Legacy). Phase 2 verifies the frozen box's identity.
         self.box_manager
             .check_and_handle_reboot_with(current_boot_id, |config, state| {
-                if let (BoxStatus::Parked | BoxStatus::Paused, Some(recorded_pid)) =
-                    (state.status, state.pid)
+                if matches!(state.status, BoxStatus::Parked | BoxStatus::Paused)
                     && let Ok(box_layout) = self.layout.box_layout(config.id.as_str(), false)
                 {
                     let pid_path = box_layout.pid_file_path();
-                    PidFileReader::at(&pid_path).process_identity()
-                        == ProcessIdentity::Verified(recorded_pid)
+                    matches!(
+                        PidFileReader::at(&pid_path).process_identity(),
+                        ProcessIdentity::Verified(_) | ProcessIdentity::Legacy(_)
+                    )
                 } else {
                     false
                 }
@@ -1603,6 +1606,7 @@ impl RuntimeImpl {
             let original_status = state.status;
             let original_pid = state.pid;
             let original_lock_id = state.lock_id;
+            let original_started_at = state.started_at;
             if state.lock_id.is_none() {
                 let lock_id = self.lock_manager.allocate()?;
                 self.disk_lock_manager.allocate_and_retrieve(lock_id)?;
@@ -1646,6 +1650,9 @@ impl RuntimeImpl {
                     if matches!(original_status, BoxStatus::Parked | BoxStatus::Paused) {
                         // Liveness alone cannot verify the recorded frozen VM.
                         state.set_status(BoxStatus::Unknown);
+                    }
+                    if state.status == BoxStatus::Unknown {
+                        state.started_at = None;
                     }
                     if had_stale_exit {
                         stash_exit_file(&box_layout);
@@ -1732,6 +1739,7 @@ impl RuntimeImpl {
             if state.status != original_status
                 || state.pid != original_pid
                 || state.lock_id != original_lock_id
+                || state.started_at != original_started_at
             {
                 self.box_manager.save_box(box_id, &state)?;
             }
@@ -3330,6 +3338,126 @@ mod tests {
             let state = runtime.box_manager.update_box(&id).unwrap();
             assert_eq!((state.status, state.pid), expected, "box {id}");
         }
+    }
+
+    #[test]
+    fn test_recovery_marks_unverified_frozen_boxes_unknown_after_delayed_boot_id() {
+        let (runtime, _dir) = create_test_runtime();
+        runtime.recover_boxes_with_boot_id(Some("boot-a")).unwrap();
+        runtime.recover_boxes_with_boot_id(None).unwrap();
+
+        let mut cases = Vec::new();
+        for frozen in [BoxStatus::Parked, BoxStatus::Paused] {
+            for identity in [
+                "legacy",
+                "verified without PID",
+                "verified with different PID",
+            ] {
+                let (pid, child) = spawn_dummy_process();
+                let child = ChildGuard(child);
+                let config = test_box_config_in_layout(false, &runtime);
+                let layout = runtime
+                    .layout
+                    .box_layout(config.id.as_str(), false)
+                    .unwrap();
+                let pid_file = layout.pid_file_path();
+                let mut state = running_state(pid);
+                state.mark_started();
+                state.set_status(frozen);
+                match identity {
+                    "legacy" => {
+                        std::fs::create_dir_all(layout.root()).unwrap();
+                        std::fs::write(&pid_file, pid.to_string()).unwrap();
+                    }
+                    "verified without PID" => {
+                        state.pid = None;
+                        write_pid_file_with_fingerprint(&pid_file, pid);
+                    }
+                    "verified with different PID" => {
+                        state.pid = Some(pid.saturating_add(1));
+                        write_pid_file_with_fingerprint(&pid_file, pid);
+                    }
+                    _ => unreachable!(),
+                }
+                runtime.box_manager.add_box(&config, &state).unwrap();
+                cases.push((config.id, frozen, identity, child));
+            }
+        }
+
+        runtime.recover_boxes_with_boot_id(Some("boot-b")).unwrap();
+
+        let mut unexpected = Vec::new();
+        for (id, frozen, identity, child) in cases {
+            let recovered = runtime.box_manager.update_box(&id).unwrap();
+            let actual = (recovered.status, recovered.pid, recovered.started_at);
+            let expected = (BoxStatus::Unknown, Some(child.0.id()), None);
+            if actual != expected {
+                unexpected.push((frozen, identity, actual, expected));
+            }
+        }
+        assert!(unexpected.is_empty(), "unexpected recovery: {unexpected:?}");
+    }
+
+    #[test]
+    fn test_recovery_clears_started_at_for_unknown_box_with_legacy_pid_file() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+        let config = test_box_config_in_layout(false, &runtime);
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .unwrap();
+        std::fs::create_dir_all(layout.root()).unwrap();
+        std::fs::write(layout.pid_file_path(), pid.to_string()).unwrap();
+
+        let lock_id = runtime.lock_manager.allocate().unwrap();
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
+        let mut state = running_state(pid);
+        state.mark_started();
+        state.set_status(BoxStatus::Unknown);
+        state.set_lock_id(lock_id);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        let persisted = runtime.box_manager.update_box(&config.id).unwrap();
+        assert!(persisted.started_at.is_some());
+
+        runtime.recover_boxes().unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(recovered.status, BoxStatus::Unknown);
+        assert_eq!(recovered.pid, Some(pid));
+        assert_eq!(recovered.lock_id, Some(lock_id));
+        assert_eq!(recovered.started_at, None, "persisted stale started_at");
+    }
+
+    #[test]
+    fn test_recovery_adopts_legacy_pid_for_unknown_box_without_recorded_pid() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+        let config = test_box_config_in_layout(false, &runtime);
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .unwrap();
+        std::fs::create_dir_all(layout.root()).unwrap();
+        std::fs::write(layout.pid_file_path(), pid.to_string()).unwrap();
+
+        let mut state = BoxState::new();
+        state.mark_started();
+        state.set_status(BoxStatus::Unknown);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(
+            (recovered.status, recovered.pid, recovered.started_at),
+            (BoxStatus::Running, Some(pid), None)
+        );
     }
 
     #[test]
