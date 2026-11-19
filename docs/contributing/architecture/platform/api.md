@@ -166,7 +166,7 @@ The [removal-release notes](../../../../apps/api/README.md#retired-cloud-operati
 ### Cloud Apps
 
 Cloud Apps share the platform login, selected organization and API-key system. The dashboard
-entry is `/dashboard/apps`, immediately after Boxes. Management requests use
+entry is `/dashboard/apps`, in Applications after CI and at the same level. Management requests use
 `Authorization: Bearer <platform JWT or API key>` with `read:apps`, `write:apps`, or
 `delete:apps` permissions. Organization API keys can manage multiple Apps and other resources
 according to their explicit grants. Their issuer must remain an organization member. App creation
