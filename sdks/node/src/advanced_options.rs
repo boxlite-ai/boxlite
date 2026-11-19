@@ -20,8 +20,7 @@ pub struct JsSecurityOptions {
     /// Maximum number of open file descriptors.
     pub max_open_files: Option<f64>,
 
-    /// Legacy file-size setting kept for configuration compatibility.
-    /// The shim inherits its host file-size limit.
+    /// Maximum file size in bytes.
     pub max_file_size: Option<f64>,
 
     /// Maximum number of processes.

@@ -1242,6 +1242,7 @@ use boxlite::runtime::options::{SecurityOptions, SecurityOptionsBuilder};
 
 let security = SecurityOptionsBuilder::enabled()
     .max_open_files(2048)
+    .max_file_size_bytes(1024 * 1024 * 512)  // 512 MiB
     .max_processes(100)
     .allow_env("MY_VAR")
     .build();
@@ -1274,7 +1275,7 @@ let security = SecurityOptions::builder()
 | `allow_env(var)` | Add to env allowlist |
 | `resource_limits(limits)` | Set all limits |
 | `max_open_files(n)` | RLIMIT_NOFILE |
-| `max_file_size_bytes(n)` | Legacy configuration field |
+| `max_file_size_bytes(n)` | RLIMIT_FSIZE |
 | `max_processes(n)` | RLIMIT_NPROC |
 | `max_memory_bytes(n)` | RLIMIT_AS |
 | `max_cpu_time_seconds(n)` | RLIMIT_CPU |
@@ -1291,7 +1292,7 @@ pub struct ResourceLimits {
     /// Max open file descriptors (RLIMIT_NOFILE)
     pub max_open_files: Option<u64>,
 
-    /// Legacy file-size setting kept for configuration compatibility
+    /// Max file size in bytes (RLIMIT_FSIZE)
     pub max_file_size: Option<u64>,
 
     /// Max number of processes (RLIMIT_NPROC)
@@ -1305,7 +1306,8 @@ pub struct ResourceLimits {
 }
 ```
 
-The shim inherits the host launcher's `RLIMIT_FSIZE` soft and hard values.
+When `max_file_size` is `None`, the shim inherits the host launcher's
+`RLIMIT_FSIZE` soft and hard limits.
 See [resource-limit enforcement](../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 
 ---

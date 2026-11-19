@@ -76,8 +76,7 @@ export interface SecurityOptions {
   maxOpenFiles?: number;
 
   /**
-   * Legacy file-size setting kept for configuration compatibility.
-   * The shim inherits its host file-size limit.
+   * Maximum file size in bytes.
    */
   maxFileSize?: number;
 

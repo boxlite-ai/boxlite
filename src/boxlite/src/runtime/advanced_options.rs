@@ -183,8 +183,7 @@ pub struct ResourceLimits {
     #[serde(default)]
     pub max_open_files: Option<u64>,
 
-    /// Legacy file-size setting kept for configuration compatibility.
-    /// The shim inherits its host file-size limit.
+    /// Maximum file size in bytes (RLIMIT_FSIZE).
     #[serde(default)]
     pub max_file_size: Option<u64>,
 
@@ -373,6 +372,7 @@ impl SecurityOptions {
 ///
 /// let security = SecurityOptionsBuilder::enabled()
 ///     .max_open_files(2048)
+///     .max_file_size_bytes(1024 * 1024 * 512) // 512 MiB
 ///     .build();
 /// ```
 #[derive(Debug, Clone)]
@@ -509,7 +509,7 @@ impl SecurityOptionsBuilder {
         self
     }
 
-    /// Store the legacy file-size setting for configuration compatibility.
+    /// Set maximum file size in bytes.
     pub fn max_file_size_bytes(&mut self, bytes: u64) -> &mut Self {
         self.inner.resource_limits.max_file_size = Some(bytes);
         self

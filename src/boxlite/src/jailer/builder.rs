@@ -222,7 +222,7 @@ impl JailerBuilder {
         self
     }
 
-    /// Store the legacy file-size setting for configuration compatibility.
+    /// `RLIMIT_FSIZE` — maximum file size, in bytes.
     pub fn with_max_file_size_bytes(mut self, bytes: u64) -> Self {
         self.security.resource_limits.max_file_size = Some(bytes);
         self

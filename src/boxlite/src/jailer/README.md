@@ -142,20 +142,19 @@ requiring maximum security should use Linux.
 | Resource | Limit Type | Purpose |
 |----------|------------|---------|
 | Open files | RLIMIT_NOFILE | Prevent FD exhaustion |
-| File size | Inherited RLIMIT_FSIZE | Cap growth of individual host files |
+| File size | RLIMIT_FSIZE | Cap growth of individual host files |
 | Processes | RLIMIT_NPROC | Prevent fork bombs |
 | Memory | RLIMIT_AS | Prevent OOM |
 | CPU time | RLIMIT_CPU | Prevent CPU monopolization |
 
-The shim inherits the host launcher's `RLIMIT_FSIZE` soft and hard limits.
-Native online disk growth can exceed a limit derived from the initial disk,
-so the jailer leaves both inherited values in place. The VMM checks guest
-block I/O against the current virtual capacity.
+At startup, the jailer sets both `RLIMIT_FSIZE` limits to the configured
+`ResourceLimits.max_file_size` in bytes. If the setting is absent, the shim
+inherits both limits from the host launcher.
 
-The host kernel enforces the inherited soft limit on individual files. A
-sparse image can grow in virtual capacity before writes need to extend the
-host file. A finite host limit can therefore cause later I/O to fail.
-`ResourceLimits.max_file_size` is accepted for configuration compatibility.
+The VMM checks guest block I/O against the current virtual capacity. The host
+kernel enforces the shim's soft limit on individual files. A sparse image can
+grow in virtual capacity before later writes extend the host file and reach
+that limit.
 
 ### Layer 4: Environment Sanitization
 

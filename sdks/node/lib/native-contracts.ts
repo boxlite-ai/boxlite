@@ -307,7 +307,6 @@ export interface JsSecurityOptions {
   jailerEnabled?: boolean;
   seccompEnabled?: boolean;
   maxOpenFiles?: number;
-  /** Legacy file-size setting kept for configuration compatibility. */
   maxFileSize?: number;
   maxProcesses?: number;
   maxMemory?: number;

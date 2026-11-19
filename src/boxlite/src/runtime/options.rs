@@ -2983,6 +2983,27 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_preserves_configured_file_size_limit() {
+        let mut options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+        options.sanitize().unwrap();
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            None
+        );
+
+        let configured_limit = 32 << 30;
+        options.advanced.security.resource_limits.max_file_size = Some(configured_limit);
+        options.sanitize().unwrap();
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(configured_limit)
+        );
+    }
+
+    #[test]
     fn test_security_builder_env_allowlist() {
         let opts = SecurityOptionsBuilder::new()
             .env_allowlist(vec!["FOO".to_string()])

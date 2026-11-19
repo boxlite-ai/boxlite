@@ -105,8 +105,7 @@ pub struct PySecurityOptions {
     #[pyo3(get, set)]
     pub max_open_files: Option<u64>,
 
-    /// Legacy file-size setting kept for configuration compatibility.
-    /// The shim inherits its host file-size limit.
+    /// Maximum file size in bytes.
     #[pyo3(get, set)]
     pub max_file_size: Option<u64>,
 

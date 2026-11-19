@@ -559,7 +559,7 @@ logged.
   The shim routes requests by `block_id` through
   [`VmControl`](../../../../src/vmm/README.md#virtio-block-device).
 - **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
-  The host kernel enforces the shim's inherited
+  The host kernel enforces the shim's configured or inherited
   [`RLIMIT_FSIZE` soft limit](../../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box

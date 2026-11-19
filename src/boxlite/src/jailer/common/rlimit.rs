@@ -58,12 +58,9 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
         set_rlimit_raw(libc::RLIMIT_NOFILE, max_files)?;
     }
 
-    // Online disk growth can exceed a file limit derived from the initial disk.
-    // The VMM checks guest I/O against the current virtual disk capacity.
-    // The host kernel enforces the shim's inherited file-size limit.
-    // if let Some(max_fsize) = limits.max_file_size {
-    //     set_rlimit_raw(libc::RLIMIT_FSIZE, max_fsize)?;
-    // }
+    if let Some(max_fsize) = limits.max_file_size {
+        set_rlimit_raw(libc::RLIMIT_FSIZE, max_fsize)?;
+    }
 
     // NOTE: `max_processes` is deliberately NOT applied as RLIMIT_NPROC.
     // RLIMIT_NPROC is enforced per *real UID across the whole host*, and it is
