@@ -58,6 +58,10 @@ The tag push builds from that commit, installs the pinned Claude validator, vali
 The publish job rechecks those hashes and the remote tag's commit before uploading; only this job has `contents: write`.
 It uses the repository `GITHUB_TOKEN`, needs no cloud/model credentials, and does not mark the plugin as the repository's Latest release.
 
+Before the first plugin release, explicitly mark the intended runtime release as Latest in GitHub.
+GitHub can otherwise ignore `--latest=false` and automatically select the plugin; see the [upstream report](https://github.com/orgs/community/discussions/151811).
+Verify `/releases/latest` still names a runtime release after publishing.
+
 Download the ZIPs and checksums from the matching entry in [GitHub Releases](https://github.com/boxlite-ai/boxlite/releases).
 Release assets remain available independently of the seven-day Actions artifact used for job handoff and PR previews.
 Those temporary artifacts include version, run ID and attempt in their names, so reruns cannot overwrite earlier previews.
