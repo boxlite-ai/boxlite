@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Version 1: a 32-byte little-endian header, machine state, then raw RAM.
+//! Version 1: a 32-byte little-endian header, machine state, then packed RAM.
 
 use std::{
     fs::{self, File},
@@ -29,25 +29,44 @@ pub(crate) const MAX_MACHINE_STATE_LEN: u64 =
     (crate::config::MAX_VCPUS as u64) * (512 << 10) + (64 << 10);
 
 pub(crate) fn write(path: &Path, count: u32, machine: &[u8], ram: &GuestRam) -> Result<()> {
-    let mut regions = ram.regions();
-    let region = regions.next().ok_or_else(|| invalid("missing RAM"))?;
-    if region.guest_addr != 0 || regions.next().is_some() {
-        return Err(invalid("export requires one RAM region at GPA 0"));
+    let mut ram_len = 0u64;
+    let mut previous_end = 0;
+    for region in ram.regions() {
+        if region.size == 0 {
+            return Err(invalid("empty RAM region"));
+        }
+        if region.guest_addr < previous_end {
+            return Err(invalid("RAM regions must be ordered and non-overlapping"));
+        }
+        let size = region.size as u64;
+        previous_end = region
+            .guest_addr
+            .checked_add(size)
+            .ok_or_else(|| invalid("RAM region end GPA overflows"))?;
+        ram_len = ram_len
+            .checked_add(size)
+            .ok_or_else(|| invalid("RAM byte length overflows"))?;
+    }
+    if ram_len == 0 {
+        return Err(invalid("missing RAM"));
     }
     create(path, |writer| {
         writer.write_all(MAGIC)?;
         writer.write_all(&VERSION.to_le_bytes())?;
         writer.write_all(&count.to_le_bytes())?;
-        writer.write_all(&(region.size as u64).to_le_bytes())?;
+        writer.write_all(&ram_len.to_le_bytes())?;
         writer.write_all(&(machine.len() as u64).to_le_bytes())?;
         writer.write_all(machine)?;
         let mut buffer = vec![0; CHUNK];
-        for offset in (0..region.size).step_by(CHUNK) {
-            let len = CHUNK.min(region.size - offset);
-            ram.memory()
-                .read_slice(&mut buffer[..len], GuestAddress(offset as u64))
-                .map_err(io::Error::other)?;
-            writer.write_all(&buffer[..len])?;
+        for region in ram.regions() {
+            for offset in (0..region.size).step_by(CHUNK) {
+                let len = CHUNK.min(region.size - offset);
+                let address = GuestAddress(region.guest_addr + offset as u64);
+                ram.memory()
+                    .read_slice(&mut buffer[..len], address)
+                    .map_err(io::Error::other)?;
+                writer.write_all(&buffer[..len])?;
+            }
         }
         Ok(())
     })

@@ -607,9 +607,9 @@ The handle queues Export to the supervisor. The supervisor queues one capture
 per vCPU; each parked owning thread calls its own `save_state`. Once all replies
 are collected in contiguous ID order, the supervisor calls the host VM's
 `save_state`, encodes the machine state with Postcard, then streams RAM through
-a `BufWriter` in fixed 1 MiB chunks. RAM is not assembled into an image-sized
-buffer. Only one RAM region at GPA 0 is supported; multiple regions and nonzero
-bases are rejected.
+a `BufWriter` in chunks of up to 1 MiB. Export packs nonempty, non-overlapping
+RAM regions in ascending GPA order. The header records their combined byte
+length, and the payload skips address gaps such as the x86 MMIO hole.
 
 The target must not exist. Capture errors happen before file creation; any
 write or final flush failure closes and removes the incomplete target before
@@ -630,13 +630,13 @@ checksum, hash, signature, feature negotiation or compatibility metadata:
 | `16..24` | `u64` RAM byte length |
 | `24..32` | `u64` machine-state byte length, `M` |
 | `32..32+M` | Postcard: vCPU records (ID + `X86VcpuState`), then `X86VmState` |
-| `32+M..` | Raw RAM bytes |
+| `32+M..` | Packed RAM bytes in ascending GPA order |
 
 The internal reader checks the magic, version and header vCPU count (1–64).
 It rejects declared lengths that overflow or extend past the file and caps the
 encoded machine-state buffer at 32 MiB + 64 KiB.
 
-`make test:unit:vmm` covers the container, layout refusal, partial-write/final-flush
+`make test:unit:vmm` covers the container, MMIO-hole packing, partial-write/final-flush
 cleanup and handle admission on every host. Linux x86_64 mock tests exercise
 non-Send CPUs, owning-thread capture, out-of-order replies, platform ordering
 and failures that preserve Paused. The ignored export test needs Linux x86_64

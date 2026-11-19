@@ -224,6 +224,10 @@ impl<H: HostVm> Vm<H> {
         let mut config = config;
         config.validate()?;
         let ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
+        #[cfg(target_arch = "x86_64")]
+        let startup = Startup::Boot(BootRegisters::default());
+        #[cfg(not(target_arch = "x86_64"))]
+        let startup = Startup::Boot(());
         let mut vm = Self::with_ram(
             ram,
             config.vcpu_count,
@@ -231,7 +235,7 @@ impl<H: HostVm> Vm<H> {
             fresh_vm,
             create_workers,
             |chipset, ctx| devices(chipset, ctx, &mut config),
-            Startup::Boot(BootRegisters::default()),
+            startup,
         )?;
         vm.startup = Startup::Boot(boot(&vm.ram, &config)?);
         Ok(vm)

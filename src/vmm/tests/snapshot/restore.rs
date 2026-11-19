@@ -368,8 +368,9 @@ fn invalid_ram_lengths_are_refused_before_creating_a_host_vm() {
         let mut bytes = original.clone();
         bytes[16..24].copy_from_slice(&ram_len.to_le_bytes());
         fs::write(&path, bytes).unwrap();
-        let error = from_path::<Backend>(&path, || panic!("host VM created for RAM size {ram_len}"))
-            .expect_err("invalid RAM length accepted");
+        let error =
+            from_path::<Backend>(&path, || panic!("host VM created for RAM size {ram_len}"))
+                .expect_err("invalid RAM length accepted");
         assert!(
             matches!(error, Error::Snapshot(ref e)
                 if e.kind() == io::ErrorKind::InvalidInput && e.to_string() == reason),

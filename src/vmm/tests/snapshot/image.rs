@@ -43,17 +43,35 @@ fn container_round_trip_streams_across_chunk_boundaries() {
 }
 
 #[test]
-fn multi_region_and_nonzero_base_are_rejected_before_creation() {
+fn container_round_trip_packs_ram_across_the_mmio_hole() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
-    for ranges in [
-        vec![(GuestAddress(0), 4096), (GuestAddress(8192), 4096)],
-        vec![(GuestAddress(4096), 4096)],
-    ] {
-        let ram = GuestRam::new(&ranges).unwrap();
-        assert!(image::write(&path, 1, b"", &ram).is_err());
-        assert!(!path.exists());
+    let low = GuestAddress(0);
+    let high = GuestAddress(4 << 30);
+    let mut low_bytes = [0; 4096];
+    let mut high_bytes = [0; 8192];
+    low_bytes[4095] = 0x35;
+    high_bytes[0] = 0xc7;
+    let ranges = [(low, low_bytes.len()), (high, high_bytes.len())];
+    let regions = [(low, &low_bytes[..]), (high, &high_bytes[..])];
+    let ram = GuestRam::new(&ranges).unwrap();
+    for (start, bytes) in regions {
+        ram.memory().write_slice(bytes, start).unwrap();
     }
+
+    image::write(&path, 1, b"", &ram).unwrap();
+    let mut file = File::open(&path).unwrap();
+    let header = image::Header::read(&mut file).unwrap();
+    assert_eq!(header.ram_len, (low_bytes.len() + high_bytes.len()) as u64);
+
+    let restored = GuestRam::new(&ranges).unwrap();
+    restored.read_image(&mut file).unwrap();
+    for (start, expected) in regions {
+        let mut bytes = vec![0; expected.len()];
+        restored.memory().read_slice(&mut bytes, start).unwrap();
+        assert_eq!(bytes, expected);
+    }
+    assert_eq!(file.read(&mut [0]).unwrap(), 0);
 }
 
 #[test]
