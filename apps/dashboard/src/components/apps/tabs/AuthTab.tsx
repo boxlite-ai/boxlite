@@ -477,7 +477,7 @@ function Methods({ app, status, onSettings }: { app: AppDetail; status: AppAuthS
       title="Sign-in methods"
       actions={
         <>
-          {status.enforced && (
+          {status.enforced && status.loginUrl && (
             <a href={status.loginUrl} target="_blank" rel="noreferrer" className={LINK_BUTTON}>
               Test login <ArrowUpRight className="size-3.5" />
             </a>

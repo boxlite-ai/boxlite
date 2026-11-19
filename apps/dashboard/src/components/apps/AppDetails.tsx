@@ -148,8 +148,9 @@ function AppDetails() {
         title: `Open ${app.name} · ${app.environment} to anyone?`,
         body: (
           <>
-            Anyone with {app.url} can open it without signing in{exposed ? ` (it serves ${exposed.name})` : ''}. Your
-            agent&apos;s later deploys keep this setting until you change it here.
+            Anyone with {app.url ?? "this environment's URL"} can open it without signing in
+            {exposed ? ` (it serves ${exposed.name})` : ''}. Your agent&apos;s later deploys keep this setting until you
+            change it here.
           </>
         ),
         confirmLabel: 'Make public',
@@ -498,7 +499,7 @@ function Header({
           </DropdownMenuContent>
         </DropdownMenu>
         {/* Only a live release can be opened; before that the URL answers "nothing deployed". */}
-        {app.activeRelease && (
+        {app.url && app.activeRelease && (
           <Button
             type="button"
             onClick={() => void openApp(app.id, app.environment)}

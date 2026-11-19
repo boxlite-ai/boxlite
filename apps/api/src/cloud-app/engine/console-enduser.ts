@@ -47,7 +47,7 @@ export interface AuthStatusView {
   /** Sign-in works: [auth] is declared and at least one of its providers is ready. */
   enforced: boolean
   methods: SignInMethodView[]
-  loginUrl: string
+  loginUrl: string | null
   users: number
   note: string | null
   /** The App's SMTP sender for email code sign-in (never the password). */
@@ -90,7 +90,7 @@ function userView(u: UserView): EndUserView {
 
 export const endUserAuth = {
   async authStatus(ctx: Ctx, app: AppRow, env: EnvRow): Promise<AuthStatusView> {
-    const s = await enduser.authStatus(ctx, app, env)
+    const s = await enduser.signInStatus(ctx, app, env)
     const declared = new Map(s.providers.map((p) => [p.name, p.status]))
     const managed = configuredProviders(ctx)
     const methods: SignInMethodView[] = await Promise.all(
@@ -116,7 +116,7 @@ export const endUserAuth = {
       protect: s.protect,
       enforced,
       methods,
-      loginUrl: s.login_url,
+      loginUrl: env.public_url ? enduser.loginUrl(env.public_url) : null,
       users: s.users,
       note: s.enabled && missing.length ? noteFor(missing) : null,
       emailSender: (({ password_set, ...v }) => ({ ...v, passwordSet: password_set }))(

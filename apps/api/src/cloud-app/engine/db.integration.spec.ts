@@ -8,6 +8,7 @@ import { DropAppBoxPointer1794500001000 } from '../../migrations/post-deploy/179
 import Redis from 'ioredis'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CloudAppService } from '../cloud-app.service'
+import { DomainCountLimitReachedError } from '../../box/errors/domain.error'
 
 async function migrateBoxOwnership(runner: QueryRunner, schema: string) {
   await runner.query(`CREATE TABLE ${schema}.box (id text PRIMARY KEY, "organizationId" uuid)`)
@@ -596,5 +597,60 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
     const app = (await store.appByNameAnyState('retention-ended'))!
     await store.run('UPDATE apps SET purge_after = clock_timestamp() WHERE id = ?', app.id)
     expect((await request('/v1/apps/deleted/retention-ended/restore', 'POST')).status).toBe(409)
+  })
+
+  test('reads App projections at full domain quota without allocating missing URLs', async () => {
+    const { createApp } = await import('./services/apps')
+    const assigned = await createApp(context, 'domain-assigned', 'test')
+    const unassigned = await createApp(context, 'domain-unassigned', 'test')
+    const main = (await store.envByName(assigned.id, 'main'))!
+    const draft = (await store.envByName(unassigned.id, 'main'))!
+    const url = 'https://already-assigned.apps.example.test'
+    await store.updateEnv(main.id, { public_url: url })
+    expect((await request('/v1/apps/domain-assigned/environments', 'POST', { name: 'staging' })).status).toBe(201)
+    const allocate = jest.fn(async () => {
+      throw new DomainCountLimitReachedError(1, 1)
+    })
+    const origin = jest.spyOn(context.origins, 'envUrl').mockImplementation(async (env) => {
+      if (env.public_url) return env.public_url
+      return allocate()
+    })
+    try {
+      const listing = await request('/v1/apps')
+      expect(listing.status).toBe(200)
+      expect(await listing.json()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: assigned.name, url: `${url}/` }),
+          expect.objectContaining({ name: unassigned.name, url: null }),
+        ]),
+      )
+      const assignedDetail = await request(`/v1/apps/${assigned.name}/view`)
+      expect(assignedDetail.status).toBe(200)
+      expect(await assignedDetail.json()).toMatchObject({
+        url: `${url}/`,
+        auth: { loginUrl: `${url}/.boxlite/auth/login` },
+      })
+      const unassignedDetail = await request(`/v1/apps/${unassigned.name}/view`)
+      expect(unassignedDetail.status).toBe(200)
+      expect(await unassignedDetail.json()).toMatchObject({ url: null, auth: { loginUrl: null } })
+      const environments = await request(`/v1/apps/${assigned.name}/environments`)
+      expect(environments.status).toBe(200)
+      expect(await environments.json()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'main', url: `${url}/` }),
+          expect.objectContaining({ name: 'staging', url: null }),
+        ]),
+      )
+      expect(allocate).not.toHaveBeenCalled()
+      expect(await context.resources.runtimeEnv(assigned, (await store.envById(main.id))!, undefined)).toMatchObject({
+        BOXLITE_APP_URL: url,
+      })
+      await expect(context.resources.runtimeEnv(unassigned, draft, undefined)).rejects.toBeInstanceOf(
+        DomainCountLimitReachedError,
+      )
+      expect(allocate).toHaveBeenCalledTimes(1)
+    } finally {
+      origin.mockRestore()
+    }
   })
 })

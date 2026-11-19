@@ -130,7 +130,7 @@ export async function summaryView(ctx: Ctx, app: AppRow): Promise<AppSummaryView
     id: app.name,
     name: app.name,
     slug: app.name,
-    url: (await ctx.resources.appUrl(app.name, main.name)) + '/',
+    url: main.public_url ? `${main.public_url}/` : null,
     previewSrc: await (async () => {
       const shot = main.live_deployment ? await previewMeta(ctx, main.id) : null
       return shot
@@ -156,7 +156,7 @@ export async function environmentViews(ctx: Ctx, app: AppRow): Promise<Environme
       return {
         name: env.name,
         status: await envStatus(ctx, env, state.box, state.services),
-        url: (await ctx.resources.appUrl(app.name, env.name)) + '/',
+        url: env.public_url ? `${env.public_url}/` : null,
         box: env.active_box_id,
         lastDeploy: lastDeploy((await ctx.store.deployments(env.id, 1))[0]),
         from: env.from_env,
@@ -335,10 +335,10 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
   }
 
   const platformVariables: { name: string; value: string; kind: string }[] = [
-    { name: 'BOXLITE_APP_URL', value: await ctx.resources.appUrl(app.name, fresh.name), kind: 'App URL' },
     { name: 'BOXLITE_ENV', value: fresh.name, kind: 'Environment' },
     { name: 'BOXLITE_APP', value: app.name, kind: 'App' },
   ]
+  if (fresh.public_url) platformVariables.unshift({ name: 'BOXLITE_APP_URL', value: fresh.public_url, kind: 'App URL' })
   if (database && spec?.database)
     platformVariables.unshift({
       name: 'DATABASE_URL',
@@ -362,7 +362,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
         ? `Deploying #${active.number}${running ? ` · ${running.name}${running.detail ? ` (${running.detail})` : ''}` : ` · ${active.status}`}`
         : null
 
-  await refreshPreviewIfStale(ctx, app, fresh, state.box)
+  if (fresh.public_url) await refreshPreviewIfStale(ctx, app, fresh, state.box)
   const shot = fresh.live_deployment ? await previewMeta(ctx, fresh.id) : null
 
   return {
@@ -370,7 +370,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     appId: app.id,
     name: app.name,
     slug: app.name,
-    url: (await ctx.resources.appUrl(app.name, fresh.name)) + '/',
+    url: fresh.public_url ? `${fresh.public_url}/` : null,
     visibility: await ctx.resources.effectiveAccess(fresh),
     accessSource: fresh.access_override ? 'online' : 'manifest',
     status,
