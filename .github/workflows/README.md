@@ -459,3 +459,14 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 - `NPM_TOKEN` — npm, for the Node packages
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
 - `SLACK_WEBHOOK_URL` — incoming webhook for full release reports and the prod approval link
+
+## Plugin release artifacts
+
+[release-plugins.yml](release-plugins.yml) builds Codex and Claude packages on plugin PRs and publishes GitHub Release assets for `boxlite-plugin-vVERSION` tags.
+Make builders validate the shared version, test package boundaries, run the pinned Claude validator, and produce the plugin, marketplace, review kit and checksum files.
+
+PR builds cannot publish; tagged builds must match the manifest version and remote commit.
+Publication creates a draft, uploads every asset, then publishes without replacing existing versions or the repository's Latest release.
+The [plugin publishing guide](../../scripts/plugins/README.md#publish-versioned-github-releases) covers version updates, downloads and recovery from incomplete drafts.
+
+Run `make test:apps:infra` to exercise the workflow’s version and publication guards with the real package builder.

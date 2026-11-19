@@ -33,6 +33,47 @@ The packager uses an exact inventory, fixed ZIP metadata and ordering, and exclu
 The review kit is a handoff archive, not the ZIP to upload as an OpenAI plugin.
 Claude's directory reads a published GitHub plugin folder; a local marketplace ZIP does not substitute for that repository.
 
+## Publish versioned GitHub Releases
+
+The [Release BoxLite plugin workflow](../../.github/workflows/release-plugins.yml) publishes all five files listed above as GitHub Release assets.
+Its independent tag format is `boxlite-plugin-vVERSION`, for example `boxlite-plugin-v0.2.1`; runtime/SDK tags do not publish plugins.
+PRs only build and validate a preview, using read-only repository permissions.
+
+```text
+plugin version + matching tag -> tests and native validator -> draft with five assets -> published Release
+```
+
+1. Update `plugins/boxlite/plugin.json`, both host manifests, and the `version` in `scripts/plugins/review/{cases,checklist}.json` together.
+2. Update versioned filenames in docs and package tests, then run `make plugin:boxlite:check:cc plugin:boxlite:review-kit`.
+3. Commit the version change and push an unused matching tag to the intended release commit.
+
+For example, after preparing version `0.2.1` at the current commit:
+
+```sh
+git tag boxlite-plugin-v0.2.1
+git push origin boxlite-plugin-v0.2.1
+```
+
+The tag push builds from that commit, installs the pinned Claude validator, validates both host manifests, and verifies archive checksums.
+The publish job rechecks those hashes and the remote tag's commit before uploading; only this job has `contents: write`.
+It uses the repository `GITHUB_TOKEN`, needs no cloud/model credentials, and does not mark the plugin as the repository's Latest release.
+
+Download the ZIPs and checksums from the matching entry in [GitHub Releases](https://github.com/boxlite-ai/boxlite/releases).
+Release assets remain available independently of the seven-day Actions artifact used for job handoff and PR previews.
+Those temporary artifacts include version, run ID and attempt in their names, so reruns cannot overwrite earlier previews.
+
+Existing releases, including drafts, cause publication to fail without replacing their assets.
+If an upload fails, inspect the incomplete draft before explicitly deleting it and retrying; never delete a published version to reuse its number.
+
+After this workflow is present on `main`, a failed tag run can also be retried manually with:
+
+```sh
+gh workflow run release-plugins.yml --ref boxlite-plugin-v0.2.1
+```
+
+A manual run on a branch, or a tag that disagrees with the plugin manifest, fails before publication.
+Publishing these build artifacts does not submit to OpenAI/Claude or complete the private release-readiness checklist.
+
 ## Real acceptance
 
 Start the acceptance process with `BOXLITE_API_KEY` already supplied by a private environment; never pass the value on argv.
