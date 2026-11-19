@@ -410,8 +410,15 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             recoverable,
           }
 
-          // Update box to error state without safeguards
-          await this.boxRepository.updateWhere(boxId, { updateData, whereCondition: {} })
+          try {
+            await this.boxRepository.updateWhere(boxId, {
+              updateData,
+              whereCondition: { state: box.state, desiredState: box.desiredState, pending: box.pending },
+            })
+          } catch (conflict) {
+            if (!(conflict instanceof BoxConflictError)) throw conflict
+            this.logger.debug(`Box ${boxId} changed while synchronizing its desired state`)
+          }
 
           // Break sync loop since box is in error state.
           break

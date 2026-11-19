@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Header } from 'tar'
+import { ForbiddenException } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import {
   WorkerPool,
@@ -348,9 +349,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
   })
   it('commits the real original Box ID with the Box row in the single shared table', async () => {
-    const { host, config, box } = await created()
+    const { host, config, box, row } = await created()
     const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
-    expect(ledger.payload).toEqual({ scope: scopeKey(scope()), box: box.box_id })
+    expect(ledger.payload).toEqual({ scope: scopeKey(scope()), box: box.box_id, creationEffect: row.value.effect!.id })
     expect(await host.get(config.name)).toMatchObject({ box_id: box.box_id, status: 'running' })
     expect(await db.getRepository(Box).count()).toBe(1)
     expect(limits.resolveMaxCreatedBoxes).toHaveBeenCalledWith(org)
@@ -1010,6 +1011,96 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }
     },
   )
+  it.each(['current', 'historical'])(
+    'releases a requested slot after confirmation for its original persisted Box: %s',
+    async (format) => {
+      const { host, config, row } = await prepared()
+      const box = await host.create(config)
+      if (format === 'historical') {
+        const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
+        await store.state.commit(lease, [
+          { key: ledger.key, expected: ledger.version, payload: { scope: scopeKey(scope()), box: box.box_id } },
+        ])
+      }
+      expect((await journal.allocation(lease, row.record.key))!.value.box).toEqual({ phase: 'requested', id: null })
+      await db
+        .getRepository(Box)
+        .update(box.box_id, { state: BoxState.DESTROYED, desiredState: BoxDesiredState.DESTROYED })
+      const capacity = testCapacity({ account: 1, tenant: 1 })
+      const replacement = { repository: 30, run: 40, job: 99 }
+      expect(await journal.reserve(lease, scopeKey(scope()), replacement, capacity)).toBeUndefined()
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const pool = recoveringPool(workers.open(scope(), lease))
+        try {
+          await pool.tick(lease, capacity)
+        } finally {
+          await pool.close()
+        }
+      }
+      expect(await journal.used(org)).toBe(0)
+      expect(await db.getRepository(Box).count()).toBe(1)
+      expect(await journal.reserve(lease, scopeKey(scope()), replacement, capacity)).toBeDefined()
+    },
+  )
+  it('preserves confirmed destruction when a concurrent sync returns an error', async () => {
+    const { box, host } = await deleting()
+    const repository = new BoxRepository(
+      db,
+      { emit: jest.fn() } as never,
+      { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as never,
+    )
+    const locks = { lock: async () => true, unlock: async () => true, getCode: async () => null }
+    const handler = new JobStateHandlerService(repository, locks as never, {} as never, {} as never, {} as never)
+    const jobRows = db.getRepository(Job)
+    const jobs = new JobService(jobRows, { lpush: jest.fn() } as never, handler)
+    const job = await jobs.createJob(null, JobType.DESTROY_BOX, runnerId, ResourceType.BOX, box.box_id)
+    const runners = {
+      findOneOrFail: async () => {
+        await jobRows.save(Object.assign(job, { status: JobStatus.COMPLETED, completedAt: new Date() }))
+        await handler.handleJobCompletion(job)
+        expect(await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).toMatchObject({
+          state: BoxState.DESTROYED,
+        })
+        throw new Error('runner lookup failed')
+      },
+    }
+    const destroy = new BoxDestroyAction(runners as never, {} as never, repository, locks as never)
+    const manager = new BoxManager(
+      repository,
+      runners as never,
+      {} as never,
+      locks as never,
+      {} as never,
+      {} as never,
+      destroy,
+      { reasonFor: async (_box: Box, reason: string) => reason } as never,
+      { get: () => app } as never,
+    )
+    await manager.syncInstanceState(box.box_id)
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYED })
+    const pool = recoveringPool(host)
+    try {
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      expect(await journal.used(org)).toBe(0)
+    } finally {
+      await pool.close()
+    }
+  })
+  it('keeps requested quota when the saved Box belongs to a different creation effect', async () => {
+    const { host, config } = await prepared()
+    const original = await host.create(config)
+    const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
+    await store.state.commit(lease, [
+      {
+        key: ledger.key,
+        expected: ledger.version,
+        payload: { scope: scopeKey(scope()), box: original.box_id, creationEffect: randomUUID() },
+      },
+    ])
+    await db.getRepository(Box).update(original.box_id, { state: BoxState.DESTROYED })
+    await expect(host.get(config.name)).rejects.toBeInstanceOf(ForbiddenException)
+    expect(await journal.used(org)).toBe(1)
+  })
   it.each(['late failure', 'failure before destroying'])(
     'returns the slot only after the original runner completes a replacement destroy job: %s',
     async (scenario) => {
