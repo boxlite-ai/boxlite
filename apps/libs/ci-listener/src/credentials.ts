@@ -23,7 +23,7 @@ export class ListenerCredentials {
   private readonly lease: ExecutionLease
   private readonly held = new Map<string, Entry>()
   private readonly busy = new Map<string, symbol>()
-  private readonly retryAt = new Map<string, number>()
+  private retryAt = new Map<string, number>()
   private closed = false
   constructor(
     private readonly state: Pick<ListenerState, 'commit'>,
@@ -141,6 +141,13 @@ export class ListenerCredentials {
         errors.push(error)
       }
     if (errors.length) throw new AggregateError(errors, 'GitHub credential retirement remains pending')
+  }
+  /** Share captured authority and issuance backoff; handles and purpose locks stay local. */
+  fork(owner: string): ListenerCredentials {
+    if (this.closed) throw new Error('GitHub credential provider is closed')
+    const fork = new ListenerCredentials(this.state, this.lease, owner, this.#source)
+    fork.retryAt = this.retryAt
+    return fork
   }
   private async retire(key: string, expected?: Entry): Promise<void> {
     const entry = this.held.get(key)

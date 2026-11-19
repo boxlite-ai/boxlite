@@ -75,7 +75,7 @@ export class WorkQueue {
             })
             if (error instanceof StateConflict) this.failures.delete(key)
             if (this.failures.size > this.capacity) this.failures.delete(this.failures.keys().next().value!)
-            entry.dirty = false
+            if (!(error instanceof StateConflict)) entry.dirty = false
             try {
               this.report(error)
             } catch (reporting) {

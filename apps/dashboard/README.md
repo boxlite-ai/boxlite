@@ -348,7 +348,7 @@ Both entry points tell the user that connecting or updating a card places a
 temporary $0.50 hold that is released automatically: Welcome below
 **Verify card**, Wallet below the Payment Method panel.
 
-Both pages redeem coupons through `useRedeemCouponMutation`. Success invalidates
+Codes entered independently on either page redeem through `useRedeemCouponMutation`. Success invalidates
 wallet, transactions, invoices, plan, and usage so the next view reflects the
 server's result. Welcome shows the returned message and offers Quickstart;
 Explore with BoxLite is available without a card or coupon.
@@ -359,19 +359,24 @@ Share `https://<console>/redeem?code=CODE` to hand out a coupon. The `/redeem`
 route opens `/dashboard/billing?tab=wallet&code=CODE`. Signed-out visitors sign
 in first, and the sign-in return path keeps the query.
 
-Wallet opens the coupon form with the code filled in and names the organization
-that receives the credits. When the user owns their only organization, the code
-redeems once on landing, with no click. With several organizations, or without
-the owner role, nothing is redeemed until the user clicks Redeem.
+Wallet submits a reward claim when the signed-in user has a verified email and
+owns their only organization. An owner with multiple organizations can switch
+organizations from Wallet and confirm the claim there. The link keeps its coupon
+code across the switch. If Wallet cannot verify membership, use **Retry verification**.
+Codes entered under **Have a coupon code?** redeem independently.
 
-The result also appears as a toast, since the inline note sits low in the panel.
-A successful redeem removes `code` from the URL. A rejected code is tried once
-and stays in the form for another try. With an unverified email, Wallet asks the
-user to verify it first and redeems nothing.
+When Commerce accepts the claim, Wallet clears `code` from the URL and prompts
+the user to add a card. An organization with a card on file can proceed directly
+to processing. Reopening Wallet in the same tab checks pending claims for the
+active account and organization using their original event IDs. Coupon codes
+with different capitalization or surrounding spaces share an event ID.
 
-Coupon limits such as one use per organization, a total cap, and expiry are set
-on the coupon itself. The link carries only the code. In the mock preview
-(`npm run start:mock`), `ACME50` redeems and any other code is rejected.
+An unconfirmed claim can be retried. A rejection at submission keeps the code
+available for another attempt. Once Commerce records a failed or skipped outcome,
+Wallet closes the claim form and shows the failure. For example, a coupon can
+expire or reach its redemption limit while the organization waits to add a card.
+In the mock preview, `ACME50` returns a pending claim and an unknown code returns
+`coupon_not_found`.
 
 ## A choice says what it does, and shows which one is picked
 
