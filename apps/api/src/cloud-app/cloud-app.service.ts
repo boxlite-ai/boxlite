@@ -1,5 +1,6 @@
 import {
   ForbiddenException,
+  ConflictException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -33,6 +34,7 @@ import { safeEqual, sha256hex } from './engine/auth'
 import { serveAppOrigin } from './engine/proxy/app-origin'
 import { handleUpgrade } from './engine/proxy/upgrade'
 import { ensureSqlParser } from './engine/sqlguard'
+import { RedisLockProvider, withRedisLockLease } from '../box/common/redis-lock.provider'
 
 @Injectable()
 export class CloudAppService implements OnModuleInit {
@@ -49,6 +51,7 @@ export class CloudAppService implements OnModuleInit {
     private readonly credentials: CloudAppCredentials,
     private readonly domains: CloudAppDomains,
     private readonly organizations: OrganizationService,
+    private readonly locks: RedisLockProvider,
   ) {}
 
   async onModuleInit() {
@@ -98,6 +101,7 @@ export class CloudAppService implements OnModuleInit {
         domains: this.domains,
         volumes: this.resources.volumesForOrganization(organizationId),
         boxes: this.resources.boxesForOrganization(organizationId),
+        withPurgeLock: (appId, operation) => this.withPurgeLock(appId, operation),
         boxlite: this.resources.forOrganization(organizationId),
         neon,
         appdb,
@@ -142,7 +146,7 @@ export class CloudAppService implements OnModuleInit {
     const permission =
       method === 'GET' || method === 'HEAD'
         ? Permission.READ_APPS
-        : method === 'DELETE' && /^\/apps\/[^/]+\/?$/.test(path)
+        : method === 'DELETE' && /^\/apps\/(?:deleted\/)?[^/]+\/?$/.test(path)
           ? Permission.DELETE_APPS
           : Permission.WRITE_APPS
     const permissions = apiKey
@@ -157,6 +161,12 @@ export class CloudAppService implements OnModuleInit {
       admin: auth.role === SystemRole.ADMIN,
       email: auth.email,
     }
+  }
+
+  async withPurgeLock<T>(appId: string, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const lease = await this.locks.acquireLease(`cloud-app:purge:${appId}`, 60)
+    if (!lease) throw new ConflictException('App cleanup is already in progress')
+    return withRedisLockLease(lease, operation)
   }
 
   async management(request: Request, principal: PlatformPrincipal): Promise<Response> {

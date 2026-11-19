@@ -176,6 +176,10 @@ does not issue a key; credentials are managed on the existing API Keys page.
 | --- | --- | --- |
 | `GET`, `POST` | `/v1/{organizationId}/apps` | List or create Apps in the selected organization. Creation returns the App and an initialization prompt without credentials. |
 | `GET` | `/v1/{organizationId}/apps/{app}/view` | Dashboard projection, including environments, deployment, services, data and configuration. |
+| `DELETE` | `/v1/{organizationId}/apps/{app}` | Soft-delete the App and start its seven-day retention period. |
+| `GET` | `/v1/{organizationId}/apps/deleted` | List retained Apps and their purge dates. |
+| `POST` | `/v1/{organizationId}/apps/deleted/{name}/restore` | Restore a retained App. |
+| `DELETE` | `/v1/{organizationId}/apps/deleted/{name}` | Permanently purge a soft-deleted App in this organization. Requires `delete:apps` and returns `204` when resource cleanup completes. |
 | `GET` | `/v1/{organizationId}/apps/{app}` | CLI status for an explicitly selected App. |
 | `GET` | `/v1/{organizationId}/apps/{app}/handoff` | Initialization instructions without issuing or exposing credentials. |
 | `GET` | `/v1/me` | Organization identity for CLI login and `whoami`; App selection is local to the CLI. |
@@ -190,6 +194,10 @@ does not issue a key; credentials are managed on the existing API Keys page.
 | HTTP | `/internal/apps/sv/v1/...` | Environment-token-authenticated Supervisor callbacks and release data. |
 | HTTP | `/internal/apps/auth/...` | Organization-aware App OAuth flow; independent of the dashboard's OIDC session. |
 | `GET` | `/internal/apps/artifacts/{version}/{file}` | Public CLI, Agent instructions and Supervisor binaries bundled with the API image. |
+
+An early purge closes the restore window before resource cleanup starts. If cleanup
+fails partway through, retry the same request or let the App worker retry on its
+next maintenance pass. The App name stays reserved until cleanup succeeds.
 
 Environment domains are platform Domain resources. Both the default hostname and aliases resolve
 to an environment, which routes through the API to a private Box tunnel. Box creation and volume

@@ -143,6 +143,10 @@ export function cloudAppHandlers() {
         })),
       ),
     ),
+    http.delete(`${base}/deleted/:name`, ({ params }) => {
+      if (!deleted.delete(String(params.name))) return missing()
+      return new HttpResponse(null, { status: 204 })
+    }),
     http.post(base, async ({ request }) => {
       const { name } = (await request.json()) as { name: string }
       const problem = typeof name === 'string' ? nameProblem(name) : 'An App name is required.'

@@ -69,12 +69,37 @@ describe('Apps mock preview', () => {
     expect(afterRestore.some((app) => app.name === starter.name)).toBe(false)
   })
 
-  it('returns not found when deleting or restoring a missing App', async () => {
+  it('permanently deletes a soft-deleted App, releases its name and prevents restoration', async () => {
+    const name = 'preview-purged'
+    await client.post('/apps', { name })
+    await client.delete(`/apps/${name}`)
+
+    const purged = await client.delete(`/apps/deleted/${name}`)
+    expect(purged.status).toBe(204)
+    const { data: deleted } = await client.get<DeletedApp[]>('/apps/deleted')
+    expect(deleted.some((app) => app.name === name)).toBe(false)
+    await expect(client.get(`/apps/${name}/view`)).rejects.toMatchObject({ cause: { response: { status: 404 } } })
+    await expect(client.post(`/apps/deleted/${name}/restore`)).rejects.toMatchObject({
+      cause: { response: { status: 404 } },
+    })
+    await expect(client.delete(`/apps/deleted/${name}`)).rejects.toMatchObject({
+      cause: { response: { status: 404 } },
+    })
+
+    const { data: recreated } = await client.post<CreatedApp>('/apps', { name })
+    expect(recreated.app).toMatchObject({ name, status: 'draft' })
+  })
+
+  it('returns not found for missing Apps and permanent deletion of live Apps', async () => {
     for (const request of [
       () => client.delete('/apps/absent-preview-app'),
       () => client.post('/apps/deleted/absent-preview-app/restore'),
+      () => client.delete('/apps/deleted/absent-preview-app'),
+      () => client.delete('/apps/deleted/demo-shop'),
     ]) {
       await expect(request()).rejects.toMatchObject({ cause: { response: { status: 404 } } })
     }
+    const { data: live } = await client.get<AppDetail>('/apps/demo-shop/view')
+    expect(live.status).toBe('live')
   })
 })

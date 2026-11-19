@@ -3,7 +3,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { FlatButton, TEXT_INPUT, DIALOG_FRAME } from './spec'
 import { cn } from '@/lib/utils'
@@ -49,7 +56,9 @@ export function useConfirm(): [(options: ConfirmOptions) => Promise<boolean>, Re
           <DialogHeader>
             <DialogTitle className="font-display text-section font-semibold">{options.title}</DialogTitle>
           </DialogHeader>
-          <div className="text-body leading-[1.6] text-muted-foreground">{options.body}</div>
+          <DialogDescription asChild>
+            <div className="text-body leading-[1.6] text-muted-foreground">{options.body}</div>
+          </DialogDescription>
           {options.typeToConfirm && (
             <label className="flex flex-col gap-2">
               <span className="text-body text-muted-foreground">
