@@ -12,7 +12,7 @@
  * release or a version bump from replacing a machine with running boxes on it,
  * and `protect` refuses a delete outright. The version bump still has to reach
  * the fleet, and it does: `UpgradeRunnerBinary*` below replaces the binary in
- * place over SSM, one host at a time, as part of the same deploy. See
+ * place over SSM, canary first and then in bounded batches. See
  * `stack/runner-upgrade.ts` — "installed at boot" would mean "never" for a host
  * whose boot script is ignored and which is never replaced.
  *
@@ -31,6 +31,7 @@
  * records why it was accepted rather than leaving it to look like a slip.
  */
 
+import { awsDataDiskEnvironment, awsDataDiskSetup } from './data-disk.ts'
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
 import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE } from '../../runners.ts'
@@ -102,6 +103,9 @@ export const awsRunnerProvider =
   ({
     placement,
     region,
+    accountId,
+    volumePrefix = 'boxlite-volume',
+    stateBucket,
     artifactsBucket,
     adminApiKey,
     regionId,
@@ -109,8 +113,11 @@ export const awsRunnerProvider =
   }: {
     placement: Extract<Placement, { cloud: 'aws' }>
     region: string
+    accountId: string
+    volumePrefix?: string
     /** Where a build-mode binary is staged. Read-only, and only under `runner/`. */
     artifactsBucket: string
+    stateBucket: string
     /** What registers the hosts the API does not seed. See `runner-registration.ts`. */
     adminApiKey: $util.Input<string>
     /** The region those rows go in — the same one the API seeded its own into. */
@@ -118,9 +125,6 @@ export const awsRunnerProvider =
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
-    if (request.dataDiskGb !== undefined) {
-      throw new Error('AWS runners do not support dataDiskGb; configure rootDiskGb instead')
-    }
     if (placement.exposure !== 'egress-only-public') {
       throw new Error(
         `The runner was placed as ${placement.exposure}; it pulls box images constantly and must ` +
@@ -151,11 +155,11 @@ export const awsRunnerProvider =
       policy: JSON.stringify({
         Version: '2012-10-17',
         Statement: [
-          { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: ['arn:aws:s3:::boxlite-volume-*'] },
+          { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: [`arn:aws:s3:::${volumePrefix}-*`] },
           {
             Effect: 'Allow',
             Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
-            Resource: ['arn:aws:s3:::boxlite-volume-*/*'],
+            Resource: [`arn:aws:s3:::${volumePrefix}-*/*`],
           },
         ],
       }),
@@ -166,9 +170,51 @@ export const awsRunnerProvider =
       role: role.name,
       policy: JSON.stringify({
         Version: '2012-10-17',
-        Statement: [{ Effect: 'Allow', Action: ['s3:GetObject'], Resource: `arn:aws:s3:::${artifactsBucket}/runner/*` }],
+        Statement: [
+          { Effect: 'Allow', Action: ['s3:GetObject'], Resource: `arn:aws:s3:::${artifactsBucket}/runner/*` },
+        ],
       }),
     })
+
+    const checkpointPolicy = request.checkpointBucket
+      ? new aws.iam.RolePolicy('RunnerCheckpoints', {
+          role: role.name,
+          policy: $resolve([request.checkpointBucket, request.migrationArchivePrefix ?? 'box-migrations']).apply(
+            ([bucket, configured]) => {
+              const path = configured.trim().replace(/\/+$/, '') || 'box-migrations'
+              const qualified = path.startsWith('s3://')
+              const segments = (qualified ? path.slice(5) : path).split('/')
+              if (!segments.every((segment: string) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment)))
+                throw new Error('Invalid BOX_MIGRATION_ARCHIVE_PREFIX for the Runner archive grant')
+              const archiveBucket = qualified ? segments.shift()! : bucket
+              // An externally owned bucket needs a separately authorized role/bucket policy.
+              const paths = new Set(['checkpoints/*', 'box-migrations/*'])
+              if (archiveBucket === bucket) paths.add([...segments, '*'].join('/'))
+              return JSON.stringify({
+                Version: '2012-10-17',
+                Statement: [
+                  {
+                    Effect: 'Allow',
+                    Action: ['s3:GetBucketLocation', 's3:ListBucket', 's3:ListBucketMultipartUploads'],
+                    Resource: 'arn:aws:s3:::' + bucket,
+                  },
+                  {
+                    Effect: 'Allow',
+                    Action: [
+                      's3:GetObject',
+                      's3:PutObject',
+                      's3:DeleteObject',
+                      's3:AbortMultipartUpload',
+                      's3:ListMultipartUploadParts',
+                    ],
+                    Resource: [...paths].map((key) => `arn:aws:s3:::${bucket}/${key}`),
+                  },
+                ],
+              })
+            },
+          ),
+        })
+      : undefined
 
     const secretNames = Object.keys(request.secrets)
     const secretPolicy =
@@ -216,7 +262,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
       // Nothing: nested virtualization is an instance attribute on this cloud,
       // and the guest's own /dev/kvm is present as soon as it is set.
       prepareKvm: '',
-      // Nothing: box state stays on the root volume, which `rootDiskGb` sizes.
+      // Each host supplies its assigned data volume after the fleet is allocated below.
       prepareHome: '',
       startWrapper: startWrapper(secretNames, region),
       unitEnvironment: { AWS_REGION: region },
@@ -224,8 +270,30 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
 
     const assignments = request.fleet
 
+    const zone = aws.ec2.getSubnetOutput({ id: placement.subnets[0] }).availabilityZone
+    const disks = assignments.map(
+      ({ slot }) =>
+        new aws.ebs.Volume(
+          slot.resourceName + 'DataDisk',
+          {
+            availabilityZone: zone,
+            type: 'gp3',
+            size: request.dataDiskGb ?? 200,
+            encrypted: true,
+            tags: {
+              Name: slot.nameTag + '-data',
+              'boxlite:app': $app.name,
+              'boxlite:stage': $app.stage,
+              'boxlite:role': 'runner-data',
+              'boxlite:control-plane-runner-name': slot.controlPlaneRunnerName,
+            },
+          },
+          { protect: true, retainOnDelete: true, ignoreChanges: ['size', 'iops', 'throughput'] },
+        ),
+    )
+
     const instances = assignments.map(
-      ({ slot, token }) =>
+      ({ slot, token }, index) =>
         new aws.ec2.Instance(
           slot.resourceName,
           {
@@ -253,43 +321,66 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
               $resolve(Object.values(request.environment)),
               $resolve(Object.values(request.secrets)),
               token,
-            ]).apply(([apiUrl, otlpUrl, resolved, addresses, hostToken]) =>
-              renderRunnerBoot({
-                apiUrl: apiUrl as string,
-                otlpUrl: otlpUrl as string,
-                // Plain strings: the binary comes from the checkout, not from
-                // another resource, so there is nothing here to resolve.
-                binary: request.binary,
-                region,
-                port: RUNNER_PORT,
-                environment: {
-                  ...Object.fromEntries(
-                    Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
-                  ),
-                  // Which host this is, as the control plane knows it.
-                  BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
-                  // The wrapper reads each secret's address from here.
-                  ...Object.fromEntries(
-                    secretNames.map((name, index) => [`${name}_ARN`, String((addresses as string[])[index])]),
-                  ),
-                  // Last, so this host's own token wins over the fleet-wide one
-                  // the store delivered. Every host but the first has its own.
-                  [RUNNER_TOKEN_VARIABLE]: hostToken as string,
-                },
-                platform,
-              }),
+              request.registryProxyHost ?? '',
+              request.checkpointBucket ?? '',
+              disks[index].id,
+              zone,
+            ]).apply(
+              ([apiUrl, otlpUrl, resolved, addresses, hostToken, proxyHost, checkpointBucket, volumeId, diskZone]) =>
+                renderRunnerBoot({
+                  apiUrl: apiUrl as string,
+                  otlpUrl: otlpUrl as string,
+                  // Plain strings: the binary comes from the checkout, not from
+                  // another resource, so there is nothing here to resolve.
+                  binary: request.binary,
+                  region,
+                  port: RUNNER_PORT,
+                  environment: {
+                    ...Object.fromEntries(
+                      Object.keys(request.environment).map((name, index) => [
+                        name,
+                        String((resolved as string[])[index]),
+                      ]),
+                    ),
+                    // Which host this is, as the control plane knows it.
+                    BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
+                    // The wrapper reads each secret's address from here.
+                    ...Object.fromEntries(
+                      secretNames.map((name, index) => [`${name}_ARN`, String((addresses as string[])[index])]),
+                    ),
+                    // Last, so this host's own token wins over the fleet-wide one
+                    // the store delivered. Every host but the first has its own.
+                    [RUNNER_TOKEN_VARIABLE]: hostToken as string,
+                  },
+                  platform: {
+                    ...platform,
+                    prepareHome: awsDataDiskSetup({ volumeId }),
+                    unitEnvironment: {
+                      ...platform.unitEnvironment,
+                      VOLUME_STORAGE_BACKEND: 's3',
+                      ...awsDataDiskEnvironment({ accountId, zone: diskZone, volumeId }),
+                      ...(proxyHost ? { REGISTRY_PROXY_HOST: proxyHost } : {}),
+                      ...(checkpointBucket ? { AWS_DEFAULT_BUCKET: checkpointBucket } : {}),
+                    },
+                  },
+                }),
             ),
             rootBlockDevice: { volumeSize: request.rootDiskGb, encrypted: true },
             tags: { Name: slot.nameTag, 'boxlite:control-plane-runner-name': slot.controlPlaneRunnerName },
           },
           {
             // See the note at the top: a host holds state nothing else does.
-            ignoreChanges: ['ami', 'userDataBase64'],
+            ignoreChanges: ['ami', 'instanceType', 'rootBlockDevice', 'userDataBase64', 'ebsBlockDevices'],
             protect: true,
             // The boot script reads the staged artifact with this role, and it
             // only ever runs once. Without the edge the host may be created
             // first and fail permanently.
-            dependsOn: [artifactPolicy, ...(secretPolicy ? [secretPolicy] : []), ...dependsOn],
+            dependsOn: [
+              artifactPolicy,
+              ...(checkpointPolicy ? [checkpointPolicy] : []),
+              ...(secretPolicy ? [secretPolicy] : []),
+              ...dependsOn,
+            ],
           },
         ),
     )
@@ -302,52 +393,99 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
      * that already exists. These land it in place, over SSM — see
      * `stack/runner-upgrade.ts` for what the payload does and why.
      *
-     * One command per host, chained: the dependency graph is what keeps two
-     * hosts from restarting at once, and a failure stops the chain with the
-     * unvisited hosts still serving the old binary. Each waits on its own
-     * instance because a host that does not exist has nothing to upgrade.
+     * All hosts pass readiness before the canary runs. Each later batch waits
+     * for its predecessor; failure leaves unvisited hosts on their current
+     * binary. Data attachments are ready before the first preflight.
      */
-    let previousUpgrade: any
+    const attachments = instances.map(
+      (instance, index) =>
+        new aws.ec2.VolumeAttachment(
+          assignments[index].slot.resourceName + 'DataAttachment',
+          {
+            deviceName: '/dev/sdf',
+            instanceId: instance.id,
+            volumeId: disks[index].id,
+            skipDestroy: true,
+          },
+          { protect: true, retainOnDelete: true },
+        ),
+    )
+    const checkPayload = Buffer.from(
+      `set -euo pipefail
+for attempt in {1..240}; do
+  if systemctl is-active --quiet boxlite-runner && curl -fsS --max-time 3 http://127.0.0.1:${RUNNER_PORT}/ >/dev/null; then exit 0; fi
+  sleep 5
+done
+echo 'FATAL: Runner was not ready before rollout' >&2
+exit 1
+`,
+    ).toString('base64')
+    const checks = instances.map(
+      (instance, index) =>
+        new command.local.Command(
+          assignments[index].slot.resourceName.replace(/^Runner/, 'CheckRunnerHealth'),
+          {
+            dir: upgradeDir(),
+            create: UPGRADE_RUNNER_COMMAND,
+            update: UPGRADE_RUNNER_COMMAND,
+            environment: {
+              RUNNER_UPGRADE_CLOUD: 'aws',
+              RUNNER_UPGRADE_TARGET: instance.id,
+              RUNNER_UPGRADE_LABEL: assignments[index].slot.controlPlaneRunnerName,
+              RUNNER_UPGRADE_IDENTITY: request.binary.identity,
+              RUNNER_UPGRADE_PAYLOAD: checkPayload,
+              AWS_REGION: region,
+            },
+            triggers: [
+              upgradeTrigger({ identity: request.binary.identity, binary: request.binary }),
+              request.apiUrl,
+              request.otlpUrl,
+              request.registryProxyHost ?? '',
+              request.environment.BOXLITE_RUNNER_ENV ?? '',
+            ],
+          },
+          { dependsOn: [...instances, ...attachments, ...dependsOn] },
+        ),
+    )
+    const batchSize = Math.min(4, Math.max(1, Math.floor(instances.length / 4)))
+    let prior: CloudResource[] = checks
+    let batch: CloudResource[] = []
+    const upgrades: CloudResource[] = []
     for (const [index, instance] of instances.entries()) {
       const { slot } = assignments[index]
-      /*
-       * The binary and the unit environment, in one command.
-       *
-       * `userDataBase64` is ignored after first boot, so `/etc/boxlite/runner.env`
-       * is as unreachable to a deploy as the binary is — a stage that moves its
-       * domain leaves every host calling a name that no longer resolves, and
-       * the host is then unreachable from the control plane and cannot be told.
-       * GCP converges it through a second resource in the one policy
-       * assignment; here the transport carries a script, so both halves ride
-       * the same one and a host takes one turn rather than two.
-       *
-       * No backend: these hosts mount with mount-s3 and their boot script
-       * writes no `VOLUME_STORAGE_BACKEND`, so enforcing one would leave every
-       * one of them disagreeing with itself forever.
-       *
-       * Both addresses are Outputs, so the payload is one too — and resolved
-       * rather than cast, because an unresolved one renders as Pulumi's
-       * `[toString]` refusal text and the fleet is converged onto that.
-       */
-      const payload = $resolve([request.apiUrl, request.otlpUrl, request.environment.BOXLITE_RUNNER_ENV ?? '']).apply(
-        ([apiUrl, otlpUrl, runnerEnv]) =>
-          encodeUpgradePayload({
-            identity: request.binary.identity,
-            binary: request.binary,
-            port: RUNNER_PORT,
-            // Only a build-mode binary needs it, and only because it is read from
-            // S3 with the host's own role rather than fetched publicly.
-            region,
-            apiUrl: apiUrl as string,
-            otlpUrl: otlpUrl as string,
-            runnerEnv: runnerEnv as string,
-          }),
+      if (index === 1 || (index > 1 && (index - 1) % batchSize === 0)) {
+        prior = batch
+        batch = []
+      }
+      const payload = $resolve([
+        request.apiUrl,
+        request.otlpUrl,
+        request.environment.BOXLITE_RUNNER_ENV ?? '',
+        request.registryProxyHost ?? '',
+        request.checkpointBucket ?? '',
+        disks[index].id,
+        zone,
+      ]).apply(([apiUrl, otlpUrl, runnerEnv, registryProxyHost, checkpointBucket, volumeId, diskZone]) =>
+        encodeUpgradePayload({
+          identity: request.binary.identity,
+          binary: request.binary,
+          port: RUNNER_PORT,
+          region,
+          apiUrl,
+          otlpUrl,
+          runnerEnv,
+          volumeBackend: 's3',
+          registryProxyHost: registryProxyHost || null,
+          deploymentEnvironment: {
+            ...awsDataDiskEnvironment({ accountId, zone: diskZone, volumeId }),
+            ...(checkpointBucket ? { AWS_DEFAULT_BUCKET: checkpointBucket } : {}),
+          },
+          observeSeconds: index === 0 ? 300 : 0,
+        }),
       )
-      previousUpgrade = new command.local.Command(
+      const upgrade = new command.local.Command(
         upgradeResourceName(slot),
         {
-          // See `runner-registration.ts`: a local command runs from the
-          // engine's own cwd, and `$cli` is a name only SST defines.
           dir: upgradeDir(),
           create: UPGRADE_RUNNER_COMMAND,
           update: UPGRADE_RUNNER_COMMAND,
@@ -355,38 +493,27 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
             RUNNER_UPGRADE_CLOUD: 'aws',
             RUNNER_UPGRADE_TARGET: instance.id,
             RUNNER_UPGRADE_LABEL: slot.controlPlaneRunnerName,
+            RUNNER_UPGRADE_APP: $app.name,
+            RUNNER_UPGRADE_STAGE: $app.stage,
+            RUNNER_UPGRADE_STATE_BUCKET: stateBucket,
             RUNNER_UPGRADE_IDENTITY: request.binary.identity,
             RUNNER_UPGRADE_PAYLOAD: payload,
             AWS_REGION: region,
           },
-          /*
-           * The identity, the address it came from, and the host.
-           *
-           * `triggers` replaces the command rather than updating it, which is
-           * why `create` and `update` run the same script. What is deliberately
-           * not in there is a digest: the stack never reads one — the host does,
-           * from the manifest beside the tarball — so a republished asset under
-           * one version is a change this cannot see. `runner-binary.ts` records
-           * that as the cost of resolving from the checkout.
-           *
-           * Narrow on purpose either way: a payload that re-ran on every deploy
-           * would restart a converged fleet for nothing.
-           */
-          /*
-           * Both addresses are in here as well as in the payload: they are the
-           * inputs that change when a stage moves its domain or gains a
-           * collector, which is exactly what the unit-environment half exists
-           * for. Without them that half would be rendered and never sent.
-           */
           triggers: [
             upgradeTrigger({ identity: request.binary.identity, binary: request.binary }),
             instance.id,
             request.apiUrl,
             request.otlpUrl,
+            request.registryProxyHost ?? '',
+            request.checkpointBucket ?? '',
+            disks[index].id,
           ],
         },
-        { dependsOn: [instance, ...(previousUpgrade ? [previousUpgrade] : [])] },
+        { dependsOn: [instance, ...prior] },
       )
+      batch.push(upgrade)
+      upgrades.push(upgrade)
     }
 
     /*
@@ -407,8 +534,8 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
         'RegisterExtraRunners',
         {
           // A local command runs from the engine's own cwd, so the directory
-          // has to be given. Derived rather than read from `$cli`, which only
-          // SST defines — see `runner-registration.ts`.
+          // has to be given. Derive it from this module's location so the
+          // entrypoint's working directory does not affect registration.
           dir: registrationDir(),
           create: REGISTER_RUNNERS_COMMAND,
           update: REGISTER_RUNNERS_COMMAND,
@@ -425,10 +552,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           // Every input that changes the answer, and nothing secret: the
           // payload carries the tokens, so it is named here by the ids of the
           // resources that mint them rather than by its own value.
-          triggers: [
-            request.apiUrl,
-            extras.map((extra) => extra.slot.controlPlaneRunnerName).join(','),
-          ],
+          triggers: [request.apiUrl, extras.map((extra) => extra.slot.controlPlaneRunnerName).join(',')],
         },
         // After the hosts exist and after the API answers: the script waits on
         // /api/health, but a row created before its host is a row nothing holds.
@@ -436,5 +560,5 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
       )
     }
 
-    return { ids: instances.map((instance) => instance.id), ready: instances }
+    return { ids: instances.map((instance) => instance.id), ready: [...instances, ...attachments, ...upgrades] }
   }

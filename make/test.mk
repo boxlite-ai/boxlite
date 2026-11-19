@@ -730,6 +730,12 @@ test\:apps\:infra\:auth0: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:tooling
 	@cd apps/infra && node --import tsx --test bootstrap/auth0*.test.ts bootstrap/configure-auth0-login.test.ts
 
+# AWS prerequisite and retained-wrapper contracts, independent of Linux-only cleanup fixtures.
+PHONY_TARGETS += test\:apps\:infra\:aws
+test\:apps\:infra\:aws: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:tooling
+	@cd apps/infra && npm exec -- tsx --conditions=development --test bootstrap/aws*.test.ts deployment/pulumi-logs.test.ts deployment/release-safety.test.ts
+
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy
@@ -775,6 +781,10 @@ test\:integration\:runner: dev\:go
 
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:apps\:image-service
+test\:apps\:image-service:
+	@cd apps/image-service && go test ./... $(GOTEST_FILTER)
 
 PHONY_TARGETS += test\:apps\:secret-server
 test\:apps\:secret-server:

@@ -1,15 +1,6 @@
-/*
- * CloudWatch alarms, on metrics the workloads already emit.
- *
- * Two of the three read a load balancer's own metrics, which exist whether or
- * not the application cooperates — that is the point of choosing them. The
- * third reads a counter the API embeds in its log lines, which is the only way
- * to ask a question about a runner from outside the runner.
- *
- * `treatMissingData: 'notBreaching'` on all three. A metric that stops
- * reporting is not the same as a metric over its threshold, and an alarm that
- * fires on silence fires every time a stage is quiet — which is how a page
- * stops being read.
+/**
+ * Load-balancer signals come from AWS; application signals are extracted from
+ * the API's raw JSON logs. Each app/stage has its own metric namespace.
  */
 
 import type { AlarmProvider, AlarmRequest, AlarmSubjects, AlarmThreshold } from '../../alarms.ts'
@@ -17,8 +8,8 @@ import type { AlarmProvider, AlarmRequest, AlarmSubjects, AlarmThreshold } from 
 /** The default window: one minute, which is the finest a standard metric is published at. */
 const DEFAULT_PERIOD_SECONDS = 60
 
-/** The namespace the API's embedded metrics land in. */
-const APPLICATION_NAMESPACE = 'BoxLite'
+/** App/stage isolation for metrics extracted from API log events. */
+const applicationNamespace = () => `BoxLite/${$app.name}/${$app.stage}`
 
 const alarm = (
   name: string,
@@ -39,6 +30,22 @@ const alarm = (
 export const awsAlarmProvider =
   ({ subjects }: { subjects: AlarmSubjects }): AlarmProvider =>
   (request: AlarmRequest): void => {
+    if (!subjects.api.metricLogGroup) throw new Error('AWS application alarms require the API CloudWatch log group')
+    const signals = [
+      ['RunnerUnreachable', '{ $.event = "runner.unreachable" }'],
+      ['RunnerDiskExpansionFailing', `{ $.['event.name'] = "runner.disk_expansion" && $.level >= 50 }`],
+      [
+        'RunnerDiskPressureCritical',
+        `{ $.['event.name'] = "runner.disk_pressure" && $.['disk.pressure_level'] = "critical" }`,
+      ],
+    ]
+    for (const [name, pattern] of signals)
+      new aws.cloudwatch.LogMetricFilter(name + 'Metric', {
+        logGroupName: subjects.api.metricLogGroup,
+        pattern,
+        metricTransformation: { name, namespace: applicationNamespace(), value: '1', defaultValue: '0', unit: 'Count' },
+      })
+
     alarm('ApiServerErrorAlarm', request.apiServerErrors, {
       namespace: 'AWS/ApplicationELB',
       metricName: 'HTTPCode_Target_5XX_Count',
@@ -59,14 +66,14 @@ export const awsAlarmProvider =
     })
 
     alarm('RunnerUnreachableAlarm', request.runnersUnreachable, {
-      namespace: APPLICATION_NAMESPACE,
+      namespace: applicationNamespace(),
       metricName: 'RunnerUnreachable',
       statistic: 'Maximum',
       alarmDescription: 'A registered runner has stopped answering the control plane',
     })
 
     /*
-     * Both disk alarms read counters the control plane embeds in its own log
+     * Both disk alarms read metrics extracted from control-plane log
      * lines (`RunnerUnreachable`'s shape, and for the same reason): expansion
      * failures and critical pressure happen on hosts the alarms cannot reach,
      * so the API that hears about them is what publishes them. The metrics
@@ -77,7 +84,7 @@ export const awsAlarmProvider =
       'RunnerDiskExpansionFailingAlarm',
       request.runnersDiskExpansionFailing,
       {
-        namespace: APPLICATION_NAMESPACE,
+        namespace: applicationNamespace(),
         metricName: 'RunnerDiskExpansionFailing',
         statistic: 'Sum',
         alarmDescription: 'Runner data-disk expansions are failing',
@@ -93,7 +100,7 @@ export const awsAlarmProvider =
     )
 
     alarm('RunnerDiskPressureCriticalAlarm', request.runnersDiskPressureCritical, {
-      namespace: APPLICATION_NAMESPACE,
+      namespace: applicationNamespace(),
       metricName: 'RunnerDiskPressureCritical',
       statistic: 'Sum',
       alarmDescription: 'A runner is at critical data-disk usage',

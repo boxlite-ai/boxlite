@@ -150,10 +150,9 @@ const parseTokens = (argv: string[], extra: ExtraOptions): Invocation => {
   return { module: moduleName, command: command ?? null, options, positionals, inner }
 }
 
-const assertNoSwallowedOptions = (environment: NodeJS.ProcessEnv, options: Options): void => {
-  const swallowed = OPTION_NAMES.filter(
-    (name) => environment[npmConfigVariable(name)] !== undefined && !(name in options),
-  )
+const assertNoSwallowedOptions = (environment: NodeJS.ProcessEnv, options: Options, extra: ExtraOptions): void => {
+  const names = [...OPTION_NAMES, ...(extra.flags ?? []), ...(extra.values ?? [])]
+  const swallowed = names.filter((name) => environment[npmConfigVariable(name)] !== undefined && !(name in options))
   if (swallowed.length === 0) return
   const written = swallowed.map((name) => `--${name}`).join(' ')
   throw new InvocationError(
@@ -171,9 +170,9 @@ export const parseInvocation = (
   try {
     parsed = parseTokens(argv, extra)
   } catch (error) {
-    assertNoSwallowedOptions(environment, {})
+    assertNoSwallowedOptions(environment, {}, extra)
     throw error
   }
-  assertNoSwallowedOptions(environment, parsed.options)
+  assertNoSwallowedOptions(environment, parsed.options, extra)
   return parsed
 }

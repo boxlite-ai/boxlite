@@ -54,12 +54,13 @@ mstage does not build artifacts or declare resources. Those belong to
 
 | Home | Bootstrap record                  | Encrypted values                | Encryption key                                   |
 | ---- | --------------------------------- | ------------------------------- | ------------------------------------------------ |
-| AWS  | SSM `/sst/bootstrap`              | S3 `secret/<app>/<stage>.json`  | SSM `/sst/passphrase/<app>/<stage>`              |
+| AWS  | SSM `/boxlite/pulumi/bootstrap`              | S3 `secret/<app>/<stage>.json`  | SSM `/boxlite/pulumi/passphrase/<app>/<stage>`              |
 | GCP  | Secret Manager `mstage-bootstrap` | GCS `secret/<app>/<stage>.json` | Secret Manager `mstage-passphrase-<app>-<stage>` |
 
 Both backends use AES-256-GCM. Bootstrap must establish the bucket and key first.
 A shared storage format does not migrate cloud resources or rewrite cloud-specific values.
-The store is one object: serialize writers to avoid lost updates. SST `_fallback` values are not merged.
+
+AWS writes the stage configuration using the S3 object revision and retries conflicting edits.
 
 ```bash
 npm run mstage env list -- --stage dev
@@ -96,8 +97,9 @@ Consumers must explicitly deliver references through their platform's secret mec
 Supported address shapes are `{"address":"arn:aws:ssm:REGION:ACCOUNT:parameter/NAME"}`,
 `{"address":"arn:aws:secretsmanager:REGION:ACCOUNT:secret:NAME"}`, or
 `{"address":"projects/PROJECT/secrets/NAME"}`. The stage's home determines the accepted cloud.
-GCP addresses may include `/versions/<version>`. Write with `--json`; plaintext
-where an address belongs is refused.
+GCP addresses may include `/versions/<version>`. Write references with `--json`.
+
+For native AWS deployments, ECS supports both address types. Runner hosts and managed ClickHouse need complete stage-owned Secrets Manager ARNs. See [AWS workload paths](../docs/aws/deployment.md#bootstrap-and-preview).
 
 Creating the secret and granting runtime read access remain the owner's responsibility.
 The base catalog declares hosted CI credentials as optional references consumed only
@@ -144,7 +146,7 @@ Protected-stage recovery requires `--confirm`.
 
 | Home | Checkpoint                          | Lock                               |
 | ---- | ----------------------------------- | ---------------------------------- |
-| AWS  | `app/<app>/<stage>.json`            | `lock/<app>/<stage>.json`          |
+| AWS  | `.pulumi/stacks/<app>/<stage>.json`            | `.pulumi/locks/organization/<app>/<stage>/`          |
 | GCP  | `.pulumi/stacks/<app>/<stage>.json` | Pulumi lock objects for that stack |
 
 `unlock` reports the holder and rechecks before deleting. `edit` refuses a held lock, malformed

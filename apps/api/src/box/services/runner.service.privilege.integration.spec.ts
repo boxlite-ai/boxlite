@@ -97,6 +97,35 @@ describeIfDatabase('RunnerService privilege capability (integration, real Postgr
     return runners.save(runner)
   }
 
+  it('keeps a concurrent heartbeat and reports a sustained v2 outage across health checks', async () => {
+    const health = service as any
+    const start = health.serviceStartTime
+    const warn = jest.spyOn(health.logger, 'warn')
+    try {
+      health.serviceStartTime = new Date(Date.now() - 180_000)
+      const runner = await readyRunner('health-race')
+      const stale = new Date(Date.now() - 90_000)
+      await runners.update(runner.id, { lastChecked: stale })
+      const observed = await runners.findOneByOrFail({ id: runner.id })
+      await runners.update(runner.id, { lastChecked: new Date() })
+      await health.checkRunnerV2Health(observed)
+      expect((await runners.findOneByOrFail({ id: runner.id })).state).toBe(RunnerState.READY)
+      expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'runner.unreachable' }))
+
+      await runners.update(runner.id, { lastChecked: stale })
+      await health.handleCheckRunners()
+      expect((await runners.findOneByOrFail({ id: runner.id })).state).toBe(RunnerState.UNRESPONSIVE)
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'runner.unreachable', runnerId: runner.id }))
+      warn.mockClear()
+      await health.handleCheckRunners()
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'runner.unreachable', source: 'stale-heartbeat' }),
+      )
+    } finally {
+      health.serviceStartTime = start
+    }
+  })
+
   it('selects reported support for privileged requests and keeps ordinary candidates', async () => {
     const legacy = await readyRunner('legacy')
     const unsupported = await readyRunner('unsupported', false)

@@ -33,7 +33,7 @@ type Config struct {
 	// from: gcp for Secret Manager, file for SecretDir on a local stack. The
 	// API writes them under the same two names. Unset leaves every pull
 	// anonymous.
-	SecretStore string `envconfig:"REGISTRY_SECRET_STORE" validate:"omitempty,oneof=gcp file"`
+	SecretStore string `envconfig:"REGISTRY_SECRET_STORE" validate:"omitempty,oneof=gcp aws file"`
 	SecretDir   string `envconfig:"REGISTRY_SECRET_DIR" validate:"required_if=SecretStore file"`
 	// CredentialTTL is how long a verified caller is taken on trust before the
 	// control plane is asked again. It is the delay between revoking a runner

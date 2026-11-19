@@ -6,22 +6,22 @@
 /**
  * Identifies the cloud data disk backing a runner's `BOXLITE_HOME` filesystem,
  * as reported by the runner itself in each healthcheck. Only runners whose
- * infrastructure provisions such a disk (GCP Hyperdisk today) send one; the
+ * infrastructure provisions such a disk send one; the
  * column is refreshed on every heartbeat that carries it and never nulled, so
  * an older runner binary must not wipe a newer one's disk identity.
  */
 export interface RunnerDataDiskRef {
-  /** Cloud provider owning the disk; `gcp` is the only writer today. */
+  /** Cloud provider owning the disk: gcp or aws. */
   provider: string
   project: string
   zone: string
-  /** Disk name inside the project/zone, not a full resource path. */
+  /** GCP disk name or AWS EBS volume ID inside the reported tenant and zone. */
   diskName: string
   /**
    * The backend behind the identity (`hyperdisk_balanced`, `filestore`, ...).
    * Optional: binaries predating the field never send it, and the API then
-   * assumes hyperdisk_balanced — the only type infra provisions today — so a
-   * rolling upgrade never drops a live runner out of expansion coverage.
+   * retains hyperdisk_balanced compatibility for GCP. AWS requires gp3 before
+   * admitting the disk to online expansion.
    */
   diskType?: string
 }
@@ -41,6 +41,7 @@ export function isGcpDataDiskRef(ref: RunnerDataDiskRef | null | undefined): ref
 const EXPANDABLE_DISK_TYPES = new Set(['hyperdisk_balanced'])
 
 export function isDiskCapacityExpandable(ref: RunnerDataDiskRef | null | undefined): ref is RunnerDataDiskRef {
+  if (ref?.provider === 'aws') return !!ref.project && !!ref.zone && !!ref.diskName && ref.diskType === 'gp3'
   if (!isGcpDataDiskRef(ref)) return false
   // `||` on purpose: the Go client serializes an unset optional string as an
   // empty JSON string, so `??` would keep that empty value and wrongly drop a

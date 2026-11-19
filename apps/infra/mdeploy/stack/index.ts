@@ -73,7 +73,7 @@ const CONTAINER_ROLES = ['api', 'proxy', 'otel-collector'] as const
  * publish rather than an address this file could invent.
  */
 const imageFor = (
-  images: Images,
+  images: Record<string, $util.Input<string>>,
   component: 'api' | 'proxy' | 'otel-collector' | 'registry-proxy',
 ): $util.Input<string> => {
   const address = images[component]
@@ -86,7 +86,6 @@ export type StackInputs = {
   /** `CLICKHOUSE_RETENTION_HOURS` from the stage, or null when it set none. */
   clickHouseRetentionHours: number | null
   stage: string
-  /** The commit being deployed. Every container runs the same one. */
   tag: string
   /** The stage's own domain. The control plane answers at `api.<domain>`. */
   domain: string
@@ -166,17 +165,14 @@ export type StackProviders = {
    * silently matched nothing.
    */
   resizeRunnerDisks: () => boolean
-  /**
-   * No host, like the runner: on the cloud that deploys it this is a managed
-   * service rather than a cluster task, so it takes its placement from the
-   * network directly. The other cloud answers with the inactive handle.
-   */
+  /** Place the credential reader on its own workload identity and private network path. */
   registryProxy: (input: {
+    host: WorkloadHost
     network: Network
     dependsOn: any[]
     registryCredentials: RegistryCredentialStore
   }) => RegistryProxyProvider
-  /** Where registry passwords live: on the proxy's cloud, and inactive on the other. */
+  /** The credential store the API writes and the proxy reads on the selected cloud. */
   registryCredentials: RegistryCredentialStoreProvider
   /**
    * One host's registration token, minted so it survives the next deploy.
@@ -407,6 +403,7 @@ export const deployStack = ({
    * nothing while looking healthy.
    */
   const registryProxy: RegistryProxy = providers.registryProxy({
+    host: cluster.hostFor('registry-proxy'),
     network,
     dependsOn: placed,
     registryCredentials,
@@ -607,6 +604,7 @@ export const deployStack = ({
     otlpUrl: collector.otlpUrl,
     registryProxyHost,
     checkpointBucket: storage.checkpoints.active ? storage.checkpoints.bucket : null,
+    migrationArchivePrefix: inputs.apiEnvironment.BOX_MIGRATION_ARCHIVE_PREFIX,
     environment: runnerEnvironment,
     secrets: inputs.runnerSecrets,
   })

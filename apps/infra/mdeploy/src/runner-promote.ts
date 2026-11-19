@@ -100,7 +100,8 @@ export const promoteRunner = async ({
   const tag = String(options.tag ?? '')
   const from = String(options.from ?? '')
   const to = String(options.to ?? '')
-  if (!COMMIT.test(tag)) throw new RunnerBuildError(`--tag must be a full commit sha; got ${JSON.stringify(tag)}\n${USAGE}`)
+  if (!COMMIT.test(tag))
+    throw new RunnerBuildError(`--tag must be a full commit sha; got ${JSON.stringify(tag)}\n${USAGE}`)
   if (!from || !to) throw new RunnerBuildError(`--from and --to are both required.\n${USAGE}`)
   if (from === to) throw new RunnerBuildError(`promoting "${from}" to itself would do nothing`)
 
@@ -109,7 +110,8 @@ export const promoteRunner = async ({
   // source is read with it, which is why both stages live in one account.
   const scope = resolveScope({ options: { ...(options as Options), stage: to }, config, environment })
   const signedIn = await checkLogin({ argv: ['login', '--stage', to], environment, cwd, log })
-  if (signedIn !== 0) throw new RunnerBuildError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
+  if (signedIn !== 0)
+    throw new RunnerBuildError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
 
   const home = await resolveHomeWith({ scope })
   const { env: credentials } = await home.identity.childEnvironment()
@@ -167,7 +169,7 @@ export const promoteRunner = async ({
    */
   for (const name of names) {
     log(`==> copying ${name}`)
-    destination.copyFrom(source.address, name)
+    destination.copyFrom(source, name)
   }
   log(`promoted ${archive} from ${from} to ${to} at ${destination.address}/`)
   log(`RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=${tag} npm run mdeploy -- --stage ${to}`)

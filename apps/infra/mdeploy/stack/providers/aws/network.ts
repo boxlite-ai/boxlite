@@ -27,6 +27,7 @@ import { API_PORT } from '../../api.ts'
 import { PROXY_PORT } from '../../edge.ts'
 import { RUNNER_PORT } from '../../runners.ts'
 import { OTLP_HTTP_PORT } from '../../collector.ts'
+import { awsVpc } from './vpc.ts'
 import { instanceFor } from 'naming'
 
 /** Every port one workload in this network opens to another. */
@@ -35,30 +36,7 @@ const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT]
 export const awsNetworkProvider =
   ({ region }: { region: string }): NetworkProvider =>
   (request: NetworkRequest): Network => {
-    const vpc = new sst.aws.Vpc('Vpc', {
-      // Off is a stage with no outbound internet at all, which means no image
-      // pulls. Supported because a stage may be reachable another way, and
-      // named rather than assumed so the deploy that chose it says so.
-      nat: request.internetEgress ? 'ec2' : undefined,
-      transform: {
-        // Named so the console shows which zone an instance is in. SST would
-        // otherwise leave three identically-labelled NAT instances.
-        natInstance: (args: any, _opts: any, resourceName: any) => {
-          const index = resourceName.match(/\d+$/)?.[0] ?? ''
-          const availabilityZone = aws.ec2.getSubnetOutput({ id: args.subnetId }).availabilityZone
-          const nat = instanceFor({ app: $app.name, stage: $app.stage, artifact: `nat-${index}` })
-          args.tags = { ...args.tags, Name: $interpolate`${nat}-${availabilityZone}` }
-        },
-        elasticIp: (args: any, _opts: any, resourceName: any) => {
-          const index = resourceName.match(/\d+$/)?.[0] ?? ''
-          const eip = instanceFor({ app: $app.name, stage: $app.stage, artifact: `nat-eip-${index}` })
-          args.tags = { ...args.tags, Name: eip }
-        },
-        natSecurityGroup: (args: any) => {
-          args.tags = { ...args.tags, Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'nat-sg' }) }
-        },
-      },
-    })
+    const vpc = awsVpc(region, request.internetEgress)
 
     /*
      * Volume traffic that never touches the NAT.
@@ -68,10 +46,10 @@ export const awsNetworkProvider =
      * traffic would otherwise cross the one NAT instance the services share.
      */
     new aws.ec2.VpcEndpoint('S3Gateway', {
-      vpcId: vpc.nodes.vpc.id,
+      vpcId: vpc.id,
       serviceName: `com.amazonaws.${region}.s3`,
       vpcEndpointType: 'Gateway',
-      routeTableIds: vpc.nodes.privateRouteTables.apply((tables: any) => tables.map((table: any) => table.id)),
+      routeTableIds: vpc.privateRouteTables.map((table) => table.id),
     })
 
     /*
@@ -85,14 +63,14 @@ export const awsNetworkProvider =
      * on the internet is in that CIDR.
      */
     const runnerSecurityGroup = new aws.ec2.SecurityGroup('RunnerSecurityGroup', {
-      vpcId: vpc.nodes.vpc.id,
+      vpcId: vpc.id,
       description: 'BoxLite runner: one inbound port from inside the VPC, egress anywhere',
       ingress: [
         {
           protocol: 'tcp',
           fromPort: RUNNER_PORT,
           toPort: RUNNER_PORT,
-          cidrBlocks: [vpc.nodes.vpc.cidrBlock],
+          cidrBlocks: [vpc.cidrBlock],
           description: 'Control plane and box proxy, from inside this network only',
         },
       ],
@@ -110,7 +88,7 @@ export const awsNetworkProvider =
      * reachability, and it has its own group above.
      */
     const serviceSecurityGroup = new aws.ec2.SecurityGroup('ServiceSecurityGroup', {
-      vpcId: vpc.nodes.vpc.id,
+      vpcId: vpc.id,
       description: 'BoxLite services: each other on their own ports, and outbound HTTPS',
       egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],
       tags: { Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'service-sg' }) },
@@ -153,6 +131,20 @@ export const awsNetworkProvider =
         }),
     )
 
+    // The credential reader has no membership in the service mesh or DB/cache
+    // client groups. Its inbound path is exclusively its private balancer.
+    const registrySecurityGroup = new aws.ec2.SecurityGroup('RegistryProxySecurityGroup', {
+      vpcId: vpc.id,
+      egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],
+    })
+    const registryTelemetry = new aws.vpc.SecurityGroupIngressRule('CollectorIngressFromRegistry', {
+      securityGroupId: serviceSecurityGroup.id,
+      referencedSecurityGroupId: registrySecurityGroup.id,
+      ipProtocol: 'tcp',
+      fromPort: OTLP_HTTP_PORT,
+      toPort: OTLP_HTTP_PORT,
+    })
+
     const placementFor = (role: WorkloadRole): Placement =>
       role === 'runner'
         ? {
@@ -165,21 +157,21 @@ export const awsNetworkProvider =
             cloud: 'aws',
             exposure: 'private',
             subnets: vpc.privateSubnets,
-            securityGroups: [serviceSecurityGroup.id],
+            securityGroups: [role === 'registry-proxy' ? registrySecurityGroup.id : serviceSecurityGroup.id],
           }
 
     return {
       binding: {
         cloud: 'aws',
-        vpc,
-        vpcId: vpc.nodes.vpc.id,
+        vpc: { securityGroups: [serviceSecurityGroup.id] },
+        vpcId: vpc.id,
         privateSubnets: vpc.privateSubnets,
         publicSubnets: vpc.publicSubnets,
-        cloudmapNamespaceId: vpc.nodes.cloudmapNamespace.id,
-        cloudmapNamespaceName: vpc.nodes.cloudmapNamespace.name,
-        cidr: vpc.nodes.vpc.cidrBlock,
+        cloudmapNamespaceId: vpc.namespace.id,
+        cloudmapNamespaceName: vpc.namespace.name,
+        cidr: vpc.cidrBlock,
       },
       placementFor,
-      ready: [...placed, runnerReachable, ...servicesReachable],
+      ready: [...vpc.ready, ...placed, runnerReachable, ...servicesReachable, registrySecurityGroup, registryTelemetry],
     }
   }

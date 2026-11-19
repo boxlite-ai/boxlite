@@ -73,12 +73,12 @@ const harness = ({
                 return {}
               }
               if (command.input.Key !== 'secret/a/dev.json') throw notFound('NoSuchKey')
-              return { Body: { transformToByteArray: async () => sealed(stored) } }
+              return { ETag: '"fixture"', Body: { transformToByteArray: async () => sealed(stored) } }
             },
           },
           ssm: {
             send: async (command: any) =>
-              command.input.Name === '/sst/bootstrap'
+              command.input.Name === '/boxlite/pulumi/bootstrap'
                 ? { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
                 : { Parameter: { Value: KEY.toString('base64') } },
           },

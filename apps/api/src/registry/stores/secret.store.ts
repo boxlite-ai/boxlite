@@ -7,6 +7,7 @@ import { SecretManagerServiceClient } from '@google-cloud/secret-manager'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { TypedConfigService } from '../../config/typed-config.service'
+import { AwsSecretManagerStore } from './aws-secret.store'
 
 /**
  * Where a registry password goes when a credential is added or rotated.
@@ -54,6 +55,13 @@ export function createSecretStore(configService: TypedConfigService): SecretStor
   if (backend === 'gcp') {
     return new GcpSecretManagerStore()
   }
+  if (backend === 'aws') {
+    return new AwsSecretManagerStore({
+      region: configService.get('registrySecrets.region') ?? '',
+      accountId: configService.get('registrySecrets.accountId') ?? '',
+      prefix: configService.get('registrySecrets.prefix') ?? '',
+    })
+  }
   if (backend === 'file') {
     // Plain files hold the password in the clear. That is acceptable on a
     // developer's machine and nowhere else, so production refuses to boot.
@@ -66,7 +74,7 @@ export function createSecretStore(configService: TypedConfigService): SecretStor
     }
     return new FileSecretStore(directory)
   }
-  throw new Error(`REGISTRY_SECRET_STORE must be "gcp" or "file", got "${backend}"`)
+  throw new Error(`REGISTRY_SECRET_STORE must be "gcp", "aws" or "file", got "${backend}"`)
 }
 
 class GcpSecretManagerStore implements SecretStore {

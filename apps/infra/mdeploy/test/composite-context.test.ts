@@ -7,7 +7,7 @@ import { actionSource } from './workflow-source.js'
 
 const common = {
   'stage-config': 'BOXLITE_MSTAGE_BOXLITE_APP_CONFIG',
-  'aws-account-id': 'AWS_ACCOUNT_ID',
+  'aws-pulumi-deploy-role-arn': 'AWS_PULUMI_DEPLOY_ROLE_ARN',
   'gcp-workload-identity-provider': 'GCP_WORKLOAD_IDENTITY_PROVIDER',
 }
 const configuration = {

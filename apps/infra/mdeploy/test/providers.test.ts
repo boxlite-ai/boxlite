@@ -30,25 +30,23 @@ import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
 process.env.MSTAGE_CONFIG ??= fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
 
 /**
- * The globals each engine installs, in as much shape as building a bundle
- * reads. Only the AWS bundle touches one while it is being built —
- * `sst.cloudflare.dns()` — which is itself worth pinning: a bundle that
- * created a resource at construction time could not be built before the stack
- * decided the order.
+ * Building a bundle reads stage identity and output helpers but creates no
+ * resources. Constructor tests verify the provider-specific resource graph.
  */
 const installGlobals = () => {
   const target = globalThis as Record<string, unknown>
   target.$app = { name: 'boxlite', stage: 'dev' }
   target.$util = { output: (value: unknown) => value, secret: (value: unknown) => value }
-  target.sst = { cloudflare: { dns: () => ({ kind: 'cloudflare-dns' }) } }
 }
 installGlobals()
 
 const aws = () =>
   awsStackProviders({
+    stateBucket: 'fixture-state',
     stage: 'dev',
     region: 'ap-southeast-1',
     accountId: '123456789012',
+    zoneId: 'zone-1',
     domain: 'dev.boxlite.ai',
     artifactsBucket: 'boxlite-app-dev-artifacts-123456789012',
     managedClickHouse: null,
@@ -97,7 +95,7 @@ test('only the cloud whose edge writes the wildcard serves a user domain', () =>
   // The API mints `demo.<userDomain>` URLs wherever it is told the domain, so
   // the cloud with no record or certificate for it must not claim to serve one.
   assert.equal(gcp().servesUserDomain(), true)
-  assert.equal(aws().servesUserDomain(), false)
+  assert.equal(aws().servesUserDomain(), true)
 })
 
 test('every entry is a function, so a bundle exists before the first resource does', () => {

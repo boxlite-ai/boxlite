@@ -1,5 +1,11 @@
 PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:apps fmt\:apps\:proxy
-PHONY_TARGETS += audit\:apps
+PHONY_TARGETS += audit\:apps fmt\:apps\:runner fmt\:apps\:image-service
+
+fmt\:apps\:runner:
+	@cd apps/runner && go fmt ./...
+
+fmt\:apps\:image-service:
+	@cd apps/image-service && go fmt ./...
 
 # Match mbuild publication's production dependency gate without installing packages.
 audit\:apps:

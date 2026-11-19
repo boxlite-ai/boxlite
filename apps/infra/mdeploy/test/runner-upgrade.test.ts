@@ -173,9 +173,16 @@ test('nothing unvalidated is interpolated into a script that runs as root', () =
 test('the trigger includes runner identity and the independent kernel digest', () => {
   // A fleet that re-ran the payload on every deploy would restart for nothing,
   // so the trigger is only what could change about the run.
-  assert.equal(upgradeTrigger({ identity: '0.10.0', binary: released }), `0.10.0:${TARBALL}:${CLOUD_RUNNER_KERNEL.sha256}`)
+  assert.equal(
+    upgradeTrigger({ identity: '0.10.0', binary: released }),
+    `0.10.0:${TARBALL}:${CLOUD_RUNNER_KERNEL.sha256}`,
+  )
   assert.notEqual(
-    upgradeTrigger({ identity: '0.10.0', binary: released, kernel: { ...CLOUD_RUNNER_KERNEL, sha256: 'a'.repeat(64) } }),
+    upgradeTrigger({
+      identity: '0.10.0',
+      binary: released,
+      kernel: { ...CLOUD_RUNNER_KERNEL, sha256: 'a'.repeat(64) },
+    }),
     upgradeTrigger({ identity: '0.10.0', binary: released }),
   )
   assert.notEqual(
@@ -218,9 +225,10 @@ test('an SSM command not yet accepted is retried, and a denied one is not', () =
   let attempts = 0
   const run = (_file: string, args: string[]): CommandResult => {
     calls.push(args)
+    if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
     if (args[1] === 'send-command') {
       attempts += 1
-      return attempts < 3 ? failed('An error occurred (InvalidInstanceId)') : ok('cmd-1')
+      return attempts < 3 ? failed('An error occurred (InvalidInstanceId)') : ok('00000000-0000-4000-a000-000000000001')
     }
     if (args.includes('Status')) return ok('Success')
     return ok('')
@@ -228,7 +236,7 @@ test('an SSM command not yet accepted is retried, and a denied one is not', () =
   assert.equal(upgradeRunner({ environment: awsEnvironment, run, sleep: () => {}, log: () => {} }), 0)
   assert.equal(attempts, 3)
   assert.ok(
-    calls.some((args) => args.includes('cmd-1')),
+    calls.some((args) => args.includes('00000000-0000-4000-a000-000000000001')),
     'the accepted command id is what is polled',
   )
 
@@ -236,7 +244,10 @@ test('an SSM command not yet accepted is retried, and a denied one is not', () =
     () =>
       upgradeRunner({
         environment: awsEnvironment,
-        run: () => failed('An error occurred (AccessDeniedException)'),
+        run: (_file, args) =>
+          args[1] === 'list-commands'
+            ? ok(JSON.stringify({ Commands: [] }))
+            : failed('An error occurred (AccessDeniedException)'),
         sleep: () => {},
         log: () => {},
       }),
@@ -248,13 +259,14 @@ test('a non-Success terminal status fails the roll rather than continuing it', (
   // The whole point of chaining the commands: a failure has to stop here, with
   // the hosts not yet visited still serving the old binary.
   const run = (_file: string, args: string[]): CommandResult => {
-    if (args[1] === 'send-command') return ok('cmd-1')
+    if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
+    if (args[1] === 'send-command') return ok('00000000-0000-4000-a000-000000000001')
     if (args.includes('Status')) return ok('Failed')
     return ok('upgrade failed; rolling back')
   }
   assert.throws(
     () => upgradeRunner({ environment: awsEnvironment, run, sleep: () => {}, log: () => {} }),
-    /the SSM command cmd-1 finished Failed/,
+    /the SSM command 00000000-0000-4000-a000-000000000001 finished Failed/,
   )
 })
 
@@ -265,7 +277,8 @@ test('an InProgress status is not a verdict', () => {
   // abort the roll on a host that is upgrading fine.
   let polls = 0
   const run = (_file: string, args: string[]): CommandResult => {
-    if (args[1] === 'send-command') return ok('cmd-1')
+    if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
+    if (args[1] === 'send-command') return ok('00000000-0000-4000-a000-000000000001')
     if (args.includes('Status')) {
       polls += 1
       return ok(polls < 4 ? 'InProgress' : 'Success')
@@ -398,25 +411,6 @@ test('a cloud with no channel here is named rather than guessed at', () => {
   )
 })
 
-// AWS retains its host-by-host dependency chain. GCP batches are tested in runner-scale-out.test.ts.
-test('AWS upgrades each host after the previous host completes', () => {
-  const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
-  const upgrades = aws.slice(aws.indexOf('let previousUpgrade'))
-  assert.notEqual(upgrades, '', 'aws does not chain its upgrades at all')
-  assert.match(
-    upgrades,
-    /previousUpgrade = new command\.local\.Command\(\s*upgradeResourceName\(/,
-    "aws does not carry each upgrade forward as the next one's predecessor",
-  )
-  assert.match(
-    upgrades,
-    /dependsOn: \[[^\]]*\.\.\.\(previousUpgrade \? \[previousUpgrade\] : \[\]\)\]/,
-    'aws does not make each upgrade wait on the previous host',
-  )
-  // Its own instance too: a host that does not exist has nothing to upgrade.
-  assert.match(upgrades, /dependsOn: \[instance,/, 'aws does not make an upgrade wait on its own host')
-})
-
 test('the policy scripts answer in the exit codes the agent grades them by', () => {
   /*
    * The whole contract of an `exec` resource: 100 from `validate` means "in the
@@ -439,13 +433,25 @@ test('the policy scripts answer in the exit codes the agent grades them by', () 
 
   // Both guards report "nothing to do", and the mismatch path is the only 101.
   assert.equal(validate.match(/^\s*exit 100$/gm)?.length, 2, 'validate must answer 100 on both guards')
-  assert.match(validate, /echo "runner binary or kernel needs updating"\nexit 101\n$/, 'validate must end by asking for enforcement')
+  assert.match(
+    validate,
+    /echo "runner binary or kernel needs updating"\nexit 101\n$/,
+    'validate must end by asking for enforcement',
+  )
 
   // The work, graded the other way round.
   assert.match(enforce, /then exit 100; fi/, 'enforce must turn a clean run into 100')
   assert.match(enforce, /exit 101\n$/, 'and anything else into 101')
-  assert.match(enforce, /bash <<'BOXLITE_RUNNER_UPGRADE'/, 'enforce must run the payload as it is, not a second copy of it')
-  assert.equal(enforce.match(/^exit 101$/gm)?.length, 1, 'exactly one line turns a non-zero status into a policy failure')
+  assert.match(
+    enforce,
+    /bash <<'BOXLITE_RUNNER_UPGRADE'/,
+    'enforce must run the payload as it is, not a second copy of it',
+  )
+  assert.equal(
+    enforce.match(/^exit 101$/gm)?.length,
+    1,
+    'exactly one line turns a non-zero status into a policy failure',
+  )
   // The payload keeps its own guards, and that is the point: the agent may
   // reach enforce long after validate, and a host that converged in between
   // must still be left alone.
@@ -475,12 +481,19 @@ test('the control-plane URL is checked before it reaches a script that runs as r
   }
   // And the shapes `api.address` actually composes are taken.
   for (const apiUrl of ['https://api.boxlite.ai', 'https://api.boxlite.ai/', 'http://api.dev.boxlite.ai:8443']) {
-    assert.match(renderUnitEnvironmentPolicyScripts({ apiUrl, volumeBackend: 'gcs' }).validate, /BOXLITE_API_URL=/, `refused ${apiUrl}`)
+    assert.match(
+      renderUnitEnvironmentPolicyScripts({ apiUrl, volumeBackend: 'gcs' }).validate,
+      /BOXLITE_API_URL=/,
+      `refused ${apiUrl}`,
+    )
   }
 })
 
 test('the unit-environment policy answers the same exit codes, and keeps no copy of the token', () => {
-  const { validate, enforce } = renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', volumeBackend: 'gcs' })
+  const { validate, enforce } = renderUnitEnvironmentPolicyScripts({
+    apiUrl: 'https://api.boxlite.ai',
+    volumeBackend: 'gcs',
+  })
   assert.ok(validate.startsWith('#!/bin/bash\n'), 'validate must name its own shell')
   assert.ok(enforce.startsWith('#!/bin/bash\n'), 'enforce must name its own shell')
 
@@ -499,7 +512,10 @@ test('the unit-environment policy answers the same exit codes, and keeps no copy
   assert.match(enforce, /awk -v key="\$key" -v line="\$line"/, 'enforce must rewrite through awk')
   assert.match(enforce, /\{ print line; found = 1; next \}/, 'it must replace the line it found')
   assert.match(enforce, /END \{ if \(!found\) print line \}/, 'and append the one it did not')
-  assert.ok(enforce.includes('mv "$UNIT_ENV_FILE.bak" "$UNIT_ENV_FILE"'), 'enforce must restore when the rewrite did not take')
+  assert.ok(
+    enforce.includes('mv "$UNIT_ENV_FILE.bak" "$UNIT_ENV_FILE"'),
+    'enforce must restore when the rewrite did not take',
+  )
 
   // Every expected line goes through one loop and one verdict, so a failure on
   // either reaches the restore rather than leaving the host half converged.
@@ -531,7 +547,7 @@ test('the unit-environment policy answers the same exit codes, and keeps no copy
   assert.match(
     enforce,
     /status=\$\?\nif \[ "\$status" -eq 0 \]; then exit 100; fi\nexit 101\n$/,
-    'enforce must translate the block\'s own status rather than grade it twice',
+    "enforce must translate the block's own status rather than grade it twice",
   )
 })
 
@@ -552,7 +568,9 @@ test('a payload converges the unit environment as well as the binary', () => {
   assert.notEqual(environment, -1, 'and the unit environment after it')
   assert.ok(binary < environment, 'the binary leads, as the two policy resources do on GCP')
   assert.ok(
-    payload.includes(`UNIT_ENV_EXPECTED=('BOXLITE_API_URL=${runnerApiUrl('https://api.dev.boxlite.ai')}' 'VOLUME_STORAGE_BACKEND=gcs')`),
+    payload.includes(
+      `UNIT_ENV_EXPECTED=('BOXLITE_API_URL=${runnerApiUrl('https://api.dev.boxlite.ai')}' 'VOLUME_STORAGE_BACKEND=gcs')`,
+    ),
     'the payload must pin the line the boot script writes, through the same function',
   )
 })
@@ -629,10 +647,6 @@ test('the GCP policy resolves the endpoint rather than casting it', () => {
   assert.match(policy, /otlpUrl: otlpUrl as string/, 'and the resolved one is what reaches the renderer')
   assert.match(policy, /registryProxyHost: \(proxyHost as string\) \|\| null/, 'and so does the resolved proxy host')
   assert.match(policy, /runnerEnv: runnerEnv as string/, 'the map must reach existing GCP hosts')
-  const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
-  const payload = aws.slice(aws.indexOf('const payload'), aws.indexOf('previousUpgrade ='))
-  assert.match(payload, /request\.environment\.BOXLITE_RUNNER_ENV/)
-  assert.match(payload, /runnerEnv: runnerEnv as string/, 'the map must reach existing AWS hosts')
 })
 
 test('a caller with no control-plane address converges binary and kernel without rewriting API settings', () => {
@@ -646,26 +660,15 @@ test('a caller with no control-plane address converges binary and kernel without
   assert.ok(payload.lastIndexOf('fetch_runner_kernel\n') > payload.indexOf('upgrade_binary\n'))
 })
 
-test('an AWS host is sent both halves, and the address is what re-sends them', () => {
-  // The payload is only as good as what triggers it: a domain move changes no
-  // identity and no tarball, so without the address in `triggers` the command
-  // that carries the fix is never re-run.
-  const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
-  const upgrades = aws.slice(aws.indexOf('let previousUpgrade'))
-  assert.match(upgrades, /encodeUpgradePayload\(\{[^}]*apiUrl: apiUrl as string,/, 'the AWS payload must carry the control plane address')
-  assert.match(upgrades, /encodeUpgradePayload\(\{[^}]*otlpUrl: otlpUrl as string,/, 'and the collector endpoint beside it')
-  assert.match(upgrades, /triggers: \[[^\]]*request\.apiUrl,?[^\]]*\]/, 'and the address must re-send it')
-  assert.match(upgrades, /triggers: \[[^\]]*request\.otlpUrl,?[^\]]*\]/, 'as must the endpoint')
-
-  // No backend here: these hosts mount with mount-s3 and their boot script
-  // writes no such key, so enforcing one would leave every host disagreeing.
-  assert.doesNotMatch(upgrades, /volumeBackend/)
-})
-
 test('a registry proxy host that is not a host is refused before it reaches a root shell', () => {
   for (const registryProxyHost of ["x'; rm -rf / #", 'https://registry-proxy.example', 'Registry-Proxy.example']) {
     assert.throws(
-      () => renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', volumeBackend: 'gcs', registryProxyHost }),
+      () =>
+        renderUnitEnvironmentPolicyScripts({
+          apiUrl: 'https://api.boxlite.ai',
+          volumeBackend: 'gcs',
+          registryProxyHost,
+        }),
       /the registry proxy's host reaches/,
       `accepted ${registryProxyHost}`,
     )
@@ -740,7 +743,11 @@ test('a host the fleet table does not hold is refused rather than defaulted', ()
   try {
     writeFileSync(`${directory}/block.sh`, block)
     const run = spawnSync('bash', [`${directory}/block.sh`], {
-      env: { ...process.env, BOXLITE_RUNNER_HOST_NAME: 'someone-elses-host', BOXLITE_RUNNER_ENV_FILE: `${directory}/runner.env` },
+      env: {
+        ...process.env,
+        BOXLITE_RUNNER_HOST_NAME: 'someone-elses-host',
+        BOXLITE_RUNNER_ENV_FILE: `${directory}/runner.env`,
+      },
       encoding: 'utf8',
     })
     assert.equal(run.status, 1, 'an unknown host must not resolve a disk name at all')
@@ -776,7 +783,12 @@ test('a data-disk identity that reaches a root shell is checked wherever it is g
     bad({ hosts: ['boxlite-dev-runner', 'boxlite-dev-runner'] }),
   ]) {
     assert.throws(
-      () => renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', volumeBackend: 'gcs', dataDiskIdentity: identity }),
+      () =>
+        renderUnitEnvironmentPolicyScripts({
+          apiUrl: 'https://api.boxlite.ai',
+          volumeBackend: 'gcs',
+          dataDiskIdentity: identity,
+        }),
       RunnerUpgradeError,
       `accepted ${JSON.stringify(identity)}`,
     )
@@ -801,7 +813,10 @@ test('a legacy host is converged by enforce: three keys land in the file, the un
     // The host name comes from the metadata server on a real host — no
     // BOXLITE_RUNNER_HOST_NAME here, so the curl branch is the one that runs.
     // The stub logs its arguments, which pins the URL and header spelling.
-    writeFileSync(`${directory}/curl`, `#!/bin/bash\nprintf '%s\\n' "$@" >> ${directory}/curl.log\necho boxlite-dev-runner\n`)
+    writeFileSync(
+      `${directory}/curl`,
+      `#!/bin/bash\nprintf '%s\\n' "$@" >> ${directory}/curl.log\necho boxlite-dev-runner\n`,
+    )
     // The convergence restarts the unit on success; a stub records it rather
     // than talking to a real systemd.
     writeFileSync(`${directory}/systemctl`, `#!/bin/bash\nprintf '%s\\n' "$@" >> ${directory}/systemctl.log\n`)
@@ -810,22 +825,35 @@ test('a legacy host is converged by enforce: three keys land in the file, the un
     writeFileSync(`${directory}/runner.env`, 'BOXLITE_API_URL=https://api.dev.boxlite.ai/api\n')
     writeFileSync(`${directory}/enforce.sh`, enforce)
 
-    const run = spawnSync(
-      'bash',
-      ['-c', `PATH=${directory}:\$PATH; bash ${directory}/enforce.sh; echo EXIT=\$?`],
-      {
-        env: { ...process.env, BOXLITE_RUNNER_ENV_FILE: `${directory}/runner.env` },
-        encoding: 'utf8',
-      },
+    const run = spawnSync('bash', ['-c', `PATH=${directory}:\$PATH; bash ${directory}/enforce.sh; echo EXIT=\$?`], {
+      env: { ...process.env, BOXLITE_RUNNER_ENV_FILE: `${directory}/runner.env` },
+      encoding: 'utf8',
+    })
+    assert.match(
+      run.stdout,
+      /EXIT=100/,
+      `enforce must grade a successful convergence as 100:\n${run.stdout}${run.stderr}`,
     )
-    assert.match(run.stdout, /EXIT=100/, `enforce must grade a successful convergence as 100:\n${run.stdout}${run.stderr}`)
 
     const env = readFileSync(`${directory}/runner.env`, 'utf8')
     assert.match(env, /GCP_PROJECT_ID=boxlite-gcp-dev\n/)
     assert.match(env, /GCP_ZONE=asia-southeast1-b\n/)
-    assert.match(env, new RegExp(`RUNNER_DATA_DISK_NAME=${runnerDataDiskNameFor({ app: 'boxlite', stage: 'dev', host: 'boxlite-dev-runner' })}\n`))
-    assert.match(env, /BOXLITE_API_URL=https:\/\/api\.dev\.boxlite\.ai\/api\n/, 'the pre-existing lines must survive the rewrite')
-    assert.match(readFileSync(`${directory}/curl.log`, 'utf8'), /instance\/name/, 'the host name must come from the metadata server')
+    assert.match(
+      env,
+      new RegExp(
+        `RUNNER_DATA_DISK_NAME=${runnerDataDiskNameFor({ app: 'boxlite', stage: 'dev', host: 'boxlite-dev-runner' })}\n`,
+      ),
+    )
+    assert.match(
+      env,
+      /BOXLITE_API_URL=https:\/\/api\.dev\.boxlite\.ai\/api\n/,
+      'the pre-existing lines must survive the rewrite',
+    )
+    assert.match(
+      readFileSync(`${directory}/curl.log`, 'utf8'),
+      /instance\/name/,
+      'the host name must come from the metadata server',
+    )
     assert.match(
       readFileSync(`${directory}/systemctl.log`, 'utf8'),
       /restart\nboxlite-runner/,
@@ -875,7 +903,11 @@ test('an unknown host fails validate as an execution error, before any complianc
   try {
     writeFileSync(`${directory}/validate.sh`, validate)
     const run = spawnSync('bash', [`${directory}/validate.sh`], {
-      env: { ...process.env, BOXLITE_RUNNER_HOST_NAME: 'someone-elses-host', BOXLITE_RUNNER_ENV_FILE: '/nonexistent/runner.env' },
+      env: {
+        ...process.env,
+        BOXLITE_RUNNER_HOST_NAME: 'someone-elses-host',
+        BOXLITE_RUNNER_ENV_FILE: '/nonexistent/runner.env',
+      },
       encoding: 'utf8',
     })
     assert.equal(run.status, 1, `an unknown host must fail validate outright:\n${run.stdout}${run.stderr}`)

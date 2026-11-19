@@ -68,7 +68,11 @@ gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f compo
 Run a preview of the chosen ref first. On GCP, `components=api` deploys the API image and its existing API environment
 through a new Cloud Run revision; `components=runner` converges the binary and Runner environment through OS Policies.
 Both include the workload's required read grants and leave unrelated infrastructure outside the targets.
-The default `api+runner` retains full-stack deployment; AWS/SST supports only that selection for now.
+
+On AWS, `api` updates the existing ECS API task/service; `runner` uses SSM readiness checks and batched updates.
+Both clouds preview the refreshed full graph and refuse shared changes during component deployments.
+The default `api+runner` retains full-stack deployment.
+
 Individual selection requires existing workloads; Runner fleet changes require a full deployment.
 Existing stage protection, configuration checks and per-stage queuing still apply; do not cancel a healthy apply to start another.
 
@@ -80,6 +84,9 @@ gh workflow run mdeploy-all.yml --ref main -f stage=dev -f ref='<full-main-sha>'
 ```
 
 For environment changes alone, reuse the deployed component's ref; its existing env group remains the configuration source.
+
+On AWS and GCP, an API release changes the API image and retains the deployed Runner binary and other images. A Runner release retains all deployed container images. A scoped release requires an existing stack whose deployed versions can be read from its checkpoint.
+
 The internal CLI receives `--components` from the workflow; no separate public deployment workflow is introduced.
 
 Image releases are published to GHCR through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
@@ -122,11 +129,10 @@ Automation callers may supply the optional string inputs `requested_by` (a publi
 These fields provide display and correlation metadata; they do not grant reviewer authority.
 Keep email addresses and credentials out of both inputs. Existing `apply`, `confirm` and Environment approval requirements still apply.
 
-## Retained legacy AWS deployment
+## First AWS deployment
 
-The [AWS deployment guide](aws/deployment.md#retained-legacy-aws-deployment) owns the retained SST path
-and its compatibility boundary. Its [runner update launcher](../scripts/runner-update-binary.mjs)
-is separate from current mdeploy orchestration.
+Bootstrap the stage, then select both API and Runner to create shared infrastructure.
+Subsequent deployments can select either component. See the [AWS deployment guide](aws/deployment.md#deployment-scope).
 
 ## Deploy an existing stack
 

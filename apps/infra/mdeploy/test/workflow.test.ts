@@ -72,11 +72,10 @@ test('the public workflow forwards every component selection through preview and
 test('component-specific artifact and cloud checks stay aligned with the public selection', () => {
   const parsed = load(rawWorkflow) as any
   const steps = parsed.jobs.plan.steps
-  const gate = steps.findIndex((step: any) => step.name === 'Check component deployment support')
-  assert.ok(gate > steps.findIndex((step: any) => step.name === 'Resolve the stage'))
-  assert.ok(gate < steps.findIndex((step: any) => step.name === 'Federate an AWS identity'))
-  assert.equal(steps[gate].if, "inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'")
-  assert.notEqual(spawnSync('bash', ['-c', steps[gate].run]).status, 0)
+  assert.equal(
+    steps.some((step: any) => step.name === 'Check component deployment support'),
+    false,
+  )
   const images = actionSteps('mdeploy').find((step: any) => step.name === 'Verify the images')
   assert.equal(images.if, "inputs.components != 'runner'")
   const release = parsed.jobs.resolve.steps.find((step: any) => step.name === 'Require the release this tag names')
@@ -171,32 +170,18 @@ test('a GCP identity is federated by the action that also gives gcloud its own c
   }
 })
 
-/*
- * The AWS role is composed, not looked up in a repository variable.
- *
- * Every other deploy workflow here builds it from `vars.AWS_ACCOUNT_ID` and the
- * fixed per-stage role name. A workflow that read `vars.AWS_DEPLOY_ROLE_ARN`
- * instead would federate against a variable this repository does not define —
- * the OIDC step fails with an empty role, which reads as an auth problem rather
- * than as a missing setting.
- *
- * Both new workflows are checked here so the two cannot drift apart.
- */
-test('the AWS role is composed from the account id, as every other workflow does', () => {
+/** Native entrypoints use the role whose IAM fence isolates historical SST writers. */
+test('native AWS build and deploy use the distinct role wired by bootstrap', () => {
   const read = (name: string) => workflowSource(name)
   for (const [name, source] of [
     ['mdeploy-all.yml', workflow],
     ['mbuild.yml', read('mbuild.yml')],
   ] as const) {
-    // The stage half may be an expression or a literal — mbuild-release's two
-    // jobs each serve one fixed stage, and naming it is clearer there than
-    // threading an input through. What must not vary is the rest: the account
-    // from `vars.AWS_ACCOUNT_ID`, and the role name bootstrap actually creates.
-    assert.match(
-      source,
-      /role-to-assume: arn:aws:iam::\$\{\{ (?:vars\.AWS_ACCOUNT_ID|inputs\.aws-account-id) \}\}:role\/boxlite-(?:\$\{\{ [^}]+ \}\}|[a-z0-9-]+)-github-deploy/,
-      `${name} does not compose the role ARN`,
+    assert.ok(
+      source.includes('role-to-assume: ${{ inputs.aws-pulumi-deploy-role-arn }}'),
+      `${name} does not use the native role`,
     )
+    assert.doesNotMatch(source, /role-to-assume: .*github-deploy/)
     assert.doesNotMatch(
       source,
       /vars\.AWS_DEPLOY_ROLE_ARN|vars\.AWS_ECR_PUSH_ROLE_ARN/,

@@ -1,19 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-/*
- * Pure helpers for creating the deployment stage's GitHub Environment.
- *
- * The deploy workflow binds to `environment: ${{ inputs.stage }}` and reads
- * `AWS_ACCOUNT_ID`/`AWS_REGION` from it — the stage's own configuration comes
- * from its SST secret store, not from GitHub — and the AWS trust
- * policy pins `repo:<owner>/<repo>:environment:<stage>` — so the Environment
- * must exist, under exactly that name, before any of it works.
- *
- * `PUT /repos/{owner}/{repo}/environments/{name}` is create-or-update, which
- * is what makes rerunning the bootstrap safe.
- */
+import { execFileSync } from 'node:child_process'
 
+/** Preserve existing GitHub Environment rules. Reviewers are configured when bootstrap creates an Environment.
+ * Cloud identity variables belong to that Environment; mstage reads application values from its encrypted stage store.
+ */
 // Protection rules are a paid feature on private repositories: "Users with
 // GitHub Free plans can only configure environments for public repositories."
 // A self-hoster on a private free repo can still deploy — they just get an
@@ -61,4 +53,72 @@ export function parseReviewerIds(rawReviewers: any) {
       }
       return Number(entry)
     })
+}
+
+export function ensureGithubEnvironment(
+  { repo, stage, reviewerIds }: { repo: string; stage: string; reviewerIds: number[] },
+  run = execFileSync,
+) {
+  const path = environmentApiPath(repo, stage)
+  try {
+    const existing = JSON.parse(
+      run('gh', ['api', path], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }),
+    )
+    if (
+      stage === 'prod' &&
+      !existing.protection_rules?.some(
+        (rule: { type: string; reviewers?: unknown[] }) => rule.type === 'required_reviewers' && rule.reviewers?.length,
+      )
+    ) {
+      throw new Error('Existing prod GitHub Environment needs required reviewers before bootstrap')
+    }
+    return
+  } catch (error: any) {
+    if (!/\(HTTP 404\)/.test(error.stderr?.toString() ?? '')) throw error
+  }
+  const payload = githubEnvironmentPayload({ reviewerIds })
+  try {
+    run('gh', ['api', '--method', 'PUT', environmentApiPath(repo, stage), '--input', '-'], {
+      input: JSON.stringify(payload),
+      stdio: ['pipe', 'ignore', 'pipe'],
+      timeout: 30_000,
+      killSignal: 'SIGTERM',
+    })
+    const reviewers = reviewerIds.length > 0 ? `required reviewers: ${reviewerIds.join(', ')}` : 'no required reviewers'
+    console.log(`==> GitHub ${stage} environment`)
+    console.log(`    ready (${reviewers})`)
+    return
+  } catch (error: any) {
+    const stderr = error.stderr?.toString() ?? ''
+    if (!isProtectionUnavailableError(stderr) || reviewerIds.length === 0) throw error
+
+    // Fail closed on the protected stage. Everywhere else an unprotected
+    // environment is a downgrade worth taking to keep bootstrap moving; for
+    // prod it would silently produce the thing the reviewers exist to prevent
+    // — a stage anyone who can run the workflow can deploy unreviewed.
+    if (stage === 'prod') {
+      throw new Error(
+        `refusing to create the GitHub '${stage}' environment without required reviewers: ` +
+          'deployment protection rules need a public repository, or GitHub Pro/Team/Enterprise ' +
+          'on a private one. Enable protection for this repository, then rerun.',
+        { cause: error },
+      )
+    }
+
+    // Protection rules need a public repo, or a paid plan on a private one.
+    // The environment itself still has to exist for vars/secrets to land, so
+    // fall back to an unprotected one rather than blocking the bootstrap.
+    run('gh', ['api', '--method', 'PUT', environmentApiPath(repo, stage), '--input', '-'], {
+      input: JSON.stringify(githubEnvironmentPayload({ reviewerIds: [] })),
+      stdio: ['pipe', 'ignore', 'inherit'],
+      timeout: 30_000,
+      killSignal: 'SIGTERM',
+    })
+    console.warn(`==> GitHub ${stage} environment`)
+    console.warn(
+      '    created WITHOUT required reviewers ' +
+        '(deployment protection rules need a public repository, or GitHub Pro/Team/Enterprise on a private one). ' +
+        'Anyone who can run the workflow can deploy this stage unreviewed.',
+    )
+  }
 }

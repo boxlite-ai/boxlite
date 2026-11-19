@@ -15,7 +15,7 @@
 
 
 /**
- * Cloud identity of the runner data disk. diskType names the backend so the API can tell expandable block disks from backends with a different resize path (e.g. Filestore); runners predating the field are treated as hyperdisk_balanced, the only type infra provisions today.
+ * Cloud identity of a Runner data disk. GCP uses a project ID, zone and disk name; AWS uses an account ID, availability zone and EBS volume ID. GCP disks without diskType retain the hyperdisk_balanced compatibility default; AWS expansion requires gp3.
  */
 export interface RunnerDataDiskRef {
     /**
@@ -23,7 +23,7 @@ export interface RunnerDataDiskRef {
      */
     'provider': string;
     /**
-     * Cloud project the data disk lives in
+     * GCP project ID or AWS account ID containing the data disk
      */
     'project': string;
     /**
@@ -35,7 +35,7 @@ export interface RunnerDataDiskRef {
      */
     'diskName': string;
     /**
-     * Backend behind the identity (hyperdisk_balanced, filestore, ...). Omitted by runner binaries predating the field; the API then assumes hyperdisk_balanced, the only data disk infra provisions today.
+     * Disk backend, including hyperdisk_balanced, filestore or gp3. GCP disks without this field retain the hyperdisk_balanced compatibility default; AWS expansion requires gp3.
      */
     'diskType'?: string;
 }

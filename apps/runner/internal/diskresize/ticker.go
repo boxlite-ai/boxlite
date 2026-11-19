@@ -20,8 +20,8 @@ const (
 )
 
 // ErrDeviceMissing is returned by the default size reader on hosts without the
-// data disk device (AWS, local, or a non-Linux host). The ticker treats it as
-// a permanent skip: disk resize is a GCP-only behavior.
+// configured data disk device. The ticker skips hosts without that device;
+// AWS deployments provide their assigned EBS device through Config.DevicePath.
 var ErrDeviceMissing = errors.New("data disk device not found")
 
 type Config struct {

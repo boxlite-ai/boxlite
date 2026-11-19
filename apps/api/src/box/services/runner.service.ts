@@ -16,7 +16,17 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { DataSource, FindOptionsWhere, In, MoreThanOrEqual, Not, Repository, UpdateResult } from 'typeorm'
+import {
+  DataSource,
+  FindOptionsWhere,
+  In,
+  IsNull,
+  LessThan,
+  MoreThanOrEqual,
+  Not,
+  Repository,
+  UpdateResult,
+} from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { Runner } from '../entities/runner.entity'
 import { CreateRunnerInternalDto } from '../dto/create-runner-internal.dto'
@@ -493,29 +503,20 @@ export class RunnerService {
     )
   }
 
-  private async updateRunnerState(runnerId: string, newState: RunnerState): Promise<void> {
-    const runner = await this.findOne(runnerId)
-    if (!runner) {
-      this.logger.error(`Runner ${runnerId} not found when trying to update state`)
-      return
-    }
-
-    // Don't change state if runner is decommissioned
-    if (runner.state === RunnerState.DECOMMISSIONED) {
-      this.logger.debug(`Runner ${runnerId} is decommissioned, not updating state`)
-      return
-    }
-
-    if (
-      !(await this.updateRunnerUnlessDecommissioned(runnerId, {
-        state: newState,
-        lastChecked: new Date(),
-      }))
-    ) {
-      return
-    }
-
-    this.eventEmitter.emit(RunnerEvents.STATE_UPDATED, new RunnerStateUpdatedEvent(runner, runner.state, newState))
+  private async markRunnerUnreachable(runner: Runner): Promise<void> {
+    if (runner.state === RunnerState.DECOMMISSIONED) return
+    // A heartbeat or decommission between observation and write wins the race.
+    const result = await this.runnerRepository.update(
+      { id: runner.id, state: runner.state, lastChecked: runner.lastChecked ?? IsNull() },
+      { state: RunnerState.UNRESPONSIVE, ...(runner.apiVersion === '2' ? {} : { lastChecked: new Date() }) },
+    )
+    if (!result.affected) return
+    this.invalidateRunnerCache(runner.id)
+    this.logger.warn({ event: 'runner.unreachable', runnerId: runner.id })
+    this.eventEmitter.emit(
+      RunnerEvents.STATE_UPDATED,
+      new RunnerStateUpdatedEvent(runner, runner.state, RunnerState.UNRESPONSIVE),
+    )
   }
 
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'check-runners', waitForCompletion: true })
@@ -529,6 +530,18 @@ export class RunnerService {
     }
 
     try {
+      // A silent v2 Runner leaves the READY work queue after its first missed heartbeat.
+      // Sample continuing outages for alarms that require multiple breached periods.
+      const cutoff = new Date(Date.now() - 60_000)
+      if (
+        this.serviceStartTime < cutoff &&
+        (await this.runnerRepository.existsBy({
+          apiVersion: '2',
+          state: RunnerState.UNRESPONSIVE,
+          lastChecked: LessThan(cutoff),
+        }))
+      )
+        this.logger.warn({ event: 'runner.unreachable', source: 'stale-heartbeat' })
       const runners = await this.runnerRepository.find({
         where: [
           {
@@ -636,7 +649,7 @@ export class RunnerService {
 
               // If last attempt, mark as unresponsive
               if (attempt === retryDelays.length) {
-                await this.updateRunnerState(runner.id, RunnerState.UNRESPONSIVE)
+                await this.markRunnerUnreachable(runner)
               }
             }
           }
@@ -652,37 +665,10 @@ export class RunnerService {
    * v2 runners report health via the healthcheck endpoint, so we check if lastChecked is within threshold.
    */
   private async checkRunnerV2Health(runner: Runner): Promise<void> {
-    const markAsUnresponsive = async () => {
-      this.logger.warn(
-        `v2 Runner ${runner.id} health check stale (last: ${Math.round((Date.now() - runner.lastChecked.getTime()) / 1000)}s ago), marking as UNRESPONSIVE`,
-      )
-      await this.updateRunnerState(runner.id, RunnerState.UNRESPONSIVE)
-    }
-
-    if (!runner.lastChecked) {
-      return
-    }
-
-    // v2 runners report health every ~10 seconds via the healthcheck endpoint
-    // Allow 60 seconds (6 missed healthchecks) before marking as UNRESPONSIVE
-    const healthCheckThresholdMs = 60 * 1000
-
-    if (runner.lastChecked < this.serviceStartTime) {
-      // Allow the runner a grace period to re-establish health checks
-      const timeSinceServiceStart = Date.now() - this.serviceStartTime.getTime()
-
-      if (timeSinceServiceStart > healthCheckThresholdMs) {
-        // Grace period expired and runner still hasn't checked in
-        await markAsUnresponsive()
-      }
-    } else {
-      // Runner has checked in since API started - use normal threshold
-      const timeSinceLastCheck = Date.now() - runner.lastChecked.getTime()
-
-      if (timeSinceLastCheck > healthCheckThresholdMs) {
-        // Runner hasn't reported health recently
-        await markAsUnresponsive()
-      }
+    if (runner.state !== RunnerState.READY || !runner.lastChecked) return
+    const cutoff = Date.now() - 60_000
+    if (runner.lastChecked.getTime() < cutoff && this.serviceStartTime.getTime() < cutoff) {
+      await this.markRunnerUnreachable(runner)
     }
   }
 

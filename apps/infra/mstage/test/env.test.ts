@@ -33,7 +33,7 @@ const clients = ({
       send: async (command: any) => {
         const name = command.input.Name
         asked.push(name)
-        if (name === '/sst/bootstrap') {
+        if (name === '/boxlite/pulumi/bootstrap') {
           if (bootstrap instanceof Error) throw bootstrap
           return { Parameter: { Value: bootstrap } }
         }
@@ -56,10 +56,10 @@ const clients = ({
   }
 }
 
-test('the state bucket comes from /sst/bootstrap, which nothing else records', async () => {
+test('the state bucket comes from /boxlite/pulumi/bootstrap, which nothing else records', async () => {
   const fake = clients({})
   assert.equal(await readStateBucket(fake), 'sst-state-abcdefghijkl')
-  assert.deepEqual(fake.asked, ['/sst/bootstrap'])
+  assert.deepEqual(fake.asked, ['/boxlite/pulumi/bootstrap'])
 })
 
 test('an unbootstrapped region says so instead of failing on a bucket name', async () => {
@@ -76,12 +76,12 @@ test('a bootstrap parameter without a state bucket is refused', async () => {
 test('a stage decrypts to its map, read from the SST key layout', async () => {
   const fake = clients({
     objects: { 'secret/boxlite/dev.json': sealed({ SMTP_USER: 'alice', PORT: '8080' }) },
-    passphrases: { '/sst/passphrase/boxlite/dev': KEY },
+    passphrases: { '/boxlite/pulumi/passphrase/boxlite/dev': KEY },
   })
   const values = await readEnvironment({ clients: fake, app: 'boxlite', stage: 'dev' })
   assert.deepEqual(values, { SMTP_USER: 'alice', PORT: '8080' })
   assert.ok(fake.asked.includes('s3:sst-state-abcdefghijkl/secret/boxlite/dev.json'), fake.asked.join(', '))
-  assert.ok(fake.asked.includes('/sst/passphrase/boxlite/dev'), fake.asked.join(', '))
+  assert.ok(fake.asked.includes('/boxlite/pulumi/passphrase/boxlite/dev'), fake.asked.join(', '))
 })
 
 test('a stage that was never written is empty, not an error', async () => {
@@ -92,7 +92,7 @@ test('a stage that was never written is empty, not an error', async () => {
 test('a wrong passphrase is reported as such, not as corrupt JSON', async () => {
   const fake = clients({
     objects: { 'secret/boxlite/dev.json': sealed({ A: '1' }) },
-    passphrases: { '/sst/passphrase/boxlite/dev': randomBytes(32) },
+    passphrases: { '/boxlite/pulumi/passphrase/boxlite/dev': randomBytes(32) },
   })
   await assert.rejects(
     () => readEnvironment({ clients: fake, app: 'boxlite', stage: 'dev' }),
@@ -104,14 +104,14 @@ test('a stored object with no passphrase names the parameter that is missing', a
   const fake = clients({ objects: { 'secret/boxlite/dev.json': sealed({ A: '1' }) } })
   await assert.rejects(
     () => readEnvironment({ clients: fake, app: 'boxlite', stage: 'dev' }),
-    /\/sst\/passphrase\/boxlite\/dev does not exist/,
+    /\/boxlite\/pulumi\/passphrase\/boxlite\/dev does not exist/,
   )
 })
 
 test('a passphrase that is not an AES key size is refused before decrypting', async () => {
   const fake = clients({
     objects: { 'secret/boxlite/dev.json': sealed({ A: '1' }) },
-    passphrases: { '/sst/passphrase/boxlite/dev': randomBytes(20) },
+    passphrases: { '/boxlite/pulumi/passphrase/boxlite/dev': randomBytes(20) },
   })
   await assert.rejects(() => readEnvironment({ clients: fake, app: 'boxlite', stage: 'dev' }), /20 bytes/)
 })
@@ -119,15 +119,15 @@ test('a passphrase that is not an AES key size is refused before decrypting', as
 test('a stage is read through the bucket its caller never has to name', async () => {
   const fake = clients({
     objects: { 'secret/boxlite/dev.json': sealed({ PORT: '8080' }) },
-    passphrases: { '/sst/passphrase/boxlite/dev': KEY },
+    passphrases: { '/boxlite/pulumi/passphrase/boxlite/dev': KEY },
   })
   assert.deepEqual(await readEnvironment({ clients: fake, app: 'boxlite', stage: 'dev' }), { PORT: '8080' })
   // The bucket's name, the one object, and the key that opens it. No second
   // object: a stage's environment is one document.
   assert.deepEqual(fake.asked, [
-    '/sst/bootstrap',
+    '/boxlite/pulumi/bootstrap',
     's3:sst-state-abcdefghijkl/secret/boxlite/dev.json',
-    '/sst/passphrase/boxlite/dev',
+    '/boxlite/pulumi/passphrase/boxlite/dev',
   ])
 })
 

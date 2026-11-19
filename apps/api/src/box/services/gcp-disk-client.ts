@@ -5,9 +5,10 @@
 
 import { Injectable, Logger, Optional } from '@nestjs/common'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
+import { DiskRateLimitedError } from './disk-client-contract'
 
 /** GCP rejected the resize with its throttle signal (RESOURCE_EXHAUSTED) — for this API's budget that means the per-disk resize rate limit. */
-export class GcpDiskRateLimitedError extends Error {
+export class GcpDiskRateLimitedError extends DiskRateLimitedError {
   constructor(message: string) {
     super(message)
     this.name = 'GcpDiskRateLimitedError'

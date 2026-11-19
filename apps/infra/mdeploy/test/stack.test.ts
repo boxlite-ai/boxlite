@@ -819,13 +819,10 @@ test('the registry proxy runs the image published for this commit', () => {
   assert.equal(read(seen.registryProxy.request.image), `registry/${'a'.repeat(40)}-registry-proxy`)
 })
 
-test('the registry proxy takes its placement from the network, not a cluster host', () => {
-  // A managed service on the cloud that deploys it, like the runner a machine:
-  // neither is a task on the cluster, and a host handed to one would be a
-  // cluster task that nothing schedules.
+test('the registry proxy receives its workload host and network placement', () => {
   const { providers, seen } = bundle()
   deployStack({ providers, config, inputs: inputs() })
-  assert.equal(seen.registryProxy.input.host, undefined)
+  assert.deepEqual(seen.registryProxy.input.host, { cloud: 'aws', role: 'registry-proxy' })
   assert.ok(seen.registryProxy.input.network, 'it is handed the network to take its own placement from')
 })
 

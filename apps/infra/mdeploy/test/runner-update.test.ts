@@ -10,7 +10,11 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
+import { objectStore } from './runner-journal-fixture.ts'
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RunnerUpdateError, compareHostsIn, updateRunners, type Host } from '../src/runner-update.ts'
 import type { CommandResult, RunCommand } from '../src/upgrade-runners.ts'
@@ -29,12 +33,15 @@ const EXAMPLE = fileURLToPath(new URL('../../.mstage.config.example.json', impor
 
 /** A fleet of two on AWS, and an SSM command that succeeds. */
 const awsFleet = (calls: string[][] = []): RunCommand => {
+  const store = objectStore()
   return (file, args) => {
+    if (args[0] === 's3api') return store.run(file, args)
     calls.push([file, ...args])
     if (args[1] === 'describe-instances') {
-      return ok('i-0002\tboxlite-app-dev-runner-2\ni-0001\tboxlite-app-dev-runner')
+      return ok('i-00000002\tboxlite-app-dev-runner-2\ni-00000001\tboxlite-app-dev-runner')
     }
-    if (args[1] === 'send-command') return ok('cmd-1')
+    if (args[1] === 'list-commands') return ok(JSON.stringify({ Commands: [] }))
+    if (args[1] === 'send-command') return ok('00000000-0000-4000-a000-000000000001')
     if (args.includes('Status')) return ok('Success')
     return ok('')
   }
@@ -91,16 +98,17 @@ const gcpFleet = (calls: string[][] = []): RunCommand => {
   }
 }
 
-const drive = (argv: string[], run: RunCommand, home: 'aws' | 'gcp' = 'aws') =>
+const drive = (argv: string[], run: RunCommand, home: 'aws' | 'gcp' = 'aws', npmEnv: NodeJS.ProcessEnv = {}) =>
   updateRunners({
     argv,
-    environment: { MSTAGE_CONFIG: EXAMPLE },
+    environment: { MSTAGE_CONFIG: EXAMPLE, ...npmEnv },
     cwd: new URL('../..', import.meta.url).pathname,
     log: () => {},
     checkLogin: async () => 0,
     resolveHomeWith: (async () => ({
       identity: { home, childEnvironment: async () => ({ env: {}, expiresAt: null }) },
       backend: {},
+      stateBucket: async () => 'fixture-state',
     })) as never,
     run,
     sleep: () => {},
@@ -115,7 +123,7 @@ test('a fleet is discovered and visited in a stable order, one host at a time', 
   const sent = calls.filter((call) => call[2] === 'send-command')
   assert.equal(sent.length, 2, 'both hosts were rolled')
   const targets = sent.map((call) => call[call.indexOf('--instance-ids') + 1])
-  assert.deepEqual(targets, ['i-0001', 'i-0002'], 'sorted by the name a console shows, not by the API’s order')
+  assert.deepEqual(targets, ['i-00000001', 'i-00000002'], 'sorted by the name a console shows, not by the API’s order')
 })
 
 test('the fleet’s order is its own, not the string order of its names', () => {
@@ -201,7 +209,7 @@ test('naming one host rolls that one and no other', async () => {
   await drive(['--stage', 'dev', '--host', 'boxlite-app-dev-runner-2'], awsFleet(calls))
   const sent = calls.filter((call) => call[2] === 'send-command')
   assert.equal(sent.length, 1)
-  assert.ok(sent[0]?.includes('i-0002'))
+  assert.ok(sent[0]?.includes('i-00000002'))
 })
 
 test('a protected stage is confirmed, exactly as a deploy of it would be', async () => {
@@ -335,4 +343,27 @@ test('GCP rejects unscoped or cross-stage hosts and selectors before writing', a
       assert.equal(calls.filter((call) => call[4] === 'update').length, 0)
     }
   }
+})
+
+test('a rollout status option consumed by npm cannot start an AWS update', async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'runner-update-npm-'))
+  t.after(() => rmSync(cwd, { recursive: true, force: true }))
+  writeFileSync(join(cwd, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { probe: 'node probe.cjs' } }))
+  writeFileSync(
+    join(cwd, 'probe.cjs'),
+    'console.log(JSON.stringify({argv:process.argv.slice(2), status:process.env.npm_config_rollout_status}))',
+  )
+  const raw = execFileSync(
+    'npm',
+    ['run', '--silent', 'probe', '--rollout-status', '--', '--stage', 'dev', '--host', 'i-00000001'],
+    { cwd, encoding: 'utf8' },
+  )
+  const passed = JSON.parse(raw)
+  assert.equal(passed.status, 'true')
+  const calls: string[][] = []
+  await assert.rejects(
+    drive(passed.argv, awsFleet(calls), 'aws', { npm_config_rollout_status: passed.status }),
+    /--rollout-status was consumed by npm/,
+  )
+  assert.deepEqual(calls, [])
 })

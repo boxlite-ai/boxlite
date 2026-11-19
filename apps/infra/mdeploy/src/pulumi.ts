@@ -1,23 +1,8 @@
-/*
- * How a GCP stage deploys: Pulumi directly, with its state in the project it
- * deploys into.
- *
- * The AWS path spawns `sst`, and will keep doing that — its providers are
- * written against SST components. This path exists because of one thing SST
- * cannot do: keep state anywhere but S3, R2 or a local directory. Its `Home`
- * interface is unimplementable outside its own package (every method but
- * `Bootstrap` is unexported), and `LoadHome` is a three-case switch with
- * `default: invalid`. Pulumi's own backend takes `gs://`, so this driver gives a
- * GCP stage what the SST path cannot: no second cloud in the deploy path at all.
- *
- * The program runs inline rather than from a `Pulumi.yaml` — the stack is
- * TypeScript that already runs under this process's loader, and an inline
- * program keeps the engine from having to work out how to compile it. The cost
- * is that the program cannot read `process.env` for the stage's configuration,
- * which is why `gcpProgram` takes an environment instead.
- */
+/** Pulumi drives both clouds; configuration and deployment state share the stage's own cloud. */
 
+import type { EngineEvent } from '@pulumi/pulumi/automation/index.js'
 import { gcpProgram, type ProgramOutputs } from '../pulumi/program.ts'
+import { awsProgram } from '../pulumi/aws-program.ts'
 import { publicHostsFor } from '../stack/api.ts'
 import { userDomainFrom } from './stack-env.ts'
 import {
@@ -27,7 +12,7 @@ import {
 } from './dns-authorization.ts'
 import { spawnWith } from './upgrade-runners.ts'
 import type { Identity } from 'mstage/identity'
-import type { MstageConfig } from 'mstage/config'
+import type { Cloud, MstageConfig } from 'mstage/config'
 import type { StoreBackend } from 'mstage/env'
 import type { Scope } from 'mstage/scope'
 import { windowFor } from './credential-window.ts'
@@ -42,7 +27,14 @@ const NARRATION: Record<Intent, string> = {
   remove: 'removing',
   refresh: 'reconciling the state of',
 }
-type OperationOptions = { onOutput?: (output: string) => void; target?: string[]; targetDependents?: boolean }
+type OperationOptions = {
+  onOutput?: (output: string) => void
+  target?: string[]
+  targetDependents?: boolean
+  onEvent?: (event: EngineEvent) => void
+  refresh?: boolean
+  signal?: AbortSignal
+}
 const ACT: Record<Intent, (stack: PulumiStack, options: OperationOptions) => Promise<unknown>> = {
   deploy: (stack, options) => stack.up(options),
   diff: (stack, options) => stack.preview(options),
@@ -103,8 +95,8 @@ export type PulumiStack = {
   setAllConfig: (config: Record<string, { value: string; secret?: boolean }>) => Promise<void>
   up: (options: OperationOptions) => Promise<unknown>
   preview: (options: OperationOptions) => Promise<unknown>
-  destroy: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
-  refresh: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
+  destroy: (options: OperationOptions) => Promise<unknown>
+  refresh: (options: OperationOptions) => Promise<unknown>
   exportStack: () => Promise<{ deployment?: { resources?: DeployedResource[] } }>
 }
 
@@ -114,38 +106,70 @@ export type StackFactory = (input: {
   program: () => Promise<ProgramOutputs>
   /** What the engine subprocess inherits: credentials, and the passphrase. */
   envVars: Record<string, string>
-  /** `gs://<bucket>` — the same bucket mstage keeps this stage's store in. */
+  /** `s3://<bucket>` or `gs://<bucket>` — the same bucket mstage keeps this stage's store in. */
   backendUrl: string
   selectOnly?: boolean
 }) => Promise<PulumiStack>
 
 /**
- * The real Automation API, imported only when a GCP stage asks for it.
+ * The real Automation API, loaded when a deployment runs.
  *
  * Structural above and lazy here for the reason mstage loads the Google SDKs
  * lazily (`mstage/src/home.ts:44-49`): an AWS-only repository should not have to
  * carry the packages, and a test should be able to drive this without them.
  */
-const createStack: StackFactory = async ({ projectName, stackName, program, envVars, backendUrl, selectOnly }) => {
+export const createStack: StackFactory = async ({
+  projectName,
+  stackName,
+  program,
+  envVars,
+  backendUrl,
+  selectOnly,
+}) => {
   let automation: any
   try {
     // A constant rather than a literal: see the note in `pulumi/program.ts`.
     automation = await import(AUTOMATION)
   } catch (error) {
     throw new PulumiDeployError(
-      'A GCP stage needs @pulumi/pulumi installed in apps/infra, and the `pulumi` CLI on PATH — ' +
+      'A deployment needs @pulumi/pulumi installed in apps/infra, and the `pulumi` CLI on PATH — ' +
         'the Automation API does not bundle the engine, it spawns that binary. ' +
         `Install both, or pass a factory to pulumiDeploy. (${(error as Error).message})`,
     )
   }
   const stack = { stackName, projectName, program }
   const workspace = {
+    ...(backendUrl.startsWith('s3://') && { pulumiCommand: await awsPulumiCommand(automation, envVars) }),
     envVars,
     projectSettings: { name: projectName, runtime: 'nodejs', backend: { url: backendUrl } },
   }
   return selectOnly
     ? automation.LocalWorkspace.selectStack(stack, workspace)
     : automation.LocalWorkspace.createOrSelectStack(stack, workspace)
+}
+
+// The SDK can prepare an update after the deadline and attaches its abort listener after spawn.
+async function awsPulumiCommand(automation: any, envVars: Record<string, string>) {
+  const cli = await automation.PulumiCommand.get({
+    skipVersionCheck: Boolean(
+      envVars.PULUMI_AUTOMATION_API_SKIP_VERSION_CHECK || process.env.PULUMI_AUTOMATION_API_SKIP_VERSION_CHECK,
+    ),
+  })
+  return {
+    command: cli.command,
+    version: cli.version,
+    run(
+      args: string[],
+      cwd: string,
+      env: Record<string, string>,
+      onOutput?: (line: string) => void,
+      onError?: (line: string) => void,
+      signal?: AbortSignal,
+    ) {
+      signal?.throwIfAborted()
+      return cli.run(args, cwd, env, onOutput, onError, signal)
+    },
+  }
 }
 
 export type PulumiDeployInput = {
@@ -191,7 +215,7 @@ export const pulumiDeploy = async ({
   createStackWith = createStack,
   lookupAuthorizations,
 }: PulumiDeployInput): Promise<number> => {
-  deploymentComponents({ value: components, home: 'gcp', intent })
+  deploymentComponents({ value: components, home: scope.home, intent })
   /*
    * The project the stage declares, which is also what the Pulumi provider has
    * to be pointed at. Read from the one declaration rather than asked of the
@@ -200,7 +224,7 @@ export const pulumiDeploy = async ({
    * anyway (`mstage/src/config/load.ts`).
    */
   const project = scope.project
-  if (!project) {
+  if (scope.home === 'gcp' && !project) {
     throw new PulumiDeployError(
       `Stage "${scope.stage}" declares no project. A GCP stage declares it as project in mstage.config.json.`,
     )
@@ -210,10 +234,14 @@ export const pulumiDeploy = async ({
   // that skipped it would be one place the two clouds differ for no reason.
   await identity.assertUsableFor(windowFor(intent))
 
-  const { env: credentials } = await identity.childEnvironment()
+  const { env: credentials, expiresAt } = await identity.childEnvironment()
   // The store last, so a stale export in this shell cannot shadow it: the point
   // of keeping configuration in one place is that it wins.
-  const environment = definedOnly({ ...credentials, ...stageEnvironment })
+  const environment = definedOnly({
+    ...credentials,
+    ...stageEnvironment,
+    ...(scope.home === 'aws' ? { AWS_REGION: scope.region, AWS_DEFAULT_REGION: scope.region } : {}),
+  })
   if (!environment[PASSPHRASE_KEY]?.trim()) {
     throw new PulumiDeployError(
       `${PASSPHRASE_KEY} is required — Pulumi seals the state's secrets with it. Generate 32 random bytes ` +
@@ -228,7 +256,7 @@ export const pulumiDeploy = async ({
   const stage = scope.stage as string
   log(
     `${NARRATION[intent]} ${components === 'api+runner' ? 'every component' : components + ' only'} of ${app} stage ${stage} ` +
-      `${intent === 'remove' ? 'from' : 'into'} ${project} (${scope.region}) with pulumi`,
+      `${intent === 'remove' ? 'from' : 'into'} ${project ?? 'AWS'} (${scope.region}) with pulumi`,
   )
 
   /*
@@ -242,7 +270,7 @@ export const pulumiDeploy = async ({
    * for that same reason, in its own words.
    */
   const domain = environment.STACK_DOMAIN
-  if (intent === 'deploy' && domain && components === 'api+runner') {
+  if (scope.home === 'gcp' && project && intent === 'deploy' && domain && components === 'api+runner') {
     assertAuthorizationsConverge({
       app,
       stage,
@@ -256,10 +284,14 @@ export const pulumiDeploy = async ({
     })
   }
 
+  const common = { app, stage, region: scope.region, environment, cwd: config.root }
   const stack = await createStackWith({
     projectName: app,
     stackName: stage,
-    program: gcpProgram({ app, stage, region: scope.region, project, zone: scope.zone, environment, cwd: config.root }),
+    program:
+      scope.home === 'aws'
+        ? awsProgram({ ...common, stateBucket: state.bucket, protectedStage: scope.protect })
+        : gcpProgram({ ...common, project: project!, zone: scope.zone }),
     /*
      * The whole stage environment, not only the credentials and the passphrase.
      * The engine spawns a provider plugin per provider, and those are the
@@ -267,30 +299,49 @@ export const pulumiDeploy = async ({
      * CLI itself needs would leave the DNS record unwritable.
      */
     envVars: environment,
-    backendUrl: `gs://${state.bucket}`,
+    backendUrl: `${scope.home === 'aws' ? 's3' : 'gs'}://${state.bucket}`,
     ...(components === 'api+runner' ? {} : { selectOnly: true }),
   })
 
-  // Exported state can contain secrets: inspect identities/labels only and never log the payload.
+  let resources: DeployedResource[] = []
+  if (components !== 'api+runner' || (scope.home === 'aws' && intent === 'remove')) {
+    const checkpoint = await stack.exportStack()
+    if (!Array.isArray(checkpoint.deployment?.resources))
+      throw new PulumiDeployError('Cannot inspect the current stack resources')
+    resources = checkpoint.deployment.resources
+  }
+  if (scope.home === 'aws' && intent === 'remove' && resources.some((resource) => resource.protect)) {
+    throw new PulumiDeployError(
+      'Protected resources remain; follow the retained-data teardown in docs/aws/deployment.md#retained-data-teardown before removal',
+    )
+  }
   const targets =
     components === 'api+runner'
       ? undefined
       : componentTargets({
           components,
+          home: scope.home,
           app,
           stage,
           environment,
-          resources: (await stack.exportStack()).deployment?.resources ?? [],
+          resources,
         })
   if (targets) log(`pulumi targets: ${targets.join(', ')}`)
 
   // The provider's coordinates as stack configuration rather than as
   // environment: an inline program is not a subprocess, so what the engine is
   // told is what it uses.
-  await stack.setAllConfig({
-    'gcp:project': { value: project },
-    'gcp:region': { value: scope.region },
-  })
+  await stack.setAllConfig(
+    scope.home === 'aws'
+      ? {
+          'aws:region': { value: scope.region },
+          'aws:defaultTags': { value: JSON.stringify({ tags: { 'boxlite:app': app, 'boxlite:stage': stage } }) },
+        }
+      : {
+          'gcp:project': { value: project! },
+          'gcp:region': { value: scope.region },
+        },
+  )
 
   const onOutput = (output: string) => {
     for (const line of output.split('\n')) {
@@ -301,8 +352,19 @@ export const pulumiDeploy = async ({
       log(line)
     }
   }
+  const deadlineMs = Math.min(
+    120 * 60_000,
+    expiresAt ? Math.max(1, expiresAt.getTime() - Date.now() - 60_000) : Infinity,
+  )
+  const signal = scope.home === 'aws' ? AbortSignal.timeout(deadlineMs) : undefined
   try {
-    await ACT[intent](stack, { onOutput, ...(targets ? { target: targets, targetDependents: false } : {}) })
+    signal?.throwIfAborted()
+    await ACT[intent](stack, {
+      onOutput,
+      ...(signal ? { signal } : {}),
+      ...(targets || (scope.home === 'aws' && intent === 'deploy') ? { refresh: true } : {}),
+      ...(targets ? { target: targets, targetDependents: false } : {}),
+    })
     return 0
   } catch (error) {
     // The engine already printed what failed; this says which stage it was, so
@@ -312,7 +374,7 @@ export const pulumiDeploy = async ({
   }
 }
 
-export type GcpTargetInput = {
+export type PulumiTargetInput = {
   config: Pick<MstageConfig, 'root'>
   scope: Scope
   identity: PulumiDeployInput['identity']
@@ -326,22 +388,12 @@ export type GcpTargetInput = {
   createStackWith?: StackFactory
 }
 
-/**
- * A GCP stage, as one bundle.
- *
- * Two groups rather than one: the stage's own configuration, and the passphrase
- * Pulumi opens its state with. The SST path has no equivalent, which is exactly
- * why the group list belongs to the target instead of to whoever fetches it.
- */
-export const gcpTarget = ({
-  config,
-  scope,
-  identity,
-  backend,
-  stateBucket,
-  createStackWith,
-}: GcpTargetInput): DeployTarget => ({
-  cloud: 'gcp',
+/** Credentials, environment groups and state access are resolved once for either cloud. */
+const cloudTarget = (
+  cloud: Cloud,
+  { config, scope, identity, backend, stateBucket, createStackWith }: PulumiTargetInput,
+): DeployTarget => ({
+  cloud,
   engine: 'pulumi',
   backend,
   // The passphrase on either intent: a teardown still has to open the state to
@@ -351,17 +403,21 @@ export const gcpTarget = ({
     PULUMI_GROUP,
   ],
 
-  async run({ intent, components, stageEnvironment, log }: DeployRequest): Promise<number> {
+  async run({ intent = 'deploy', components, stageEnvironment = {}, log }: DeployRequest): Promise<number> {
+    deploymentComponents({ value: components, home: cloud, intent })
     return pulumiDeploy({
       intent,
       components,
       config,
       scope,
       identity,
-      state: { bucket: await stateBucket() },
       stageEnvironment,
       log,
+      state: { bucket: await stateBucket() },
       ...(createStackWith ? { createStackWith } : {}),
     })
   },
 })
+
+export const gcpTarget = (input: PulumiTargetInput): DeployTarget => cloudTarget('gcp', input)
+export const awsTarget = (input: PulumiTargetInput): DeployTarget => cloudTarget('aws', input)

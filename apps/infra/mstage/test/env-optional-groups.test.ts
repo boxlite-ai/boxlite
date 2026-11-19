@@ -56,12 +56,12 @@ const harness = (stored: Record<string, string>) => {
         }
         const object = store[command.input.Key]
         if (!object) throw notFound('NoSuchKey')
-        return { Body: { transformToByteArray: async () => object } }
+        return { ETag: '"fixture"', Body: { transformToByteArray: async () => object } }
       },
     },
     ssm: {
       send: async (command: any) =>
-        command.input.Name === '/sst/bootstrap'
+        command.input.Name === '/boxlite/pulumi/bootstrap'
           ? { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
           : { Parameter: { Value: KEY.toString('base64') } },
     },

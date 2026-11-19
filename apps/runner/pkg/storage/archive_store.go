@@ -109,6 +109,7 @@ type S3ArchiveStoreConfig struct {
 	Region          string
 	AccessKeyId     string
 	SecretAccessKey string
+	SessionToken    string
 	Bucket          string
 }
 
@@ -122,8 +123,18 @@ func NewS3ArchiveStore(cfg S3ArchiveStoreConfig) (*S3ArchiveStore, error) {
 		return nil, err
 	}
 
+	if (cfg.AccessKeyId == "") != (cfg.SecretAccessKey == "") {
+		return nil, fmt.Errorf("S3 archive access key and secret key must be supplied together")
+	}
+	creds := credentials.NewStaticV4(cfg.AccessKeyId, cfg.SecretAccessKey, cfg.SessionToken)
+	if cfg.AccessKeyId == "" {
+		creds = credentials.NewChainCredentials([]credentials.Provider{
+			&credentials.EnvAWS{},
+			&credentials.IAM{Region: cfg.Region},
+		})
+	}
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKeyId, cfg.SecretAccessKey, ""),
+		Creds:  creds,
 		Secure: secure,
 		Region: cfg.Region,
 	})

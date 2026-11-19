@@ -23,14 +23,9 @@ import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { RunnerEvents } from '../constants/runner-events'
 import { RunnerUnschedulableUpdatedEvent } from '../events/runner-unschedulable-updated.event'
 import { runnerLookupCacheKeyById } from '../utils/runner-lookup-cache.util'
-import {
-  GcpDiskClient,
-  GcpDiskClientLike,
-  GcpDiskPerformanceFields,
-  GcpDiskSnapshot,
-  GcpDiskRateLimitedError,
-  toExpansionClientError,
-} from './gcp-disk-client'
+import type { GcpDiskPerformanceFields, GcpDiskSnapshot } from './gcp-disk-client'
+import { CloudDiskClient, diskExpansionBudget, toDiskClientError } from './disk-client'
+import { DiskRateLimitedError, DiskClientLike } from './disk-client-contract'
 import { runnerDiskConfig } from '../../config/configuration'
 
 /** Fixed behaviors, deliberately not configurable (misconfiguration surface). */
@@ -39,7 +34,7 @@ export const RATE_LIMIT_COOLDOWN_MS = 30 * 60 * 1000
 /** Fewer samples (or a span shorter than this) means no growth history: H falls back to its floor. */
 export const MIN_GROWTH_SAMPLES = 2
 export const MIN_GROWTH_SPAN_MS = 30 * 60 * 1000
-/** Per round, cap on runners actually sent to GCP; the rest wait for the next round. */
+/** Per round, cap on runners sent to their cloud disk API; the rest wait for the next round. */
 export const MAX_PATCHES_PER_ROUND = 20
 /**
  * ext4 metadata keeps the filesystem ~2.1% below the block device (measured:
@@ -338,7 +333,7 @@ export function sampleBucketAt(now: Date, intervalMinutes: number): Date {
  *
  * One cron round does, in order: resolve pending expansions (poll the zone
  * operation, confirm via the runner's reported diskGiB), then evaluate every
- * READY runner that reports a GCP disk: lift stale exhaustion marks, record a
+ * READY runner that reports an expandable cloud disk: lift stale exhaustion marks, record a
  * usage sample, and where gates allow (no pending attempt, no rate-limit
  * cooldown, budget remaining, under the cap, water level crossed) issue one
  * `disks.update` that carries the capacity change and — when the per-disk
@@ -353,7 +348,7 @@ export function sampleBucketAt(now: Date, intervalMinutes: number): Date {
  * A single Redis lease keeps multiple API instances from running the round.
  *
  * Everything is dormant while RUNNER_DISK_EXPANSION_ENABLED is false:
- * no sampling, no marks, no GCP calls.
+ * no sampling, no marks, no cloud mutations.
  */
 @Injectable()
 export class RunnerDiskExpansionService {
@@ -367,8 +362,8 @@ export class RunnerDiskExpansionService {
     private readonly samplesRepository: Repository<RunnerDiskUsageSample>,
     @InjectRepository(Runner)
     private readonly runnerRepository: Repository<Runner>,
-    @Inject(GcpDiskClient)
-    private readonly gcpDiskClient: GcpDiskClientLike,
+    @Inject(CloudDiskClient)
+    private readonly diskClient: DiskClientLike,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly configService: TypedConfigService,
     private readonly dataSource: DataSource,
@@ -388,11 +383,7 @@ export class RunnerDiskExpansionService {
       'Runners unschedulable because their data disk cannot grow further',
       () => this.gaugeValues.exhausted,
     )
-    gauge(
-      'runner_disk_missing_ref',
-      'Ready runners reporting no data-disk identity (rollout gap on GCP stages; expected on AWS stages)',
-      () => this.gaugeValues.missingRef,
-    )
+    gauge('runner_disk_missing_ref', 'Ready runners reporting no data-disk identity', () => this.gaugeValues.missingRef)
     gauge(
       'runner_disk_expansion_uncapped',
       'Runners skipped because expansion is on without any cap configured',
@@ -461,7 +452,7 @@ export class RunnerDiskExpansionService {
           continue
         }
 
-        const op = await this.gcpDiskClient.getZoneOperation(runner.dataDiskRef, row.operation)
+        const op = await this.diskClient.getZoneOperation(runner.dataDiskRef, row.operation, runner.name)
         if (op.status === 'DONE' && op.error) {
           // Zone capacity or quota failures surface here immediately, minutes
           // before any confirmation timeout would.
@@ -589,7 +580,8 @@ export class RunnerDiskExpansionService {
     },
   ): Promise<boolean> {
     const { expansion, expandLimitGiB, windowMs, retentionCutoff, now } = ctx
-    const budgetWindowStart = new Date(now.getTime() - expansion.growthWindowHours * 3600_000)
+    const budget = diskExpansionBudget(ctx.dataDiskRef, expansion)
+    const budgetWindowStart = new Date(now.getTime() - budget.hours * 3600_000)
     // Lift and cap gates share the effective cap: explicit cap, admission
     // limit, or the per-runner relative default anchored to the disk's first
     // attempt — never an undefined dead end.
@@ -606,7 +598,7 @@ export class RunnerDiskExpansionService {
       const budgetFree =
         (await this.expansions.count({
           where: { runnerId: runner.id, accepted: true, requestedAt: MoreThan(budgetWindowStart) },
-        })) < expansion.maxExpansionsPerWindow
+        })) < budget.count
       const capHasRoom = cap !== undefined && !deviceReachedGiB(runner.diskGiB, cap)
       if (runner.currentDiskUsagePercentage < expansion.liftPercentage && budgetFree && capHasRoom) {
         await this.liftExhaustedMark(runner)
@@ -620,7 +612,7 @@ export class RunnerDiskExpansionService {
     if (await this.expansions.exist({ where: { runnerId: runner.id, status: RunnerDiskExpansionStatus.PENDING } })) {
       return false
     }
-    // A recent GCP throttle rejection keeps the runner quiet for the cooldown.
+    // A recent cloud throttle rejection keeps the runner quiet for the cooldown.
     const cooldownStart = new Date(now.getTime() - RATE_LIMIT_COOLDOWN_MS)
     if (
       await this.expansions.exist({
@@ -634,7 +626,7 @@ export class RunnerDiskExpansionService {
     const accepted = await this.expansions.count({
       where: { runnerId: runner.id, accepted: true, requestedAt: MoreThan(budgetWindowStart) },
     })
-    if (accepted >= expansion.maxExpansionsPerWindow) {
+    if (accepted >= budget.count) {
       await this.markExhausted(runner, 'budget exhausted')
       return false
     }
@@ -693,8 +685,8 @@ export class RunnerDiskExpansionService {
     // round from re-requesting this resize while one is in flight (the
     // pending gate reads it), and it separates persistence failures from
     // cloud failures: an insert failure here propagates as itself instead of
-    // being classified as a GCP rejection. A crash between the insert and
-    // the GCP call leaves a pending row without an operation; the confirm
+    // being classified as a cloud rejection. A crash between the insert and
+    // the cloud call leaves a pending row without an operation; the confirm
     // timeout closes that as unconfirmed.
     const inserted = await this.expansions.insert({
       runnerId: runner.id,
@@ -717,14 +709,17 @@ export class RunnerDiskExpansionService {
     const performance = await this.resolvePerformanceFields(runner, ref, toGiB, now)
     let operation: string
     try {
-      ;({ operation } = performance?.fields
-        ? await this.gcpDiskClient.resizeDisk(ref, toGiB, performance.fields)
-        : await this.gcpDiskClient.resizeDisk(ref, toGiB))
+      ;({ operation } =
+        ref.provider === 'aws'
+          ? await this.diskClient.resizeDisk(ref, toGiB, undefined, runner.name)
+          : performance?.fields
+            ? await this.diskClient.resizeDisk(ref, toGiB, performance.fields)
+            : await this.diskClient.resizeDisk(ref, toGiB))
     } catch (e) {
       // Only cloud-side failures land here; persistence failures propagate
       // unclassified.
-      const mapped = toExpansionClientError(e)
-      const rateLimited = mapped instanceof GcpDiskRateLimitedError
+      const mapped = toDiskClientError(ref, e)
+      const rateLimited = mapped instanceof DiskRateLimitedError
       // A performance-carrying rejection is credited to the performance
       // budget: performanceUpdated already opens the 4h performance cooldown,
       // and recording rate_limited here would also freeze capacity for the
@@ -788,6 +783,8 @@ export class RunnerDiskExpansionService {
     toGiB: number,
     now: Date,
   ): Promise<{ fields: GcpDiskPerformanceFields | undefined; attributes: Record<string, string | number> }> {
+    // EBS capacity growth preserves provisioned performance.
+    if (ref.provider !== 'gcp' || !this.diskClient.getDisk) return { fields: undefined, attributes: {} }
     const cooldownStart = new Date(now.getTime() - PERFORMANCE_COOLDOWN_MS)
     let perfCooldownActive = false
     try {
@@ -815,7 +812,7 @@ export class RunnerDiskExpansionService {
     try {
       // Deadline-raced: see BASELINE_READ_DEADLINE_MS. Expiry lands in the
       // same size-only fallback as a failed read below.
-      disk = await raceDeadline(this.gcpDiskClient.getDisk(ref))
+      disk = await raceDeadline(this.diskClient.getDisk(ref))
     } catch (e) {
       this.logger.warn(`Runner ${runner.id} disk read failed, expanding size only: ${errorMessage(e)}`, {
         ...expansionLogBase(runner, ref),

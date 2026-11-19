@@ -284,6 +284,7 @@ The calling job binds the target Environment, reads its `vars`, and supplies tho
 for example, `gcp-deployer: ${{ vars.GCP_DEPLOYER }}` becomes `${{ inputs.gcp-deployer }}` inside the action.
 Composite action manifests have a narrower context set than workflows and cannot reference `vars` directly.
 
+AWS callers pass `AWS_PULUMI_DEPLOY_ROLE_ARN` as `aws-pulumi-deploy-role-arn`; the action uses its input to assume the native role.
 The reusable image workflow carries the promotion source declaration separately through `stage-config-from`.
 
 The mdeploy tests parse composite-step input expressions against the Runner's supported contexts and check every caller's configuration bindings.
@@ -306,9 +307,7 @@ Run them with `make test:apps:mdeploy`; workflow lint alone does not exercise lo
 
 `setup-infra` saves an exact dependency-cache miss immediately after `npm ci`,
 using the key recorded by its restore step. Callers may then change their checkout.
-The deployment action saves a generated SST platform after use, before returning to its caller.
-
-Both caches use `v2` namespaces and exact keys; stage state and configuration stay outside their paths.
+The dependency cache uses an exact `v2` key and contains only installed packages.
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
 `build-guest` and `run-in-manylinux` run after both. They are separate actions rather than one
@@ -439,13 +438,9 @@ Stage declarations travel through `BOXLITE_MSTAGE_BOXLITE_APP_CONFIG` on the mat
 | Cloud/path | GitHub inputs established by bootstrap |
 | --- | --- |
 | GCP | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOYER`, `GCP_IMAGE_PUBLISHER` Environment variables |
-| AWS | `AWS_ACCOUNT_ID`, `AWS_REGION` Environment variables for federated credentials |
-| Legacy AWS wrapper | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID` Environment secrets |
+| AWS | `AWS_PULUMI_DEPLOY_ROLE_ARN`, `AWS_ACCOUNT_ID`, `AWS_REGION` Environment variables |
 
-mdeploy reads application values from the encrypted stage store through mstage. The retained legacy
-AWS wrapper uses its SST manifest and bootstrap credential copies. AWS bootstrap still prepares
-legacy `boxlite` resources while mdeploy names `boxlite-app`; read the
-[compatibility boundary](../../apps/infra/bootstrap/aws/README.md#aws-mdeploy-compatibility) before switching.
+mdeploy reads application values from the encrypted stage store through mstage. AWS bootstrap prepares the stage's native Pulumi role, state bucket and immutable release repository.
 
 [Configuration](../../apps/infra/docs/configuration.md) explains groups, digests and secret handling;
 [security](../../apps/infra/docs/security.md) distinguishes workflow gates from live IAM and Environment settings.

@@ -22,8 +22,8 @@ inputs:
   stage-config:
     description: Target Environment stage declaration
     required: true
-  aws-account-id:
-    description: Target AWS account when using ECR
+  aws-pulumi-deploy-role-arn:
+    description: Native AWS deployment role from the target Environment
     default: ''
   gcp-workload-identity-provider:
     description: Target GCP workload identity provider
@@ -128,12 +128,7 @@ runs:
       if: steps.config.outputs.kind == 'ecr'
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        # Composed from the stage's AWS_ACCOUNT_ID, not a stored role ARN: the
-        # role name is fixed per stage (bootstrap/environment.ts's
-        # githubDeployRoleName, the same name bootstrap/aws.ts creates the role
-        # under), so only the account id has to be configured. Every other
-        # deploy workflow in this repository composes it the same way.
-        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/boxlite-${{ inputs.stage || inputs.to }}-github-deploy
+        role-to-assume: ${{ inputs.aws-pulumi-deploy-role-arn }}
         aws-region: ${{ steps.config.outputs.region }}
         role-session-name: mbuild-${{ github.run_id }}
 

@@ -39,18 +39,15 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { runnerJournal, outstanding, isSsmCommandId, type JournalScope } from './runner-journal.ts'
 import { ON_HOST } from '../stack/runner-upgrade.ts'
 
 /** ~5 min at 10s apart, which covers an agent registering on a fresh instance. */
 const CONNECT_ATTEMPTS = 30
 const CONNECT_PAUSE_SECONDS = 10
-/**
- * ~30 min at 5s apart. It has to stay above everything the payload can bound —
- * 300s fetches and two readiness gates of up to 150s each — with room for the apt/tar/systemctl
- * steps that take no timeout at all. Read it as "supervision must exceed
- * everything we can bound, with room for what we cannot".
- */
-const COMPLETION_ATTEMPTS = 360
+/** Remote execution is capped at 30 minutes; supervision allows five more. */
+const COMPLETION_ATTEMPTS = 420
 const COMPLETION_PAUSE_SECONDS = 5
 
 export const TERMINAL_SSM_STATUSES = new Set(['Success', 'Failed', 'Cancelled', 'TimedOut'])
@@ -62,6 +59,9 @@ export const TERMINAL_SSM_STATUSES = new Set(['Success', 'Failed', 'Cancelled', 
  * half-upgraded. A bad id or a denied permission fails immediately.
  */
 const RETRYABLE_SEND_ERRORS = /InvalidInstanceId|ThrottlingException|TooManyUpdates|RequestLimitExceeded/
+// An explicit AWS service rejection proves that this attempt did not create a command.
+const DEFINITIVE_SEND_DENIAL =
+  /An error occurred \((?:AccessDenied(?:Exception)?|UnauthorizedOperation|UnrecognizedClientException|ExpiredToken(?:Exception)?|InvalidDocument(?:Version)?|InvalidParameters|ValidationException|UnsupportedPlatformType)\) when calling the SendCommand operation/
 
 /**
  * Which channel failures are worth another attempt.
@@ -92,7 +92,15 @@ export type RunCommand = (file: string, args: string[]) => CommandResult
 export const spawnWith =
   (environment: NodeJS.ProcessEnv = process.env): RunCommand =>
   (file, args) => {
-    const result = spawnSync(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: environment })
+    const result = spawnSync(file, args, {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      env:
+        file === 'aws' && args[1] === 'send-command'
+          ? { ...environment, AWS_MAX_ATTEMPTS: '1', AWS_RETRY_MODE: 'standard' }
+          : environment,
+      ...(file === 'aws' ? { timeout: 30_000 } : {}),
+    })
     if (result.error) {
       const code = (result.error as NodeJS.ErrnoException).code
       if (code === 'ENOENT') throw new Error(`the \`${file}\` CLI is required but was not found on PATH`)
@@ -126,7 +134,10 @@ export type UpgradeOneRequest = {
   payload: string
   /** The host as the control plane knows it, for the log. */
   label?: string
-} & ({ cloud: 'aws'; target: string; region: string } | { cloud: 'gcp'; target: string; project: string; zone: string })
+} & (
+  | { cloud: 'aws'; target: string; region: string; journal?: JournalScope }
+  | { cloud: 'gcp'; target: string; project: string; zone: string }
+)
 
 export type UpgradeContext = {
   run?: RunCommand
@@ -146,6 +157,46 @@ const indent = (text: string): string =>
     .map((line) => `    ${line}`)
     .join('\n')
 
+const inventorySsm = (target: string, region: string, run: RunCommand, operationComment?: string) => {
+  // Inventory the whole document, including Pending commands that have not
+  // reached their instance yet. The CLI follows all pages before filtering here.
+  const inventory = run('aws', [
+    'ssm',
+    'list-commands',
+    '--region',
+    region,
+    '--filters',
+    ...(operationComment ? [] : ['key=ExecutionStage,value=Executing']),
+    'key=DocumentName,value=AWS-RunShellScript',
+    ...(operationComment ? ['--instance-id', target] : []),
+    '--query',
+    '{Commands:Commands[].{CommandId:CommandId,Comment:Comment,InstanceIds:InstanceIds},NextToken:NextToken}',
+    '--output',
+    'json',
+  ])
+  if (!inventory.ok)
+    throw new Error(`cannot reconcile SSM commands for ${target}: ${inventory.stderr || '(no stderr)'}`)
+  let commands: { CommandId: string; Comment: string; InstanceIds: string[] }[]
+  try {
+    const response = JSON.parse(inventory.stdout)
+    if (!Array.isArray(response.Commands) || response.NextToken) throw new Error('incomplete command inventory')
+    commands = response.Commands.filter((item: any) => {
+      if (
+        typeof item.Comment !== 'string' ||
+        !(operationComment ? item.Comment === operationComment : item.Comment.startsWith('boxlite-runner upgrade to '))
+      )
+        return false
+      if (!isSsmCommandId(item.CommandId) || !Array.isArray(item.InstanceIds) || !item.InstanceIds.length) {
+        throw new Error('Runner command has no complete target identity')
+      }
+      return item.InstanceIds.includes(target)
+    })
+  } catch (error) {
+    throw new Error(`invalid SSM command inventory for ${target}: ${String(error)}`)
+  }
+  return commands
+}
+
 /**
  * SSM: accept the command, then poll to a terminal status.
  *
@@ -160,6 +211,7 @@ const upgradeOverSsm = ({
   identity,
   payload,
   region,
+  journal: scope,
   run,
   sleep,
   log,
@@ -168,43 +220,93 @@ const upgradeOverSsm = ({
   identity: string
   payload: string
   region: string
+  journal?: JournalScope
   run: RunCommand
   sleep: (seconds: number) => void
   log: (line: string) => void
 }): number => {
-  const send = [
-    'ssm',
-    'send-command',
-    '--region',
-    region,
-    '--document-name',
-    'AWS-RunShellScript',
-    '--instance-ids',
-    target,
-    '--comment',
-    `boxlite-runner upgrade to ${identity}`,
-    '--parameters',
-    `commands=["echo ${payload} | base64 -d | bash"]`,
-    '--query',
-    'Command.CommandId',
-    '--output',
-    'text',
-  ]
-
-  let commandId = ''
-  for (let attempt = 1; ; attempt++) {
-    const sent = run('aws', send)
-    if (sent.ok) {
-      commandId = sent.stdout
-      break
-    }
-    if (!RETRYABLE_SEND_ERRORS.test(sent.stderr) || attempt >= CONNECT_ATTEMPTS) {
-      throw new Error(`aws ssm send-command failed for ${target}: ${sent.stderr || '(no stderr)'}`)
-    }
-    log(`    ${target} not accepted yet (${attempt}/${CONNECT_ATTEMPTS}); retrying`)
-    sleep(CONNECT_PAUSE_SECONDS)
+  const deadline = Date.now() + 35 * 60_000
+  const digest = createHash('sha256').update(payload).digest('hex')
+  const journal = scope && runnerJournal(scope, region, target, run)
+  let record = journal?.read() ?? null
+  const active = outstanding(record) ? record.entry : undefined
+  const samePayload = !active || (active.digest === digest && active.identity === identity)
+  const operationComment = (id: string, version: string) =>
+    `op ${id} boxlite-runner upgrade to ${version}`.slice(0, 100)
+  let comment = active
+    ? operationComment(active.operationId, active.identity)
+    : `boxlite-runner upgrade to ${identity.slice(0, 36)} [${digest.slice(0, 32)}]`
+  const commands = active?.commandId ? [] : inventorySsm(target, region, run, active ? comment : undefined)
+  if (commands.length > 1) {
+    throw new Error(
+      `${target}: multiple active updates; reconcile commands ${commands.map((item) => item.CommandId).join(', ')} before retrying`,
+    )
   }
-  log(`    command:  ${commandId}`)
+  const previous = commands[0]
+  let commandId = active?.commandId ?? previous?.CommandId ?? ''
+  if (active && !commandId)
+    throw new Error(
+      `${target}: operation ${active.operationId} has no visible SSM command yet; retry to reconcile or explicitly force unlock`,
+    )
+  if (commandId) {
+    log(`    resuming command: ${commandId}`)
+  } else {
+    if (journal) {
+      record = journal.write(record, { operationId: randomUUID(), digest, identity, status: 'submitting' })
+      comment = operationComment(record.entry.operationId, record.entry.identity)
+      log(`    operation: ${record.entry.operationId}`)
+    }
+    const send = [
+      'ssm',
+      'send-command',
+      '--region',
+      region,
+      '--document-name',
+      'AWS-RunShellScript',
+      '--instance-ids',
+      target,
+      '--comment',
+      comment,
+      '--timeout-seconds',
+      '60',
+      '--parameters',
+      `commands=["echo ${payload} | base64 -d | bash"],executionTimeout=["1800"]`,
+      '--query',
+      'Command.CommandId',
+      '--output',
+      'text',
+    ]
+    for (let attempt = 1; ; attempt++) {
+      if (journal && journal.read()?.etag !== record?.etag)
+        throw new Error(target + ': Runner operation was superseded before dispatch')
+      const sent = run('aws', send)
+      if (sent.ok) {
+        commandId = sent.stdout
+        if (!isSsmCommandId(commandId))
+          throw new Error(`${target}: SSM accepted an update without a valid command ID; reconcile before retrying`)
+        break
+      }
+      // Retry only an explicit rejection. An interrupted request may already
+      // have been accepted; its next invocation must inventory before sending.
+      if (!RETRYABLE_SEND_ERRORS.test(sent.stderr) || attempt >= CONNECT_ATTEMPTS || Date.now() >= deadline) {
+        if (journal && record && (RETRYABLE_SEND_ERRORS.test(sent.stderr) || DEFINITIVE_SEND_DENIAL.test(sent.stderr)))
+          journal.write(record, { ...record.entry, status: 'failed' })
+        throw new Error(
+          `aws ssm send-command failed for ${target}: ${sent.stderr || '(no stderr)'}; reconcile before retrying`,
+        )
+      }
+      log(`    ${target} not accepted yet (${attempt}/${CONNECT_ATTEMPTS}); retrying`)
+      sleep(CONNECT_PAUSE_SECONDS)
+    }
+    log(`    command:  ${commandId}`)
+  }
+
+  // A pre-journal command may still be running during an upgrade of the deployer.
+  // Only mutate a record for commands issued under its operation ID.
+  const tracked =
+    record && comment === operationComment(record.entry.operationId, record.entry.identity) ? journal : undefined
+  if (tracked && record && !record.entry.commandId)
+    record = tracked.write(record, { ...record.entry, commandId, status: 'submitted' })
 
   const invocation = [
     'ssm',
@@ -223,7 +325,7 @@ const upgradeOverSsm = ({
   let lastFailure = ''
   let lastStatus = ''
   let terminal = ''
-  for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS && Date.now() < deadline; attempt++) {
     const polled = run('aws', [...invocation, '--query', 'Status', '--output', 'text'])
     if (polled.ok) {
       if (TERMINAL_SSM_STATUSES.has(polled.stdout)) {
@@ -242,7 +344,9 @@ const upgradeOverSsm = ({
   if (!terminal) {
     const why = lastFailure ? `last polling error: ${lastFailure}` : `last status: ${lastStatus || 'unknown'}`
     const minutes = (COMPLETION_ATTEMPTS * COMPLETION_PAUSE_SECONDS) / 60
-    throw new Error(`${target}: the SSM command was still not terminal after ${minutes} minutes (${why})`)
+    throw new Error(
+      `${target}: the SSM command was still not terminal; command ${commandId} after ${minutes} minutes (${why})`,
+    )
   }
 
   // Both streams, because the payload's own diagnosis is the reason to read
@@ -250,6 +354,13 @@ const upgradeOverSsm = ({
   for (const query of ['StandardOutputContent', 'StandardErrorContent']) {
     const read = run('aws', [...invocation, '--query', query, '--output', 'text'])
     if (read.ok && read.stdout) log(indent(read.stdout))
+  }
+  if (tracked && record)
+    tracked.write(record, { ...record.entry, status: terminal === 'Success' ? 'succeeded' : 'failed' })
+  if (!samePayload || (previous && previous.Comment !== comment)) {
+    throw new Error(
+      `${target}: previous payload ${commandId} settled ${terminal}; retry to submit the requested update`,
+    )
   }
   if (terminal !== 'Success') throw new Error(`${target}: the SSM command ${commandId} finished ${terminal}`)
   return 0
@@ -497,6 +608,7 @@ export const upgradeOne = (
         identity: request.identity,
         payload,
         region: request.region,
+        journal: request.journal,
         run,
         sleep,
         log,
@@ -533,7 +645,25 @@ export const upgradeRunner = ({
   }
   switch (cloud) {
     case 'aws':
-      return upgradeOne({ ...common, cloud, region: required(environment, 'AWS_REGION') }, context)
+      return upgradeOne(
+        {
+          ...common,
+          cloud,
+          region: required(environment, 'AWS_REGION'),
+          ...(environment.RUNNER_UPGRADE_APP ||
+          environment.RUNNER_UPGRADE_STAGE ||
+          environment.RUNNER_UPGRADE_STATE_BUCKET
+            ? {
+                journal: {
+                  app: required(environment, 'RUNNER_UPGRADE_APP'),
+                  stage: required(environment, 'RUNNER_UPGRADE_STAGE'),
+                  bucket: required(environment, 'RUNNER_UPGRADE_STATE_BUCKET'),
+                },
+              }
+            : {}),
+        },
+        context,
+      )
     case 'gcp':
       return upgradeOne(
         {

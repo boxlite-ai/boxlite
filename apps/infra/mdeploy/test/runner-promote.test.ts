@@ -38,17 +38,17 @@ const cloud = (held: Record<string, string[]>, calls: string[][] = []): RunComma
     if (asked.includes('head-bucket')) return ok('')
     if (asked.includes('list-objects-v2')) {
       const stage = Object.keys(held).find((name) => asked.includes(bucketFor(name)))
-      const names = stage ? held[stage] ?? [] : []
+      const names = stage ? (held[stage] ?? []) : []
       return ok(names.map((name) => `runner/${REF}/${name}`).join('\t') || 'None')
     }
     return ok('')
   }
 }
 
-const drive = (run: RunCommand, argv: string[], log: string[] = []) =>
+const drive = (run: RunCommand, argv: string[], log: string[] = [], stagesFile = EXAMPLE) =>
   promoteRunner({
     argv,
-    environment: { MSTAGE_CONFIG: EXAMPLE },
+    environment: { MSTAGE_CONFIG: stagesFile },
     cwd: new URL('../..', import.meta.url).pathname,
     log: (line) => log.push(line),
     checkLogin: async () => 0,
@@ -59,16 +59,27 @@ const drive = (run: RunCommand, argv: string[], log: string[] = []) =>
     run,
   })
 
-test('it copies exactly what the source holds, and names nothing itself', async () => {
+test('AWS copies the published artifacts across regions without copying source tags', async (t) => {
   // The archive carries the version it was built from, so the source bucket is
   // the only thing that knows what this commit produced — a promotion that
   // composed the name would promote whatever the working copy happens to be.
   const calls: string[][] = []
   const log: string[] = []
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-aws-promotion-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const stages = JSON.parse(readFileSync(EXAMPLE, 'utf8'))
+  stages.stages.dev.region = 'eu-west-1'
+  const path = join(directory, 'stages.json')
+  writeFileSync(path, JSON.stringify(stages))
   const run = cloud({ dev: [ARCHIVE, `${ARCHIVE}.sha256`], prod: [] }, calls)
-  assert.equal(await drive(run, ['--tag', REF, '--from', 'dev', '--to', 'prod'], log), 0)
+  assert.equal(await drive(run, ['--tag', REF, '--from', 'dev', '--to', 'prod'], log, path), 0)
 
-  const copies = calls.filter((call) => call[1] === 's3' && call[2] === 'cp').map((call) => call.slice(-2))
+  const transfers = calls.filter((call) => call[1] === 's3' && call[2] === 'cp')
+  for (const call of transfers) {
+    assert.equal(call[call.indexOf('--copy-props') + 1], 'none', 'multipart promotion only reads the source bytes')
+    assert.equal(call[call.indexOf('--source-region') + 1], 'eu-west-1', 'the copy uses the source bucket region')
+  }
+  const copies = transfers.map((call) => call.slice(-2))
   assert.deepEqual(copies, [
     [`s3://${bucketFor('dev')}/runner/${REF}/${ARCHIVE}`, `s3://${bucketFor('prod')}/runner/${REF}/${ARCHIVE}`],
     [
@@ -76,7 +87,10 @@ test('it copies exactly what the source holds, and names nothing itself', async 
       `s3://${bucketFor('prod')}/runner/${REF}/${ARCHIVE}.sha256`,
     ],
   ])
-  assert.ok(log.some((line) => line.includes('RUNNER_ARTIFACT_REF=' + REF)), 'it must print the deploy that installs it')
+  assert.ok(
+    log.some((line) => line.includes('RUNNER_ARTIFACT_REF=' + REF)),
+    'it must print the deploy that installs it',
+  )
 })
 
 test('a destination that already holds it is left untouched', async () => {
@@ -124,12 +138,14 @@ test('a name every object inherits is not a stage to promote to', async () => {
    * of it, which is why that guard is not redundant with this one.
    */
   await assert.rejects(
-    async () => drive(cloud({ dev: [ARCHIVE, `${ARCHIVE}.sha256`] }), ['--tag', REF, '--from', 'toString', '--to', 'prod']),
+    async () =>
+      drive(cloud({ dev: [ARCHIVE, `${ARCHIVE}.sha256`] }), ['--tag', REF, '--from', 'toString', '--to', 'prod']),
     /no stage "toString" is declared/,
     'the source stage was taken from the prototype chain',
   )
   await assert.rejects(
-    async () => drive(cloud({ dev: [ARCHIVE, `${ARCHIVE}.sha256`] }), ['--tag', REF, '--from', 'dev', '--to', 'toString']),
+    async () =>
+      drive(cloud({ dev: [ARCHIVE, `${ARCHIVE}.sha256`] }), ['--tag', REF, '--from', 'dev', '--to', 'toString']),
     /Stage "toString" \(from --stage\) is not declared/,
     'the destination stage was taken from the prototype chain',
   )
@@ -159,7 +175,8 @@ test('it addresses bytes, and refuses a name that is not one', async () => {
  * which reads as the wrong bucket rather than as the wrong call.
  */
 const PROJECTS: Record<string, string> = { dev2: 'your-gcp-project-id', prod2: 'another-gcp-project-id' }
-const gcpBucketFor = (stage: string) => gcpRunnerArtifactsBucket({ app: 'boxlite-app', stage, project: PROJECTS[stage]! })
+const gcpBucketFor = (stage: string) =>
+  gcpRunnerArtifactsBucket({ app: 'boxlite-app', stage, project: PROJECTS[stage]! })
 
 /**
  * Two GCP stages, because the committed example declares one and a promotion
@@ -193,7 +210,7 @@ const googleCloud = (held: Record<string, string[]>, calls: string[][] = []): Ru
     }
     if (asked.startsWith('storage ls')) {
       const stage = Object.keys(held).find((name) => asked.includes(gcpBucketFor(name)))
-      const names = stage ? held[stage] ?? [] : []
+      const names = stage ? (held[stage] ?? []) : []
       if (names.length === 0) return failed('matched no objects')
       return ok(names.map((name) => `gs://${gcpBucketFor(stage!)}/runner/${REF}/${name}`).join('\n'))
     }
@@ -222,7 +239,9 @@ test('a cross-project source is read at object level, never asked for its metada
     stages.remove()
   }
 
-  const described = calls.filter(([file, ...rest]) => file === 'gcloud' && rest.join(' ').startsWith('storage buckets describe'))
+  const described = calls.filter(
+    ([file, ...rest]) => file === 'gcloud' && rest.join(' ').startsWith('storage buckets describe'),
+  )
   assert.deepEqual(
     described.map((call) => call.at(-1)),
     [`gs://${gcpBucketFor('prod2')}`],

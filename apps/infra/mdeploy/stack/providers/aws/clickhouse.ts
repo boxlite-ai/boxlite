@@ -32,6 +32,7 @@ import {
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding } from '../../network.ts'
 import { instanceFor } from 'naming'
+import { workloadSecretPath } from './secret-names.ts'
 
 /** What each requested size answers to. */
 const INSTANCE = { small: 'm6a.large', medium: 'm6a.xlarge' } as const
@@ -48,7 +49,7 @@ type ManagedSecret = { resource: CloudResource; version: CloudResource }
 const clickHouseSecret = (resourceName: string, name: string): ManagedSecret => {
   const password = new random.RandomPassword(`${resourceName}Password`, { length: 32, special: false })
   const resource = new aws.secretsmanager.Secret(resourceName, {
-    namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: name })}-`,
+    namePrefix: `${workloadSecretPath($app.name, $app.stage)}${name}-`,
     recoveryWindowInDays: 7,
   })
   const version = new aws.secretsmanager.SecretVersion(`${resourceName}Value`, {

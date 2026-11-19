@@ -13,7 +13,7 @@ const declaration: GroupDeclaration = {
   where: path.pathname,
 }
 const references = {
-  aws: 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-dev-turnstile-AbCdEf',
+  aws: 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite/workloads/boxlite/dev/turnstile-AbCdEf',
   gcp: 'projects/boxlite-dev/secrets/turnstile/versions/3',
 }
 const turnstile = {
