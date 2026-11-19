@@ -271,11 +271,11 @@ fn shares_network_and_the_agent_bridge_reach_the_vm_config() {
 }
 
 #[test]
-fn optional_devices_stay_absent_and_non_unix_agent_bridges_are_rejected() {
+fn empty_aggregate_accepts_later_delivery_and_non_unix_agent_bridges_are_rejected() {
     let test_box = TestBox::new();
     let kernel = test_box.stage_kernel(&fake_kernel(), None);
     let config = build_config(&test_box.spec(Some(kernel.clone()))).unwrap();
-    assert!(config.filesystem.is_none());
+    assert!(config.filesystem.unwrap().shares.is_empty());
     assert!(config.vsock.is_none());
     assert!(config.network.is_none());
     let mut spec = runtime_like_spec(&test_box, Some(kernel));

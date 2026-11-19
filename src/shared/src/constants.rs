@@ -47,6 +47,8 @@ pub mod executor {
 pub mod mount_tags {
     /// Native virtio-fs device containing the logical share exports.
     pub const AGGREGATE: &str = "boxlite";
+    /// Full mount-control handshake on the VM's existing box socket.
+    pub const MOUNT_CONTROL_PREFACE: &[u8] = b"BOXLITE-MOUNT/1\n";
     /// Tag for prepared rootfs virtiofs share (merged mode)
     pub const ROOTFS: &str = "BoxLiteContainer0Rootfs";
 

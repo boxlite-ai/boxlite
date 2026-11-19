@@ -15,5 +15,6 @@ pub(crate) mod resolved_mount;
 mod virtiofs;
 mod volume;
 
+pub(crate) use aggregate::aggregate_root;
 pub(crate) use aggregate::mount_volumes as mount_initial_volumes;
 pub use volume::mount_volumes;

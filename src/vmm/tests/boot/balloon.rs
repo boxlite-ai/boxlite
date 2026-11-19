@@ -112,7 +112,7 @@ fn run_reporting_guest(init_on_free: bool) -> (Evidence, String) {
         move |ram, config| prepare(ram, config, leaf).map(|setup| setup.boot_regs),
         |chipset, ctx, config| {
             sampler_memory = Some(ctx.memory.memory().into_inner());
-            crate::devices::add_all(chipset, ctx, config, writer).map(|_| ())
+            crate::devices::add_all(chipset, ctx, config, writer, None).map(|_| ())
         },
     )
     .unwrap();

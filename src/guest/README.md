@@ -12,6 +12,65 @@ TCP and Unix listeners return `PermissionDenied` for `Guest.SyncClock`.
 
 The host samples current UTC after connecting and immediately before sending. The agent accepts the call only from the host control plane (the vsock listener rejects non-host peers before tonic sees them), validates a post-epoch timestamp with a valid subsecond part, then reads `CLOCK_REALTIME`. Only an absolute difference greater than 100ms calls `clock_settime`, in either direction; a difference of exactly 100ms or less returns success without adjusting the clock. The host is the clock authority, so legitimate timestamps after long sleeps have no ahead-of-guest bound. Invalid timestamps, clock-read failures, and clock-setting failures propagate as gRPC errors; only successful responses update the shim's successful-push baseline. The 100ms threshold is a decision to adjust, not a precision guarantee: transport and scheduling delay remain uncompensated. The correction never touches the RTC or `CLOCK_MONOTONIC`, so the guest's own RTC offset and alarms survive it, and user containers need no additional `CAP_SYS_TIME`.
 
+## Runtime directory delivery
+
+`Container.Mount` has two source forms. A legacy `source` is one folder name
+inside the container's shared volumes directory and requires `read_only=true`.
+Aggregate delivery leaves `source` empty and supplies `device_tag`, a unique
+`export_key` incarnation, an absolute `destination`, and the requested read-only
+or writable bind mode. Initialization registers each aggregate root by device
+tag. Installed initialization mounts already belong to the rollback guard when
+root publication starts; failed publication unwinds them without replacing a
+previous registration. Committing initialization keeps the roots available for
+later RPCs.
+
+Aggregate Mount and Detach require a container whose resolved capability bounding
+set excludes `CAP_SYS_ADMIN`. The guest rejects other containers with gRPC
+`UNIMPLEMENTED` before opening their namespace or modifying mount state. The
+capability policy applies to both init and exec, so a workload cannot acquire
+mount-administration rights later through exec or file capabilities. Configured
+privileges remain intact; legacy read-only share delivery keeps its contract.
+This boundary prevents workload-created covering mounts between identity
+validation and unmount. Supporting mount-administrative workloads requires
+additional synchronization outside this delivery layer.
+
+The agent clones the export with `open_tree`, applies recursive read-only flags
+when requested, and moves the clone into the running container's mount namespace
+with `move_mount`. It refuses destinations containing entries and walks every
+component without following symlinks. Guest writable mode does not override the
+host export's permission policy. A retry must match the incarnation's source,
+mode, destination, and actual mounted tree.
+
+The incarnation record retains the original cloned-tree descriptor. This pins
+the mounted tree rather than the directory underneath it, preventing mount-ID
+reuse while the record is attached. The child reports that tree's checked
+`statx(STATX_MNT_ID)` identity after `move_mount`. Before retry success or detach,
+another child opens the destination without following links and compares its
+mount ID with the retained tree. An ancestor rename followed by a replacement
+mount therefore fails without removing the replacement or forgetting the
+original record. This ownership follows Linux's
+[`open_detached_copy`, `do_move_mount`, and `dissolve_on_fput`](https://github.com/torvalds/linux/blob/v6.12/fs/namespace.c):
+moving changes the mount's namespace, while the open file retains its reference.
+
+`Container.Detach(container_id, destination, export_key)` uses `MNT_DETACH`.
+New opens lose access through the destination; already-open files and directory
+references remain usable. Runtime and OCI descendants must be detached first.
+Removing a runtime overmount removes only its last bookkeeping entry, preserving
+the underlying OCI entry. Repeated detach succeeds without another unmount;
+detach of an unseen incarnation records a tombstone that rejects delayed Mount.
+Mount and Detach hold the same per-container write lock through syscall execution
+and bookkeeping, in an owned task that survives RPC caller cancellation.
+
+These are lower-level delivery operations. The caller coordinates guest
+acknowledgment with host export retirement and reconciles unknown RPC outcomes.
+They do not expose a public Box mount transaction API.
+
+Run `make test:unit:guest FILTER=storage::attach::tests` for validation and
+tombstone checks, and `make test:guest-perms` for the ignored `privileged_`
+namespace cases: actual RO/RW delivery, replay, descendant refusal, lazy detach
+with an open descriptor, and ancestor rename plus mount replacement. The guest
+unit suite also covers root publication rollback and OCI bookkeeping.
+
 ## Startup ownership
 
 | Responsibility | Native PID 1 | libkrun child |

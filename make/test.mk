@@ -372,6 +372,12 @@ test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE
 	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
 	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1
 
+# PR2 primitives: descriptor registration, guest RPC attach/detach, and reference lifetime.
+PHONY_TARGETS += test\:integration\:vmm\:mount-delivery
+test\:integration\:vmm\:mount-delivery: export BOXLITE_TEST_ENGINE := native
+test\:integration\:vmm\:mount-delivery: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug)
+	@timeout 180s cargo test -p boxlite --features native --test native_mount_delivery -- --ignored --test-threads=1 --nocapture
+
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
 	@test "$$(uname -s -m)" = "Darwin arm64" || { echo "macOS arm64 is required" >&2; exit 1; }

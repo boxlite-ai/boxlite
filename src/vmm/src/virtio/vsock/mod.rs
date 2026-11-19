@@ -7,6 +7,8 @@ mod backend;
 mod buffer;
 mod connection;
 mod packet;
+#[cfg(target_os = "linux")]
+mod selection_timer;
 mod source;
 
 use super::queue::Completion;
@@ -83,7 +85,25 @@ impl Drop for BoundPath {
 }
 
 impl Vsock {
-    pub(crate) fn bind(config: &crate::config::VsockConfig) -> io::Result<Self> {
+    pub(crate) fn bind(
+        config: &crate::config::VsockConfig,
+        control: Option<crate::VsockControl>,
+    ) -> io::Result<Self> {
+        if let Some(control) = &control
+            && !config.listen.iter().any(|(port, _)| *port == control.port)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "vsock control requires a matching listener",
+            ));
+        }
+        #[cfg(not(target_os = "linux"))]
+        if control.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "mount-control routing requires Linux",
+            ));
+        }
         let mut paths = Vec::new();
         let mut mappings = Vec::new();
         for (port, path) in &config.listen {
@@ -109,6 +129,7 @@ impl Vsock {
                 }),
         );
         let mut device = Self::new(config.cid, mappings)?;
+        Arc::get_mut(&mut device.mappings).unwrap().control = control;
         device.paths = paths;
         Ok(device)
     }

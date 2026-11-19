@@ -334,6 +334,7 @@ fn connection_limit_stalls_host_accepts_until_a_guest_flow_is_removed() {
     let mappings = Arc::new(Mappings {
         listeners: vec![(9000, host_listener)],
         connects: HashMap::from([(2696, guest_path)]),
+        control: None,
     });
     let registrar = Arc::new(Registrar::new());
     let mut backend = Backend::new(3, mappings, registrar.clone()).unwrap();
@@ -369,6 +370,7 @@ fn host_ports_skip_mappings_and_exhaustion_closes_only_new_accepts() {
     let mappings = Arc::new(Mappings {
         listeners: vec![(9000, listener)],
         connects: HashMap::from([(FIRST_HOST_PORT, temp.0.join("reserved"))]),
+        control: None,
     });
     let mut backend = Backend::new(3, mappings, Arc::new(Registrar::new())).unwrap();
     assert!(!backend.drive().unwrap());

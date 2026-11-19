@@ -13,9 +13,13 @@ use std::{
     collections::{HashMap, VecDeque},
     io,
     ops::Range,
-    os::unix::net::UnixListener,
+    os::{
+        fd::AsRawFd,
+        unix::net::{UnixListener, UnixStream},
+    },
     path::PathBuf,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 /// Bounds sockets and per-flow buffers per backend.
@@ -24,11 +28,23 @@ pub(super) const MAX_CONNECTIONS: usize = 128;
 pub(super) const MAX_PENDING: usize = 256;
 /// Start host allocations above common service ports; explicit mappings are skipped too.
 const FIRST_HOST_PORT: u32 = 1 << 30;
+/// Undecided sockets do not consume guest flow slots and cannot persist indefinitely.
+const MAX_SELECTIONS: usize = 32;
+const SELECTION_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 pub(super) struct Mappings {
     pub listeners: Vec<(u32, UnixListener)>,
     pub connects: HashMap<u32, PathBuf>,
+    pub control: Option<crate::VsockControl>,
+}
+
+struct Pending {
+    // Deregister the polling duplicate before closing or transferring its stream.
+    registration: Registration,
+    socket: UnixStream,
+    key: Key,
+    deadline: Instant,
 }
 
 pub(super) struct Backend {
@@ -38,6 +54,9 @@ pub(super) struct Backend {
     registrar: Arc<dyn EventRegistrar>,
     cid: u64,
     connections: VecDeque<(Key, Connection)>,
+    pending: VecDeque<Pending>,
+    #[cfg(target_os = "linux")]
+    selection_timer: Option<super::selection_timer::SelectionTimer>,
     ports: Range<u32>,
     next_listener: usize,
     listener_retry: bool,
@@ -55,12 +74,21 @@ impl Backend {
             .iter()
             .map(|(_, io)| Registration::listener(io, registrar.clone(), Interest::READABLE))
             .collect::<Result<_, _>>()?;
+        #[cfg(target_os = "linux")]
+        let selection_timer = mappings
+            .control
+            .as_ref()
+            .map(|_| super::selection_timer::SelectionTimer::new(registrar.clone()))
+            .transpose()?;
         Ok(Self {
             _registrations: registrations,
             mappings,
             registrar,
             cid,
             connections: VecDeque::new(),
+            pending: VecDeque::new(),
+            #[cfg(target_os = "linux")]
+            selection_timer,
             ports: FIRST_HOST_PORT..u32::MAX,
             next_listener: 0,
             listener_retry: false,
@@ -167,16 +195,31 @@ impl Backend {
                         guest: *guest,
                         host,
                     };
-                    let connection = Connection::new(
-                        socket,
-                        self.registrar.clone(),
-                        State::AwaitResponse,
-                        key,
-                        self.cid,
-                    )?;
-                    self.outgoing
-                        .push_back(connection.packet(REQUEST, 0, vec![]));
-                    self.connections.push_back((key, connection));
+                    if self
+                        .mappings
+                        .control
+                        .as_ref()
+                        .is_some_and(|control| control.port == *guest)
+                    {
+                        // Evict the oldest undecided stream, preserving admission for clients
+                        // that send a preface even when idle peers fill the selection budget.
+                        if self.pending.len() == MAX_SELECTIONS {
+                            self.pending.pop_front();
+                        }
+                        let registration = Registration::stream(
+                            &socket,
+                            self.registrar.clone(),
+                            Interest::READABLE,
+                        )?;
+                        self.pending.push_back(Pending {
+                            registration,
+                            socket,
+                            key,
+                            deadline: Instant::now() + SELECTION_TIMEOUT,
+                        });
+                    } else {
+                        self.accept_guest(socket, key)?;
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {
@@ -192,6 +235,57 @@ impl Backend {
         } else {
             self.connections.len() < MAX_CONNECTIONS && self.can_receive()
         };
+        for _ in 0..self.pending.len() {
+            let pending = self.pending.pop_front().unwrap();
+            if Instant::now() >= pending.deadline {
+                again = true;
+                continue;
+            }
+            let mut prefix = 0u8;
+            // Peek only. Full handshake and descriptor reception belong to the control
+            // server; its client waits for the ACK before sending SCM_RIGHTS.
+            // SAFETY: the stream is live and prefix is writable for one byte.
+            let count = unsafe {
+                libc::recv(
+                    pending.socket.as_raw_fd(),
+                    (&mut prefix as *mut u8).cast(),
+                    1,
+                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                )
+            };
+            if count < 0 {
+                let error = io::Error::last_os_error();
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) {
+                    again |= error.kind() == io::ErrorKind::Interrupted;
+                    self.pending.push_back(pending);
+                    continue;
+                }
+            }
+            let Pending {
+                registration,
+                socket,
+                key,
+                ..
+            } = pending;
+            drop(registration);
+            if count == 1 {
+                let control = self.mappings.control.as_ref().unwrap();
+                if prefix == control.control_prefix {
+                    // Queue saturation rejects only this connection and never stalls the worker.
+                    let _ = control.connections.try_send(socket);
+                } else if self.connections.len() < MAX_CONNECTIONS && self.can_receive() {
+                    self.accept_guest(socket, key)?;
+                }
+            }
+            again = true;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(timer) = &mut self.selection_timer {
+            timer.arm(self.pending.iter().map(|pending| pending.deadline).min())?;
+        }
         for _ in 0..self.connections.len() {
             // A connection emits at most one write update and one read/control packet.
             if self.outgoing.len() + 2 > MAX_PENDING {
@@ -212,6 +306,20 @@ impl Backend {
             }
         }
         Ok(again)
+    }
+
+    fn accept_guest(&mut self, socket: UnixStream, key: Key) -> Result<(), DeviceError> {
+        let connection = Connection::new(
+            socket,
+            self.registrar.clone(),
+            State::AwaitResponse,
+            key,
+            self.cid,
+        )?;
+        self.outgoing
+            .push_back(connection.packet(REQUEST, 0, vec![]));
+        self.connections.push_back((key, connection));
+        Ok(())
     }
 
     fn connection(&mut self, key: Key) -> Option<&mut Connection> {

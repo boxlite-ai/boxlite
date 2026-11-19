@@ -43,6 +43,7 @@ pub(crate) fn add_all(
     mut ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
+    control: Option<crate::VsockControl>,
 ) -> Result<()> {
     add_legacy_devices(chipset, console.clone(), Box::new(cmos::host_clock))?;
 
@@ -65,7 +66,8 @@ pub(crate) fn add_all(
         })?;
     }
     if let Some(vsock) = &config.vsock {
-        let device = crate::virtio::vsock::Vsock::bind(vsock).map_err(crate::Error::Vsock)?;
+        let device =
+            crate::virtio::vsock::Vsock::bind(vsock, control).map_err(crate::Error::Vsock)?;
         add_slot_device(&mut slots, &mut used, |slot| {
             mmio::add_device(chipset, &ctx, "vsock", slot, Arc::new(Mutex::new(device)))
         })?;

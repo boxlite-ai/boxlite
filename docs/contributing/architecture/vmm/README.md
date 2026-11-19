@@ -486,7 +486,7 @@ engine adapter calls it from
 `VmmInstance::enter`:
 
 ```rust
-let mut vm = Vm::new(config, console)?; // validate, create the host VM, map RAM, load the kernel, build devices
+let mut vm = Vm::new(config, console, None)?; // validate, create the host VM, map RAM, load the kernel, build devices
 let stop = vm.stop_handle();   // Clone + Send; the shim's SIGTERM path calls stop.stop()
 let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopRequested
 ```

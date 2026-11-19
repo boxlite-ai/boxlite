@@ -54,7 +54,7 @@ fn mounts_production_guest_volumes_through_aggregate_filesystem() {
         shares,
     });
     let log = SerialLog::default();
-    let mut vm = Vm::new(config, Box::new(log.clone())).unwrap();
+    let mut vm = Vm::new(config, Box::new(log.clone()), None).unwrap();
     let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
     assert!(
         matches!(exit, Ok(VmExit::GuestReset)),

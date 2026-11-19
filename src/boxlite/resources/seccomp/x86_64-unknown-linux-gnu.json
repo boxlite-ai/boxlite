@@ -4,6 +4,14 @@
     "filter_action": "allow",
     "filter": [
       {
+        "syscall": "timerfd_create",
+        "comment": "Native vsock expires undecided shared-socket connections with one monotonic, nonblocking, close-on-exec timer.",
+        "args": [
+          { "index": 0, "type": "dword", "op": "eq", "val": 1 },
+          { "index": 1, "type": "dword", "op": "eq", "val": 526336 }
+        ]
+      },
+      {
         "syscall": "fstatfs",
         "comment": "Native VMM filesystem metadata queries on already-open descriptors. Required with network disabled, when the shim applies this filter."
       },

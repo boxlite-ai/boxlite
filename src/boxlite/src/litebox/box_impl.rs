@@ -2080,6 +2080,13 @@ mod tests {
         ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
             Err(Status::unimplemented("not used by these tests"))
         }
+
+        async fn detach(
+            &self,
+            _: Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerDetachResponse>, Status> {
+            Err(Status::unimplemented("not used by these tests"))
+        }
     }
 
     #[derive(Default)]

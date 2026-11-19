@@ -52,7 +52,32 @@ impl VmmInstanceImpl for NativeVmmInstance {
             })?),
             None => Box::new(io::sink()),
         };
-        let mut vm = Vm::new(self.config, sink).map_err(map_vmm_error)?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let (control, server) = if self.config.vsock.is_some() {
+            let (connections, receiver) = std::sync::mpsc::sync_channel(32);
+            let server = std::thread::Builder::new()
+                .name("mount-control".into())
+                .spawn(move || {
+                    crate::vmm::controller::mount_control::serve(
+                        receiver,
+                        boxlite_shared::constants::mount_tags::AGGREGATE.into(),
+                    );
+                })
+                .map_err(|error| BoxliteError::Engine(format!("spawn mount control: {error}")))?;
+            (
+                Some(boxlite_vmm::VsockControl {
+                    port: boxlite_shared::constants::network::GUEST_AGENT_PORT,
+                    control_prefix: boxlite_shared::constants::mount_tags::MOUNT_CONTROL_PREFACE[0],
+                    connections,
+                }),
+                Some(server),
+            )
+        } else {
+            (None, None)
+        };
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let control = None;
+        let mut vm = Vm::new(self.config, sink, control).map_err(map_vmm_error)?;
         let vm_control = vm.control();
         // Without the channel the box still runs; it only cannot grow online.
         if let Err(error) = vmm_socket::serve(&self.vmm_socket_path, move |op| {
@@ -64,7 +89,16 @@ impl VmmInstanceImpl for NativeVmmInstance {
                 "VMM control socket unavailable"
             );
         }
-        let exit = vm.run().map_err(map_vmm_error)?;
+        let result = vm.run().map_err(map_vmm_error);
+        // Closing the device's sender ends admission before waiting for the server.
+        drop(vm);
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if let Some(server) = server {
+            server
+                .join()
+                .map_err(|_| BoxliteError::Engine("mount control panicked".into()))?;
+        }
+        let exit = result?;
         tracing::info!(?exit, "native VM ended");
         Ok(())
     }
@@ -155,7 +189,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
         cmdline: build_cmdline(spec, kernel.command_line.as_deref()),
         initramfs: kernel.initramfs.clone(),
         disks,
-        filesystem: (!spec.fs_shares.shares().is_empty()).then(|| FsConfig {
+        filesystem: Some(FsConfig {
             tag: boxlite_shared::constants::mount_tags::AGGREGATE.into(),
             shares: spec
                 .fs_shares

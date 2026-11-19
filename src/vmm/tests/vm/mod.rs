@@ -1727,7 +1727,7 @@ fn debug_shows_the_vm_shape_without_its_internals() {
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn new_names_a_kernel_it_cannot_load() {
-    let error = Vm::new(config(1, 16), Box::new(io::sink())).expect_err("no kernel file");
+    let error = Vm::new(config(1, 16), Box::new(io::sink()), None).expect_err("no kernel file");
 
     assert!(
         matches!(&error, Error::LoadKernel { path, .. } if path.as_os_str() == "vmlinux"),
@@ -1923,7 +1923,9 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
             );
             Ok(BootRegisters::default())
         },
-        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer).map(|_| ()),
+        |chipset, ctx, config| {
+            crate::devices::add_all(chipset, ctx, config, writer, None).map(|_| ())
+        },
     )
     .unwrap();
     let mut id = [0; 4];

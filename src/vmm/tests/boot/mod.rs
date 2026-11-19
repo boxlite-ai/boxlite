@@ -991,7 +991,7 @@ fn boots_the_m1_initramfs_through_the_public_api() {
     let initramfs = TempFile::new("m1.cpio", &archive);
     let log = SerialLog::default();
     let config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
-    let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
+    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).expect("create the VM");
 
     let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
 
@@ -1416,7 +1416,7 @@ fn mounts_virtiofs_and_copies_host_bytes_through_the_linux_driver() {
         }],
     });
     let log = SerialLog::default();
-    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).unwrap();
     let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
     assert!(
         matches!(exit, Ok(VmExit::GuestReset)),
@@ -1467,7 +1467,7 @@ fn an_open_guest_file_observes_coordinated_host_rewrites() {
         }],
     });
     let log = SerialLog::default();
-    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).unwrap();
     let host_directory = directory.clone();
     let update = thread::spawn(move || {
         let deadline = Instant::now() + BOOT_TIMEOUT;
@@ -1544,7 +1544,7 @@ fn copies_between_readonly_snapshot_and_writable_file_exports() {
         ],
     });
     let log = SerialLog::default();
-    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).unwrap();
     let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
     assert!(
         matches!(exit, Ok(VmExit::GuestReset)),
