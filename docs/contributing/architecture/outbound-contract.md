@@ -348,7 +348,8 @@ The shared rule fixtures exercise the compiler and matcher. Trusted TCP and UDP 
 ### Extended TCP enforcement
 
 The bridge's trusted Go controller compiles extended rules into a snapshot shared by TCP and UDP.
-Current wire inputs still select the legacy transport policy. The bridge advertises the complete extended capability after its owning integration slices.
+
+Legacy launch selects legacy forwarding. Versioned launch and snapshot replacement carry explicit admission. The bridge advertises extended IPv4 admission, deny rules, destination ports, and expanded rule lists.
 
 At flow entry, capture the snapshot and the pre-NAT and translated addresses. For example, an IP allow for `192.0.2.254:8080` can admit a local alias to loopback, subject to the platform check on `127.0.0.1:8080`. A Cloud snapshot refuses that translated socket.
 
@@ -385,14 +386,14 @@ An HTTP/1.1 upgrade keeps its tunnel open for bidirectional traffic. Closing the
 
 An extended DNS route screens raw answers with the captured policy. Only approved IPv4 literals reach the chosen connector. An address route keeps its translated socket and requires a matching controlled DNS answer when the matcher requests name association.
 
-Trusted replacement publishes through the NIC transition. Both wire PUT resources return 409 for a valid incomplete write when a trusted snapshot is configured, including while disabled. While disabled, both reads project an empty legacy allow list, and re-enable restores the preserved legacy projection.
+Trusted replacement publishes through the NIC transition. Both PUT resources return 409 for a valid legacy-shaped write while extended admission is active, including while disabled.
 
 | Requested transition | Before NIC call | On success | On NIC failure |
 | --- | --- | --- | --- |
 | Disable | Publish candidate with disabled gate and pending status | Confirm disabled candidate | Keep disabled gate and report uncertain status |
 | Re-enable | Keep previous disabled gate and publish pending status | Publish and confirm enabled candidate | Keep previous disabled gate and report uncertain status |
 
-Policy GET returns 503 while either operation is pending or uncertain. The status resource reports the snapshot and its application state.
+When the policy has a legacy view, policy GET returns 503 while either operation is pending or uncertain. Complete status reports the snapshot and its application state.
 
 [TCP design and acceptance](https://github.com/boxlite-ai/boxlite/issues/2880)
 
@@ -487,8 +488,8 @@ Enabled traffic continues through the existing filter-table chains, including th
 
 Disabling publishes a rejecting snapshot before NIC suspension; enabling retains that gate until the NIC has enabled successfully.
 NIC errors retain the disabled gate and mark application uncertain.
-Policy GET returns 503 while application is pending or uncertain, and successful GET/PUT retain the existing policy JSON shape.
-The separate status resource reports the observed snapshot identity and application state without changing the policy body.
+
+Policy and status responses use the shapes in the bridge revision protocol below.
 
 The registered-DNS regression fixture binds native gVisor UDP/TCP endpoints on port 5353 and forwards received DNS messages to a test-owned host listener.
 It exercises endpoint demultiplexing without replacing the global mode gate, and includes a new query on an established TCP DNS connection.
@@ -498,10 +499,11 @@ Controlled NIC pauses separately verify the interval before suspension and the i
 
 | Control resource | Contract |
 | --- | --- |
-| `GET /network/outbound` | Existing policy JSON plus a strong ETag; 503 while application is pending or uncertain. |
-| `PUT /network/outbound` | Existing complete policy replacement, optional HTTP `If-Match`; the bridge chooses a fresh revision. |
-| `PUT /network/outbound/snapshot` | Version-required internal replacement; one strong expected revision in `If-Match` and a fresh candidate in `X-Boxlite-Outbound-Revision`. |
-| `GET /network/outbound/status` | Policy, observed `revision`, `application_state`, and capabilities including `revision-v1`; no persistence or Internet-connectivity claim. |
+| `GET /network/outbound` | Legacy policy JSON and strong ETag, 503 while legacy application is pending or uncertain, or 501 when the policy requires complete status. |
+| `PUT /network/outbound` | Legacy policy replacement with optional `If-Match`. The bridge chooses a fresh revision. |
+| `PUT /network/outbound/snapshot` | Flat legacy policy or versioned complete replacement. Requires a strong `If-Match` and a fresh `X-Boxlite-Outbound-Revision`. |
+| `GET /network/outbound/status` | Legacy policy, revision, application state, and `revision-v1`. Returns 501 when the policy requires complete status. |
+| `GET /network/outbound/complete-status` | Complete snapshot with admission, rules, and revision, plus application state and supported outbound capabilities. |
 
 Version-aware clients use the dedicated snapshot resource and never fall back to legacy PUT.
 An old handler may ignore extra headers on its existing resource; a new resource makes unsupported peers reject the operation before application, including after a capability-probe/backend-restart race.
@@ -876,6 +878,8 @@ sequenceDiagram
 ```
 
 Legacy policy interfaces return `Unsupported` for protected snapshots. General Box metadata uses one durable row for the outbound policy and its visibility, even when the Box handle is cached. Metadata omits the network view when it cannot express the policy.
+
+Box listings use one database snapshot for all entries.
 
 `NetworkHandle::published_ports` and Go `Network.PublishedPorts` report the independent lifecycle-verified bindings. A port lookup does not start a VM or repair listeners.
 

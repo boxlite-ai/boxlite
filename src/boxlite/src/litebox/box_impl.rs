@@ -327,8 +327,7 @@ impl BoxImpl {
         self.config.container.id.as_str()
     }
 
-    /// Metadata for this box. Local reads are synchronous: everything comes
-    /// from persisted state plus the bindings this handle itself published.
+    #[cfg(test)]
     pub(crate) fn info(&self) -> BoxInfo {
         self.info_from_state(&self.state.read())
     }

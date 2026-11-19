@@ -653,14 +653,13 @@ impl RuntimeImpl {
     /// Get a handle to an existing box by ID or name.
     ///
     /// Returns a LiteBox handle that can be used to operate on the box.
-    /// Checks in-memory cache first (for boxes not yet persisted), then DB.
+    /// Checks the handle cache before querying the database.
     ///
     /// If another handle to the same box exists, they share the same BoxImpl
     /// (and thus the same LiveState if initialized).
     pub async fn get(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
         tracing::trace!(id_or_name = %id_or_name, "RuntimeInnerImpl::get called");
 
-        // Check in-memory cache first (for boxes created but not yet persisted)
         {
             let sync = self.sync_state.read().unwrap();
 
@@ -718,9 +717,8 @@ impl RuntimeImpl {
 
     /// Get information about a specific box by ID or name (without creating a handle).
     ///
-    /// Checks in-memory cache first (for boxes not yet persisted), then database.
+    /// A cached handle supplies local lifecycle and port information.
     pub async fn get_info(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
-        // Check in-memory cache first (for boxes created but not yet persisted)
         let cached_box = {
             let sync = self.sync_state.read().unwrap();
 
@@ -761,44 +759,22 @@ impl RuntimeImpl {
             .transpose()
     }
 
-    /// List all boxes, sorted by creation time (newest first).
-    ///
-    /// Includes both persisted boxes (from database) and in-memory boxes
-    /// (created but not yet persisted).
+    /// List persisted boxes from one database snapshot, newest first.
     pub async fn list_info(self: &Arc<Self>) -> BoxliteResult<Vec<BoxInfo>> {
-        use std::collections::HashSet;
-
         // Get boxes from database - run on blocking thread pool
         let this = Arc::clone(self);
         let db_boxes = tokio::task::spawn_blocking(move || this.box_manager.list_for_info())
             .await
             .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
-        let mut seen_ids = HashSet::with_capacity(db_boxes.len());
         let mut infos = Vec::with_capacity(db_boxes.len());
         for (config, state, legacy_policy_visible) in db_boxes {
-            seen_ids.insert(config.id.clone());
-            // Database rows are the cross-process freshness authority. Build
-            // their metadata directly instead of manufacturing live handles.
             let mut info = BoxInfo::new(&config, &state);
             if !legacy_policy_visible {
                 info.network = None;
             }
             infos.push(info);
         }
-
-        // Add in-memory boxes not yet persisted. `info()` reads the box's
-        // shim.pid, so collect the handles first rather than doing that file
-        // I/O while holding the cache lock.
-        let in_memory_only: Vec<_> = {
-            let sync = self.sync_state.read().unwrap();
-            sync.active_boxes_by_id
-                .iter()
-                .filter(|(box_id, _)| !seen_ids.contains(*box_id))
-                .filter_map(|(_, weak)| weak.upgrade())
-                .collect()
-        };
-        infos.extend(in_memory_only.iter().map(|box_impl| box_impl.info()));
 
         // Sort by creation time (newest first)
         infos.sort_by_key(|b| std::cmp::Reverse(b.created_at));
@@ -807,7 +783,7 @@ impl RuntimeImpl {
 
     /// Check if a box with the given ID or name exists.
     ///
-    /// Checks in-memory cache first (for boxes not yet persisted), then database.
+    /// Checks the handle cache before querying the database.
     pub async fn exists(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<bool> {
         // Check in-memory cache first
         {
@@ -1081,7 +1057,7 @@ impl RuntimeImpl {
 
     /// Resolve an ID or name to the actual box ID.
     ///
-    /// Checks in-memory cache first (for boxes not yet persisted), then database.
+    /// Checks the handle cache before querying the database.
     fn resolve_id(&self, id_or_name: &str) -> BoxliteResult<BoxID> {
         // Check in-memory cache first
         {
@@ -1114,8 +1090,7 @@ impl RuntimeImpl {
     /// This is the internal implementation called by both `BoxliteRuntime::remove()`
     /// and `LiteBox::stop()` when its removal policy is enabled.
     ///
-    /// Handles both persisted boxes (in database) and in-memory-only boxes
-    /// (created but not yet started).
+    /// Cleans up a cached handle when its database row is absent.
     ///
     /// # Arguments
     /// * `id` - Box ID to remove
@@ -1206,7 +1181,6 @@ impl RuntimeImpl {
         };
 
         if let Some(box_impl) = box_impl {
-            // Box exists in-memory only (not yet started/persisted)
             let state = box_impl.state.read();
             if state.status.is_active() && !force {
                 return Err(BoxliteError::InvalidState(format!(
@@ -1858,8 +1832,7 @@ impl RuntimeImpl {
     /// Returns `(SharedBoxImpl, inserted)` where `inserted` is true if a new BoxImpl
     /// was created, false if an existing one was returned.
     ///
-    /// Checks both by name (if provided) and by ID. This prevents duplicate names
-    /// even for boxes not yet persisted to database.
+    /// Reuses cached handles by name or ID.
     fn get_or_create_box_impl(
         self: &Arc<Self>,
         config: BoxConfig,
@@ -2797,6 +2770,61 @@ mod tests {
             durable.allow_net
         );
         assert_eq!(box_impl.state.read().outbound_policy, Some(cached));
+    }
+
+    #[test]
+    fn list_info_hides_protected_policy_created_after_its_database_snapshot() {
+        use crate::litebox::box_impl::outbound::CompleteOutboundControl;
+        use crate::net::{CompleteOutboundPolicy, OutboundAdmission, OutboundRevision};
+
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        executor.block_on(async {
+            let (runtime, _dir) = create_test_runtime();
+            let (resume, occupied) = tokio::sync::oneshot::channel();
+            let gate = tokio::task::spawn_blocking(move || occupied.blocking_recv());
+            let mut list = Box::pin(runtime.list_info());
+            assert!(futures::poll!(&mut list).is_pending());
+            // The only blocking worker must finish the list query before this task runs.
+            let snapshot_finished = tokio::task::spawn_blocking(|| ());
+            resume.send(()).unwrap();
+            gate.await.unwrap().unwrap();
+            snapshot_finished.await.unwrap();
+
+            let config = test_box_config(false);
+            let mut state = BoxState::new();
+            let committed = CompleteOutboundPolicy::default()
+                .prepare(OutboundAdmission::ExtendedIpv4, OutboundRevision::initial())
+                .unwrap();
+            runtime
+                .persist_box_with_policy(
+                    &config,
+                    &mut state,
+                    Some(CompleteOutboundControl {
+                        committed,
+                        pending: None,
+                    }),
+                )
+                .unwrap();
+            let (_handle, inserted) = runtime.get_or_create_box_impl(config.clone(), state);
+            assert!(inserted);
+
+            let overlapping = list.await.unwrap();
+            assert!(
+                overlapping
+                    .iter()
+                    .all(|info| info.id != config.id || info.network.is_none()),
+                "overlapping list exposed a legacy network view for a protected box"
+            );
+
+            let after = runtime.list_info().await.unwrap();
+            assert_eq!(after.len(), 1);
+            assert_eq!(after[0].id, config.id);
+            assert!(after[0].network.is_none());
+        });
     }
 
     #[tokio::test]
