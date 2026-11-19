@@ -45,6 +45,13 @@ Agent admission and AutoStop coordinate per Box. A stopping marker prevents new 
 
 Agent record decoding shares the existing record module with the encoders. This preserves one mapping of state, result, request and steering values across REST and other consumers.
 
+Response config decoding accepts additional server fields while validating known
+field types; request config parsing rejects unknown fields. Successful explicit
+stop clears the canonical Box's turn reservations and cached handle. Observers
+check metadata without starting a Box and release protection when its run ends;
+pauses and transient metadata failures retain protection. Work OpenCode resumes
+after restart is outside the prior run's AutoStop protection.
+
 REST response decoders and their round-trip tests compile only with the `rest` feature. Shared encoders and CLI input parsers remain available without it. Validate both feature configurations with warnings denied: runtime assembly builds the core library without REST before the Go SDK builds its REST-enabled C dependency.
 
 Wire conversion must be shared or tested against the existing CLI record mapping, preserve omitted versus null fields and reject malformed inputs. URL path segments for opaque IDs must be encoded. The current OpenCode adapter supports only its advertised operations; unsupported controls keep their core error.

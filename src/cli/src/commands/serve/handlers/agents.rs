@@ -13,7 +13,7 @@ use boxlite::agents::{
     self, AgentControlOptions, AgentCreateOptions, AgentEventsOptions, AgentSendMode,
     AgentSendOptions, AgentTurnStatus,
 };
-use boxlite::{Agent, BoxliteError};
+use boxlite::{Agent, BoxStatus, BoxliteError};
 use futures::StreamExt;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
@@ -178,22 +178,31 @@ fn observe_turn(
             {
                 return;
             }
-            if let Ok(turn) = agent.get_turn(&turn_id).await
-                && let Ok(snapshot) = turn.state()
-                && matches!(
-                    snapshot.status,
-                    AgentTurnStatus::Completed
-                        | AgentTurnStatus::Cancelled
-                        | AgentTurnStatus::Failed
-                        | AgentTurnStatus::Unknown
-                )
-            {
-                let mut turns = state.agent_turns.lock().await;
-                release_turn(&mut turns, &box_id, generation);
-                return;
+            // Metadata reads cannot start the service or reuse the spent handle.
+            match state.runtime.get_info(&box_id).await {
+                Ok(Some(info)) if info.status.is_running() => {
+                    if let Ok(turn) = agent.get_turn(&turn_id).await
+                        && let Ok(snapshot) = turn.state()
+                        && matches!(
+                            snapshot.status,
+                            AgentTurnStatus::Completed
+                                | AgentTurnStatus::Cancelled
+                                | AgentTurnStatus::Failed
+                                | AgentTurnStatus::Unknown
+                        )
+                    {
+                        break;
+                    }
+                }
+                Ok(Some(info)) if matches!(info.status, BoxStatus::Paused | BoxStatus::Unknown) => {
+                }
+                Err(_) => {}
+                Ok(_) => break,
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
+        let mut turns = state.agent_turns.lock().await;
+        release_turn(&mut turns, &box_id, generation);
     });
 }
 

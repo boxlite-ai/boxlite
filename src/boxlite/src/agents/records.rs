@@ -193,8 +193,37 @@ pub(super) struct Resource {
     pub(super) id: String,
     pub(super) agent: String,
     pub(super) state: Option<State>,
-    pub(super) config: Value,
+    pub(super) config: Config,
     pub(super) capabilities: Capabilities,
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct Config {
+    model: Option<String>,
+    reasoning: Option<String>,
+    instructions: Option<String>,
+    tools: Vec<String>,
+    mcp: Vec<String>,
+    permissions: Option<Value>,
+    limits: Option<Value>,
+    output_schema: Option<Value>,
+}
+
+#[cfg(feature = "rest")]
+impl From<Config> for AgentConfig {
+    fn from(value: Config) -> Self {
+        Self {
+            model: value.model,
+            reasoning: value.reasoning,
+            instructions: value.instructions,
+            tools: value.tools,
+            mcp: value.mcp,
+            permissions: value.permissions,
+            limits: value.limits,
+            output_schema: value.output_schema,
+        }
+    }
 }
 
 #[cfg(feature = "rest")]

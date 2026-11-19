@@ -204,6 +204,14 @@ the server retains the protection for five minutes or until the Box is removed.
 After that grace period AutoStop may interrupt work that was admitted but could
 not be observed.
 
+Stopping a Box releases its admitted-turn protection. Observers read Box metadata
+without resuming a stopped Box and exit when its run ends. If OpenCode resumes
+an earlier turn after restart, that resumed turn is not protected from AutoStop;
+only turns admitted through the server in the new run receive protection.
+
+Agent config responses accept additional fields while validating known fields.
+Agent config request bodies reject unknown fields.
+
 Close and interrupt return HTTP 204 without a snapshot;
 read a resource separately when its current state is needed. The remote Rust
 `requests()` method remains unsupported, although turn snapshots can include

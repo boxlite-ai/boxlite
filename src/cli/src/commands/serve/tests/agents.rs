@@ -449,6 +449,12 @@ struct AutoStopFixture {
     finished: Arc<std::sync::atomic::AtomicBool>,
     fail_admission: Arc<std::sync::atomic::AtomicBool>,
     observations: Arc<std::sync::atomic::AtomicUsize>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+    invalidated: Arc<std::sync::atomic::AtomicBool>,
+    starts: Arc<std::sync::atomic::AtomicUsize>,
+    hold_observation: Arc<std::sync::atomic::AtomicBool>,
+    observation_started: Arc<tokio::sync::Notify>,
+    finish_observation: Arc<tokio::sync::Notify>,
     admission_started: Arc<tokio::sync::Notify>,
     finish_admission: Arc<tokio::sync::Notify>,
     server: tokio::task::JoinHandle<()>,
@@ -462,21 +468,51 @@ impl AutoStopFixture {
         let finished = Arc::new(AtomicBool::new(false));
         let fail_admission = Arc::new(AtomicBool::new(false));
         let observations = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(AtomicBool::new(true));
+        let invalidated = Arc::new(AtomicBool::new(false));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let hold_observation = Arc::new(AtomicBool::new(false));
+        let observation_started = Arc::new(tokio::sync::Notify::new());
+        let finish_observation = Arc::new(tokio::sync::Notify::new());
         let admission_started = Arc::new(tokio::sync::Notify::new());
         let finish_admission = Arc::new(tokio::sync::Notify::new());
-        let box_info = || {
-            json!({"box_id":STUB_BOX_ID,"name":null,"status":"running",
+        fn box_info(running: bool) -> Value {
+            json!({"box_id":STUB_BOX_ID,"name":"friendly-box","status":if running { "running" } else { "stopped" },
             "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
             "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512,"auto_resume":true})
-        };
+        }
         let app = Router::new()
-            .route("/v1/boxes", get(move || async move { Json(json!({"boxes":[box_info()]})) }))
-            .route("/v1/boxes/{id}", get(move || async move { Json(box_info()) }))
+            .route("/v1/boxes", get({
+                let running = Arc::clone(&running);
+                move || { let running = Arc::clone(&running); async move {
+                    Json(json!({"boxes":[box_info(running.load(Ordering::SeqCst))]}))
+                }}
+            }))
+            .route("/v1/boxes/{id}", get({
+                let running = Arc::clone(&running);
+                move || { let running = Arc::clone(&running); async move {
+                    Json(box_info(running.load(Ordering::SeqCst)))
+                }}
+            }))
+            .route("/v1/boxes/{id}/start", post({
+                let running = Arc::clone(&running);
+                let starts = Arc::clone(&starts);
+                move || { let running = Arc::clone(&running); let starts = Arc::clone(&starts); async move {
+                    starts.fetch_add(1, Ordering::SeqCst);
+                    running.store(true, Ordering::SeqCst);
+                    Json(box_info(true))
+                }}
+            }))
             .route("/v1/boxes/{id}/stop", post({
                 let stops = Arc::clone(&stops);
-                move || { let stops = Arc::clone(&stops); async move {
+                let running = Arc::clone(&running);
+                let invalidated = Arc::clone(&invalidated);
+                move || { let stops = Arc::clone(&stops); let running = Arc::clone(&running);
+                    let invalidated = Arc::clone(&invalidated); async move {
                     stops.fetch_add(1, Ordering::SeqCst);
-                    Json(box_info())
+                    running.store(false, Ordering::SeqCst);
+                    invalidated.store(true, Ordering::SeqCst);
+                    Json(box_info(false))
                 }}
             }))
             .route("/v1/boxes/{id}/agents/{agent}", get(|| async { Json(resource()) }))
@@ -497,8 +533,26 @@ impl AutoStopFixture {
             .route("/v1/boxes/{id}/agents/{agent}/turns/{turn}", get({
                 let finished = Arc::clone(&finished);
                 let observations = Arc::clone(&observations);
+                let running = Arc::clone(&running);
+                let invalidated = Arc::clone(&invalidated);
+                let starts = Arc::clone(&starts);
+                let hold = Arc::clone(&hold_observation);
+                let started = Arc::clone(&observation_started);
+                let finish = Arc::clone(&finish_observation);
                 move || { let finished = Arc::clone(&finished); let observations = Arc::clone(&observations);
+                    let running = Arc::clone(&running); let invalidated = Arc::clone(&invalidated);
+                    let starts = Arc::clone(&starts); let hold = Arc::clone(&hold);
+                    let started = Arc::clone(&started); let finish = Arc::clone(&finish);
                     async move {
+                        // An agent lookup can resume the service; metadata reads must not.
+                        if !running.swap(true, Ordering::SeqCst) { starts.fetch_add(1, Ordering::SeqCst); }
+                        if hold.swap(false, Ordering::SeqCst) {
+                            started.notify_one();
+                            finish.notified().await;
+                        }
+                        if invalidated.load(Ordering::SeqCst) {
+                            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))).into_response();
+                        }
                         if observations.fetch_add(1, Ordering::SeqCst) == 0 {
                             return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({}))).into_response();
                         }
@@ -532,6 +586,12 @@ impl AutoStopFixture {
             finished,
             fail_admission,
             observations,
+            running,
+            invalidated,
+            starts,
+            hold_observation,
+            observation_started,
+            finish_observation,
             admission_started,
             finish_admission,
             server,
@@ -561,10 +621,15 @@ impl AutoStopFixture {
 
     async fn sweep(&self) {
         let now = std::time::Instant::now();
-        self.state.last_activity.write().await.insert(
+        let mut activity = self.state.last_activity.write().await;
+        for timestamp in activity.values_mut() {
+            *timestamp = now - std::time::Duration::from_secs(120);
+        }
+        activity.insert(
             STUB_BOX_ID.into(),
             now - std::time::Duration::from_secs(120),
         );
+        drop(activity);
         super::run_lifecycle_once(&self.state, now).await;
     }
 
@@ -611,6 +676,154 @@ async fn autostop_spares_an_admission_in_progress() {
         request.await.unwrap().unwrap().status(),
         StatusCode::CREATED
     );
+}
+
+#[tokio::test]
+async fn rest_review_config_accepts_additive_fields_and_validates_known_fields() {
+    for invalid in [false, true] {
+        let mut response = resource();
+        response["config"]["provider_metadata"] = json!({"version": 2});
+        response["config"]["model"] = if invalid {
+            json!(123)
+        } else {
+            json!("provider/model")
+        };
+        assert!(boxlite::agents::records::parse_config(response["config"].clone()).is_err());
+        let response = Arc::new(response);
+        let upstream = Router::new()
+            .route(
+                "/v1/boxes/{id}",
+                get(|| async {
+                    Json(json!({"box_id":STUB_BOX_ID,"name":null,"status":"running",
+                    "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+                    "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512}))
+                }),
+            )
+            .route(
+                "/v1/boxes/{id}/agents",
+                post({
+                    let response = Arc::clone(&response);
+                    move || {
+                        let response = Arc::clone(&response);
+                        async move { (StatusCode::CREATED, Json((*response).clone())) }
+                    }
+                }),
+            )
+            .route(
+                "/v1/boxes/{id}/agents/{agent}",
+                get({
+                    let response = Arc::clone(&response);
+                    move || {
+                        let response = Arc::clone(&response);
+                        async move { Json((*response).clone()) }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let runtime =
+            BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+        let sandbox = runtime.get(STUB_BOX_ID).await.unwrap().unwrap();
+        for result in [
+            sandbox.agents().get("ses_test").await,
+            sandbox
+                .agents()
+                .create("opencode", Default::default())
+                .await,
+        ] {
+            if invalid {
+                assert!(result.is_err(), "malformed response config was accepted");
+            } else {
+                let agent = result.expect("additive response config fields must be accepted");
+                assert_eq!(agent.id(), "ses_test");
+                assert_eq!(
+                    agent.config().unwrap().model.as_deref(),
+                    Some("provider/model")
+                );
+            }
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn rest_review_stop_by_name_releases_turn_protection_after_restart() {
+    use std::sync::atomic::Ordering;
+    let fixture = AutoStopFixture::new().await;
+    fixture.hold_observation.store(true, Ordering::SeqCst);
+    fixture.accept().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.observation_started.notified(),
+    )
+    .await
+    .unwrap();
+    let client = reqwest::Client::new();
+    let stopped = client
+        .post(format!("{}/v1/boxes/friendly-box/stop", fixture.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stopped.status(), StatusCode::OK);
+    assert!(
+        !fixture
+            .state
+            .agent_turns
+            .lock()
+            .await
+            .contains_key(STUB_BOX_ID),
+        "stop by name retained the canonical Box reservation"
+    );
+    let restarted = client
+        .post(format!("{}/v1/boxes/friendly-box/start", fixture.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(restarted.status(), StatusCode::OK);
+    fixture.finish_observation.notify_one();
+    fixture.sweep().await;
+    assert_eq!(
+        fixture.stops(),
+        2,
+        "a restarted Box inherited stale turn protection"
+    );
+}
+
+#[tokio::test]
+async fn rest_review_observer_releases_a_stopped_run_without_resuming_it() {
+    use std::sync::atomic::Ordering;
+    let fixture = AutoStopFixture::new().await;
+    fixture.hold_observation.store(true, Ordering::SeqCst);
+    fixture.accept().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.observation_started.notified(),
+    )
+    .await
+    .unwrap();
+    fixture.running.store(false, Ordering::SeqCst);
+    fixture.invalidated.store(true, Ordering::SeqCst);
+    fixture.finish_observation.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while fixture
+            .state
+            .agent_turns
+            .lock()
+            .await
+            .contains_key(STUB_BOX_ID)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("observer retained protection after the Box run stopped");
+    assert_eq!(
+        fixture.starts.load(Ordering::SeqCst),
+        0,
+        "observer resumed a stopped Box"
+    );
+    assert!(!fixture.running.load(Ordering::SeqCst));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

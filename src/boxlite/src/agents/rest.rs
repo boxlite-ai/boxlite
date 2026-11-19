@@ -76,7 +76,7 @@ fn from_resource(remote: &RestBox, path: String, resource: Resource) -> BoxliteR
         id: resource.id,
         adapter: resource.agent,
         state: resource.state.map(TryInto::try_into).transpose()?,
-        config: super::records::parse_config(resource.config)?,
+        config: resource.config.into(),
         capabilities,
     }))
 }

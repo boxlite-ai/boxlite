@@ -175,6 +175,7 @@ pub(in crate::commands::serve) async fn stop_box(
         Ok(b) => b,
         Err(resp) => return resp,
     };
+    let canonical = litebox.id().to_string();
 
     if let Err(e) = litebox.stop().await {
         return error_from_boxlite(&e);
@@ -183,7 +184,8 @@ pub(in crate::commands::serve) async fn stop_box(
     // stop() cancels the box's token, which invalidates this handle for good.
     // Keeping it cached would hand the next request a handle that answers every
     // call with "invalidated after stop()".
-    state.boxes.write().await.remove(&box_id);
+    state.boxes.write().await.remove(&canonical);
+    state.agent_turns.lock().await.remove(&canonical);
 
     let info = match litebox.info().await {
         Ok(info) => info,
