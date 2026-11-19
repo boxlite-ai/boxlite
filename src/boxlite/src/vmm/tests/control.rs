@@ -39,6 +39,48 @@ fn a_request_reaches_the_handler_and_its_answer_returns() {
 }
 
 #[test]
+fn accept_recovers_from_temporary_errors_with_bounded_backoff() {
+    let (mut client, stream) = UnixStream::pair().unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    write_frame(
+        &mut client,
+        &serde_json::to_vec(&grow_to("container", 4096)).unwrap(),
+    )
+    .unwrap();
+
+    let accept_error = |errno| Err(io::Error::from_raw_os_error(errno));
+    let incoming = [
+        accept_error(libc::EMFILE),
+        accept_error(libc::ENFILE),
+        accept_error(libc::ECONNABORTED),
+        accept_error(libc::EINTR),
+        accept_error(libc::EMFILE),
+        accept_error(libc::ENFILE),
+        accept_error(libc::EMFILE),
+        accept_error(libc::ENFILE),
+        Ok(stream),
+        accept_error(libc::EMFILE),
+        accept_error(libc::EBADF),
+    ];
+    let incoming = incoming.into_iter().chain(std::iter::once_with(|| {
+        panic!("the listener must stop accepting after EBADF")
+    }));
+    let mut waits = Vec::new();
+    serve_connections(
+        incoming,
+        |ControlOp::ResizeDisk { bytes, .. }| Ok(ControlReply::DiskSize(bytes)),
+        |delay| waits.push(delay),
+    );
+
+    let reply = read_frame(&mut client).expect("request after EMFILE must receive a reply");
+    let reply: ControlResponse = serde_json::from_slice(&reply).unwrap();
+    assert_eq!(reply, Ok(ControlReply::DiskSize(4096)));
+    assert_eq!(waits, [5, 10, 20, 40, 50, 50, 5].map(Duration::from_millis));
+}
+
+#[test]
 fn another_version_is_unsupported_and_the_shim_keeps_serving() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("control.sock");

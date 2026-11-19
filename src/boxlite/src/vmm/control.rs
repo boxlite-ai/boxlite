@@ -22,6 +22,8 @@ pub(crate) const VERSION: u32 = 1;
 const MAX_FRAME: u32 = 4096;
 /// How long the shim waits for a request or a reply write.
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+const ACCEPT_RETRY_INITIAL: Duration = Duration::from_millis(5);
+const ACCEPT_RETRY_MAX: Duration = Duration::from_millis(50);
 
 /// One versioned request. Its operation sits beside `version`, tagged by
 /// `op`; an unknown operation fails to parse.
@@ -76,15 +78,47 @@ pub(crate) fn serve(
     restrict_to_owner(path)?;
     std::thread::Builder::new()
         .name("vmm-control".into())
-        .spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { break };
-                if let Err(error) = answer(stream, &handle) {
-                    tracing::debug!(%error, "control connection ended");
-                }
-            }
-        })?;
+        .spawn(move || serve_connections(listener.incoming(), handle, std::thread::sleep))?;
     Ok(())
+}
+
+fn serve_connections(
+    incoming: impl Iterator<Item = io::Result<UnixStream>>,
+    handle: impl Fn(ControlOp) -> ControlResponse,
+    mut sleep: impl FnMut(Duration),
+) {
+    use io::ErrorKind::{ConnectionAborted, Interrupted};
+
+    let mut retry_delay = ACCEPT_RETRY_INITIAL;
+    for connection in incoming {
+        let stream = match connection {
+            Ok(stream) => {
+                retry_delay = ACCEPT_RETRY_INITIAL;
+                stream
+            }
+            Err(error) if matches!(error.kind(), Interrupted | ConnectionAborted) => continue,
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EBADF | libc::ENOTSOCK | libc::EINVAL)
+                ) =>
+            {
+                tracing::error!(%error, "VMM control listener stopped");
+                break;
+            }
+            Err(error) => {
+                if retry_delay == ACCEPT_RETRY_INITIAL {
+                    tracing::warn!(%error, "VMM control accept failed, retrying");
+                }
+                sleep(retry_delay);
+                retry_delay = (retry_delay * 2).min(ACCEPT_RETRY_MAX);
+                continue;
+            }
+        };
+        if let Err(error) = answer(stream, &handle) {
+            tracing::debug!(%error, "control connection ended");
+        }
+    }
 }
 
 fn answer(
