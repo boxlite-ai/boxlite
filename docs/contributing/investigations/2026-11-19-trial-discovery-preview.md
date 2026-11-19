@@ -63,9 +63,11 @@ Browser review covers organization → use case → plan choice → Back → con
 
 Production bundle inspection must exclude the prototype chunk and its activation/coupon fixture strings. No real payment or hosted authentication acceptance test is claimed.
 
+Integration tests also exercise the real Welcome completion hook, organization/use-case submissions, Back navigation, and all three preview gates. Invalid coupons retain the form; correcting the code clears its error before completion. Verification alone never invokes completion.
+
 ## Observed results
 
-On main b2e104c20, `make test:apps:dashboard` passed 152 files / 1,674 tests and `make build:apps:dashboard` passed. Production asset inspection excluded the prototype activation and coupon fixture strings. Independent code audit found no production billing or authentication mutations. All success paths use the completion callback immediately; no success interstitial remains.
+On main b2e104c20, `make test:apps:dashboard` passed 153 files / 1,683 tests and `make build:apps:dashboard` passed. Production asset inspection excluded the prototype activation and coupon fixture strings. Independent code audit found no production billing or authentication mutations. All success paths use the completion callback immediately; no success interstitial remains.
 
 ## Complete onboarding screenshots
 

@@ -114,3 +114,37 @@ it('uses the provided Welcome completion when skipping', () => {
   click('Explore console — no card required')
   expect(complete).toHaveBeenCalledOnce()
 })
+
+it('uses Welcome completion only after explicit verified activation', () => {
+  const complete = vi.fn()
+  render('eligible', complete)
+  click('Continue to free trial')
+  click('Verify card')
+  expect(complete).not.toHaveBeenCalled()
+  click('Start 3-day trial')
+  expect(complete).toHaveBeenCalledOnce()
+  expect(host.querySelector('output')?.textContent).toBe('/')
+})
+
+it('uses Welcome completion for valid coupons but retains invalid input', () => {
+  const complete = vi.fn()
+  render('eligible', complete)
+  click('Have a coupon? Redeem code')
+  const input = host.querySelector('#trial-coupon') as HTMLInputElement
+  const enter = (value: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  enter('INVALID')
+  click('Redeem')
+  expect(complete).not.toHaveBeenCalled()
+  expect(input.getAttribute('aria-invalid')).toBe('true')
+  expect(host.querySelector('output')?.textContent).toBe('/')
+  enter('ACME50')
+  expect(input.getAttribute('aria-invalid')).toBe('false')
+  expect(host.querySelector('#trial-coupon-error')).toBeNull()
+  click('Redeem')
+  expect(complete).toHaveBeenCalledOnce()
+  expect(host.querySelector('output')?.textContent).toBe('/')
+})
