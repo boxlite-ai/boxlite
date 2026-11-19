@@ -1,0 +1,16 @@
+name = "local-hello"
+access = "public"
+
+[runtime]
+image = "node"
+size = "nano"
+
+[[service]]
+name = "web"
+command = "node server.mjs"
+port = 3000
+health = "/healthz"
+
+[variables]
+BACKEND_URL = "http://local-hello-api.app.localhost:4000/api/version"
+LOCAL_PROXY_HOST = "host.boxlite.internal"
