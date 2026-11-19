@@ -66,6 +66,13 @@ fn managed_share_kind(mount: &crate::volumes::ResolvedLocalMount) -> ResolvedSha
     }
 }
 
+fn managed_owner_path(kind: &ResolvedShareKind, resolved_path: &std::path::Path) -> PathBuf {
+    match kind {
+        ResolvedShareKind::ManagedSubDirectory { sub_path } => resolved_path.join(sub_path),
+        _ => resolved_path.to_path_buf(),
+    }
+}
+
 pub fn resolve_user_volumes(
     volumes: &[VolumeSpec],
     mounts: &[MountSpec],
@@ -90,10 +97,7 @@ pub fn resolve_user_volumes(
             })?;
             let kind = managed_share_kind(&mount);
             let resolved_path = mount.payload_root;
-            let owner_path = match &kind {
-                ResolvedShareKind::ManagedSubDirectory { sub_path } => resolved_path.join(sub_path),
-                _ => resolved_path.clone(),
-            };
+            let owner_path = managed_owner_path(&kind, &resolved_path);
             let metadata = std::fs::metadata(&owner_path).map_err(|error| {
                 BoxliteError::Config(format!("Failed to stat managed volume {selector}: {error}"))
             })?;
@@ -190,12 +194,7 @@ pub fn resolve_user_volumes(
                 })?;
                 let kind = managed_share_kind(&managed);
                 let resolved_path = managed.payload_root;
-                let owner_path = match &kind {
-                    ResolvedShareKind::ManagedSubDirectory { sub_path } => {
-                        resolved_path.join(sub_path)
-                    }
-                    _ => resolved_path.clone(),
-                };
+                let owner_path = managed_owner_path(&kind, &resolved_path);
                 let metadata = std::fs::metadata(&owner_path).map_err(|error| {
                     BoxliteError::Config(format!(
                         "Failed to stat volume path '{}': {error}",
@@ -530,6 +529,61 @@ mod tests {
     }
 
     #[test]
+    fn resolve_typed_bind_directory_uses_host_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mount = crate::runtime::options::MountSpec {
+            read_only: true,
+            ..crate::runtime::options::MountSpec::bind_mount(
+                tmp.path().to_string_lossy().to_string(),
+                "/data",
+            )
+        };
+
+        let resolved = resolve_user_volumes(&[], &[mount], &runtime.local_volume_store).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_path, tmp.path().canonicalize().unwrap());
+        assert_eq!(resolved[0].guest_path, "/data");
+        assert!(resolved[0].read_only);
+        assert_eq!(resolved[0].tag, "uservol0");
+        assert!(matches!(resolved[0].kind, ResolvedShareKind::Directory));
+    }
+
+    #[test]
+    fn resolve_typed_bind_single_file_preserves_file_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("app.conf");
+        std::fs::write(&file_path, b"key=value\n").unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mount = crate::runtime::options::MountSpec::bind_mount(
+            file_path.to_string_lossy().to_string(),
+            "/etc/app.conf",
+        );
+
+        let resolved = resolve_user_volumes(&[], &[mount], &runtime.local_volume_store).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_path, file_path.canonicalize().unwrap());
+        assert_eq!(resolved[0].guest_path, "/etc/app.conf");
+        assert_eq!(resolved[0].tag, "uservol0");
+        assert!(matches!(
+            resolved[0].kind,
+            ResolvedShareKind::SingleFile { ref file_name } if file_name == "app.conf"
+        ));
+    }
+
+    #[test]
     fn resolve_managed_volume_uses_the_local_store() {
         let tmp = tempfile::tempdir().unwrap();
         let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
@@ -605,27 +659,7 @@ mod tests {
 
     #[test]
     fn resolve_typed_mount_subdirectory_uses_the_selected_directory_owner() {
-        use std::os::unix::ffi::OsStrExt;
         use std::os::unix::fs::MetadataExt;
-
-        fn set_alternate_group(path: &std::path::Path) -> Option<u32> {
-            // SAFETY: getuid/getgid read process IDs, getgroups writes to a
-            // correctly sized buffer, and chown receives a valid C path.
-            unsafe {
-                let uid = libc::getuid();
-                let gid = libc::getgid();
-                let alternate = if uid == 0 {
-                    1
-                } else {
-                    let count = libc::getgroups(0, std::ptr::null_mut());
-                    let mut groups = vec![0; count as usize];
-                    libc::getgroups(count, groups.as_mut_ptr());
-                    groups.into_iter().find(|group| *group != gid)?
-                };
-                let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-                (libc::chown(path.as_ptr(), uid, alternate) == 0).then_some(alternate)
-            }
-        }
 
         let tmp = tempfile::tempdir().unwrap();
         let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
@@ -642,10 +676,6 @@ mod tests {
         let payload = runtime.layout.volumes_dir().join(&volume.id).join("_data");
         let subdirectory = payload.join("team/backend");
         std::fs::create_dir_all(&subdirectory).unwrap();
-        let Some(expected_gid) = set_alternate_group(&subdirectory) else {
-            eprintln!("skipping: no supplementary group available for ownership fault injection");
-            return;
-        };
         let mount = crate::runtime::options::MountSpec {
             sub_path: Some("team/backend".to_string()),
             ..crate::runtime::options::MountSpec::volume_mount(&volume.id, "/workspace")
@@ -657,13 +687,24 @@ mod tests {
             &runtime.local_volume_store,
         )
         .unwrap();
-        assert_eq!(resolved[0].owner_gid, expected_gid);
+        assert_eq!(
+            managed_owner_path(&resolved[0].kind, &resolved[0].host_path),
+            subdirectory.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolved[0].owner_gid,
+            std::fs::metadata(&subdirectory).unwrap().gid()
+        );
 
         let whole = crate::runtime::options::MountSpec {
             sub_path: None,
             ..mount
         };
         let resolved = resolve_user_volumes(&[], &[whole], &runtime.local_volume_store).unwrap();
+        assert_eq!(
+            managed_owner_path(&resolved[0].kind, &resolved[0].host_path),
+            payload.canonicalize().unwrap()
+        );
         assert_eq!(
             resolved[0].owner_gid,
             std::fs::metadata(payload).unwrap().gid()

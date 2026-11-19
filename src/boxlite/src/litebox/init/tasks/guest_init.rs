@@ -234,6 +234,7 @@ fn kvm_device() -> ContainerDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn limits_for(cpus: Option<f64>, memory_mib: Option<u32>, cap: Option<u64>) -> (i64, u64, i64) {
         let mut options = BoxOptions {
@@ -313,5 +314,171 @@ mod tests {
             MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION,
         )
         .expect("the first safe guest passes the gate");
+    }
+
+    #[derive(Clone)]
+    struct VersionedGuest {
+        version: &'static str,
+        guest_init_calls: Arc<std::sync::Mutex<usize>>,
+        container_init_calls: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[tonic::async_trait]
+    impl boxlite_shared::Guest for VersionedGuest {
+        async fn init(
+            &self,
+            _: tonic::Request<boxlite_shared::GuestInitRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::GuestInitResponse>, tonic::Status> {
+            *self.guest_init_calls.lock().unwrap() += 1;
+            Ok(tonic::Response::new(boxlite_shared::GuestInitResponse {
+                result: Some(boxlite_shared::guest_init_response::Result::Success(
+                    boxlite_shared::GuestInitSuccess {},
+                )),
+            }))
+        }
+
+        async fn ping(
+            &self,
+            _: tonic::Request<boxlite_shared::PingRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::PingResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::PingResponse {
+                version: self.version.to_string(),
+            }))
+        }
+
+        async fn shutdown(
+            &self,
+            _: tonic::Request<boxlite_shared::ShutdownRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ShutdownResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::ShutdownResponse {}))
+        }
+
+        async fn quiesce(
+            &self,
+            _: tonic::Request<boxlite_shared::QuiesceRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::QuiesceResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::QuiesceResponse {
+                frozen_count: 0,
+            }))
+        }
+
+        async fn thaw(
+            &self,
+            _: tonic::Request<boxlite_shared::ThawRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ThawResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::ThawResponse {
+                thawed_count: 0,
+            }))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl boxlite_shared::Container for VersionedGuest {
+        async fn init(
+            &self,
+            request: tonic::Request<boxlite_shared::ContainerInitRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerInitResponse>, tonic::Status> {
+            *self.container_init_calls.lock().unwrap() += 1;
+            let container_id = request.into_inner().container_id;
+            Ok(tonic::Response::new(
+                boxlite_shared::ContainerInitResponse {
+                    result: Some(boxlite_shared::container_init_response::Result::Success(
+                        boxlite_shared::ContainerInitSuccess { container_id },
+                    )),
+                },
+            ))
+        }
+
+        async fn start(
+            &self,
+            _: tonic::Request<boxlite_shared::ContainerStartRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerStartResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+
+        async fn mount(
+            &self,
+            _: tonic::Request<boxlite_shared::ContainerMountRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerMountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+    }
+
+    fn bootstrap_for_version_gate() -> GuestBootstrapConfig {
+        GuestBootstrapConfig {
+            guest: GuestInitConfig {
+                volumes: vec![],
+                network: None,
+            },
+            container: crate::portal::interfaces::ContainerInitConfig {
+                container_id: "container-1".to_string(),
+                image: crate::images::ContainerImageConfig::default(),
+                rootfs: crate::portal::interfaces::ContainerRootfsInitConfig::Merged,
+                mounts: vec![crate::volumes::ContainerMount {
+                    volume_name: "uservol0".to_string(),
+                    destination: "/data".to_string(),
+                    read_only: true,
+                    owner_uid: 0,
+                    owner_gid: 0,
+                    payload: crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                        sub_path: "team/backend".to_string(),
+                    },
+                }],
+                ca_certs: vec![],
+                tty: false,
+                devices: vec![],
+                resources: ContainerResources::default(),
+                advanced: Default::default(),
+            },
+        }
+    }
+
+    async fn run_with_guest_version(version: &'static str) -> (BoxliteResult<()>, usize, usize) {
+        let guest_init_calls = Arc::new(std::sync::Mutex::new(0));
+        let container_init_calls = Arc::new(std::sync::Mutex::new(0));
+        let guest = VersionedGuest {
+            version,
+            guest_init_calls: Arc::clone(&guest_init_calls),
+            container_init_calls: Arc::clone(&container_init_calls),
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(boxlite_shared::GuestServer::new(guest.clone()))
+                .add_service(boxlite_shared::ContainerServer::new(guest))
+                .serve(addr)
+                .await
+                .unwrap();
+        });
+        for _ in 0..100 {
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let result = run_guest_init(
+            crate::portal::GuestSession::new(boxlite_shared::BoxTransport::tcp(addr.port())),
+            bootstrap_for_version_gate(),
+        )
+        .await;
+        let guest_calls = *guest_init_calls.lock().unwrap();
+        let container_calls = *container_init_calls.lock().unwrap();
+        (result, guest_calls, container_calls)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_guest_init_enforces_the_safe_guest_version_before_any_init() {
+        let (result, guest_calls, container_calls) = run_with_guest_version("0.13.1").await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert_eq!((guest_calls, container_calls), (0, 0));
+
+        let (result, guest_calls, container_calls) = run_with_guest_version("0.13.2").await;
+        result.unwrap();
+        assert_eq!((guest_calls, container_calls), (1, 1));
     }
 }

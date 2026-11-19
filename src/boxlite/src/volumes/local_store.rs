@@ -73,6 +73,13 @@ impl LocalVolumeStore {
     /// Startup-only cleanup: remove leftovers from crashed staging or trash
     /// operations. Never touches canonical volume directories.
     pub(crate) fn recover(&self) -> BoxliteResult<()> {
+        self.recover_impl(|_| Ok(()))
+    }
+
+    fn recover_impl(
+        &self,
+        before_cleanup: impl Fn(&Path) -> BoxliteResult<()>,
+    ) -> BoxliteResult<()> {
         self.with_registry_lock(true, || {
             for directory in [STAGING_DIR, TRASH_DIR] {
                 let root = self.root.join(directory);
@@ -82,7 +89,8 @@ impl LocalVolumeStore {
                     let entry = entry
                         .map_err(|error| storage("read volume recovery entry", &root, error))?;
                     let path = entry.path();
-                    if let Err(error) = remove_entry_nofollow(&path) {
+                    let result = before_cleanup(&path).and_then(|()| remove_entry_nofollow(&path));
+                    if let Err(error) = result {
                         tracing::error!(path = %path.display(), %error, "Failed to remove local volume recovery entry");
                     }
                 }
@@ -205,14 +213,14 @@ impl LocalVolumeStore {
     }
 
     pub(crate) fn remove(&self, id: &str, force: bool) -> BoxliteResult<()> {
-        self.remove_impl(id, force, || {})
+        self.remove_impl(id, force, |_| Ok(()))
     }
 
     fn remove_impl(
         &self,
         id: &str,
         force: bool,
-        before_cleanup: impl FnOnce(),
+        before_cleanup: impl FnOnce(&Path) -> BoxliteResult<()>,
     ) -> BoxliteResult<()> {
         validate_id(id)?;
         let Some(trash) = self.with_registry_lock(true, || {
@@ -260,8 +268,8 @@ impl LocalVolumeStore {
         else {
             return Ok(());
         };
-        before_cleanup();
-        if let Err(error) = remove_entry_nofollow(&trash) {
+        let result = before_cleanup(&trash).and_then(|()| remove_entry_nofollow(&trash));
+        if let Err(error) = result {
             tracing::error!(volume_id = %id, path = %trash.display(), %error, "Failed to remove local volume payload from trash");
         }
         Ok(())
@@ -808,7 +816,7 @@ mod tests {
             })
         });
         let result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), &mut resolve_task).await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), &mut resolve_task).await;
         release_sender.send(()).unwrap();
         lock_task.await.unwrap().unwrap();
 
@@ -931,13 +939,6 @@ mod tests {
 
     #[tokio::test]
     async fn removal_succeeds_when_physical_trash_cleanup_fails() {
-        // SAFETY: geteuid only reads the effective user ID.
-        if unsafe { libc::geteuid() } == 0 {
-            eprintln!("root: chmod-based cleanup fault injection skipped");
-            return;
-        }
-        use std::os::unix::fs::PermissionsExt;
-
         let home = tempfile::tempdir().unwrap();
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: home.path().to_path_buf(),
@@ -954,28 +955,20 @@ mod tests {
             .join(&volume.id)
             .join(PAYLOAD_DIR);
         std::fs::write(payload.join("keep"), b"payload").unwrap();
-        let original_mode = std::fs::metadata(&payload).unwrap().permissions().mode();
-        std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        let result = runtime.local_volume_store.remove(&volume.id, false);
+        let result = runtime
+            .local_volume_store
+            .remove_impl(&volume.id, false, |_| {
+                Err(BoxliteError::Storage("injected cleanup failure".into()))
+            });
         let trash_entry = std::fs::read_dir(runtime.layout.volumes_dir().join(TRASH_DIR))
             .unwrap()
             .next()
             .unwrap()
             .unwrap()
             .path();
-        let trash_payload = trash_entry.join(PAYLOAD_DIR);
-        let cleanup_failed = trash_payload.join("keep").exists();
-        std::fs::set_permissions(
-            &trash_payload,
-            std::fs::Permissions::from_mode(original_mode),
-        )
-        .unwrap();
 
-        assert!(
-            cleanup_failed,
-            "the test must inject a physical cleanup failure"
-        );
+        assert!(trash_entry.join(PAYLOAD_DIR).join("keep").exists());
         result.expect("logical removal succeeds after the rename to trash");
         assert!(matches!(
             runtime.local_volume_store.get(&volume.id),
@@ -1000,9 +993,10 @@ mod tests {
         let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
         let (release_sender, release_receiver) = std::sync::mpsc::channel();
         let remove_task = tokio::task::spawn_blocking(move || {
-            store.remove_impl(&volume_id, false, move || {
+            store.remove_impl(&volume_id, false, move |_| {
                 ready_sender.send(()).unwrap();
                 release_receiver.recv().unwrap();
+                Ok(())
             })
         });
         ready_receiver.recv().unwrap();
@@ -1011,7 +1005,7 @@ mod tests {
         let mut create_task =
             tokio::task::spawn_blocking(move || store.create(Some("after-rename")));
         let result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), &mut create_task).await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), &mut create_task).await;
         release_sender.send(()).unwrap();
         remove_task.await.unwrap().unwrap();
 
@@ -1031,14 +1025,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_reopens_and_retries_after_trash_cleanup_failure() {
-        // SAFETY: geteuid only reads the effective user ID.
-        if unsafe { libc::geteuid() } == 0 {
-            eprintln!("root: chmod-based cleanup fault injection skipped");
-            return;
-        }
-        use std::os::unix::fs::PermissionsExt;
-
+    async fn recovery_ignores_cleanup_failure_and_runtime_reopens() {
         let home = tempfile::tempdir().unwrap();
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: home.path().to_path_buf(),
@@ -1053,23 +1040,19 @@ mod tests {
         let nested = operation.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(nested.join("keep"), b"payload").unwrap();
-        let original_mode = std::fs::metadata(&nested).unwrap().permissions().mode();
-        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o555)).unwrap();
-        drop(runtime);
 
-        let recovered = RuntimeImpl::new_for_test(BoxliteOptions {
+        runtime
+            .local_volume_store
+            .recover_impl(|_| Err(BoxliteError::Storage("injected cleanup failure".into())))
+            .expect("physical cleanup failure must not block recovery");
+        assert!(operation.exists());
+
+        drop(runtime);
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: home.path().to_path_buf(),
             ..Default::default()
-        });
-        let cleanup_failed = nested.join("keep").exists();
-        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(original_mode)).unwrap();
-
-        assert!(
-            cleanup_failed,
-            "the test must inject a physical cleanup failure"
-        );
-        let runtime = recovered.expect("physical cleanup failure must not block runtime startup");
-        assert!(operation.exists());
+        })
+        .expect("runtime must reopen after cleanup failure");
         runtime.local_volume_store.recover().unwrap();
         assert!(!operation.exists());
     }
@@ -1240,7 +1223,7 @@ mod tests {
             },
             Some("after-timeout".to_string()),
         );
-        let result = tokio::time::timeout(std::time::Duration::from_millis(100), create).await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), create).await;
         assert!(result.is_err(), "the registry lock must delay creation");
         drop(create_runtime);
         release_sender.send(()).unwrap();

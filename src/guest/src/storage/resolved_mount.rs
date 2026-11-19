@@ -274,13 +274,21 @@ mod tests {
 
     #[test]
     fn pin_cleans_mountpoint_on_success_and_failure() {
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::create_dir(directory.path().join("subdir")).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let payload = parent.path().join("payload");
+        std::fs::create_dir_all(payload.join("subdir")).unwrap();
 
-        let result = ResolvedMount::pin(directory.path(), "subdir", false);
-        drop(result);
+        let resolved = ResolvedMount::pin(&payload, "subdir", false)
+            .expect("pin must succeed before testing cleanup");
+        let mountpoint = resolved.path().to_path_buf();
+        assert!(mountpoint.exists());
+        drop(resolved);
 
-        let leftovers = std::fs::read_dir(directory.path())
+        assert!(
+            !mountpoint.exists(),
+            "pin must remove the mountpoint directory"
+        );
+        let leftovers = std::fs::read_dir(parent.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .filter(|name| name.to_string_lossy().starts_with(".resolved-"))

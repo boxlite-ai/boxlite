@@ -43,7 +43,7 @@ fn local_volume_complete_lifecycle() {
             "alpine:latest",
             "sh",
             "-c",
-            "cat /workspace/result.txt; test ! -e /workspace/sibling; test ! -e /workspace/team; ! echo change > /workspace/result.txt",
+            "cat /workspace/result.txt && test ! -e /workspace/sibling && test ! -e /workspace/team && ! echo change > /workspace/result.txt",
         ])
         .assert()
         .success()

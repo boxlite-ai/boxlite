@@ -15,6 +15,7 @@ async def test_local_volume_shared_by_boxes_clone_and_import(shared_runtime):
     box = None
     clone = None
     imported = None
+    archive_path = os.path.join(os.sep, "tmp", f"{volume.id}.boxlite")
     try:
         box = await shared_runtime.create(
             boxlite.BoxOptions(
@@ -39,9 +40,7 @@ async def test_local_volume_shared_by_boxes_clone_and_import(shared_runtime):
         )
         result = await execution.wait()
         assert result.exit_code == 0, result.stderr
-        archive = await box.export(
-            dest=os.path.join(os.sep, "tmp", f"{volume.id}.boxlite")
-        )
+        archive = await box.export(dest=archive_path)
         clone = await box.clone_box()
         execution = await clone.exec("cat", ["/workspace/team/backend/result.txt"])
         stdout = "".join([chunk async for chunk in execution.stdout()])
@@ -68,11 +67,20 @@ async def test_local_volume_shared_by_boxes_clone_and_import(shared_runtime):
         imported = None
         await shared_runtime.volumes.remove(volume.id)
     finally:
-        if box is not None:
-            await shared_runtime.remove(box.id, force=True)
-        if clone is not None:
-            await shared_runtime.remove(clone.id, force=True)
-        if imported is not None:
-            await shared_runtime.remove(imported.id, force=True)
-        with pytest.raises(boxlite.NotFoundError):
-            await shared_runtime.volumes.get(volume.id)
+        for handle in (box, clone, imported):
+            if handle is not None:
+                try:
+                    await shared_runtime.remove(handle.id, force=True)
+                except Exception:
+                    pass
+        try:
+            await shared_runtime.volumes.remove(volume.id)
+        except Exception:
+            pass
+        try:
+            os.remove(archive_path)
+        except FileNotFoundError:
+            pass
+
+    with pytest.raises(boxlite.NotFoundError):
+        await shared_runtime.volumes.get(volume.id)
