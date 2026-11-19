@@ -20,8 +20,6 @@ sys.path.insert(0, str(SCRIPTS))
 import transfer
 import transfer_hosts
 import transfer_archive
-from transfer_archive import Archive
-from transfer_hosts import CodexHost, ClaudeHost, TransferError
 
 
 class FileTransferTests(unittest.TestCase):
@@ -45,7 +43,7 @@ class FileTransferTests(unittest.TestCase):
         self.addCleanup(environment.stop)
 
     def client(self, host):
-        return (CodexHost if host == 'codex' else ClaudeHost)('chosen-server', self.root)
+        return (transfer_hosts.CodexHost if host == 'codex' else transfer_hosts.ClaudeHost)('chosen-server', self.root)
 
     def calls(self):
         path = self.root / 'calls.jsonl'
@@ -59,10 +57,10 @@ class FileTransferTests(unittest.TestCase):
             with self.subTest(host=host), self.client(host) as client:
                 result = transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
                 self.assertEqual(result['status'], 'completed')
-                self.assertEqual(Archive.decode((self.root / 'uploaded.tar').read_bytes()).tree(),
-                                 Archive.snapshot(self.source).tree())
+                self.assertEqual(transfer_archive.Archive.decode((self.root / 'uploaded.tar').read_bytes()).tree(),
+                                 transfer_archive.Archive.snapshot(self.source).tree())
                 transfer.download(client, 'box-1', '/workspace/fresh/.', self.root / (host + '-out'))
-            self.assertEqual(Archive.snapshot(self.root / (host + '-out')).tree(), Archive.snapshot(self.source).tree())
+            self.assertEqual(transfer_archive.Archive.snapshot(self.root / (host + '-out')).tree(), transfer_archive.Archive.snapshot(self.source).tree())
         self.assertEqual([c['tool'] for c in self.calls()], ['uploadFiles', 'downloadFiles'] * 2)
         self.assertEqual(self.calls()[-1]['arguments'], {'box_id': 'box-1', 'path': '/workspace/fresh/.'})
 
@@ -78,24 +76,26 @@ class FileTransferTests(unittest.TestCase):
         invalid = [{}, {'content': []}, {'content': [{'type': 'text', 'text': ''}]},
                    {'content': [{'type': 'text', 'text': 'HTTP 202'}]}]
         class Response:
+            def __init__(self, value):
+                self.value = value
             def call(self, *args):
-                return value
+                return self.value
         for value in invalid:
-            with self.subTest(value=value), self.assertRaises(TransferError):
-                transfer.upload(Response(), 'box-1', self.source, '/workspace/fresh')
+            with self.subTest(value=value), self.assertRaises(transfer_hosts.TransferError):
+                transfer.upload(Response(value), 'box-1', self.source, '/workspace/fresh')
         for value in (None, [], {'isError': True}):
-            with self.assertRaises(TransferError):
+            with self.assertRaises(transfer_hosts.TransferError):
                 transfer_hosts.tool_result(value)
         for host in ('codex', 'claude'):
             self.fault('empty-ack')
-            with self.client(host) as client, self.assertRaises(TransferError):
+            with self.client(host) as client, self.assertRaises(transfer_hosts.TransferError):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
         self.assertEqual(len(self.calls()), 2)
 
     def test_claude_rejects_wrong_operation_and_never_uses_a_model_success_claim(self):
         for fault in ('wrong-target', 'wrong-tool', 'wrong-server', 'no-callback'):
             self.fault(fault)
-            with self.subTest(fault=fault), self.client('claude') as client, self.assertRaises(TransferError):
+            with self.subTest(fault=fault), self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
         self.assertFalse(self.calls())
 
@@ -103,24 +103,24 @@ class FileTransferTests(unittest.TestCase):
         for fault in ('repeat', 'tool-error'):
             self.fault(fault)
             before = len(self.calls())
-            with self.client('claude') as client, self.assertRaises(TransferError):
+            with self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
             self.assertEqual(len(self.calls()), before + 1)
 
     def test_claude_never_uses_truncated_display_content_as_download_bytes(self):
-        (self.root / 'uploaded.tar').write_bytes(Archive.snapshot(self.source).encode())
+        (self.root / 'uploaded.tar').write_bytes(transfer_archive.Archive.snapshot(self.source).encode())
         self.fault('missing-structured')
-        with self.client('claude') as client, self.assertRaises(TransferError):
+        with self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
             transfer.download(client, 'box-1', '/workspace/fresh/.', self.destination)
         self.assertFalse(self.destination.exists())
 
     def test_claude_reads_large_result_only_from_its_current_session_without_symlinks(self):
-        (self.root / 'uploaded.tar').write_bytes(Archive.snapshot(self.source).encode())
+        (self.root / 'uploaded.tar').write_bytes(transfer_archive.Archive.snapshot(self.source).encode())
         with patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': str(self.root / 'claude-results')}):
             self.fault('persisted')
             with self.client('claude') as client:
                 transfer.download(client, 'box-1', '/workspace/fresh/.', self.destination)
-            self.assertEqual(Archive.snapshot(self.destination).tree(), Archive.snapshot(self.source).tree())
+            self.assertEqual(transfer_archive.Archive.snapshot(self.destination).tree(), transfer_archive.Archive.snapshot(self.source).tree())
             self.fault('persisted-link')
             with self.client('claude') as client, self.assertRaises(OSError):
                 transfer.download(client, 'box-1', '/workspace/fresh/.', self.root / 'refused')
@@ -136,18 +136,18 @@ class FileTransferTests(unittest.TestCase):
                            config / 'projects/project/current/tool-results/../mcp-data.txt'):
                 notice = ('Error: result (1,000,000 characters) exceeds maximum allowed tokens. '
                           + 'Output has been saved to ' + str(target) + '.\nFormat: JSON')
-                with self.assertRaises(TransferError):
+                with self.assertRaises(transfer_hosts.TransferError):
                     client.download_result({'structuredContentOmitted': True}, notice, 'current')
             for raw, content in [({'structuredContentOmitted': True}, 'model-selected path'),
                                  ({'isError': True, 'structuredContent': {'base64': ''}}, ''),
                                  ({}, 'display truncated')]:
-                with self.assertRaises(TransferError):
+                with self.assertRaises(transfer_hosts.TransferError):
                     client.download_result(raw, content, 'current')
 
     def test_codex_protocol_failure_or_interaction_never_falls_back(self):
         for fault in ('eof', 'json', 'error', 'interaction'):
             self.fault(fault)
-            with self.client('codex') as client, self.assertRaises(TransferError):
+            with self.client('codex') as client, self.assertRaises(transfer_hosts.TransferError):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
             self.assertIsNotNone(client.channel.process.poll())
         self.assertFalse(self.calls())
@@ -182,11 +182,11 @@ class FileTransferTests(unittest.TestCase):
                 host.process.stdout.close()
 
     def test_host_timeout_and_message_limit_cleanup_children(self):
-        with patch.object(transfer_hosts, 'TIMEOUT', 0), self.assertRaises(TransferError):
+        with patch.object(transfer_hosts, 'TIMEOUT', 0), self.assertRaises(transfer_hosts.TransferError):
             with self.client('codex'):
                 self.fail('Timeout must not connect')
         with self.client('codex') as client, patch.object(transfer_hosts, 'MAX_MESSAGE', 1024):
-            with self.assertRaises(TransferError):
+            with self.assertRaises(transfer_hosts.TransferError):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
         self.assertIsNotNone(client.channel.process.poll())
         self.assertFalse(self.calls())
@@ -206,10 +206,12 @@ class FileTransferTests(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
 
     def test_helper_does_not_read_credential_environment_or_configuration(self):
+        assert_no_credentials = self.assertFalse
         class Environment(dict):
             def __getitem__(self, key):
-                if any(part in key.upper() for part in ('TOKEN', 'SECRET', 'API_KEY')):
-                    raise AssertionError('Helper accessed credential environment')
+                # KeyError would be swallowed by get(), hiding a credential read.
+                assert_no_credentials(any(part in key.upper() for part in ('TOKEN', 'SECRET', 'API_KEY')),
+                                      'Helper accessed credential environment')
                 return super().__getitem__(key)
             def get(self, key, default=None):
                 try:
@@ -223,12 +225,12 @@ class FileTransferTests(unittest.TestCase):
         config = self.root / 'not-readable.json'
         config.write_text('private host configuration')
         config.chmod(0)
-        client = ClaudeHost('chosen-server', mcp_config=config, plugin_dir=self.root)
+        client = transfer_hosts.ClaudeHost('chosen-server', mcp_config=config, plugin_dir=self.root)
         self.assertEqual(client.options, ['--mcp-config', str(config), '--strict-mcp-config', '--plugin-dir', str(self.root)])
 
     def test_claude_model_login_error_is_distinct_from_boxlite_authorization(self):
         self.fault('not-logged-in')
-        with self.client('claude') as client, self.assertRaisesRegex(TransferError, 'Claude model session is not signed in'):
+        with self.client('claude') as client, self.assertRaisesRegex(transfer_hosts.TransferError, 'Claude model session is not signed in'):
             transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
         self.assertFalse(self.calls())
 
@@ -248,8 +250,8 @@ class FileTransferTests(unittest.TestCase):
         with patch.object(sys, 'argv', args), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(transfer.main(), 1)
         self.assertFalse(self.calls())
-        for host in (CodexHost, ClaudeHost):
-            with self.assertRaises(TransferError):
+        for host in (transfer_hosts.CodexHost, transfer_hosts.ClaudeHost):
+            with self.assertRaises(transfer_hosts.TransferError):
                 host('')
 
     def test_download_checks_metadata_base64_and_size_before_writing(self):
@@ -257,16 +259,18 @@ class FileTransferTests(unittest.TestCase):
                  {'structuredContent': {'base64': '!'}}, {'structuredContent': {'base64': 1}},
                  {'structuredContent': {'base64': 'A' * (4 * ((transfer.MAX_BYTES + 2) // 3) + 1)}}]
         class Response:
+            def __init__(self, value):
+                self.value = value
             def call(self, *args):
-                return value
+                return self.value
         for value in cases:
-            with self.assertRaises(TransferError):
-                transfer.download(Response(), 'box-1', '/workspace/fresh/.', self.destination)
+            with self.assertRaises(transfer_hosts.TransferError):
+                transfer.download(Response(value), 'box-1', '/workspace/fresh/.', self.destination)
             self.assertFalse(self.destination.exists())
-        encoded = base64.b64encode(Archive.snapshot(self.source).encode()).decode()
+        encoded = base64.b64encode(transfer_archive.Archive.snapshot(self.source).encode()).decode()
         value = {'content': [{'type': 'text', 'text': json.dumps({'base64': encoded})}]}
-        transfer.download(Response(), 'box-1', '/workspace/fresh/.', self.destination)
-        self.assertEqual(Archive.snapshot(self.destination).tree(), Archive.snapshot(self.source).tree())
+        transfer.download(Response(value), 'box-1', '/workspace/fresh/.', self.destination)
+        self.assertEqual(transfer_archive.Archive.snapshot(self.destination).tree(), transfer_archive.Archive.snapshot(self.source).tree())
 
     def test_source_symlinks_and_existing_destinations_are_refused_before_calls(self):
         link = self.root / 'alias'
@@ -274,7 +278,7 @@ class FileTransferTests(unittest.TestCase):
         with self.client('codex') as client:
             with self.assertRaises(OSError):
                 transfer.upload(client, 'box-1', link, '/workspace/new')
-            with self.assertRaises(TransferError):
+            with self.assertRaises(transfer_hosts.TransferError):
                 transfer.download(client, 'box-1', '/workspace/data/.', self.source)
         self.assertFalse(self.calls())
 
@@ -288,7 +292,7 @@ class FileTransferTests(unittest.TestCase):
                 member.linkname = '/outside'
                 archive.addfile(member)
             with self.assertRaises(ValueError):
-                Archive.decode(stream.getvalue())
+                transfer_archive.Archive.decode(stream.getvalue())
             self.assertFalse(self.destination.exists())
 
     def test_archive_boundaries_are_checked_before_filesystem_writes(self):
@@ -298,35 +302,35 @@ class FileTransferTests(unittest.TestCase):
                 for name in names:
                     archive.addfile(tarfile.TarInfo(name))
             with self.assertRaises(ValueError):
-                Archive.decode(stream.getvalue())
+                transfer_archive.Archive.decode(stream.getvalue())
         for name in ('bad\\name', '', 'bad\nname'):
             with self.assertRaises(ValueError):
-                Archive().add(name, b'x')
+                transfer_archive.Archive().add(name, b'x')
         with self.assertRaises(ValueError):
-            Archive().add('.', b'not a directory')
+            transfer_archive.Archive().add('.', b'not a directory')
         with patch.object(transfer_archive, 'MAX_ENTRIES', 2):
-            archive = Archive()
+            archive = transfer_archive.Archive()
             archive.add('one', b'a')
             archive.add('two', b'b')
-            self.assertEqual(Archive.decode(archive.encode()).tree(), archive.tree())
+            self.assertEqual(transfer_archive.Archive.decode(archive.encode()).tree(), archive.tree())
             with self.assertRaises(ValueError):
                 archive.add('three', b'c')
-        archive = Archive()
+        archive = transfer_archive.Archive()
         archive.add('one/two/three/file', b'x')
         with patch.object(transfer_archive, 'MAX_ENTRIES', 2), self.assertRaises(ValueError):
             archive.save(self.destination)
         self.assertFalse(self.destination.exists())
         with patch.object(transfer_archive, 'MAX_BYTES', 4096), self.assertRaises(ValueError):
-            Archive.snapshot(self.source)
-        archive = Archive()
+            transfer_archive.Archive.snapshot(self.source)
+        archive = transfer_archive.Archive()
         archive.add('small', b'x')
         with patch.object(transfer_archive, 'MAX_BYTES', 4096), self.assertRaises(ValueError):
             archive.encode()
         with self.assertRaises(ValueError):
-            Archive.decode(b'truncated')
+            transfer_archive.Archive.decode(b'truncated')
         (self.source / '.env').write_text('not for transfer')
         with self.assertRaises(ValueError):
-            Archive.snapshot(self.source)
+            transfer_archive.Archive.snapshot(self.source)
 
 
 if __name__ == '__main__':

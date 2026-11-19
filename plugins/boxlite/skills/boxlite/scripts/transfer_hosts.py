@@ -40,16 +40,19 @@ class HostProcess:
         try:
             os.killpg(self.process.pid, signal.SIGTERM)
         except ProcessLookupError:
+            # The group has already exited; there is nothing left to signal.
             pass
         try:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            # The grace period ended; the finally block escalates to SIGKILL.
             pass
         finally:
             # Leader exit does not imply descendant exit: terminate the remaining group too.
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
+                # No descendants remain after the graceful shutdown.
                 pass
             try:
                 self.process.wait(timeout=5)
