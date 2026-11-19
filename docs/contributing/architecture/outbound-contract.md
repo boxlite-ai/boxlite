@@ -830,15 +830,51 @@ make test:unit:rust FILTER=outbound_recovery RUST_UNIT_CORE_ARGS='-p boxlite --a
 
 ### Runtime bootstrap identity
 
+#### Complete policy in the local Runtime
+
+Use `BoxliteRuntime::create_with_outbound_policy` or `get_or_create_with_outbound_policy` to configure a complete local IPv4 policy without changing existing `BoxOptions` literals. An explicit complete policy selects extended forwarding even when both rule lists are empty. A Box created through `NetworkSpec` uses legacy forwarding.
+
+For example, a complete policy with `mode: enabled`, an empty `allow_net`, and `deny_net: ["192.0.2.0/24:443"]` denies that prefix only on port 443. The Runtime validates the rules and checks the selected shim's capabilities before creating a row. The versioned launch sends the committed policy, revision, admission mode, and the union of capabilities required by any unresolved attempt.
+
+`NetworkHandle::update_outbound_policy` and `replace_outbound_policy` evolve the complete policy under the Box operation lock. `complete_outbound_snapshot` reads durable policy and `complete_outbound_status` compares it with backend observation. An explicit `deny_net: []` requires deny capability for the request and clears user denies without erasing the installed admission mode.
+
+The versioned request uses canonical deny rules and preserves whether the caller supplied the field. Its body budget includes framing for an existing policy accepted by the 64 KiB legacy endpoint. Recovery preserves that policy's original allow strings and historical rule count.
+
+An unresolved attempt survives restart as uncertainty. The shim installs the committed snapshot only, and a read never replays the attempt. The Runtime records restoration with its fresh revision before dispatch so a later mutation can confirm the exact restored identity if publication was interrupted.
+
+```mermaid
+sequenceDiagram
+    participant R as Runtime
+    participant D as SQLite
+    participant G as gvproxy
+    R->>D: Reserve the candidate and preserve earlier evidence
+    R->>G: Apply by revision
+    G-->>R: Confirm the complete candidate
+    alt Durable publication succeeds
+        R->>D: Publish policy and revision
+    else Durable publication fails
+        R->>D: Record restoration with a fresh revision
+        R->>G: Restore the predecessor by revision
+        G-->>R: Confirm the restoration
+        Note over R,D: If publication is interrupted, retain both attempts
+    end
+```
+
+Legacy policy interfaces return `Unsupported` for protected snapshots. General Box metadata omits a network view that cannot express the policy, and `NetworkHandle::published_ports` and Go `Network.PublishedPorts` report the independent lifecycle-verified bindings. A port lookup does not start a VM or repair listeners.
+
+Runtime records with protected policy require a compatible Runtime. A rollback needs a legacy-compatible store with no unresolved extended requirements. Clone, export, and import refuse policy they cannot represent before provisioning or writing the resulting archive.
+
+#### Legacy revision bootstrap
+
 New and restarted VMs receive the persisted revision alongside their persisted policy.
 Records without control metadata use `initial`.
-An unresolved pending candidate is not replayed at startup: the committed policy and revision seed the backend, and the pending record remains available for reconciliation.
-Reattaching to a surviving backend does not replace its live identity.
 
-The revision travels in a private field of the existing stdin launch message, then in the private JSON object passed to gvproxy.
+Startup seeds the backend with the committed policy and revision. The Runtime keeps an unresolved candidate for reconciliation and preserves a surviving backend's live identity on reattach.
+
+The stdin launch message carries the legacy revision in a private field. The shim passes the revision to gvproxy through private JSON.
 `InstanceSpec`, `NetworkBackendSpec`, `GvproxyConfig`, and `BoxState` keep their public fields.
-The existing `GvproxyInstance::from_config` constructor remains available; the explicit revision constructor restores a coordinator-owned identity.
-The shim validates the optional token before starting the backend; absent metadata preserves the legacy launch contract.
+
+The explicit revision constructor restores a coordinator-owned identity. The shim validates an optional token before startup and uses the legacy launch contract when metadata is absent.
 
 The shared `bootstrap-v1.json` example passes through the production launch encoder, shim parser, and gvproxy JSON encoder.
 Real-library tests create gvproxy with a restored revision, verify live readback and conditional replacement, reject a stale replacement, and repeat after backend restart.

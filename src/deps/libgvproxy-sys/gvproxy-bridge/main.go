@@ -14,7 +14,6 @@ static void call_rust_log_callback(void* callback, int level, const char* msg) {
 import "C"
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -313,8 +312,8 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 
 	goJSON := C.GoString(configJSON)
 
-	var config GvproxyConfig
-	if err := json.Unmarshal([]byte(goJSON), &config); err != nil {
+	config, initialPolicy, err := decodeGvproxyStartup([]byte(goJSON))
+	if err != nil {
 		logrus.WithError(err).Error("Failed to parse gvproxy config")
 		setErr(err)
 		return -1
@@ -365,7 +364,6 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// Platform-specific socket creation
 	var conn net.Conn
 	var listener net.Listener
-	var err error
 
 	if runtime.GOOS == "darwin" {
 		// macOS: Use UnixDgram with VFKit protocol (SOCK_DGRAM)
@@ -458,11 +456,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 			return
 		}
 
-		mode := "enabled"
-		if config.OutboundDisabled {
-			mode = "disabled"
-		}
-		policy, err := newOutboundPolicyController(ctx, vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, config.OutboundRevision)
+		policy, err := newOutboundPolicyController(ctx, vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, initialPolicy, config.OutboundRevision)
 		if err != nil {
 			initErr <- fmt.Errorf("initialize outbound policy: %w", err)
 			return
@@ -498,6 +492,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 					mux.Handle("/network/outbound", policy)
 					mux.Handle(outboundStatusPath, policy)
 					mux.Handle(outboundSnapshotPath, policy)
+					mux.Handle(completeOutboundStatusPath, policy)
 					if sErr := http.Serve(l, mux); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
@@ -655,6 +650,18 @@ func gvproxy_get_stats(id C.longlong) *C.char {
 
 	// Explicit: CString allocates memory, caller must free it
 	return C.CString(stats)
+}
+
+//export gvproxy_outbound_capabilities
+func gvproxy_outbound_capabilities() C.uint {
+	capabilities := supportedOutboundCapabilities()
+	var bits C.uint
+	for i, supported := range []bool{capabilities.Admission, capabilities.Deny, capabilities.Port, capabilities.Capacity} {
+		if supported {
+			bits |= 1 << i
+		}
+	}
+	return bits
 }
 
 //export gvproxy_get_version

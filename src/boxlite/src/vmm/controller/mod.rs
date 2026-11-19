@@ -16,6 +16,7 @@
 
 mod handler;
 mod shim;
+pub(crate) use shim::probe_outbound_capabilities;
 mod spawn;
 pub mod watchdog;
 

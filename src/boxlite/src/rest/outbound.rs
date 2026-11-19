@@ -53,6 +53,33 @@ async fn checked(response: Response) -> BoxliteResult<Response> {
     Err(map_http_body(status, &body))
 }
 
+async fn legacy_reply<T: serde::de::DeserializeOwned>(response: Response) -> BoxliteResult<T> {
+    let body = response.bytes().await.map_err(body_error)?;
+    let value: serde_json::Value = serde_json::from_slice(&body).map_err(uncertain)?;
+    for view in std::iter::once(&value).chain(
+        ["persisted", "observed", "runtime_persisted"]
+            .into_iter()
+            .filter_map(|field| value.get(field)),
+    ) {
+        let policy = view.get("policy").unwrap_or(view);
+        if view.get("outbound_v1").is_some()
+            || view.get("complete_snapshot").is_some()
+            || view
+                .get("admission")
+                .is_some_and(|admission| admission.as_str() != Some("legacy"))
+            || policy.get("deny_net").is_some()
+            || policy
+                .get("admission")
+                .is_some_and(|admission| admission.as_str() != Some("legacy"))
+        {
+            return Err(BoxliteError::Unsupported(
+                "REST policy requires the complete policy interface".into(),
+            ));
+        }
+    }
+    serde_json::from_slice(&body).map_err(uncertain)
+}
+
 impl ApiClient {
     pub(super) async fn read_outbound_snapshot(
         &self,
@@ -66,7 +93,7 @@ impl ApiClient {
             .map_err(transport_error)?;
         let response = checked(response).await?;
         let revision = revision(&response)?;
-        let policy: OutboundNetworkConfig = response.json().await.map_err(body_error)?;
+        let policy: OutboundNetworkConfig = legacy_reply(response).await?;
         policy.validate().map_err(uncertain)?;
         Ok(OutboundSnapshot { policy, revision })
     }
@@ -81,7 +108,7 @@ impl ApiClient {
             .send()
             .await
             .map_err(transport_error)?;
-        let status: OutboundStatus = checked(response).await?.json().await.map_err(body_error)?;
+        let status: OutboundStatus = legacy_reply(checked(response).await?).await?;
         status.persisted.policy.validate().map_err(uncertain)?;
         if let Some(observed) = &status.observed {
             observed.snapshot.policy.validate().map_err(uncertain)?;
@@ -129,7 +156,7 @@ impl ApiClient {
                 "acknowledgement revision does not match candidate",
             ));
         }
-        let policy: OutboundNetworkConfig = response.json().await.map_err(body_error)?;
+        let policy: OutboundNetworkConfig = legacy_reply(response).await?;
         if policy != replacement.candidate().policy {
             return Err(uncertain("acknowledgement policy does not match candidate"));
         }

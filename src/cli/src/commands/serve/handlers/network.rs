@@ -119,6 +119,20 @@ fn invalid(message: &str) -> Response {
     error_from_boxlite(&boxlite::BoxliteError::InvalidArgument(message.into()))
 }
 
+pub(in crate::commands::serve) async fn published_ports(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let handle = match get_or_fetch_box(&state, &box_id).await {
+        Ok(handle) => handle,
+        Err(error) => return error,
+    };
+    match handle.network().published_ports().await {
+        Ok(ports) => Json(ports).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
 fn policy_reply(snapshot: OutboundSnapshot) -> Response {
     (
         [(header::ETAG, format!("\"{}\"", snapshot.revision))],

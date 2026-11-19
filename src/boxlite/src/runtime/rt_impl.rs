@@ -404,7 +404,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        let (litebox, _created) = self.create_inner(options, name, false).await?;
+        let (litebox, _created) = self.create_inner(options, name, false, None).await?;
         Ok(litebox)
     }
 
@@ -421,7 +421,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        self.create_inner(options, name, true).await
+        self.create_inner(options, name, true, None).await
     }
 
     /// Import a box from a `.boxlite` archive.
@@ -451,6 +451,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         name: Option<String>,
         reuse_existing: bool,
+        complete: Option<crate::net::CompleteOutboundPolicy>,
     ) -> BoxliteResult<(LiteBox, bool)> {
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
@@ -467,12 +468,20 @@ impl RuntimeImpl {
             ));
         }
 
+        let snapshot = complete.as_ref().map(|policy| {
+            if !matches!(&options.network, crate::runtime::options::NetworkSpec::Enabled { allow_net } if allow_net.is_empty()) {
+                return Err(BoxliteError::InvalidArgument("complete outbound policy requires a NIC and no legacy allow rules".into()));
+            }
+            policy.prepare(crate::net::OutboundAdmission::ExtendedIpv4, crate::net::OutboundRevision::initial())
+        }).transpose()?;
+
         // Check DB for existing name — use lookup_box to get full (config, state)
         // so we can build the LiteBox directly without a second lookup
         if let Some(ref name) = name
             && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
             return if reuse_existing {
+                self.check_outbound_reuse(&config.id, snapshot.as_ref())?;
                 self.adopt_existing_box(&options, config, state)
             } else {
                 Err(BoxliteError::InvalidArgument(format!(
@@ -487,11 +496,25 @@ impl RuntimeImpl {
         options.validate_cpus()?;
         options.validate_secrets()?;
 
+        if let (Some(policy), Some(snapshot)) = (&complete, &snapshot) {
+            let mut required = snapshot.requirements();
+            required.deny |= policy.deny_net.is_some();
+            crate::vmm::controller::probe_outbound_capabilities()
+                .await?
+                .require(required)?;
+        }
+
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
 
         // Persist Configured state only after both lock namespaces are allocated.
-        if let Err(e) = self.persist_box_with_locks(&config, &mut state) {
+        let outbound = snapshot.clone().map(|committed| {
+            crate::litebox::box_impl::outbound::CompleteOutboundControl {
+                committed,
+                pending: None,
+            }
+        });
+        if let Err(e) = self.persist_box_with_policy(&config, &mut state, outbound) {
             // TOCTOU race recovery: lookup_box (line ~268) and add_box are
             // separate non-atomic operations. Between them, another concurrent
             // caller can complete the full create path and persist first:
@@ -504,6 +527,7 @@ impl RuntimeImpl {
                 && let Some(ref name) = name
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
+                self.check_outbound_reuse(&config.id, snapshot.as_ref())?;
                 return self.adopt_existing_box(&options, config, state);
             }
 
@@ -531,6 +555,27 @@ impl RuntimeImpl {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok((litebox_from_impl(box_impl), true))
+    }
+
+    fn check_outbound_reuse(
+        &self,
+        id: &BoxID,
+        requested: Option<&crate::net::CompleteOutboundSnapshot>,
+    ) -> BoxliteResult<()> {
+        let Some(requested) = requested else {
+            return Ok(());
+        };
+        let (_, _, existing) = self.box_manager.outbound_state(id)?;
+        if !existing.is_some_and(|state| {
+            state.pending.is_none()
+                && state.committed.admission == requested.admission
+                && state.committed.policy == requested.policy
+        }) {
+            return Err(BoxliteError::InvalidState(
+                "existing Box does not have the requested committed outbound policy".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Adopt a box found either by the initial lookup or duplicate-create recovery.
@@ -693,8 +738,7 @@ impl RuntimeImpl {
         };
 
         if let Some(box_impl) = cached_box {
-            box_impl.refresh_network_policy()?;
-            return Ok(Some(box_impl.info()));
+            return box_impl.info_from_store().map(Some);
         }
 
         // Fall back to DB lookup - run on blocking thread pool
@@ -705,7 +749,16 @@ impl RuntimeImpl {
                 .await
                 .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
-        Ok(db_result.map(|(config, state)| BoxInfo::new(&config, &state)))
+        db_result
+            .map(|(config, _)| {
+                let (state, _, complete) = self.box_manager.outbound_state(&config.id)?;
+                let mut info = BoxInfo::new(&config, &state);
+                if complete.is_some() {
+                    info.network = None;
+                }
+                Ok(info)
+            })
+            .transpose()
     }
 
     /// List all boxes, sorted by creation time (newest first).
@@ -717,17 +770,21 @@ impl RuntimeImpl {
 
         // Get boxes from database - run on blocking thread pool
         let this = Arc::clone(self);
-        let db_boxes = tokio::task::spawn_blocking(move || this.box_manager.all_boxes(true))
+        let db_boxes = tokio::task::spawn_blocking(move || this.box_manager.list_for_info())
             .await
             .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         let mut seen_ids = HashSet::with_capacity(db_boxes.len());
         let mut infos = Vec::with_capacity(db_boxes.len());
-        for (config, state) in db_boxes {
+        for (config, state, legacy_policy_visible) in db_boxes {
             seen_ids.insert(config.id.clone());
             // Database rows are the cross-process freshness authority. Build
             // their metadata directly instead of manufacturing live handles.
-            infos.push(BoxInfo::new(&config, &state));
+            let mut info = BoxInfo::new(&config, &state);
+            if !legacy_policy_visible {
+                info.network = None;
+            }
+            infos.push(info);
         }
 
         // Add in-memory boxes not yet persisted. `info()` reads the box's
@@ -1419,6 +1476,15 @@ impl RuntimeImpl {
         config: &BoxConfig,
         state: &mut BoxState,
     ) -> BoxliteResult<()> {
+        self.persist_box_with_policy(config, state, None)
+    }
+
+    fn persist_box_with_policy(
+        &self,
+        config: &BoxConfig,
+        state: &mut BoxState,
+        outbound: Option<crate::litebox::box_impl::outbound::CompleteOutboundControl>,
+    ) -> BoxliteResult<()> {
         let id = self.lock_manager.allocate()?;
         if let Err(e) = self.disk_lock_manager.allocate_and_retrieve(id) {
             tracing::warn!(lock_id = %id, error = %e,
@@ -1426,7 +1492,10 @@ impl RuntimeImpl {
             return Err(e);
         }
         state.set_lock_id(id);
-        if let Err(e) = self.box_manager.add_box(config, state) {
+        if let Err(e) = self
+            .box_manager
+            .add_box_with_outbound(config, state, outbound)
+        {
             self.free_box_locks(id);
             return Err(e);
         }
@@ -1980,6 +2049,19 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     ) -> BoxliteResult<(LiteBox, bool)> {
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.get_or_create(options, name).await
+    }
+
+    async fn create_with_outbound_policy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        policy: crate::net::CompleteOutboundPolicy,
+        reuse_existing: bool,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
+        self.0
+            .create_inner(options, name, reuse_existing, Some(policy))
+            .await
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
@@ -3788,6 +3870,7 @@ mod tests {
                 },
                 Some("test-box".into()),
                 false,
+                None,
             )
             .await;
 

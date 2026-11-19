@@ -34,6 +34,7 @@
 //! `CleanupGuard` cleans up failed starts; reconnect failures leave the live VM intact.
 
 mod tasks;
+pub(crate) use tasks::observe_published_ports;
 mod types;
 
 pub(crate) use crate::litebox::box_impl::LiveState;
@@ -254,14 +255,27 @@ impl BoxBuilder {
         }
         ctx.outbound_policy = state.outbound_policy.clone();
         if status != BoxStatus::Running {
+            let (persisted, control, complete) =
+                runtime.box_manager.outbound_state(&ctx.config.id)?;
+            ctx.outbound_policy = persisted.outbound_policy;
             ctx.outbound_revision = Some(
-                runtime
-                    .box_manager
-                    .outbound_control(&ctx.config.id)?
-                    .map_or_else(crate::net::OutboundRevision::initial, |control| {
-                        control.revision
-                    }),
+                control.map_or_else(crate::net::OutboundRevision::initial, |value| {
+                    value.revision
+                }),
             );
+            if let Some(complete) = complete {
+                let requirements = complete.requirements();
+                if requirements == crate::net::OutboundCapabilities::default() {
+                    let snapshot = complete.committed.legacy()?;
+                    ctx.outbound_policy = Some(snapshot.policy);
+                    ctx.outbound_revision = Some(snapshot.revision);
+                } else {
+                    ctx.complete_outbound = Some(crate::net::OutboundBootstrap {
+                        requirements,
+                        snapshot: complete.committed,
+                    });
+                }
+            }
         }
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);

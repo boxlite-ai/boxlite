@@ -43,6 +43,18 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)>;
 
+    async fn create_with_outbound_policy(
+        &self,
+        _options: BoxOptions,
+        _name: Option<String>,
+        _policy: crate::net::CompleteOutboundPolicy,
+        _reuse_existing: bool,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        Err(BoxliteError::Unsupported(
+            "complete outbound creation requires a local runtime".into(),
+        ))
+    }
+
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>>;
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>>;
@@ -189,6 +201,39 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
+    async fn published_ports(
+        &self,
+    ) -> BoxliteResult<Option<Vec<crate::runtime::types::PublishedPort>>> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support reading published ports".into(),
+        ))
+    }
+
+    async fn complete_outbound_snapshot(
+        &self,
+    ) -> BoxliteResult<crate::net::CompleteOutboundSnapshot> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support complete outbound policies".into(),
+        ))
+    }
+
+    async fn complete_outbound_status(&self) -> BoxliteResult<crate::net::CompleteOutboundStatus> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support complete outbound policies".into(),
+        ))
+    }
+
+    async fn replace_complete_outbound(
+        &self,
+        _policy: crate::net::CompleteOutboundPolicy,
+        _revision: crate::net::OutboundRevision,
+        _expected: Option<crate::net::OutboundRevision>,
+    ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support complete outbound policies".into(),
+        ))
+    }
+
     async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
         Err(BoxliteError::Unsupported(
             "this backend does not support revisioned outbound status".into(),

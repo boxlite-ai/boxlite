@@ -2,8 +2,10 @@
 
 use super::*;
 use crate::net::{
-    OutboundApplicationState, OutboundReplaceOutcome, OutboundReplacement, OutboundRevision,
-    OutboundSnapshot, OutboundStatus,
+    CompleteOutboundObservation, CompleteOutboundPolicy, CompleteOutboundSnapshot,
+    CompleteOutboundStatus, OutboundAdmission, OutboundApplicationState, OutboundCapabilities,
+    OutboundReplaceOutcome, OutboundReplacement, OutboundRevision, OutboundSnapshot,
+    OutboundStatus,
 };
 use crate::runtime::options::OutboundNetworkConfig;
 
@@ -24,9 +26,340 @@ pub(crate) struct PendingOutbound {
     pub candidate: OutboundSnapshot,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CompleteOutboundControl {
+    pub committed: CompleteOutboundSnapshot,
+    pub pending: Option<CompleteOutboundAttempt>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CompleteOutboundAttempt {
+    pub expected: OutboundRevision,
+    pub candidate: CompleteOutboundSnapshot,
+    pub possible: OutboundCapabilities,
+    pub restoration: Option<CompleteOutboundSnapshot>,
+}
+
+impl CompleteOutboundControl {
+    pub(crate) fn validate(&self) -> BoxliteResult<()> {
+        self.committed.validate_installed()?;
+        if let Some(attempt) = &self.pending {
+            attempt.candidate.validate_installed()?;
+            if attempt.candidate.revision == attempt.expected
+                || attempt.candidate.revision == OutboundRevision::initial()
+            {
+                return Err(BoxliteError::InvalidArgument(
+                    "invalid pending outbound revision".into(),
+                ));
+            }
+            if let Some(restoration) = &attempt.restoration
+                && (restoration.revision == OutboundRevision::initial()
+                    || restoration.revision == attempt.candidate.revision
+                    || restoration.revision == self.committed.revision
+                    || restoration.policy != self.committed.policy
+                    || restoration.admission != self.committed.admission)
+            {
+                return Err(BoxliteError::InvalidArgument(
+                    "invalid outbound restoration identity".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn from_legacy(committed: OutboundSnapshot, legacy: Option<&OutboundControl>) -> Self {
+        Self {
+            committed: committed.into(),
+            pending: legacy
+                .and_then(|control| control.pending.as_ref())
+                .map(|attempt| CompleteOutboundAttempt {
+                    expected: attempt.expected.clone(),
+                    candidate: attempt.candidate.clone().into(),
+                    possible: OutboundCapabilities::default(),
+                    restoration: None,
+                }),
+        }
+    }
+
+    pub(crate) fn requirements(&self) -> OutboundCapabilities {
+        let mut required = self.committed.requirements();
+        if let Some(pending) = &self.pending {
+            required = required
+                .union(pending.possible)
+                .union(pending.candidate.requirements());
+            if let Some(restoration) = &pending.restoration {
+                required = required.union(restoration.requirements());
+            }
+        }
+        required
+    }
+
+    pub(crate) fn legacy(&self) -> Option<(OutboundNetworkConfig, OutboundControl)> {
+        if self.requirements() != OutboundCapabilities::default() {
+            return None;
+        }
+        let pending = match &self.pending {
+            None => None,
+            Some(pending) if pending.restoration.is_none() => Some(PendingOutbound {
+                expected: pending.expected.clone(),
+                candidate: pending.candidate.legacy().ok()?,
+            }),
+            Some(_) => return None,
+        };
+        let snapshot = self.committed.legacy().ok()?;
+        Some((
+            snapshot.policy,
+            OutboundControl {
+                revision: snapshot.revision,
+                pending,
+            },
+        ))
+    }
+}
+
+impl CompleteOutboundAttempt {
+    fn confirmation(&self) -> &CompleteOutboundSnapshot {
+        self.restoration.as_ref().unwrap_or(&self.candidate)
+    }
+}
+
 impl BoxImpl {
+    pub(super) fn read_complete_control(
+        &self,
+    ) -> BoxliteResult<(BoxState, CompleteOutboundControl)> {
+        let (state, legacy, complete) = self.runtime.box_manager.outbound_state(&self.config.id)?;
+        let control = complete.unwrap_or_else(|| {
+            CompleteOutboundControl::from_legacy(
+                self.snapshot_from_state(&state, legacy.as_ref()),
+                legacy.as_ref(),
+            )
+        });
+        Ok((state, control))
+    }
+
+    pub(super) async fn read_complete_outbound_status(
+        &self,
+    ) -> BoxliteResult<CompleteOutboundStatus> {
+        let (state, control) = self.read_complete_control()?;
+        let mut status = CompleteOutboundStatus {
+            persisted: control.committed,
+            observed: None,
+            pending_revision: control
+                .pending
+                .as_ref()
+                .map(|attempt| attempt.confirmation().revision.clone()),
+            observation_error: None,
+            application_state: OutboundApplicationState::Uncertain,
+        };
+        if state.status != BoxStatus::Running {
+            status.observation_error = Some("box is not running".into());
+            return Ok(status);
+        }
+        let backend = match self.observation_backend(
+            &state,
+            &status.persisted.policy.mode,
+            &status.persisted.policy.allow_net,
+        ) {
+            Ok(backend) => backend,
+            Err(BoxliteError::InvalidState(error)) => {
+                status.observation_error = Some(error);
+                return Ok(status);
+            }
+            Err(error) => return Err(error),
+        };
+        match tokio::time::timeout(
+            STATUS_READBACK_TIMEOUT,
+            backend.complete_outbound_snapshot(),
+        )
+        .await
+        {
+            Ok(Ok((observation, _))) => {
+                status.application_state = match observation.application_state {
+                    OutboundApplicationState::Pending => OutboundApplicationState::Pending,
+                    OutboundApplicationState::Confirmed
+                        if status.pending_revision.is_none()
+                            && observation.snapshot == status.persisted =>
+                    {
+                        OutboundApplicationState::Confirmed
+                    }
+                    _ => OutboundApplicationState::Uncertain,
+                };
+                status.observed = Some(observation);
+            }
+            Ok(Err(error @ BoxliteError::Unsupported(_))) => return Err(error),
+            Ok(Err(error)) => status.observation_error = Some(error.to_string()),
+            Err(_) => {
+                status.observation_error =
+                    Some("outbound status readback timed out after 10s".into())
+            }
+        }
+        Ok(status)
+    }
+
+    pub(super) fn observation_backend(
+        &self,
+        state: &BoxState,
+        mode: &crate::runtime::options::NetworkMode,
+        allow_net: &[String],
+    ) -> BoxliteResult<Arc<dyn NetworkBackend>> {
+        let backend = if let Some(live) = self.live.get() {
+            let cached = self.state.read();
+            if cached.status != BoxStatus::Running
+                || cached.pid != state.pid
+                || cached.started_at != state.started_at
+            {
+                return Err(BoxliteError::InvalidState(
+                    "Box handle belongs to an earlier VM; use runtime.get()".into(),
+                ));
+            }
+            live.network.clone()
+        } else if matches!(
+            self.config.options.network,
+            crate::runtime::options::NetworkSpec::Disabled
+        ) {
+            None
+        } else {
+            let config = crate::net::NetworkBackendConfig {
+                outbound_disabled: *mode == crate::runtime::options::NetworkMode::Disabled,
+                allow_net: allow_net.to_vec(),
+                socket_path: self.layout.net_backend_socket_path(),
+                secrets: self.config.options.secrets.clone(),
+                ca_dir: self.layout.ca_dir(),
+                rate_limit: self.config.options.advanced.network_rate_limit,
+            };
+            self.runtime.network_factory.create(&config).map(Arc::from)
+        };
+        backend.ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))
+    }
+
+    pub(super) async fn replace_complete_outbound_control(
+        &self,
+        policy: CompleteOutboundPolicy,
+        revision: OutboundRevision,
+        expected: Option<OutboundRevision>,
+    ) -> BoxliteResult<OutboundReplaceOutcome> {
+        policy.validate()?;
+        if revision == OutboundRevision::initial() || expected.as_ref() == Some(&revision) {
+            return Err(BoxliteError::InvalidArgument(
+                "candidate outbound revision must be fresh".into(),
+            ));
+        }
+
+        self.with_operation(async {
+            if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+                return Err(BoxliteError::InvalidState("outbound policy updates require a running box".into()));
+            }
+            let store = &self.runtime.box_manager;
+            let (state, legacy, complete) = store.outbound_state(&self.config.id)?;
+            let mut control = complete.clone().unwrap_or_else(|| CompleteOutboundControl::from_legacy(
+                self.snapshot_from_state(&state, legacy.as_ref()), legacy.as_ref(),
+            ));
+            let live = self.ensure_booted_locked().await?;
+            let backend = live.network.as_deref().ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
+            let (observed, capabilities) = backend.complete_outbound_snapshot().await?;
+
+            let mut reconciled = false;
+            if let Some(attempt) = &control.pending
+                && confirms(&observed, attempt.confirmation())
+            {
+                let committed = attempt.confirmation().clone();
+                self.confirm_complete_outbound(&committed)?;
+                control = CompleteOutboundControl { committed, pending: None };
+                reconciled = true;
+            }
+            if let Some(expected) = &expected {
+                if expected != &control.committed.revision {
+                    return Ok(OutboundReplaceOutcome::PreconditionFailed);
+                }
+                if control.pending.is_some() || !confirms(&observed, &control.committed) {
+                    return Err(BoxliteError::InvalidState("conditional replace requires confirmed matching outbound state".into()));
+                }
+            }
+            if observed.snapshot.revision == revision {
+                return Err(BoxliteError::InvalidArgument("candidate outbound revision must be fresh".into()));
+            }
+
+            let possible = control.requirements().union(observed.snapshot.requirements());
+            if possible.deny && policy.deny_net.is_none() {
+                return Err(BoxliteError::InvalidArgument("deny_net is required while outbound denies may be active".into()));
+            }
+            let admission = if possible.admission { OutboundAdmission::ExtendedIpv4 } else { OutboundAdmission::Legacy };
+            let candidate = policy.prepare(admission, revision)?;
+            let deny_supplied = policy.deny_net.is_some();
+            let mut required = possible.union(candidate.requirements());
+            required.deny |= deny_supplied;
+            capabilities.require(required)?;
+            let versioned = required != OutboundCapabilities::default();
+            let mut restoration = control.committed.clone();
+            restoration.revision = OutboundRevision::fresh();
+            candidate.encode_replacement(deny_supplied, false, versioned)?;
+            restoration.encode_replacement(false, true, versioned)?;
+
+            let expected_live = observed.snapshot.revision;
+            let mut reserved = CompleteOutboundControl {
+                committed: control.committed.clone(),
+                pending: Some(CompleteOutboundAttempt {
+                    expected: expected_live.clone(), candidate: candidate.clone(), possible, restoration: None,
+                }),
+            };
+            store.save_complete_outbound(&self.config.id, &reserved)?;
+            let result = apply_complete(backend, &expected_live, &candidate, deny_supplied, false, versioned).await;
+            if matches!(result, Ok(OutboundReplaceOutcome::PreconditionFailed) | Err(BoxliteError::Unsupported(_))) {
+                if complete.is_some() || reconciled {
+                    store.save_complete_outbound(&self.config.id, &control)?;
+                } else {
+                    store.restore_legacy_outbound(&self.config.id, &state, legacy.as_ref())?;
+                }
+                return result;
+            }
+            if let Err(error) = result
+                && !backend_confirms(backend, &candidate).await
+            {
+                return Err(BoxliteError::Network(format!("outbound application is uncertain: {error}")));
+            }
+            #[cfg(test)]
+            if let Some(entered) = &self.outbound_before_persist {
+                entered.notify_one();
+                std::future::pending::<()>().await;
+            }
+            if let Err(error) = self.confirm_complete_outbound(&candidate) {
+                if let Some(pending) = &mut reserved.pending {
+                    pending.restoration = Some(restoration.clone());
+                }
+                store.save_complete_outbound(&self.config.id, &reserved)?;
+                let restored = apply_complete(backend, &candidate.revision, &restoration, false, true, versioned).await;
+                if !matches!(restored, Ok(OutboundReplaceOutcome::Applied))
+                    && !backend_confirms(backend, &restoration).await
+                {
+                    return Err(BoxliteError::InvalidState(format!("outbound persistence failed ({error}); restoration is uncertain ({restored:?})")));
+                }
+                self.confirm_complete_outbound(&restoration)?;
+                return Err(error);
+            }
+            Ok(OutboundReplaceOutcome::Applied)
+        }).await
+    }
+
+    fn confirm_complete_outbound(&self, snapshot: &CompleteOutboundSnapshot) -> BoxliteResult<()> {
+        let committed = CompleteOutboundControl {
+            committed: snapshot.clone(),
+            pending: None,
+        };
+        self.runtime
+            .box_manager
+            .save_complete_outbound(&self.config.id, &committed)?;
+        self.state.write().outbound_policy = snapshot.legacy().ok().map(|snapshot| snapshot.policy);
+        Ok(())
+    }
+
     pub(super) fn persisted_outbound(&self) -> BoxliteResult<OutboundSnapshot> {
-        let (state, control) = self.runtime.box_manager.outbound_state(&self.config.id)?;
+        let (state, control, complete) =
+            self.runtime.box_manager.outbound_state(&self.config.id)?;
+        if complete.is_some() {
+            return Err(complete_only());
+        }
         Ok(self.snapshot_from_state(&state, control.as_ref()))
     }
 
@@ -48,7 +381,11 @@ impl BoxImpl {
     pub(super) async fn read_outbound_status(&self) -> BoxliteResult<OutboundStatus> {
         // GET must remain readable while an updater owns the operation lock.
         // Policy/control come from one SQLite row version; no reconciliation occurs here.
-        let (state, control) = self.runtime.box_manager.outbound_state(&self.config.id)?;
+        let (state, control, complete) =
+            self.runtime.box_manager.outbound_state(&self.config.id)?;
+        if complete.is_some() {
+            return Err(complete_only());
+        }
         let mut status = OutboundStatus {
             persisted: self.snapshot_from_state(&state, control.as_ref()),
             pending_revision: control
@@ -63,36 +400,18 @@ impl BoxImpl {
             status.observation_error = Some("box is not running".into());
             return Ok(status);
         }
-        let backend = if let Some(live) = self.live.get() {
-            let cached = self.state.read();
-            if cached.status != BoxStatus::Running
-                || cached.pid != state.pid
-                || cached.started_at != state.started_at
-            {
-                status.observation_error =
-                    Some("Box handle belongs to an earlier VM; use runtime.get()".into());
+        let backend = match self.observation_backend(
+            &state,
+            &status.persisted.policy.mode,
+            &status.persisted.policy.allow_net,
+        ) {
+            Ok(backend) => backend,
+            Err(BoxliteError::InvalidState(error)) => {
+                status.observation_error = Some(error);
                 return Ok(status);
             }
-            live.network.clone()
-        } else if matches!(
-            self.config.options.network,
-            crate::runtime::options::NetworkSpec::Disabled
-        ) {
-            None
-        } else {
-            let config = crate::net::NetworkBackendConfig {
-                outbound_disabled: status.persisted.policy.mode
-                    == crate::runtime::options::NetworkMode::Disabled,
-                allow_net: status.persisted.policy.allow_net.clone(),
-                socket_path: self.layout.net_backend_socket_path(),
-                secrets: self.config.options.secrets.clone(),
-                ca_dir: self.layout.ca_dir(),
-                rate_limit: self.config.options.advanced.network_rate_limit,
-            };
-            self.runtime.network_factory.create(&config).map(Arc::from)
+            Err(error) => return Err(error),
         };
-        let backend = backend
-            .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
         let observation =
             tokio::time::timeout(STATUS_READBACK_TIMEOUT, backend.outbound_snapshot())
                 .await
@@ -126,16 +445,19 @@ impl BoxImpl {
         candidate: OutboundSnapshot,
         expected: Option<OutboundRevision>,
     ) -> BoxliteResult<OutboundReplaceOutcome> {
-        candidate.policy.validate()?;
+        crate::net::require_legacy_outbound_write(&candidate.policy)?;
         self.with_operation(async {
             if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
                 return Err(BoxliteError::InvalidState("outbound policy updates require a running box".into()));
             }
+            let manager = &self.runtime.box_manager;
+            let (state, mut control, complete) = manager.outbound_state(&self.config.id)?;
+            if complete.is_some() {
+                return Err(complete_only());
+            }
+            let mut previous = self.snapshot_from_state(&state, control.as_ref());
             let live = self.ensure_booted_locked().await?;
             let backend = live.network.as_deref().ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-            let manager = &self.runtime.box_manager;
-            let mut control = manager.outbound_control(&self.config.id)?;
-            let mut previous = self.persisted_outbound()?;
             let observed = match backend.outbound_snapshot().await {
                 Ok(value) => value,
                 Err(BoxliteError::Unsupported(_)) if expected.is_none() && control.is_none() => {
@@ -262,6 +584,46 @@ impl BoxImpl {
         self.state.write().outbound_policy = Some(policy.clone());
         Ok(OutboundReplaceOutcome::Applied)
     }
+}
+
+fn confirms(
+    observation: &CompleteOutboundObservation,
+    candidate: &CompleteOutboundSnapshot,
+) -> bool {
+    observation.application_state == OutboundApplicationState::Confirmed
+        && observation.snapshot == *candidate
+}
+
+async fn backend_confirms(
+    backend: &dyn NetworkBackend,
+    candidate: &CompleteOutboundSnapshot,
+) -> bool {
+    backend
+        .complete_outbound_snapshot()
+        .await
+        .is_ok_and(|(observed, _)| confirms(&observed, candidate))
+}
+
+async fn apply_complete(
+    backend: &dyn NetworkBackend,
+    expected: &OutboundRevision,
+    candidate: &CompleteOutboundSnapshot,
+    deny_supplied: bool,
+    restore: bool,
+    versioned: bool,
+) -> BoxliteResult<OutboundReplaceOutcome> {
+    if versioned {
+        backend
+            .replace_complete_outbound_snapshot(expected, candidate, deny_supplied, restore)
+            .await
+    } else {
+        let replacement = OutboundReplacement::new(expected.clone(), candidate.legacy()?)?;
+        backend.replace_outbound_snapshot(&replacement).await
+    }
+}
+
+fn complete_only() -> BoxliteError {
+    BoxliteError::Unsupported("outbound policy requires the complete policy interface".into())
 }
 
 async fn read_confirmed_candidate(

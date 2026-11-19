@@ -18,12 +18,13 @@ use crate::runtime::types::BoxStatus;
 impl BoxImpl {
     fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
         let mut options = self.config.options.clone();
-        if let Some(policy) = self
-            .runtime
-            .box_manager
-            .update_box(self.id())?
-            .outbound_policy
-        {
+        let (state, _, complete) = self.runtime.box_manager.outbound_state(self.id())?;
+        if complete.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "copy does not support complete outbound policy".into(),
+            ));
+        }
+        if let Some(policy) = state.outbound_policy {
             options.network = policy.try_into()?;
         }
         Ok(options)
@@ -69,6 +70,7 @@ impl BoxImpl {
 
         let t0 = Instant::now();
         self.with_disk_admission(async {
+            let copy_options = self.options_for_copy()?;
             let rt = Arc::clone(&self.runtime);
             let src_disks = self.config.box_home.join("disks");
             let src_container = src_disks.join(disk_filenames::CONTAINER_DISK);
@@ -134,7 +136,6 @@ impl BoxImpl {
             // Each clone's disk is a copy of this one, so it runs the same build.
             // Read before the loop: the guard must not be held across an await.
             let resolved_image = self.state.read().resolved_image.clone();
-            let copy_options = self.options_for_copy()?;
             let mut clones = Vec::with_capacity(count);
             for (i, staging) in staging_dirs.into_iter().enumerate() {
                 // Keep the TempDir alive until provisioning moves it to the final box home.
@@ -186,6 +187,7 @@ impl BoxImpl {
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
         self.with_disk_admission(async {
+            let config_options = self.options_for_copy()?;
             let box_home = self.config.box_home.clone();
             let runtime_layout = self.runtime.layout.clone();
 
@@ -206,7 +208,6 @@ impl BoxImpl {
             // Phase 2: Checksum + manifest + archive run with VM resumed.
             // These only read static temp files, no disk consistency needed.
             let config_name = self.config.name.clone();
-            let config_options = self.options_for_copy()?;
             let box_id_str = self.id().to_string();
             let dest = dest.to_path_buf();
 

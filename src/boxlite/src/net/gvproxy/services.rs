@@ -349,6 +349,58 @@ fn bind_conflict_error(context: &str, status: u16, body: &str) -> BoxliteError {
     BoxliteError::AlreadyExists(format!("{context} returned {status}: {}", body.trim()))
 }
 
+impl GvproxyBackend {
+    async fn exchange_outbound_replacement(
+        &self,
+        expected: &crate::net::OutboundRevision,
+        revision: &crate::net::OutboundRevision,
+        body: String,
+    ) -> BoxliteResult<Option<String>> {
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("if-match", format!("\"{expected}\"")),
+            ("x-boxlite-outbound-revision", revision.to_string()),
+        ] {
+            headers.insert(
+                name,
+                value.parse().map_err(|e| {
+                    BoxliteError::Internal(format!("build outbound revision header: {e}"))
+                })?,
+            );
+        }
+        let (status, headers, body) = self
+            .request_with_headers(
+                Method::PUT,
+                "/network/outbound/snapshot",
+                Some(body),
+                headers,
+            )
+            .await?;
+        match status {
+            404 | 405 | 501 => {
+                return Err(BoxliteError::Unsupported(
+                    "backend lacks required outbound control".into(),
+                ));
+            }
+            412 => return Ok(None),
+            200 => {}
+            _ => {
+                return Err(BoxliteError::Network(format!(
+                    "replace outbound snapshot returned {status}: {body}"
+                )));
+            }
+        }
+        let mut tags = headers.get_all(hyper::header::ETAG).iter();
+        let expected = format!("\"{revision}\"");
+        if tags.next().and_then(|tag| tag.to_str().ok()) != Some(expected.as_str())
+            || tags.next().is_some()
+        {
+            return Err(BoxliteError::Network("outbound acknowledgement revision is missing, malformed, or mismatched; application is uncertain".into()));
+        }
+        Ok(Some(body))
+    }
+}
+
 #[async_trait]
 impl NetworkBackend for GvproxyBackend {
     async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshotStatus> {
@@ -362,7 +414,7 @@ impl NetworkBackend for GvproxyBackend {
             .request(Method::GET, "/network/outbound/status", None)
             .await?;
         match status {
-            404 | 405 => {
+            404 | 405 | 501 => {
                 return Err(BoxliteError::Unsupported(
                     "backend lacks revisioned outbound control".into(),
                 ));
@@ -400,53 +452,14 @@ impl NetworkBackend for GvproxyBackend {
     ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
         use crate::net::OutboundReplaceOutcome;
         let candidate = replacement.candidate();
-        let mut headers = HeaderMap::new();
-        for (name, value) in [
-            ("if-match", format!("\"{}\"", replacement.expected())),
-            (
-                "x-boxlite-outbound-revision",
-                candidate.revision.to_string(),
-            ),
-        ] {
-            headers.insert(
-                name,
-                value.parse().map_err(|e| {
-                    BoxliteError::Internal(format!("build outbound revision header: {e}"))
-                })?,
-            );
-        }
         let body = serde_json::to_string(&candidate.policy)
             .map_err(|e| BoxliteError::Internal(e.to_string()))?;
-        let (status, headers, body) = self
-            .request_with_headers(
-                Method::PUT,
-                "/network/outbound/snapshot",
-                Some(body),
-                headers,
-            )
-            .await?;
-        match status {
-            404 | 405 => {
-                return Err(BoxliteError::Unsupported(
-                    "backend lacks revisioned outbound control".into(),
-                ));
-            }
-            412 => return Ok(OutboundReplaceOutcome::PreconditionFailed),
-            200 => {}
-            _ => {
-                return Err(BoxliteError::Network(format!(
-                    "replace outbound snapshot returned {status}: {body}"
-                )));
-            }
-        }
-        let tags = headers.get_all(hyper::header::ETAG);
-        let mut tags = tags.iter();
-        let expected = format!("\"{}\"", candidate.revision);
-        if tags.next().and_then(|tag| tag.to_str().ok()) != Some(expected.as_str())
-            || tags.next().is_some()
-        {
-            return Err(BoxliteError::Network("outbound acknowledgement revision is missing, malformed, or mismatched; application is uncertain".into()));
-        }
+        let Some(body) = self
+            .exchange_outbound_replacement(replacement.expected(), &candidate.revision, body)
+            .await?
+        else {
+            return Ok(OutboundReplaceOutcome::PreconditionFailed);
+        };
         let applied: crate::runtime::options::OutboundNetworkConfig = serde_json::from_str(&body)
             .map_err(|e| {
             BoxliteError::Network(format!(
@@ -455,6 +468,74 @@ impl NetworkBackend for GvproxyBackend {
         })?;
         if applied != candidate.policy {
             return Err(BoxliteError::Network("outbound acknowledgement policy differs from the candidate; application is uncertain".into()));
+        }
+        Ok(OutboundReplaceOutcome::Applied)
+    }
+
+    async fn complete_outbound_snapshot(
+        &self,
+    ) -> BoxliteResult<(
+        crate::net::CompleteOutboundObservation,
+        crate::net::OutboundCapabilities,
+    )> {
+        use crate::net::{CompleteOutboundObservation, OutboundCapabilities};
+        #[derive(serde::Deserialize)]
+        struct Response {
+            snapshot: crate::net::CompleteOutboundSnapshot,
+            application_state: crate::net::OutboundApplicationState,
+            capabilities: OutboundCapabilities,
+        }
+        let (status, body) = self
+            .request(Method::GET, "/network/outbound/complete-status", None)
+            .await?;
+        if matches!(status, 404 | 405) {
+            let legacy = self.outbound_snapshot().await?;
+            return Ok((
+                CompleteOutboundObservation {
+                    snapshot: legacy.snapshot.into(),
+                    application_state: legacy.application_state,
+                },
+                OutboundCapabilities::default(),
+            ));
+        }
+        if status != 200 {
+            return Err(BoxliteError::Network(format!(
+                "read complete outbound status returned {status}: {body}"
+            )));
+        }
+        let response: Response = serde_json::from_str(&body)
+            .map_err(|e| BoxliteError::Network(format!("invalid complete outbound status: {e}")))?;
+        response.snapshot.validate_installed()?;
+        Ok((
+            CompleteOutboundObservation {
+                snapshot: response.snapshot,
+                application_state: response.application_state,
+            },
+            response.capabilities,
+        ))
+    }
+
+    async fn replace_complete_outbound_snapshot(
+        &self,
+        expected: &crate::net::OutboundRevision,
+        candidate: &crate::net::CompleteOutboundSnapshot,
+        deny_supplied: bool,
+        restore: bool,
+    ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        use crate::net::OutboundReplaceOutcome;
+        let body = candidate.encode_replacement(deny_supplied, restore, true)?;
+        let Some(body) = self
+            .exchange_outbound_replacement(expected, &candidate.revision, body)
+            .await?
+        else {
+            return Ok(OutboundReplaceOutcome::PreconditionFailed);
+        };
+        let applied: crate::net::CompleteOutboundSnapshot =
+            serde_json::from_str(&body).map_err(|e| {
+                BoxliteError::Network(format!("invalid complete outbound acknowledgement: {e}"))
+            })?;
+        if applied != *candidate {
+            return Err(BoxliteError::Network("complete outbound acknowledgement differs from the candidate; application is uncertain".into()));
         }
         Ok(OutboundReplaceOutcome::Applied)
     }

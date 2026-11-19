@@ -29,10 +29,15 @@ pub mod socket_path;
 
 pub mod gvproxy;
 mod outbound;
+mod outbound_rules;
+pub(crate) use outbound::require_legacy_outbound_write;
+pub(crate) use outbound_rules::outbound_rule_has_port;
 
 pub use outbound::{
-    OutboundApplicationState, OutboundReplaceOutcome, OutboundReplacement, OutboundRevision,
-    OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus,
+    CompleteOutboundObservation, CompleteOutboundPolicy, CompleteOutboundSnapshot,
+    CompleteOutboundStatus, EffectiveOutboundPolicy, OutboundAdmission, OutboundApplicationState,
+    OutboundBootstrap, OutboundCapabilities, OutboundReplaceOutcome, OutboundReplacement,
+    OutboundRevision, OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus,
 };
 
 pub use gvproxy::GvproxyBackend;
@@ -404,6 +409,31 @@ pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
         _replacement: &OutboundReplacement,
     ) -> BoxliteResult<OutboundReplaceOutcome> {
         Err(control_unsupported("replace_outbound_snapshot"))
+    }
+
+    #[doc(hidden)]
+    async fn complete_outbound_snapshot(
+        &self,
+    ) -> BoxliteResult<(CompleteOutboundObservation, OutboundCapabilities)> {
+        let previous = self.outbound_snapshot().await?;
+        Ok((
+            CompleteOutboundObservation {
+                snapshot: previous.snapshot.into(),
+                application_state: previous.application_state,
+            },
+            OutboundCapabilities::default(),
+        ))
+    }
+
+    #[doc(hidden)]
+    async fn replace_complete_outbound_snapshot(
+        &self,
+        _expected: &OutboundRevision,
+        _candidate: &CompleteOutboundSnapshot,
+        _deny_supplied: bool,
+        _restore: bool,
+    ) -> BoxliteResult<OutboundReplaceOutcome> {
+        Err(control_unsupported("replace_complete_outbound_snapshot"))
     }
 
     async fn set_outbound(

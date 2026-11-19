@@ -52,6 +52,15 @@ impl BoxManager {
 
     /// Add a new box to the database.
     pub fn add_box(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.add_box_with_outbound(config, state, None)
+    }
+
+    pub(crate) fn add_box_with_outbound(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        outbound: Option<super::box_impl::outbound::CompleteOutboundControl>,
+    ) -> BoxliteResult<()> {
         // Check name uniqueness if name is set
         if let Some(ref name) = config.name
             && self.lookup_box_id(name)?.is_some()
@@ -70,7 +79,7 @@ impl BoxManager {
             )));
         }
 
-        self.store.save(config, state)?;
+        self.store.save_with_outbound(config, state, outbound)?;
 
         tracing::debug!(
             box_id = %config.id,
@@ -156,6 +165,10 @@ impl BoxManager {
         self.store.list_all()
     }
 
+    pub(crate) fn list_for_info(&self) -> BoxliteResult<Vec<(BoxConfig, BoxState, bool)>> {
+        self.store.list_for_info()
+    }
+
     /// Save box state to the database.
     ///
     /// Reads state from the provided BoxState and persists to DB.
@@ -179,6 +192,7 @@ impl BoxManager {
         self.store.update_outbound(id.as_str(), policy)
     }
 
+    #[cfg(test)]
     pub(crate) fn outbound_control(
         &self,
         id: &BoxID,
@@ -189,8 +203,30 @@ impl BoxManager {
     pub(crate) fn outbound_state(
         &self,
         id: &BoxID,
-    ) -> BoxliteResult<(BoxState, Option<super::box_impl::outbound::OutboundControl>)> {
+    ) -> BoxliteResult<(
+        BoxState,
+        Option<super::box_impl::outbound::OutboundControl>,
+        Option<super::box_impl::outbound::CompleteOutboundControl>,
+    )> {
         self.store.outbound_state(id.as_str())
+    }
+
+    pub(crate) fn save_complete_outbound(
+        &self,
+        id: &BoxID,
+        complete: &super::box_impl::outbound::CompleteOutboundControl,
+    ) -> BoxliteResult<()> {
+        self.store.save_complete_outbound(id.as_str(), complete)
+    }
+
+    pub(crate) fn restore_legacy_outbound(
+        &self,
+        id: &BoxID,
+        state: &BoxState,
+        control: Option<&super::box_impl::outbound::OutboundControl>,
+    ) -> BoxliteResult<()> {
+        self.store
+            .restore_legacy_outbound(id.as_str(), state, control)
     }
 
     pub(crate) fn save_outbound_control(

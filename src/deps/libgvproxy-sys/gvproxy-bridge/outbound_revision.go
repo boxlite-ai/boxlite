@@ -117,6 +117,10 @@ func (p *outboundPolicyController) serveStatus(w http.ResponseWriter, r *http.Re
 		return
 	}
 	snapshot := p.active.Load()
+	if snapshot.policy.complete != nil {
+		http.Error(w, "outbound policy requires complete status", http.StatusNotImplemented)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Policy       outboundPolicy `json:"policy"`

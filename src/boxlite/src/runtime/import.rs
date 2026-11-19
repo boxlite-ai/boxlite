@@ -83,6 +83,15 @@ fn options_from_manifest(
         rootfs: RootfsSpec::Image(manifest.image.clone()),
         ..Default::default()
     });
+    if let crate::runtime::options::NetworkSpec::Enabled { allow_net } = &options.network
+        && allow_net
+            .iter()
+            .any(|rule| crate::net::outbound_rule_has_port(rule))
+    {
+        return Err(BoxliteError::Unsupported(
+            "archive contains an outbound rule requiring complete policy".into(),
+        ));
+    }
     // Up to v4 an archive's ports carried no publication semantics: a null
     // host port meant the guest port, and host_ip and protocol were ignored.
     // Canonicalize before sanitize, so the rewritten mappings are validated.
@@ -171,7 +180,25 @@ fn extract_and_validate(
     }
 
     let manifest_json = std::fs::read_to_string(&manifest_path)?;
-    let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
+        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {e}")))?;
+    if [
+        "/outbound_policy",
+        "/outbound_v1",
+        "/box_options/outbound_policy",
+        "/box_options/network/outbound_v1",
+        "/box_options/network/deny_net",
+        "/box_options/network/Enabled/deny_net",
+        "/box_options/network/outbound/deny_net",
+    ]
+    .iter()
+    .any(|path| manifest.pointer(path).is_some())
+    {
+        return Err(BoxliteError::Unsupported(
+            "archive contains complete outbound policy".into(),
+        ));
+    }
+    let manifest: ArchiveManifest = serde_json::from_value(manifest)
         .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
 
     if manifest.version > MAX_SUPPORTED_VERSION {
@@ -693,6 +720,61 @@ mod tests {
 mod required_import_safety_tests {
     use super::*;
     use crate::runtime::options::BoxliteOptions;
+
+    #[tokio::test]
+    async fn outbound_import_refuses_complete_policy_before_provisioning() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let disk = home.path().join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk, None);
+        let manifest = ArchiveManifest {
+            version: 3,
+            box_name: None,
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions::default()),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: sha256_file(&disk).unwrap(),
+            exported_at: "2026-11-19T00:00:00Z".into(),
+        };
+        let manifest_path = home.path().join("manifest.json");
+        let archive_path = home.path().join("policy.boxlite");
+        let mut marked = serde_json::to_value(&manifest).unwrap();
+        marked["box_options"]["outbound_policy"] =
+            serde_json::json!({"mode":"enabled","allow_net":[],"deny_net":[]});
+        std::fs::write(&manifest_path, serde_json::to_vec(&marked).unwrap()).unwrap();
+        crate::litebox::archive::build_zstd_tar_archive(&archive_path, &manifest_path, &disk, 1)
+            .unwrap();
+        let result = import_box(
+            &runtime,
+            BoxArchive::new(&archive_path),
+            Some("protected".into()),
+        )
+        .await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert!(runtime.list_info().await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            0
+        );
+
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        crate::litebox::archive::build_zstd_tar_archive(&archive_path, &manifest_path, &disk, 1)
+            .unwrap();
+        let imported = import_box(
+            &runtime,
+            BoxArchive::new(archive_path),
+            Some("legacy".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(imported.name(), Some("legacy"));
+    }
 
     #[tokio::test]
     async fn required_headers_import_preserves_archive_and_store() {
