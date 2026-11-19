@@ -185,7 +185,7 @@ export class WorkerPool {
     targets: readonly { id: number; labels: string[]; assigned: number; held: number; check: StateCheck }[],
     policy: CapacityPolicy,
     signal: AbortSignal,
-    drain = false,
+    drain?: StateCheck,
   ): Promise<void> {
     const scope = await this.journal.scope(lease, this.scopeKey)
     const backend = await this.backend(scope.scope, lease)
@@ -203,7 +203,10 @@ export class WorkerPool {
     if (activity.version !== snapshot.activity.version || rows.length !== snapshot.active) throw new StateConflict()
     for (const row of rows) {
       if (row.value.supply?.scaleSet && drain && row.value.box.phase === 'none' && !row.value.closing) {
-        Object.assign(row, await this.journal.advance(lease, row.record.key, row.record.version, { closing: true }))
+        Object.assign(
+          row,
+          await this.journal.advance(lease, row.record.key, row.record.version, { closing: true }, [drain]),
+        )
       }
     }
     this.setCharges.clear()
@@ -212,6 +215,7 @@ export class WorkerPool {
       if (set && row.value.box.phase !== 'absent') this.setCharges.set(set, this.chargedInSet(set) + 1)
     }
     const checks = new Map<number, StateCheck[]>()
+    let admissionFailure: { cause: unknown } | undefined
     const waitingForAssignment = new Set<string>()
     const retire = new Set<string>()
     for (const row of rows)
@@ -247,9 +251,21 @@ export class WorkerPool {
           Object.assign(row, changed)
         } else if (row.value.delivery === 'done') retire.add(row.record.key)
       }
-      if (!ready) continue
+      if (!ready || admissionFailure) continue
       for (let count = original.length; count < Math.min(target.assigned, original.length + 16); count++) {
-        await backend.admit(signal)
+        try {
+          await backend.admit(signal)
+        } catch (error) {
+          if (
+            error instanceof LeaseLost ||
+            error instanceof StateCorrupt ||
+            error instanceof StateConflict ||
+            signal.aborted
+          )
+            throw error
+          admissionFailure = { cause: error }
+          break
+        }
         const row = await this.journal.reserve(
           lease,
           this.scopeKey,
@@ -282,11 +298,12 @@ export class WorkerPool {
         const set = row.value.supply?.scaleSet
         if (waitingForAssignment.has(row.record.key) && !row.value.closing) return undefined
         if ((row.value.box.phase === 'none' && !row.value.closing) || retiring)
-          return retiring && (drain || !set) ? [] : set ? checks.get(set) : undefined
+          return retiring && drain ? [drain] : set ? checks.get(set) : undefined
         return []
       },
       true,
     )
+    if (admissionFailure) throw admissionFailure.cause
   }
   creationReady(label: string): boolean {
     return (this.creationFailures.get(label)?.retryAt ?? 0) <= Date.now()
@@ -586,6 +603,19 @@ export class WorkerPool {
         ...(exitCode === undefined ? {} : { exitCode }),
       })
     }
+    if (
+      !row.value.closing &&
+      !retireIdle &&
+      row.value.effect?.kind === 'runner-retire' &&
+      row.value.runner.phase === 'known' &&
+      status === 'running' &&
+      (this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now()
+    ) {
+      this.idleRetryAt.set(row.record.key, Date.now() + 60000)
+      const identity = { name: row.value.name, id: row.value.runner.id! }
+      const original = await registry((client) => client.lookup(identity, signal))
+      if (!original) await update({ closing: true, runner: { phase: 'absent', id: identity.id } })
+    }
     if (!row.value.closing && retireIdle && row.value.runner.phase === 'known' && status === 'running') {
       if ((this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now()) {
         this.idleRetryAt.set(row.record.key, Date.now() + 60000)
@@ -665,6 +695,7 @@ export class WorkerPool {
     }
     if (row.value.runner.phase === 'absent') {
       await this.journal.release(lease, row.record.key, row.record.version)
+      this.idleRetryAt.delete(row.record.key)
       this.event(scope, row, 'ci-worker-released', 'info')
     }
   }

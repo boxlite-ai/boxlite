@@ -211,7 +211,14 @@ export class GitHubExecutionBackend implements PoolBackend {
         readSignal?: AbortSignal,
         checkRetirement?: () => void,
       ) => {
-        if (!(await owned.lookup(identity, readSignal))) return false
+        if (!(await owned.lookup(identity, readSignal))) {
+          return (
+            allocation.value.effect?.kind === 'runner-retire' &&
+            allocation.value.runner.phase === 'known' &&
+            allocation.value.runner.id === identity.id &&
+            allocation.value.name === identity.name
+          )
+        }
         const runners = this.scope.runners
         const purpose =
           runners.kind === 'repository'
