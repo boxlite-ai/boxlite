@@ -15,7 +15,10 @@ Local ------------------------> local launcher --> embedded runtime
 
 Both cloud modes follow [cloud operations](references/cloud.md) through the selected host MCP connection.
 Local follows [local operations](references/local.md) through the independent runtime launcher.
-Never substitute CLI, shell HTTP, another mode, or another account for a failed cloud MCP call.
+
+Cloud file bytes use the packaged helper and the explicitly selected Codex or Claude client; only the host sends MCP requests and handles credentials.
+For downloads, choose a nonexistent destination and do not create it first; the helper creates it.
+Never substitute ad hoc HTTP, another mode, or another account for a failed cloud MCP call.
 
 ## Task contract
 

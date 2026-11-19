@@ -1,7 +1,7 @@
 # Shared cloud operations
 
 Both cloud authentication modes use `https://api.boxlite.ai/mcp`, the same discovered tools, and this workflow.
-Only the credential and its granted permissions differ; never use BoxLite CLI or shell HTTP for these operations.
+Only the credential and its granted permissions differ. Lifecycle and execution use native MCP; the packaged file helper calls the existing MCP file tools programmatically.
 
 ## Create and execute
 
@@ -28,13 +28,69 @@ For incomplete output, retain the execution ID and inspect `getExecution`; never
 
 ## Files
 
-`uploadFiles` takes a base64 tar archive and destination; `downloadFiles` returns an archive.
-Exclude credentials, `.env*`, `.git`, private plugin state, caches, and persistent data unless explicitly requested.
-Reject unreviewed symlinks and special files in deployment sources.
+Use the packaged `scripts/transfer.py` helper for cloud files.
+It prepares archive arguments and hands them to the installed host, which sends the existing `uploadFiles` and `downloadFiles` calls.
+The helper never reads tokens or sends HTTP/MCP requests to BoxLite; do not copy, rewrite or split base64 in a conversation.
 
-Stay within discovered limits, currently 8 MiB of archive bytes; do not echo large base64 payloads to the user.
-Upload into a fresh, uniquely named release directory to keep application releases separate from persistent data.
-Small text files can use bounded execution with explicit argv; `read_file`, `write_file`, and `list_dir` are not BoxLite MCP tools.
+```text
+model selects files and paths -> helper packs bytes -> host client calls existing MCP tool
+host returns raw tool result -> helper decodes files -> model receives short receipt
+```
+
+The host needs Python 3.9+, shell/filesystem access, and an already configured and authorized MCP connection.
+Resolve `SKILL_DIR` to this installed skill and use the exact Box ID from the selected cloud connection.
+Select the host and connection explicitly; failures never switch credentials or fall back to REST or BoxLite CLI.
+
+| Host | Data handoff | Requirement and cost |
+| --- | --- | --- |
+| `codex` | Local app-server `mcpServer/tool/call` | Installed Codex with this method; no additional model request |
+| `claude` | Permission callback `updatedInput` and raw `structuredContent` event | Installed Claude Code; one additional model request per operation |
+
+Use the actual configured server name, not a tool namespace guessed from its display label:
+
+```sh
+python3 SKILL_DIR/scripts/transfer.py --host codex --server SELECTED_SERVER upload --box BOX_ID --source /absolute/reviewed-source --destination /workspace/new-release
+python3 SKILL_DIR/scripts/transfer.py --host codex --server SELECTED_SERVER download --box BOX_ID --source /workspace/new-release/. --destination /absolute/new-download
+python3 SKILL_DIR/scripts/transfer.py --host claude --server SELECTED_SERVER upload --box BOX_ID --source /absolute/reviewed-source --destination /workspace/new-release
+python3 SKILL_DIR/scripts/transfer.py --host claude --server SELECTED_SERVER download --box BOX_ID --source /workspace/new-release/. --destination /absolute/new-download
+```
+
+Each adapter starts a dedicated host process that reloads existing configuration; it does not attach to the running interactive session.
+A connection supplied only through flags on another process is not automatically inherited.
+For Claude, pass an existing `--mcp-config /absolute/private-config.json` or `--plugin-dir /absolute/plugin` when needed; only Claude reads those files.
+
+Claude's single model turn proposes the selected tool and a placeholder, never archive bytes.
+The permission callback checks the exact tool, connection, Box and path, injects the program-generated arguments, and allows only that operation once.
+Existing host deny rules still apply; wrong or repeated calls fail without additional approval.
+
+Downloads use Claude's raw structured result or its complete saved JSON when large results omit that field.
+Saved results must belong to the actual child session under Claude's projects directory; arbitrary paths and symlinks are refused.
+Claude downloads create a normal private session, so host transcripts/result files can retain copies of transferred data.
+
+The helper stops the child after the matching result, and a one-turn limit prevents a follow-up model request containing the payload.
+No lifecycle hooks are registered; the helper does not read the host's token store or manage login/refresh.
+
+Claude also needs its own model login available to the child process; the parent session alone does not guarantee that.
+A token supplied only to the parent can be absent from its Bash subprocess, even when the BoxLite MCP connection succeeds.
+Use an already configured host login or the user-approved shell environment; never extract tokens or change authentication in the helper.
+
+If the selected host cannot load the authorized connection or expose these control interfaces, report the limitation and stop.
+OAuth and API-key configuration remain host responsibilities; an API-key test does not establish OAuth acceptance.
+Tested control interfaces are Codex 0.170.0 and Claude Code 2.1.328; revalidate after host upgrades.
+
+Success is exit code zero with `status: completed`; this reports the MCP operation and local extraction, not an independent content-integrity check.
+Upload requires the existing server's `HTTP 204` acknowledgment; an empty or unexpected tool result leaves completion unknown.
+It makes one file-tool call and does not download files again or compute a checksum.
+
+The helper never retries, changes credentials or leaves a transfer-ticket cache; after a failure, inspect possible destination effects before a new attempt.
+
+The helper archive limit is 8 MiB including tar headers and padding; client response-size limits can be lower.
+Use reviewed regular files/directories; source links, sensitive/cache paths and unsafe archive members are refused.
+Downloads require a new local directory with existing, non-symlink parents; files and directories use private permissions.
+
+A guest source ending in `/.` downloads directory contents; another spelling retains the directory name.
+Upload keeps the existing server overwrite behavior; choose the destination deliberately.
+Guest mount paths such as `/tmp` may not support file transfer; prefer a suitable rootfs path such as `/workspace`.
 
 ## Deploy and update
 

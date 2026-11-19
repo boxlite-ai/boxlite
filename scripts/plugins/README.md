@@ -46,7 +46,12 @@ make plugin:boxlite:smoke:cloud
 ```
 
 This bounded test client is maintenance tooling, not a plugin execution path.
-The actual plugin always uses the host MCP client for either cloud credential.
+The plugin file helper supplies arguments to Codex app-server or Claude permission callbacks; the host calls existing `uploadFiles` and `downloadFiles`.
+It handles archive base64 inside the program and prints only completion metadata, without hooks, checksums or upload readback.
+
+The [design](https://github.com/boxlite-ai/boxlite/issues/2928) and [usage contract](../../plugins/boxlite/skills/boxlite/references/cloud.md#files) describe both host adapters.
+`make test:unit:plugins` exercises local filesystem and host subprocess boundaries; its peers are fixtures.
+Native-host and deployed-server acceptance are separate from those tests.
 
 The test stores resource IDs and results privately in `target/plugins/evidence/cloud-api.json`; never include that directory in a public package.
 On uncertain creation or failed cleanup, inspect the recorded name or ID before running again.
@@ -93,3 +98,17 @@ Confirm eligibility for optional local execution before making a combined public
 Claude requires companion plugin and connector listings, and its connector review covers all exposed server tools.
 
 References: [OpenAI submission](https://developers.openai.com/plugins/deploy/submission), [OpenAI local execution](https://developers.openai.com/plugins/deploy/desktop-only), [Claude publishing](https://claude.com/docs/directory/publish), [Claude connector review](https://claude.com/docs/connectors/building/review-criteria).
+
+## Transfer rollout
+
+No BoxLite API or MCP server deployment is required; the helper uses existing file tools.
+Codex requires an installed app-server exposing `mcpServer/tool/call` and the selected server in its loaded configuration.
+Claude requires its permission control channel and raw structured tool events; each operation adds one model request.
+
+Both adapters start dedicated host processes using existing configuration; neither reads credentials or implements MCP transport.
+No live interactive socket is reused and no credential fallback occurs.
+
+Build the single distributable with `make plugin:boxlite:dist`; it contains no lifecycle hooks.
+Keep marketplace eligibility, deployed OAuth acceptance and API-key acceptance separate in release evidence.
+
+References: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Claude permission callbacks](https://code.claude.com/docs/en/agent-sdk/user-input), [programmatic MCP data handling](https://www.anthropic.com/research/code-execution-with-mcp).

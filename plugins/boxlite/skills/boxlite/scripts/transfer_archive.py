@@ -1,0 +1,207 @@
+"""Bounded regular-file archives; never extract untrusted tar metadata directly."""
+import io
+import os
+from pathlib import Path, PurePosixPath
+import stat
+import tarfile
+
+MAX_BYTES = 8 * 1024 * 1024
+MAX_ENTRIES = 1024
+MAX_DEPTH = 32
+PRIVATE = {'.git', '.ssh', '.aws', '.azure', '.config', '.cache', '.codex', '.claude',
+           '.boxlite', '.bashrc', '.zshrc', '.netrc', '.npmrc', '.pypirc', 'id_rsa', 'id_ed25519', 'node_modules', '__pycache__', 'credentials.toml', 'credentials.json'}
+
+
+def safe_name(name):
+    if not isinstance(name, str) or not name or '\\' in name or any(ord(c) < 32 for c in name):
+        raise ValueError('Invalid archive path')
+    parts = name.split('/')
+    if name.startswith('/') or '..' in parts or len(parts) > MAX_DEPTH:
+        raise ValueError('Unsafe archive path or excessive depth')
+    return str(PurePosixPath(name))
+
+
+def public_name(name):
+    name = safe_name(name)
+    for part in PurePosixPath(name).parts:
+        if part in PRIVATE or part.startswith('.env') or part.endswith(('.pem', '.key')):
+            raise ValueError('Sensitive or cache path refused; prepare a reviewed source directory')
+    return name
+
+
+def open_node(name, parent=None, directory=False):
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if directory:
+        flags |= os.O_DIRECTORY
+    return os.open(name, flags, dir_fd=parent)
+
+
+class Archive:
+    """Own a validated in-memory tree and expose snapshot, encode and save operations."""
+    def __init__(self):
+        self.files = {}
+        self.directories = set()
+        self.size = 0
+
+    def add(self, name, data=None):
+        name = safe_name(name)
+        if name == '.':
+            if data is not None:
+                raise ValueError('Archive root must be a directory')
+            return
+        if name in self.files or name in self.directories:
+            raise ValueError('Duplicate archive path')
+        for parent in PurePosixPath(name).parents:
+            if str(parent) in self.files:
+                raise ValueError('Archive file/directory conflict')
+        if data is not None:
+            if any(p.startswith(name + '/') for p in (*self.files, *self.directories)):
+                raise ValueError('Archive file/directory conflict')
+            self.size += len(data)
+            if self.size > MAX_BYTES:
+                raise ValueError('Transfer exceeds 8 MiB')
+            self.files[name] = data
+        else:
+            self.directories.add(name)
+        if len(self.files) + len(self.directories) > MAX_ENTRIES:
+            raise ValueError('Too many archive entries')
+
+    def tree(self):
+        dirs = set(self.directories)
+        for name in (*self.files, *dirs):
+            dirs.update(str(p) for p in PurePosixPath(name).parents if str(p) != '.')
+        if len(dirs) + len(self.files) > MAX_ENTRIES:
+            raise ValueError('Too many implicit archive directories')
+        return dirs, self.files
+
+    @classmethod
+    def snapshot(cls, source):
+        source = Path(source).absolute()
+        public_name(source.as_posix().lstrip('/'))
+        result = cls()
+
+        def visit(fd, name):
+            before = os.fstat(fd)
+            if stat.S_ISDIR(before.st_mode):
+                if name:
+                    result.add(name)
+                for child in sorted(os.listdir(fd)):
+                    relative = public_name(f'{name}/{child}' if name else child)
+                    child_fd = open_node(child, fd)
+                    try:
+                        visit(child_fd, relative)
+                    finally:
+                        os.close(child_fd)
+            elif stat.S_ISREG(before.st_mode):
+                if before.st_nlink != 1 or before.st_size > MAX_BYTES - result.size:
+                    raise ValueError('Hardlinked or oversized source refused')
+                with os.fdopen(os.dup(fd), 'rb') as stream:
+                    data = stream.read(MAX_BYTES - result.size + 1)
+                after = os.fstat(fd)
+                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns) or len(data) != before.st_size:
+                    raise ValueError('Source changed while being read')
+                result.add(name, data)
+            else:
+                raise ValueError('Only regular files and directories are supported')
+
+        # Anchor every component, including ancestors, rather than checking then reopening paths.
+        fd = open_node(source.anchor, directory=True)
+        try:
+            for component in source.parts[1:]:
+                next_fd = open_node(component, fd)
+                os.close(fd)
+                fd = next_fd
+            visit(fd, '' if stat.S_ISDIR(os.fstat(fd).st_mode) else source.name)
+        finally:
+            os.close(fd)
+        return result
+
+    def encode(self):
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+            for name, data in [('.', None), *[(d, None) for d in sorted(self.tree()[0])],
+                               *sorted(self.files.items())]:
+                member = tarfile.TarInfo(name)
+                member.mode = 0o700 if data is None else 0o600
+                if data is None:
+                    member.type = tarfile.DIRTYPE
+                else:
+                    member.size = len(data)
+                archive.addfile(member, None if data is None else io.BytesIO(data))
+                if output.tell() > MAX_BYTES:
+                    raise ValueError('Tar archive exceeds 8 MiB including headers')
+        if output.tell() > MAX_BYTES:
+            raise ValueError('Tar archive exceeds 8 MiB including padding')
+        return output.getvalue()
+
+    @classmethod
+    def decode(cls, raw):
+        if len(raw) > MAX_BYTES or len(raw) % 512:
+            raise ValueError('Oversized or truncated archive')
+        result = cls()
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
+            count = 0
+            for member in archive:
+                count += 1
+                if count > MAX_ENTRIES + 1 or member.sparse is not None or not (member.isfile() or member.isdir()):
+                    raise ValueError('Unsupported archive member')
+                if member.size < 0 or member.size > MAX_BYTES - result.size:
+                    raise ValueError('Oversized archive member')
+                name = safe_name(member.name)
+                if member.isfile():
+                    if member.offset_data + member.size > len(raw):
+                        raise ValueError('Truncated archive member')
+                    data = archive.extractfile(member).read()
+                    if len(data) != member.size:
+                        raise ValueError('Truncated archive member')
+                    result.add(name, data)
+                else:
+                    result.add(name)
+        result.tree()
+        return result
+
+    def save(self, destination):
+        directories, files = self.tree()
+        destination = Path(destination).absolute()
+        parent = open_node(destination.anchor, directory=True)
+        root = None
+        try:
+            for component in destination.parts[1:-1]:
+                next_fd = open_node(component, parent, directory=True)
+                os.close(parent)
+                parent = next_fd
+            os.mkdir(destination.name, 0o700, dir_fd=parent)
+            root = open_node(destination.name, parent, directory=True)
+            for name in sorted(directories, key=lambda p: (p.count('/'), p)):
+                fd = self._parent(root, name)
+                try:
+                    os.mkdir(PurePosixPath(name).name, 0o700, dir_fd=fd)
+                finally:
+                    os.close(fd)
+            for name, data in files.items():
+                fd = self._parent(root, name)
+                try:
+                    file_fd = os.open(PurePosixPath(name).name,
+                                      os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+                    with os.fdopen(file_fd, 'w+b') as stream:
+                        stream.write(data)
+                finally:
+                    os.close(fd)
+        finally:
+            if root is not None:
+                os.close(root)
+            os.close(parent)
+
+    @staticmethod
+    def _parent(root, name):
+        fd = os.dup(root)
+        try:
+            for component in PurePosixPath(name).parts[:-1]:
+                next_fd = open_node(component, fd, directory=True)
+                os.close(fd)
+                fd = next_fd
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise

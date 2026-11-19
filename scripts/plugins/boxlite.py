@@ -15,6 +15,8 @@ PRIVATE = {'deployment.json', 'credentials.toml', 'secrets.json', 'supervisor.co
 MCP_URL = 'https://api.boxlite.ai/mcp'
 INVENTORY = {
     'plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json',
+    'skills/boxlite/scripts/transfer.py', 'skills/boxlite/scripts/transfer_archive.py',
+    'skills/boxlite/scripts/transfer_hosts.py',
     'mcp.json', '.mcp.json', 'README.md', 'LICENSE', 'assets/boxlite-icon.png',
     'skills/boxlite/SKILL.md', 'skills/boxlite/agents/openai.yaml',
     'skills/boxlite/references/cloud.md', 'skills/boxlite/references/local.md',

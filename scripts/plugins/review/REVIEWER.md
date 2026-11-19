@@ -45,6 +45,24 @@ Repeat the applicable lifecycle/file/update cases through both cloud credentials
 Record the actual tool namespace for cloud calls and launcher invocation for Local; a direct maintenance-client run alone does not establish agent skill behavior.
 OAuth public-tunnel denial is expected and must not be replaced by an API-key call.
 
+## File transfer prerequisites
+
+Discover `uploadFiles` and `downloadFiles` on the existing service; do not require new preparation tools or a server deployment.
+Use the packaged helper with an explicit Codex or Claude connection; archive base64 must remain inside the program and host control channel.
+The host needs Python 3.9+, shell/filesystem access and access to the selected endpoint.
+
+Claude also needs a child-process model login; a parent-only environment token may not reach tool subprocesses.
+
+Check completion and expected file placement, using binary data, a filename with spaces/non-ASCII characters and an empty directory.
+Do not pre-create the download directory; the helper creates it.
+Do not add a mandatory checksum or upload readback to the product workflow.
+
+A fixture run establishes only the boundaries it actually exercised; record deployed-server and native OAuth results separately.
+
+Both adapters reload existing host configuration and leave credential handling to that host.
+Claude adds one model request and injects bytes through a permission callback, without lifecycle hooks.
+API-key acceptance is not OAuth acceptance; verify the selected host's OAuth connection separately.
+
 ## Demo recording
 
 Record installation, three-mode selection, OAuth consent, hello execution, a file roundtrip, an update preserving data, a failure without mode fallback, and scoped cleanup.
