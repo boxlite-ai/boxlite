@@ -43,6 +43,61 @@ test('published releases require one target Environment approval for verificatio
   for (const stage of ['dev', 'prod']) assert.deepEqual(approvedJobs(stage, 'v0.13.1'), ['plan'])
 })
 
+test('apply notices precede each protected batch and never fall back to another stage secret', () => {
+  const { resolve, plan, deploy, 'notify-deploy': second } = workflow.jobs
+  const first = resolve.steps.at(-1)
+  assert.match(first.run, /release-pipeline.mjs approval$/)
+  assert.equal(first['continue-on-error'], true)
+  assert.deepEqual(plan.needs, ['resolve'])
+  assert.deepEqual(second.needs, ['resolve', 'plan'])
+  assert.ok(deploy.needs.includes('notify-deploy'))
+  assert.equal(second.environment, undefined)
+  assert.equal(second.strategy, undefined)
+  assert.equal(resolve.permissions.actions, 'read')
+  assert.deepEqual(second.permissions, { contents: 'read', actions: 'read' })
+  const send = second.steps.at(-1)
+  assert.equal(send.run, first.run)
+  assert.equal(send.env.SLACK_WEBHOOK_URL, '${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}')
+  assert.equal(send.env.APPROVAL_PHASE, 'Commit deployment approval')
+  const expr = (value: string) => value.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+  const route = new Function('inputs', 'secrets', 'return ' + expr(first.env.SLACK_WEBHOOK_URL))
+  const batch = new Function('steps', 'return ' + expr(first.env.APPROVAL_PHASE))
+  const eligible = new Function('inputs', 'return ' + first.if)
+  const next = new Function('inputs', 'needs', 'return ' + second.if)
+  for (const stage of ['dev', 'prod', 'stage']) {
+    for (const apply of [false, true]) {
+      assert.equal(eligible({ stage, apply }), apply && stage !== 'stage')
+      for (const version of ['', 'v1.2.3']) {
+        const needs = { resolve: { outputs: { version } }, plan: { result: 'success' } }
+        assert.equal(next({ stage, apply }, needs), stage === 'dev' && apply && !version)
+      }
+    }
+  }
+  for (const dev of ['', 'dev destination']) {
+    const secrets = { SLACK_DEV_DEPLOYMENT_WEBHOOK_URL: dev, SLACK_WEBHOOK_URL: 'release' }
+    assert.equal(route({ stage: 'dev' }, secrets), dev)
+    assert.equal(route({ stage: 'prod' }, secrets), 'release')
+  }
+  for (const version of ['', 'v1.2.3']) {
+    const phase = batch({ classify: { outputs: { version } } })
+    assert.equal(phase, version ? 'Release deployment approval' : 'Commit preparation approval')
+  }
+  for (const result of ['failure', 'cancelled', 'skipped']) {
+    const needs = { resolve: { outputs: { version: '' } }, plan: { result } }
+    assert.equal(next({ stage: 'dev', apply: true }, needs), false)
+  }
+  assert.equal(second['continue-on-error'], true)
+  const applyJob = new Function('inputs', 'github', 'needs', 'cancelled', 'return (' + expr(deploy.if) + ')')
+  for (const result of ['failure', 'skipped', 'success']) {
+    const needs = {
+      resolve: { result: 'success', outputs: { version: '' } },
+      plan: { result: 'success' },
+      'notify-deploy': { result },
+    }
+    assert.equal(applyJob({ stage: 'dev' }, { ref: 'refs/heads/main' }, needs, () => false), true)
+  }
+})
+
 test('shared operations declare every input they read and preserve the original requested ref', () => {
   for (const name of ['mbuild', 'mdeploy', 'build-staged-runner']) {
     const source = actionSource(name)
@@ -82,7 +137,7 @@ test('failure and cancellation prevent the separate commit apply job', () => {
     assert.equal(evaluate(
       { stage: 'dev' },
       { ref: 'refs/heads/main' },
-      { resolve: { outputs: { version: '' } }, plan: { result } },
+      { resolve: { result: 'success', outputs: { version: '' } }, plan: { result } },
       () => result === 'cancelled',
       () => result === 'failure',
     ), result === 'success', `preparation ${result}`)

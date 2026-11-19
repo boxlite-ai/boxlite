@@ -203,7 +203,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Require notification configuration and release assets
+      - name: Validate optional release webhook and require release assets
         env:
           TAG: ${{ inputs.tag }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -222,6 +222,7 @@ jobs:
       group: mbuild-release-dev-validation
       cancel-in-progress: false
     outputs:
+      phase: ${{ steps.pipeline.outputs.phase }}
       dev_run_id: ${{ steps.pipeline.outputs.dev_run_id }}
       dev_result: ${{ steps.pipeline.outputs.dev_result }}
       e2e_run_id: ${{ steps.pipeline.outputs.e2e_run_id }}
@@ -239,10 +240,14 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
           RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: node apps/infra/scripts/release-pipeline.mjs run
 
   report:
     name: Report release results
+    permissions:
+      contents: read
+      actions: read
     needs: [resolve, publish, assets, pipeline]
     if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
