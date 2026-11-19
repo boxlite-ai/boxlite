@@ -254,7 +254,7 @@ fn caller_timeout_keeps_parking_and_accepts_late_ack() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("image");
         assert!(matches!(
-            handle.export(&path),
+            handle.export_to_file(&path),
             Err(Error::Control {
                 operation: "export",
                 reason: ControlReason::InvalidState,
@@ -842,7 +842,7 @@ fn export_refuses_nonpaused_and_devices_without_queueing() {
     for status in [VmStatus::Running, VmStatus::Stopping, VmStatus::Exited] {
         parking.mailbox.lock().unwrap().status = status;
         assert!(matches!(
-            handle.export(&path),
+            handle.export_to_file(&path),
             Err(Error::Control {
                 reason: ControlReason::InvalidState,
                 ..
@@ -852,12 +852,26 @@ fn export_refuses_nonpaused_and_devices_without_queueing() {
     parking.mailbox.lock().unwrap().status = VmStatus::Paused;
     handle.devices = true;
     assert!(matches!(
-        handle.export(&path),
+        handle.export_to_file(&path),
         Err(Error::Control {
             reason: ControlReason::UnsupportedDevice,
             ..
         })
     ));
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        handle.devices = false;
+        for result in [
+            handle.export(io::sink()).map(drop),
+            handle.export_to_file(&path),
+        ] {
+            assert!(matches!(
+                result,
+                Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::Unsupported
+            ));
+        }
+        assert_eq!(handle.status(), VmStatus::Paused);
+    }
     assert!(parking.mailbox.lock().unwrap().commands.is_empty());
     assert!(!path.exists());
 }
@@ -910,7 +924,7 @@ fn command_wakes_real_poller(kind: u8) {
         parking.send(match kind {
             0 => ParkCommand::Park(Arc::new(()), tx),
             1 => ParkCommand::Resume(1, tx),
-            _ => ParkCommand::Export("unused".into(), export),
+            _ => ParkCommand::Export(Box::new(io::sink()), export),
         });
         release.send(()).unwrap();
         assert!(waiter.join().unwrap().unwrap().is_none());
@@ -938,7 +952,7 @@ fn command_wakes_real_poller(kind: u8) {
                     crate::memory::GuestRam::new(&[(vm_memory::GuestAddress(0), 4096)]).unwrap();
                 crate::Vm::export_pending(&parking, &crate::mock_vm::MockVm::new(), &ram, 1, true);
                 assert!(matches!(
-                    exported.recv().unwrap(),
+                    exported.recv().unwrap().0,
                     Err(Error::Control {
                         reason: ControlReason::UnsupportedDevice,
                         ..
@@ -976,21 +990,21 @@ fn export_supervisor_rechecks_lifecycle_and_device_admission() {
     let parking = Parking::new(events.sender());
     let ram = crate::memory::GuestRam::new(&[(vm_memory::GuestAddress(0), 4096)]).unwrap();
     let host = crate::mock_vm::MockVm::new();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("image");
     for (status, devices, reason) in [
         (VmStatus::Running, false, ControlReason::InvalidState),
         (VmStatus::Paused, true, ControlReason::UnsupportedDevice),
     ] {
         parking.mailbox.lock().unwrap().status = status;
         let (tx, rx) = mpsc::channel();
-        parking.send(ParkCommand::Export(path.clone(), tx));
+        parking.send(ParkCommand::Export(Box::new(Vec::new()), tx));
         crate::Vm::export_pending(&parking, &host, &ram, 1, devices);
+        let (result, writer) = rx.recv().unwrap();
         assert!(
-            matches!(rx.recv().unwrap(), Err(Error::Control { operation: "export", reason: actual }) if actual == reason)
+            matches!(result, Err(Error::Control { operation: "export", reason: actual }) if actual == reason)
         );
         assert!(parking.mailbox.lock().unwrap().commands.is_empty());
-        assert!(!path.exists());
+        let writer: Box<dyn Any> = writer;
+        assert!(writer.downcast::<Vec<u8>>().unwrap().is_empty());
     }
     for (status, requested) in [(VmStatus::Running, true), (VmStatus::Paused, false)] {
         let mut mailbox = parking.mailbox.lock().unwrap();
@@ -998,14 +1012,13 @@ fn export_supervisor_rechecks_lifecycle_and_device_admission() {
         mailbox.requested = requested;
         drop(mailbox);
         assert!(matches!(
-            crate::Vm::export_image(&parking, &host, &ram, 1, &path),
+            crate::Vm::export_image(&parking, &host, &ram, 1, &mut Vec::new()),
             Err(Error::Control {
                 operation: "export",
                 reason: ControlReason::InvalidState
             })
         ));
         assert!(parking.mailbox.lock().unwrap().captures.is_empty());
-        assert!(!path.exists());
     }
 }
 
@@ -1014,19 +1027,19 @@ fn terminal_parking_rejects_queued_and_new_export_commands() {
     let events = EventLoop::new().unwrap();
     let parking = Parking::new(events.sender());
     let (tx, rx) = mpsc::channel();
-    parking.send(ParkCommand::Export("unused".into(), tx));
+    parking.send(ParkCommand::Export(Box::new(io::sink()), tx));
     parking.stop();
     assert!(matches!(
-        rx.recv().unwrap(),
+        rx.recv().unwrap().0,
         Err(Error::Control {
             operation: "export",
             reason: ControlReason::TerminalOutcome
         })
     ));
     let (tx, rx) = mpsc::channel();
-    parking.send(ParkCommand::Export("unused".into(), tx));
+    parking.send(ParkCommand::Export(Box::new(io::sink()), tx));
     assert!(matches!(
-        rx.recv().unwrap(),
+        rx.recv().unwrap().0,
         Err(Error::Control {
             operation: "export",
             reason: ControlReason::InvalidState
@@ -1047,10 +1060,9 @@ fn cancelled_capture_returns_a_terminal_error_without_an_image() {
     }
     let ram = crate::memory::GuestRam::new(&[(vm_memory::GuestAddress(0), 4096)]).unwrap();
     let host = crate::mock_vm::MockVm::new();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("image");
+    let mut bytes = Vec::new();
     thread::scope(|scope| {
-        let caller = scope.spawn(|| crate::Vm::export_image(&parking, &host, &ram, 1, &path));
+        let caller = scope.spawn(|| crate::Vm::export_image(&parking, &host, &ram, 1, &mut bytes));
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some((id, reply)) = parking.mailbox.lock().unwrap().captures.pop_front() {
@@ -1072,7 +1084,7 @@ fn cancelled_capture_returns_a_terminal_error_without_an_image() {
             })
         ));
     });
-    assert!(!path.exists());
+    assert!(bytes.is_empty());
 }
 
 #[test]

@@ -216,7 +216,7 @@ fn owning_threads_capture_all_cpus_before_platform_and_records_are_id_ordered() 
     let mut handle = vm.spawn().unwrap();
     handle.pause().unwrap();
     thread::scope(|scope| {
-        let caller = scope.spawn(|| handle.export(&path));
+        let caller = scope.spawn(|| handle.export_to_file(&path));
         let mut owners = vec![];
         for _ in 0..3 {
             match observed.recv_timeout(Duration::from_secs(1)).unwrap() {
@@ -294,12 +294,62 @@ fn capture_platform_and_file_failures_leave_vm_paused_without_image() {
         } else {
             dir.path().join("image")
         };
-        assert!(handle.export(&path).is_err());
+        assert!(handle.export_to_file(&path).is_err());
         assert_eq!(handle.status(), VmStatus::Paused);
         assert!(!path.exists());
         handle.resume().unwrap();
         handle.stop();
         handle.join().unwrap();
+    }
+}
+
+#[test]
+fn writer_export_reports_flush_failure_and_concurrent_stop() {
+    struct Flush<F>(F);
+
+    impl<F: FnMut() -> io::Result<()>> io::Write for Flush<F> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            (self.0)()
+        }
+    }
+
+    for stop_during_export in [false, true] {
+        let (backend, releases, _observed) = backend(false, false);
+        let mut handle = machine(backend).spawn().unwrap();
+        handle.pause().unwrap();
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        let stop = handle.stop_handle();
+        let result = handle.export(Flush(move || {
+            if stop_during_export {
+                stop.stop();
+                Ok(())
+            } else {
+                Err(io::Error::other("flush failed"))
+            }
+        }));
+        if stop_during_export {
+            assert!(matches!(
+                result,
+                Err(Error::Control {
+                    operation: "export",
+                    reason: ControlReason::TerminalOutcome,
+                })
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(Error::Snapshot(error)) if error.to_string() == "flush failed"
+            ));
+            assert_eq!(handle.status(), VmStatus::Paused);
+            handle.stop();
+        }
+        assert_eq!(handle.join().unwrap(), crate::VmExit::StopRequested);
     }
 }
 
@@ -317,7 +367,7 @@ fn kvm_export_of_parked_device_less_guest() {
     handle.pause().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
-    handle.export(&path).unwrap();
+    handle.export_to_file(&path).unwrap();
     assert_eq!(handle.status(), VmStatus::Paused);
     let mut file = File::open(&path).unwrap();
     let header = Header::read(&mut file).unwrap();

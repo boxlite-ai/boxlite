@@ -532,7 +532,7 @@ let vm = Vm::new_device_less(config)?;
 let mut execution = vm.spawn()?;
 execution.pause()?;
 // Every vCPU is out of guest execution and has completed pending I/O.
-execution.export("memory.bxl")?; // New target file; VM stays Paused.
+execution.export_to_file("memory.bxl")?; // The VM stays Paused.
 execution.resume()?;
 execution.stop();
 let exit = execution.join()?;
@@ -542,8 +542,8 @@ let exit = execution.join()?;
   vCPU ACKs arrive; repeated pause in Pausing or Paused returns `Error::Control`
   with `ControlReason::InvalidState`. Pause rejects any actual chipset device
   before publishing a request or kicking vCPUs, including devices absent from
-  configuration flags. `resume(&mut self)` and `export(&mut self, path)` accept
-  only Paused; both return InvalidState during Pausing without queuing commands.
+  configuration flags. `resume`, `export` and `export_to_file` require Paused.
+  During Pausing they return `InvalidState` before queuing a command.
 - Each pause advances a checked epoch. Every owning vCPU completes pending
   I/O and calls `notify_guest_stopped` before ACK. The supervisor counts
   distinct vCPU IDs only for that epoch and publishes Paused only after all
@@ -598,26 +598,36 @@ no userspace devices through pause/resume/stop.
 
 ## Device-less memory export
 
-`VmHandle::export(&mut self, path: impl AsRef<Path>) -> Result<()>` captures
-Linux x86_64 state. It requires Paused (otherwise `InvalidState`) and no
-userspace devices (otherwise `UnsupportedDevice`). Paused is published only
-after every vCPU has acknowledged parking; export never opens guest entry.
+`VmHandle::export<W: Write + Send + 'static>(&mut self, writer: W) -> Result<W>`
+captures Linux x86_64 state, streams it into the supplied writer and returns the
+same writer after flushing it. Both export methods require a Paused VM with no
+userspace devices. Admission errors use the operation name `export` and report
+`InvalidState` for other lifecycle states or `UnsupportedDevice` for attached
+devices. Other hosts return `Error::Snapshot` with kind `Unsupported` after
+those checks.
 
 The handle queues Export to the supervisor. The supervisor queues one capture
 per vCPU; each parked owning thread calls its own `save_state`. Once all replies
 are collected in contiguous ID order, the supervisor calls the host VM's
 `save_state`, encodes the machine state with Postcard, then streams RAM through
-a `BufWriter` in chunks of up to 1 MiB. Export packs nonempty, non-overlapping
+the writer in chunks of up to 1 MiB. Export packs nonempty, non-overlapping
 RAM regions in ascending GPA order. The header records their combined byte
 length, and the payload skips address gaps such as the x86 MMIO hole.
+The supervisor calls `Write` synchronously. A blocked pipe or socket delays
+subsequent control events, including stop, until the write returns. On error,
+dropping a caller-supplied `BufWriter` may flush buffered bytes.
 
-The target must not exist. Capture errors happen before file creation; any
-write or final flush failure closes and removes the incomplete target before
-returning an error. If removal itself fails, that error is also reported and
-manual cleanup is required. Existing files are never truncated or deleted.
-Export does not resume the VM, including on failure; it remains Paused unless
-an independent terminal stop/failure ends execution. Successful export flushes
-the writer, but does not promise crash durability (`fsync` is not performed).
+`VmHandle::export_to_file(&mut self, path: impl AsRef<Path>) -> Result<()>`
+creates a new file with mode `0600` on the first write, after admission, state
+capture and RAM validation. An existing target returns `AlreadyExists` and is
+preserved, including if it appears between admission and the first write. On
+failure, cleanup discards buffered bytes and attempts removal only if the path
+still identifies the incomplete file.
+
+Both methods leave the VM Paused, including on failure, unless an independent
+stop or VM failure ends execution. With `export(writer)`, the caller is
+responsible for cleaning up partial output. A successful flush provides no
+crash-durability guarantee.
 
 All integers are little-endian. Version 1 has no padding, region table,
 checksum, hash, signature, feature negotiation or compatibility metadata:
@@ -633,8 +643,8 @@ checksum, hash, signature, feature negotiation or compatibility metadata:
 | `32+M..` | Packed RAM bytes in ascending GPA order |
 
 The internal reader checks the magic, version and header vCPU count (1–64).
-It rejects declared lengths that overflow or extend past the file and caps the
-encoded machine-state buffer at 32 MiB + 64 KiB.
+It rejects declared lengths that overflow and caps the encoded machine-state
+buffer at 32 MiB + 64 KiB.
 
 `make test:unit:vmm` covers the container, MMIO-hole packing, partial-write/final-flush
 cleanup and handle admission on every host. Linux x86_64 mock tests exercise
@@ -644,21 +654,27 @@ and `/dev/kvm`.
 
 ## Device-less memory restore
 
-On Linux x86_64, `Vm::from_state(path: impl AsRef<Path>) -> Result<VmHandle<KvmVm>>`
-reads a device-less version-1 image. It returns only after restoration
-completes, with the handle **Paused** and zero guest entries:
+On Linux x86_64, `Vm::from_state(reader: impl Read)` restores a device-less
+version-1 image produced by `VmHandle::export(writer)`. Pair
+`Vm::from_state_file(path: impl AsRef<Path>)` with `VmHandle::export_to_file(path)`
+to restore from disk. Both return a `Result<VmHandle<KvmVm>>` with the handle
+**Paused** and zero guest entries on success.
 
 ```rust,ignore
-let mut execution = Vm::from_state("memory.bxl")?;
+let bytes = source.export(Vec::new())?;
+let mut execution = Vm::from_state(bytes.as_slice())?;
 assert_eq!(execution.status(), VmStatus::Paused);
 execution.resume()?; // First guest entry on the destination is permitted here.
 execution.stop();
 execution.join()?;
 ```
 
-Images are created with owner-only permissions (`0600`, subject to the caller's
-umask). Restore validates metadata before mapping or reading RAM or creating a
-host VM.
+`Vm::from_state_file` checks the declared total length against the file's size
+before reading the payload. `Vm::from_state` accepts a stream without seeking
+and reports truncation as it reads the header, machine state or RAM. Both validate
+the header, machine state, `X86_LAYOUT` and the KVM physical address limit before
+allocating or reading RAM. The KVM GPA cap is separate from the host's available
+memory budget.
 
 1. Validate the 32-byte header and read the bounded encoded machine state.
 2. Decode its leading Postcard sequence-length varint before deserializing any
@@ -690,9 +706,9 @@ during import.
 
 Linux x86_64 mock tests cover zero entries before resume, platform-before-CPU
 installation, owning-thread access, admission before host creation, and failure
-cleanup (including backing release). The ignored KVM round-trip test exports,
-destroys the source, restores Paused, resumes, and verifies counter progress;
-it requires Linux x86_64 and `/dev/kvm`.
+cleanup (including backing release). The ignored KVM round-trip tests restore
+Paused and resume from both an in-memory stream and a file. The file round-trip
+verifies counter progress. These tests require Linux x86_64 and `/dev/kvm`.
 
 The ignored
 `kvm_linux_device_less_export_destroy_restore_resume_makes_progress` test also

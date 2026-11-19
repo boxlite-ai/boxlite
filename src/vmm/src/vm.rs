@@ -102,9 +102,16 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Restores a device-less image on the same host and KVM environment.
+    /// Restores a device-less image from a reader on the same host and KVM environment.
     /// Returns Paused; no guest instruction executes until `resume` succeeds.
     pub fn from_state(
+        mut reader: impl std::io::Read,
+    ) -> Result<crate::VmHandle<boxlite_hypervisor::KvmVm>> {
+        crate::snapshot::restore::from_kvm_reader(&mut reader, None)
+    }
+
+    /// Restores a device-less image from a file and returns a Paused handle.
+    pub fn from_state_file(
         path: impl AsRef<std::path::Path>,
     ) -> Result<crate::VmHandle<boxlite_hypervisor::KvmVm>> {
         crate::snapshot::restore::from_kvm_path(path.as_ref())

@@ -60,18 +60,44 @@ fn container_round_trip_packs_ram_across_the_mmio_hole() {
     }
 
     image::write(&path, 1, b"", &ram).unwrap();
-    let mut file = File::open(&path).unwrap();
-    let header = image::Header::read(&mut file).unwrap();
+    let mut bytes = Vec::new();
+    image::write_to(&mut bytes, 1, b"", &ram).unwrap();
+    assert_eq!(bytes, fs::read(&path).unwrap());
+    let mut reader = bytes.as_slice();
+    let header = image::Header::read_from(&mut reader, None).unwrap();
     assert_eq!(header.ram_len, (low_bytes.len() + high_bytes.len()) as u64);
 
     let restored = GuestRam::new(&ranges).unwrap();
-    restored.read_image(&mut file).unwrap();
+    restored.read_image(&mut reader).unwrap();
     for (start, expected) in regions {
         let mut bytes = vec![0; expected.len()];
         restored.memory().read_slice(&mut bytes, start).unwrap();
         assert_eq!(bytes, expected);
     }
-    assert_eq!(file.read(&mut [0]).unwrap(), 0);
+    assert!(reader.is_empty());
+}
+
+#[test]
+fn write_to_reports_short_writes_as_snapshot_errors() {
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
+    let mut bytes = [0; 8];
+    let error = image::write_to(&mut bytes.as_mut_slice(), 1, b"", &ram).unwrap_err();
+    assert!(matches!(error, crate::Error::Snapshot(e) if e.kind() == io::ErrorKind::WriteZero));
+    assert_eq!(&bytes, b"BXLMEM01");
+}
+
+#[test]
+fn new_file_writer_creates_on_first_write_and_removes_uncommitted_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let mut writer = image::NewFileWriter::new(&path);
+    writer.flush().unwrap();
+    assert!(!path.exists());
+
+    writer.write_all(b"partial image").unwrap();
+    assert!(path.is_file());
+    drop(writer);
+    assert!(!path.exists());
 }
 
 #[test]
@@ -79,9 +105,11 @@ fn partial_write_is_removed_and_existing_file_is_not_touched() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
     assert!(
-        image::create(&path, |writer| {
-            writer.write_all(&vec![42; 16384])?;
-            Err(io::Error::other("injected write failure"))
+        image::create(&path, |file| {
+            file.write_all(&[42; 32]).map_err(crate::Error::Snapshot)?;
+            Err(crate::Error::Snapshot(io::Error::other(
+                "injected write failure",
+            )))
         })
         .is_err()
     );
@@ -90,6 +118,29 @@ fn partial_write_is_removed_and_existing_file_is_not_touched() {
     assert!(image::create(&path, |_| panic!("must not overwrite")).is_err());
     assert_eq!(fs::read(&path).unwrap(), b"existing");
     assert!(image::create(&dir.path().join("missing/image"), |_| Ok(())).is_err());
+}
+
+#[test]
+fn failed_write_preserves_replacement_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    let replacement = dir.path().join("replacement");
+    fs::write(&replacement, b"replacement contents").unwrap();
+
+    let error = image::create(&path, |file| {
+        file.write_all(b"partial image")
+            .map_err(crate::Error::Snapshot)?;
+        fs::rename(&replacement, &path).map_err(crate::Error::Snapshot)?;
+        Err(crate::Error::Snapshot(io::Error::other(
+            "injected write failure",
+        )))
+    })
+    .unwrap_err();
+
+    assert!(matches!(error, crate::Error::Snapshot(ref e)
+        if e.to_string() == "injected write failure"));
+    assert!(fs::symlink_metadata(&path).unwrap().is_file());
+    assert_eq!(fs::read(&path).unwrap(), b"replacement contents");
 }
 
 #[test]
@@ -108,10 +159,14 @@ fn reader_checks_magic_version_and_length_bounds() {
     for offset in [16, 24] {
         let mut bytes = original.clone();
         bytes[offset..offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(image::Header::read_from(&mut bytes.as_slice(), None).is_err());
         fs::write(&path, bytes).unwrap();
         assert!(image::Header::read(&mut File::open(&path).unwrap()).is_err());
     }
-    fs::write(&path, &original[..original.len() - 1]).unwrap();
+    let truncated = &original[..original.len() - 1];
+    let mut reader = truncated;
+    assert!(image::Header::read_from(&mut reader, None).is_ok());
+    fs::write(&path, truncated).unwrap();
     assert!(image::Header::read(&mut File::open(&path).unwrap()).is_err());
     let mut bytes = original;
     bytes.push(9); // Trailing bytes are not a compatibility/admission check.
@@ -172,13 +227,19 @@ fn machine_state_length_limit_is_checked_in_the_header() {
 fn final_buffer_flush_failure_removes_partial_target() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
+    let ram = GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap();
     assert!(
-        image::create(&path, |writer| {
-            writer.write_all(b"partial header")?;
-            writer.flush()?;
+        image::create(&path, |file| {
+            file.write_all(b"partial header")
+                .map_err(crate::Error::Snapshot)?;
             // Force the production final flush to fail on a read-only descriptor.
-            *writer = io::BufWriter::new(File::open(&path)?);
-            writer.write_all(b"buffered payload")
+            let mut writer = io::BufWriter::with_capacity(
+                8192,
+                File::open(&path).map_err(crate::Error::Snapshot)?,
+            );
+            let result = image::write_to(&mut writer, 1, b"machine", &ram);
+            drop(writer.into_parts());
+            result
         })
         .is_err()
     );
@@ -212,18 +273,18 @@ fn large_ram_length_must_fit_in_the_image_file() {
 }
 
 #[test]
-fn failed_cleanup_reports_both_write_and_removal_errors() {
+fn failed_write_preserves_replacement_directory() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
     let error = image::create(&path, |_| {
-        // Replace the new target with a directory so remove_file fails,
-        // independently of host permissions (including when running as root).
-        fs::remove_file(&path)?;
-        fs::create_dir(&path)?;
-        Err(io::Error::other("injected write failure"))
+        fs::rename(&path, dir.path().join("original")).map_err(crate::Error::Snapshot)?;
+        fs::create_dir(&path).map_err(crate::Error::Snapshot)?;
+        Err(crate::Error::Snapshot(io::Error::other(
+            "injected write failure",
+        )))
     })
     .unwrap_err();
     assert!(matches!(error, crate::Error::Snapshot(ref e)
-        if e.to_string().contains("injected write failure; removing incomplete image:")));
+        if e.to_string() == "injected write failure"));
     assert!(path.is_dir());
 }

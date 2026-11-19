@@ -36,6 +36,69 @@ fn bare(backend: MockVm, count: u8) -> Vm<MockVm> {
 }
 
 #[test]
+fn writer_export_checks_lifecycle_devices_and_platform() {
+    let mut handle = bare(MockVm::new(), 1).spawn().unwrap();
+    assert!(matches!(
+        handle.export(Vec::new()),
+        Err(Error::Control {
+            operation: "export",
+            reason: ControlReason::InvalidState,
+        })
+    ));
+    handle.pause().unwrap();
+    handle.devices = true;
+    assert!(matches!(
+        handle.export(Vec::new()),
+        Err(Error::Control {
+            operation: "export",
+            reason: ControlReason::UnsupportedDevice,
+        })
+    ));
+    #[cfg(not(target_os = "linux"))]
+    {
+        handle.devices = false;
+        assert!(matches!(
+            handle.export(Vec::new()),
+            Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::Unsupported
+        ));
+    }
+    assert_eq!(handle.status(), VmStatus::Paused);
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn file_export_preserves_existing_target_and_removes_failed_capture() {
+    use std::fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image");
+    fs::write(&path, b"existing").unwrap();
+    let mut handle = bare(MockVm::new(), 1).spawn().unwrap();
+    assert!(matches!(
+        handle.export_to_file(&path),
+        Err(Error::Control {
+            operation: "export",
+            reason: ControlReason::InvalidState,
+        })
+    ));
+    handle.pause().unwrap();
+    assert!(matches!(
+        handle.export_to_file(&path),
+        Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::AlreadyExists
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"existing");
+
+    fs::remove_file(&path).unwrap();
+    // MockVm does not implement snapshot capture.
+    assert!(matches!(
+        handle.export_to_file(&path),
+        Err(Error::Hypervisor(_))
+    ));
+    assert!(!path.exists());
+    assert_eq!(handle.status(), VmStatus::Paused);
+}
+
+#[test]
 fn owned_pause_resume_and_terminal_join_preserve_mapping_lifetime() {
     let backend = MockVm::new();
     let log = backend.log();
@@ -550,8 +613,8 @@ fn coalesced_commands_drain_exports_before_sleeping() {
     let mut vm = bare(MockVm::new(), 1);
     let parking = Parking::new(vm.sender.clone());
     let (export, exported) = mpsc::channel();
-    for path in ["first", "second"] {
-        parking.send(ParkCommand::Export(path.into(), export.clone()));
+    for _ in 0..2 {
+        parking.send(ParkCommand::Export(Box::new(io::sink()), export.clone()));
     }
     let (resume, resumed) = mpsc::channel();
     parking.send(ParkCommand::Resume(0, resume));
@@ -575,6 +638,7 @@ fn coalesced_commands_drain_exports_before_sleeping() {
                 exported
                     .recv_timeout(Duration::from_secs(1))
                     .unwrap()
+                    .0
                     .is_err()
             );
             let (progress, counts) = mpsc::channel();

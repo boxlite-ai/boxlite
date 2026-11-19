@@ -355,6 +355,25 @@ fn malformed_images_are_refused_before_creating_a_host_vm() {
 }
 
 #[test]
+fn truncated_stream_payloads_are_refused_before_creating_a_host_vm() {
+    const RAM_LEN: usize = 4096;
+    let ram = GuestRam::new(&[(GuestAddress(0), RAM_LEN)]).unwrap();
+    let machine = machine().encode().unwrap();
+    let mut bytes = Vec::new();
+    image::write_to(&mut bytes, 3, &machine, &ram).unwrap();
+    for end in [bytes.len() - RAM_LEN - 1, bytes.len() - 1] {
+        let mut reader = &bytes[..end];
+        let error = from_reader::<Backend, _>(&mut reader, None, false, |_| {
+            Ok(|| panic!("host VM created for truncated stream"))
+        })
+        .unwrap_err();
+        assert!(
+            matches!(error, Error::Snapshot(ref e) if e.kind() == io::ErrorKind::UnexpectedEof)
+        );
+    }
+}
+
+#[test]
 fn invalid_ram_lengths_are_refused_before_creating_a_host_vm() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image");
@@ -476,6 +495,46 @@ fn out_of_range_vcpu_counts_are_refused_before_creating_a_host_vm() {
     }
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires /dev/kvm"]
+fn kvm_export_to_vec_restores_and_resumes() {
+    let vm = Vm::with_backend(
+        crate::VmConfig {
+            vcpu_count: 1,
+            memory_mib: 1,
+            kernel: "unused".into(),
+            cmdline: String::new(),
+            initramfs: None,
+            disks: vec![],
+            filesystem: None,
+            vsock: None,
+            network: None,
+            virtio_console: false,
+        },
+        KvmVm::new,
+        |ram, _| Ok(crate::flat_guest::load(ram.memory(), &[0xeb, 0xfe])),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let mut handle = vm.spawn().unwrap();
+    handle.pause().unwrap();
+    let bytes = handle.export(Vec::new()).unwrap();
+    assert_eq!(handle.status(), VmStatus::Paused);
+    drop(handle);
+
+    let mut reader = bytes.as_slice();
+    let header = Header::read_from(&mut reader, None).unwrap();
+    assert_eq!(header.vcpus, 1);
+    assert_eq!(header.ram_len, 1 << 20);
+    let mut restored = Vm::from_state(bytes.as_slice()).unwrap();
+    assert_eq!(restored.status(), VmStatus::Paused);
+    restored.resume().unwrap();
+    assert_eq!(restored.status(), VmStatus::Running);
+    restored.stop();
+    assert_eq!(restored.join().unwrap(), crate::VmExit::StopRequested);
+}
+
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn kvm_export_destroy_restore_resume_continues_counter() {
@@ -510,17 +569,17 @@ fn kvm_export_destroy_restore_resume_continues_counter() {
     let mut handle = vm.spawn().unwrap();
     thread::sleep(Duration::from_millis(20));
     handle.pause().unwrap();
-    handle.export(&source).unwrap();
+    handle.export_to_file(&source).unwrap();
     drop(handle);
-    let mut restored = Vm::from_state(&source).unwrap();
+    let mut restored = Vm::from_state_file(&source).unwrap();
     assert_eq!(restored.status(), VmStatus::Paused);
-    restored.export(&destination).unwrap();
+    restored.export_to_file(&destination).unwrap();
     assert_eq!(counter(&source), counter(&destination));
     restored.resume().unwrap();
     thread::sleep(Duration::from_millis(20));
     restored.pause().unwrap();
     fs::remove_file(&destination).unwrap();
-    restored.export(&destination).unwrap();
+    restored.export_to_file(&destination).unwrap();
     assert!(counter(&destination) > counter(&source));
     drop(restored);
 }
@@ -634,14 +693,14 @@ fn kvm_split_ram_export_destroy_restore_resume_continues_both_counters() {
     source.pause().unwrap();
     // The release byte takes effect when the restored vCPU resumes.
     memory.write_obj(1u8, RELEASE).unwrap();
-    source.export(&path).unwrap();
+    source.export_to_file(&path).unwrap();
     assert_eq!(read_counters(), checkpoint, "packed source counters");
     source.stop();
     assert_eq!(source.join().unwrap(), crate::VmExit::StopRequested);
     drop(memory);
 
     let advanced = checkpoint.map(|value| value + 1);
-    let mut restored = from_kvm_path(&path).unwrap();
+    let mut restored = Vm::from_state_file(&path).unwrap();
     assert_eq!(restored.status(), VmStatus::Paused);
     restored.resume().unwrap();
     let deadline = Instant::now() + timeout;
@@ -649,7 +708,7 @@ fn kvm_split_ram_export_destroy_restore_resume_continues_both_counters() {
         thread::sleep(Duration::from_millis(50));
         restored.pause().unwrap();
         fs::remove_file(&path).unwrap();
-        restored.export(&path).unwrap();
+        restored.export_to_file(&path).unwrap();
         let counters = read_counters();
         for ((counter, saved), next) in counters.into_iter().zip(checkpoint).zip(advanced) {
             assert!(
@@ -703,7 +762,7 @@ fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
     let mut handle = vm.spawn().unwrap();
     thread::sleep(Duration::from_millis(20));
     handle.pause().unwrap();
-    handle.export(&source).unwrap();
+    handle.export_to_file(&source).unwrap();
     drop(handle);
 
     let read_machine = |path: &Path| {
@@ -722,9 +781,9 @@ fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
         }
     }
     assert!(counter(&source) > 0);
-    let mut restored = Vm::from_state(&source).unwrap();
+    let mut restored = Vm::from_state_file(&source).unwrap();
     assert_eq!(restored.status(), VmStatus::Paused);
-    restored.export(&destination).unwrap();
+    restored.export_to_file(&destination).unwrap();
     let after = read_machine(&destination);
     for (id, (before, after)) in before.vcpus.iter().zip(&after.vcpus).enumerate() {
         assert_eq!(before.id as usize, id);
@@ -739,7 +798,7 @@ fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
     restored.resume().unwrap();
     thread::sleep(Duration::from_millis(20));
     restored.pause().unwrap();
-    restored.export(&resumed).unwrap();
+    restored.export_to_file(&resumed).unwrap();
     assert!(counter(&resumed) > counter(&source));
     drop(restored);
 }
@@ -892,7 +951,7 @@ fn linux_wait_for_progress(
         handle.resume().unwrap();
         thread::sleep(Duration::from_millis(200));
         handle.pause().unwrap();
-        handle.export(path).unwrap();
+        handle.export_to_file(path).unwrap();
         let after = linux_snapshot(path);
         fs::remove_file(path).unwrap();
         let ready = !wait_for_init
@@ -1163,7 +1222,7 @@ fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
     let source = dir.path().join("source");
     let mut handle = vm.spawn().unwrap();
     handle.pause().unwrap();
-    handle.export(&scratch).unwrap();
+    handle.export_to_file(&scratch).unwrap();
     let initial = linux_snapshot(&scratch);
     fs::remove_file(&scratch).unwrap();
     let ready = linux_wait_for_progress(
@@ -1178,7 +1237,7 @@ fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
     let before =
         linux_wait_for_progress(&mut handle, &ready, &scratch, Duration::from_secs(5), false);
     drop(ready);
-    handle.export(&source).unwrap();
+    handle.export_to_file(&source).unwrap();
     let still = linux_snapshot(&source);
     assert!(before.1 == still.1, "RAM must be stable while Paused");
     assert!(
@@ -1188,9 +1247,9 @@ fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
     drop(still);
     drop(handle);
 
-    let mut restored = Vm::from_state(&source).unwrap();
+    let mut restored = Vm::from_state_file(&source).unwrap();
     assert_eq!(restored.status(), VmStatus::Paused);
-    restored.export(&scratch).unwrap();
+    restored.export_to_file(&scratch).unwrap();
     let installed = linux_snapshot(&scratch);
     fs::remove_file(&scratch).unwrap();
     // Installing KVM's wall-clock MSR can update its shared RAM page without
@@ -1242,7 +1301,7 @@ fn reject_before_ram(count: u32, payload: &[u8], reason: &str) {
     let len = reader.file.metadata().unwrap().len();
     let error = from_reader::<Backend, _>(
         &mut reader,
-        len,
+        Some(len),
         false,
         |_| -> Result<fn() -> boxlite_hypervisor::Result<Backend>> {
             panic!("host prepared before vCPU admission")

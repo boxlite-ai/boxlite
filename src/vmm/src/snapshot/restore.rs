@@ -22,7 +22,16 @@ use crate::{
 };
 
 pub(crate) fn from_kvm_path(path: &Path) -> Result<VmHandle<KvmVm>> {
-    from_image(path, true, |ranges| {
+    let mut file = File::open(path).map_err(Error::Snapshot)?;
+    let file_len = file.metadata().map_err(Error::Snapshot)?.len();
+    from_kvm_reader(&mut file, Some(file_len))
+}
+
+pub(crate) fn from_kvm_reader(
+    reader: &mut impl Read,
+    file_len: Option<u64>,
+) -> Result<VmHandle<KvmVm>> {
+    from_reader(reader, file_len, true, |ranges| {
         let prepared = KvmVm::prepare()?;
         let caps = X86MemoryCaps::from_cpuid(prepared.supported_cpuid())
             .map_err(Error::HostMemoryCapability)?;
@@ -43,23 +52,9 @@ pub(crate) fn from_kvm_path(path: &Path) -> Result<VmHandle<KvmVm>> {
     })
 }
 
-fn from_image<H, Create>(
-    path: &Path,
-    fresh_vm: bool,
-    prepare: impl FnOnce(&[(GuestAddress, usize)]) -> Result<Create>,
-) -> Result<VmHandle<H>>
-where
-    H: X86Vm + 'static,
-    Create: FnOnce() -> boxlite_hypervisor::Result<H>,
-{
-    let mut file = File::open(path).map_err(Error::Snapshot)?;
-    let file_len = file.metadata().map_err(Error::Snapshot)?.len();
-    from_reader(&mut file, file_len, fresh_vm, prepare)
-}
-
 fn from_reader<H, Create>(
     reader: &mut impl Read,
-    file_len: u64,
+    file_len: Option<u64>,
     fresh_vm: bool,
     prepare: impl FnOnce(&[(GuestAddress, usize)]) -> Result<Create>,
 ) -> Result<VmHandle<H>>
@@ -106,7 +101,9 @@ fn from_path<H: X86Vm + 'static>(
     path: &Path,
     create: impl FnOnce() -> boxlite_hypervisor::Result<H>,
 ) -> Result<VmHandle<H>> {
-    from_image(path, false, |_| Ok(create))
+    let mut file = File::open(path).map_err(Error::Snapshot)?;
+    let file_len = file.metadata().map_err(Error::Snapshot)?.len();
+    from_reader(&mut file, Some(file_len), false, |_| Ok(create))
 }
 
 #[cfg(test)]

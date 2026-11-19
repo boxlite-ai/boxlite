@@ -5,9 +5,11 @@
 //! and the parking mailbox are separate; only the supervisor publishes Paused.
 
 use std::{
+    any::Any,
     collections::VecDeque,
+    io::{self, Write},
     marker::PhantomData,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Condvar, Mutex, PoisonError, mpsc},
     thread::JoinHandle,
     time::Duration,
@@ -18,7 +20,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use boxlite_hypervisor::Vm as HostVm;
 
-use crate::{ControlReason, Error, Result, StopHandle, VmExit, events::EventSender};
+use crate::{
+    ControlReason, Error, Result, StopHandle, VmExit, events::EventSender, snapshot::image,
+};
 #[cfg(target_arch = "x86_64")]
 use crate::{Vm, events::Event};
 
@@ -47,8 +51,14 @@ use boxlite_hypervisor::X86Vcpu as ParkVcpu;
 
 type ParkResult = std::result::Result<u64, ControlReason>;
 
+trait SnapshotWriter: Write + Send + Any {}
+impl<W: Write + Send + Any> SnapshotWriter for W {}
+
+type ExportWriter = Box<dyn SnapshotWriter>;
+type ExportReply = (Result<()>, ExportWriter);
+
 enum ParkCommand {
-    Export(PathBuf, mpsc::Sender<Result<()>>),
+    Export(ExportWriter, mpsc::Sender<ExportReply>),
     Park(Arc<()>, mpsc::Sender<ParkResult>),
     Resume(u64, mpsc::Sender<ParkResult>),
 }
@@ -59,8 +69,8 @@ impl ParkCommand {
             Self::Park(_, reply) | Self::Resume(_, reply) => {
                 let _ = reply.send(Err(reason));
             }
-            Self::Export(_, reply) => {
-                let _ = reply.send(Err(reason.for_operation("export")));
+            Self::Export(writer, reply) => {
+                let _ = reply.send((Err(reason.for_operation("export")), writer));
             }
         }
     }
@@ -441,20 +451,56 @@ impl<H: HostVm> VmHandle<H> {
             .map_err(|reason| reason.for_operation(operation))
     }
 
-    /// Exports a Paused, device-less VM to a new file. Failure leaves it parked
-    /// and removes any incomplete file. State capture requires Linux x86_64.
-    pub fn export(&mut self, path: impl AsRef<Path>) -> Result<()> {
+    /// Writes a Paused, device-less VM's snapshot and returns the flushed writer.
+    /// State capture requires Linux x86_64. The VM stays parked on success or
+    /// failure unless stopped concurrently. The caller cleans up partial output.
+    ///
+    /// The supervisor calls `Write` synchronously. A blocked pipe or socket
+    /// delays subsequent control events, including stop, until the write returns.
+    /// On error, dropping a caller-supplied `BufWriter` may flush buffered bytes.
+    /// Streaming restore with `Vm::from_state` validates `X86_LAYOUT` and KVM's
+    /// guest physical address limit before reading RAM bytes. That GPA cap is
+    /// separate from the host's available memory budget.
+    pub fn export<W: Write + Send + 'static>(&mut self, writer: W) -> Result<W> {
+        self.check_export()?;
+        let (tx, rx) = mpsc::channel();
+        self.parking.send(ParkCommand::Export(Box::new(writer), tx));
+        let (result, writer) = rx
+            .recv()
+            .map_err(|_| ControlReason::TerminalOutcome.for_operation("export"))?;
+        result?;
+        if self.status() != VmStatus::Paused {
+            return Err(ControlReason::TerminalOutcome.for_operation("export"));
+        }
+        // The supervisor returns the same writer it received.
+        let writer: Box<dyn Any> = writer;
+        Ok(*writer.downcast::<W>().expect("export writer type changed"))
+    }
+
+    /// Exports to a new file with mode 0600, created on the first write.
+    /// On failure, cleanup removes an incomplete file if the path still names it.
+    /// The same admission checks as [Self::export] apply.
+    pub fn export_to_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        self.check_export()?;
+        if path.as_ref().symlink_metadata().is_ok() {
+            return Err(Error::Snapshot(io::Error::from_raw_os_error(libc::EEXIST)));
+        }
+        let mut writer = self.export(image::NewFileWriter::new(path.as_ref()))?;
+        writer.commit();
+        Ok(())
+    }
+
+    fn check_export(&self) -> Result<()> {
         if self.status() != VmStatus::Paused {
             return Err(ControlReason::InvalidState.for_operation("export"));
         }
         if self.devices {
             return Err(ControlReason::UnsupportedDevice.for_operation("export"));
         }
-        let (tx, rx) = mpsc::channel();
-        self.parking
-            .send(ParkCommand::Export(path.as_ref().to_owned(), tx));
-        rx.recv()
-            .unwrap_or_else(|_| Err(ControlReason::TerminalOutcome.for_operation("export")))
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return Err(Error::Snapshot(io::ErrorKind::Unsupported.into()));
+        }
+        Ok(())
     }
 
     /// Waits for an admitted park request without changing execution state.
@@ -621,7 +667,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             }
             state.commands.pop_front().unwrap()
         };
-        let ParkCommand::Export(path, reply) = command else {
+        let ParkCommand::Export(mut writer, reply) = command else {
             unreachable!()
         };
         let result = if parking
@@ -635,9 +681,9 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         } else if devices {
             Err(ControlReason::UnsupportedDevice.for_operation("export"))
         } else {
-            Self::export_image(parking, host_vm, ram, count, &path)
+            Self::export_image(parking, host_vm, ram, count, &mut *writer)
         };
-        let _ = reply.send(result);
+        let _ = reply.send((result, writer));
     }
 
     #[cfg(target_os = "linux")]
@@ -646,7 +692,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         host_vm: &H,
         ram: &crate::memory::GuestRam,
         count: u8,
-        path: &Path,
+        writer: &mut dyn Write,
     ) -> Result<()> {
         let receivers = {
             let mut state = parking
@@ -677,7 +723,12 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             platform: host_vm.save_state()?,
         }
         .encode()?;
-        crate::snapshot::image::write(path, count.into(), &machine, ram)
+        image::write_to_checked(writer, count.into(), &machine, ram, || {
+            if parking.sender.is_stopping() {
+                return Err(ControlReason::TerminalOutcome.for_operation("export"));
+            }
+            Ok(())
+        })
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -686,11 +737,9 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         _: &H,
         _: &crate::memory::GuestRam,
         _: u8,
-        _: &Path,
+        _: &mut dyn Write,
     ) -> Result<()> {
-        Err(Error::Snapshot(std::io::Error::from(
-            std::io::ErrorKind::Unsupported,
-        )))
+        Err(Error::Snapshot(io::ErrorKind::Unsupported.into()))
     }
 
     fn drive(&mut self, parking: &Parking) -> Result<VmExit> {
