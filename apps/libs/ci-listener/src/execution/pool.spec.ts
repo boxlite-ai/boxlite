@@ -1806,6 +1806,37 @@ describe('CI shared worker lifecycle', () => {
     await finishBox()
     expect((await rows()).allocations.size).toBe(0)
   })
+  it.each(['replace', 'delivered', 'already online'] as const)(
+    'reconciles an interrupted Hosted JIT delivery: %s',
+    async (outcome) => {
+      loseDelivery = true
+      await expect(tick()).rejects.toThrow('lost upload acknowledgement')
+      const { value } = await allocation()
+      Object.assign(boxes.get(value.name)!, { recoverableJit: true })
+      const recoverJit = jest.fn(async () => (outcome === 'replace' ? 'replace' : 'delivered'))
+      Object.assign(backend.workers, { recoverJit })
+      backend.inventory = async () => [
+        {
+          id: value.runner.id!,
+          name: value.name,
+          labels: settings.labels,
+          status: outcome === 'already online' ? 'online' : 'offline',
+          busy: outcome === 'already online',
+        },
+      ]
+      await reconcile()
+      if (outcome === 'replace') {
+        expect((await allocation()).value.closing).toBe(true)
+        expect(backend.workers.stop).toHaveBeenCalledWith(value.name)
+      } else {
+        expect((await allocation()).value.delivery).toBe('done')
+        expect(backend.workers.stop).not.toHaveBeenCalled()
+      }
+      if (outcome === 'already online') expect(recoverJit).not.toHaveBeenCalled()
+      else expect(recoverJit).toHaveBeenCalledWith(value.name, value.effect!.id, undefined)
+      expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    },
+  )
   it('does not stop an active Box when the triggering job has completed elsewhere', async () => {
     await tick()
     jest.mocked(backend.job).mockImplementation(async (notice) => ({

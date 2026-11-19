@@ -155,8 +155,8 @@ function Billing() {
           <div className={TAB_PANE}>
             <WalletSection
               linkCouponCode={searchParams.get('code') ?? undefined}
-              onCouponRedeemed={() =>
-                // Dropping the redeemed code keeps a reload from submitting it again.
+              onCouponClaimAccepted={() =>
+                // An accepted claim no longer needs its code in the URL.
                 setSearchParams(
                   (previous) => {
                     const next = new URLSearchParams(previous)

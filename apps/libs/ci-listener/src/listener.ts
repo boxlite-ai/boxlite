@@ -236,6 +236,7 @@ export class Listener {
         if (!signal.aborted) {
           renewalError = error
           stop.abort()
+          this.options.host.report(error, 'listener-renewal')
         }
       }
     })()

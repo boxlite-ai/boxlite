@@ -10,6 +10,7 @@ import { PostgresStateDatabase, postgresStateTable } from './postgres'
 import { SqliteStateDatabase } from './sqlite'
 import { rebuildDemand, decodeDemand } from '../demand'
 import { WorkflowJob } from '../jobs'
+import { ExecutionJournal } from '../execution/journal'
 
 for (const backend of ['sqlite', 'postgres'] as const) {
   const suite = backend === 'postgres' && !process.env.DB_HOST ? describe.skip : describe
@@ -916,6 +917,31 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         expect((await state.recover(await owner()))[0].key).toBe('notice/restart')
       })
     if (backend === 'postgres') {
+      it.each(['acquire', 'initialize and acquire'])('allows standby %s during a guarded transaction', async (path) => {
+        const lease = await owner()
+        await state.commit(lease, [{ key: 'journal/format', expected: null, payload: { version: 2 } }])
+        const standby = new ListenerState(
+          new PostgresStateDatabase({
+            transaction: (isolation, work) =>
+              pg!.transaction(isolation, async (tx) => {
+                await tx.query("SET LOCAL lock_timeout='250ms'")
+                return work(tx)
+              }),
+          }),
+          namespace,
+        )
+        await state.ingress(
+          'hold-owner-fence',
+          async () => {
+            if (path === 'initialize and acquire') {
+              await new ExecutionJournal(standby).initialize()
+              expect(await standby.superseded()).toBe(false)
+            }
+            expect(await standby.acquire('standby', 10000)).toBeUndefined()
+          },
+          lease,
+        )
+      })
       it('rejects expired proof even when its record version still matches', async () => {
         const lease = await owner()
         const [proof] = await state.commit(lease, [{ key: 'notice/proof', expected: null, payload: true }])

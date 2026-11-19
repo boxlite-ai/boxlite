@@ -416,6 +416,25 @@ describe('CI shared execution authority', () => {
     expect(host.authorize).toHaveBeenCalledWith(expect.anything(), 'admission', undefined)
     expect(host.workers.deliverJit).toHaveBeenCalledWith(name, 'c2VjcmV0', undefined)
   })
+  it('recovers the original JIT effect only while admission and repository access remain valid', async () => {
+    expect(backend.workers.recoverJit).toBeUndefined()
+    await backend.close()
+    const recover = jest.fn(async () => 'delivered' as const)
+    host.workers.recoverJit = recover
+    backend = makeBackend()
+    const effect = randomUUID()
+    const signal = new AbortController().signal
+    await expect(backend.workers.recoverJit!(name, effect, signal)).resolves.toBe('delivered')
+    expect(host.authorize).toHaveBeenCalledWith(expect.anything(), 'admission', signal)
+    expect(recover).toHaveBeenCalledWith(name, effect, signal)
+
+    revoked = true
+    await expect(backend.workers.recoverJit!(name, effect, signal)).rejects.toThrow('Admission revoked')
+    revoked = false
+    repository.private = false
+    await expect(backend.workers.recoverJit!(name, effect, signal)).rejects.toThrow('Original job repository changed')
+    expect(recover).toHaveBeenCalledTimes(1)
+  })
   const useOrganization = async () => {
     await backend.close()
     if (source.kind !== 'app') throw new Error('Invalid test setup')

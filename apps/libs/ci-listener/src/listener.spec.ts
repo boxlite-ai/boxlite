@@ -1912,6 +1912,49 @@ describe('CI shared Listener orchestration', () => {
       abort.abort()
     }
   })
+  it('reports a failed renewal while JIT delivery is still draining under a live lease', async () => {
+    const entered = deferred(),
+      cancelled = deferred(),
+      release = deferred()
+    const queryError = new Error('Injected renewal query failure')
+    const renewal = jest.spyOn(state, 'renew').mockImplementationOnce(async () => {
+      await entered.promise
+      throw queryError
+    })
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async (_name, _jit, signal) => {
+      if (!signal) throw new Error('Expected the owner session signal')
+      signal.addEventListener('abort', cancelled.resolve, { once: true })
+      entered.resolve()
+      await release.promise
+      signal.throwIfAborted()
+    })
+    await listener.receive(notification())
+    const task = listener.run(abort.signal)
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        cancelled.promise,
+        task.then(() => {
+          throw new Error('Listener stopped before cancelling the pending JIT delivery')
+        }),
+        new Promise<void>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error('Renewal did not cancel the pending JIT delivery')), 2500)
+        }),
+      ])
+      expect(abort.signal.aborted).toBe(false)
+      await expect(state.now(lease)).resolves.toEqual(expect.any(Number))
+      expect(host.report).toHaveBeenCalledWith(queryError, 'listener-renewal')
+      expect(host.report).not.toHaveBeenCalledWith(queryError, 'listener-session')
+    } finally {
+      clearTimeout(deadline)
+      entered.resolve()
+      release.resolve()
+      abort.abort()
+      await task
+      renewal.mockRestore()
+    }
+  })
+
   it('renews ownership while a GitHub operation is waiting beyond the original lease expiry', async () => {
     listener = new Listener({
       state,
