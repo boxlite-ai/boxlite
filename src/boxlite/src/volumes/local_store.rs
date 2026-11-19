@@ -1300,6 +1300,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn background_persistence_retains_the_runtime_home_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let home_dir = home.path().to_path_buf();
+        let options = || BoxliteOptions {
+            home_dir: home_dir.clone(),
+            ..Default::default()
+        };
+        let runtime = RuntimeImpl::new_for_test(options()).unwrap();
+        let blocker =
+            rusqlite::Connection::open(runtime.layout.db_dir().join("boxlite.db")).unwrap();
+        blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let create_runtime = Arc::clone(&runtime);
+        let mut create = Box::pin(create_runtime.create(
+            BoxOptions {
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            Some("home-lock".to_string()),
+        ));
+        assert!(futures::poll!(&mut create).is_pending());
+
+        drop(create);
+        drop(create_runtime);
+        drop(runtime);
+        let reopen_home = home_dir.clone();
+        let mut reopen_task = tokio::task::spawn_blocking(move || {
+            RuntimeImpl::new_for_test(BoxliteOptions {
+                home_dir: reopen_home,
+                ..Default::default()
+            })
+        });
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(500), &mut reopen_task).await;
+        drop(blocker);
+        let reopened = match result {
+            Ok(result) => result.unwrap(),
+            Err(_) => reopen_task.await.unwrap(),
+        };
+        let reopen_succeeded = reopened.is_ok();
+        drop(reopened);
+
+        assert!(
+            !reopen_succeeded,
+            "another runtime must not clear the old worker's lock allocations"
+        );
+
+        for _ in 0..100 {
+            if let Ok(runtime) = RuntimeImpl::new_for_test(options()) {
+                drop(runtime);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the home lock must be released after background persistence finishes");
+    }
+
+    #[tokio::test]
+    async fn create_returns_the_committed_box_when_a_lookup_caches_it_first() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        let store = runtime.local_volume_store.clone();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let lock_task = tokio::task::spawn_blocking(move || {
+            store.create_impl(Some("lock-holder"), move |_, _| {
+                ready_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+            })
+        });
+        ready_receiver.recv().unwrap();
+
+        let create_runtime = Arc::clone(&runtime);
+        let mut create = Box::pin(create_runtime.create(
+            BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume(&volume.id, "/workspace")],
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            Some("race".to_string()),
+        ));
+        assert!(futures::poll!(&mut create).is_pending());
+        release_sender.send(()).unwrap();
+        lock_task.await.unwrap().unwrap();
+
+        let cached = loop {
+            if runtime.box_manager.lookup_box("race").unwrap().is_some() {
+                break runtime
+                    .get("race")
+                    .await
+                    .unwrap()
+                    .expect("a concurrent lookup sees the committed box");
+            }
+            assert!(futures::poll!(&mut create).is_pending());
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        };
+
+        let created = create
+            .await
+            .expect("a same-ID cache hit is still the successful create");
+        assert_eq!(created.id(), cached.id());
+    }
+
+    #[tokio::test]
     async fn cancelled_clone_keeps_source_admission_and_persists_base_dependency() {
         let home = tempfile::tempdir().unwrap();
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {

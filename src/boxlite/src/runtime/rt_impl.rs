@@ -549,8 +549,9 @@ impl RuntimeImpl {
 
         // Create LiteBox handle with shared BoxImpl
         // This also checks in-memory cache for duplicate names
+        let box_id = config.id.clone();
         let (box_impl, inserted) = self.get_or_create_box_impl(config, state);
-        if !inserted {
+        if !inserted && box_impl.id() != &box_id {
             return Err(BoxliteError::InvalidArgument(
                 "box with this name already exists".into(),
             ));
@@ -1455,7 +1456,7 @@ impl RuntimeImpl {
     /// Allocate the paired namespaces before publishing the persisted lock ID.
     /// A numeric ID stays unavailable until its disk namespace is clean.
     async fn persist_box_with_locks(
-        &self,
+        self: &Arc<Self>,
         config: &mut BoxConfig,
         state: &mut BoxState,
         mode: crate::volumes::VolumeReferenceMode,
@@ -1470,6 +1471,7 @@ impl RuntimeImpl {
         state.set_lock_id(id);
 
         let store = self.local_volume_store.clone();
+        let runtime = Arc::clone(self);
         let mut persisted_config = config.clone();
         let state_for_persist = state.clone();
         let (base_disk_id, source_admission) = clone_dependency
@@ -1481,6 +1483,7 @@ impl RuntimeImpl {
             })
             .unwrap_or((None, None));
         let persist_task = tokio::task::spawn_blocking(move || {
+            let _runtime = runtime;
             let _source_admission = source_admission;
             let result = match base_disk_id {
                 Some(ref id) => store.add_clone_box_with_resolved_volumes(

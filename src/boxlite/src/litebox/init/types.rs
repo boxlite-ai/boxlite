@@ -90,7 +90,11 @@ pub fn resolve_user_volumes(
             })?;
             let kind = managed_share_kind(&mount);
             let resolved_path = mount.payload_root;
-            let metadata = std::fs::metadata(&resolved_path).map_err(|error| {
+            let owner_path = match &kind {
+                ResolvedShareKind::ManagedSubDirectory { sub_path } => resolved_path.join(sub_path),
+                _ => resolved_path.clone(),
+            };
+            let metadata = std::fs::metadata(&owner_path).map_err(|error| {
                 BoxliteError::Config(format!("Failed to stat managed volume {selector}: {error}"))
             })?;
             use std::os::unix::fs::MetadataExt;
@@ -186,7 +190,13 @@ pub fn resolve_user_volumes(
                 })?;
                 let kind = managed_share_kind(&managed);
                 let resolved_path = managed.payload_root;
-                let metadata = std::fs::metadata(&resolved_path).map_err(|error| {
+                let owner_path = match &kind {
+                    ResolvedShareKind::ManagedSubDirectory { sub_path } => {
+                        resolved_path.join(sub_path)
+                    }
+                    _ => resolved_path.clone(),
+                };
+                let metadata = std::fs::metadata(&owner_path).map_err(|error| {
                     BoxliteError::Config(format!(
                         "Failed to stat volume path '{}': {error}",
                         resolved_path.display()
@@ -591,6 +601,73 @@ mod tests {
             ResolvedShareKind::ManagedSubDirectory { ref sub_path }
                 if sub_path == "team/backend"
         ));
+    }
+
+    #[test]
+    fn resolve_typed_mount_subdirectory_uses_the_selected_directory_owner() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+
+        fn set_alternate_group(path: &std::path::Path) -> Option<u32> {
+            // SAFETY: getuid/getgid read process IDs, getgroups writes to a
+            // correctly sized buffer, and chown receives a valid C path.
+            unsafe {
+                let uid = libc::getuid();
+                let gid = libc::getgid();
+                let alternate = if uid == 0 {
+                    1
+                } else {
+                    let count = libc::getgroups(0, std::ptr::null_mut());
+                    let mut groups = vec![0; count as usize];
+                    libc::getgroups(count, groups.as_mut_ptr());
+                    groups.into_iter().find(|group| *group != gid)?
+                };
+                let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+                (libc::chown(path.as_ptr(), uid, alternate) == 0).then_some(alternate)
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        let payload = runtime.layout.volumes_dir().join(&volume.id).join("_data");
+        let subdirectory = payload.join("team/backend");
+        std::fs::create_dir_all(&subdirectory).unwrap();
+        let Some(expected_gid) = set_alternate_group(&subdirectory) else {
+            eprintln!("skipping: no supplementary group available for ownership fault injection");
+            return;
+        };
+        let mount = crate::runtime::options::MountSpec {
+            sub_path: Some("team/backend".to_string()),
+            ..crate::runtime::options::MountSpec::volume_mount(&volume.id, "/workspace")
+        };
+
+        let resolved = resolve_user_volumes(
+            &[],
+            std::slice::from_ref(&mount),
+            &runtime.local_volume_store,
+        )
+        .unwrap();
+        assert_eq!(resolved[0].owner_gid, expected_gid);
+
+        let whole = crate::runtime::options::MountSpec {
+            sub_path: None,
+            ..mount
+        };
+        let resolved = resolve_user_volumes(&[], &[whole], &runtime.local_volume_store).unwrap();
+        assert_eq!(
+            resolved[0].owner_gid,
+            std::fs::metadata(payload).unwrap().gid()
+        );
     }
 
     #[test]
