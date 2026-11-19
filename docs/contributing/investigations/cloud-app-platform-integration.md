@@ -4,7 +4,7 @@ Cloud Apps use the existing cloud API, organization identity, PostgreSQL, resour
 
 ## Scope and contracts
 
-- Add Apps after Boxes in the existing dashboard navigation; use its OIDC session and selected organization.
+- Place Apps in the Applications navigation group, after CI and at the same level; use the existing OIDC session and selected organization.
 - Keep the CLI manifest, deployment workflow, Supervisor protocol, application authentication, and Neon project/branch capabilities.
 - Store control-plane records in platform PostgreSQL and source objects in configured object storage. App databases remain on the official Neon API.
 - Scope every App to a platform organization. Organization API keys authorize Apps through their existing resource permissions; resource creation still applies platform admission and organization state.

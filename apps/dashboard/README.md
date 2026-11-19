@@ -70,7 +70,7 @@ Card placeholders stay static;
 reduced-motion preferences disable the sequence. The introduction reuses the
 agent handoff logos to show compatible coding agents below the product description.
 
-App hosting uses the same OIDC session,
+App hosting appears immediately after CI in Applications. It uses the same OIDC session,
 organization switcher and resource permissions. Its management requests go to
 `/api/v1/{organizationId}/apps` through the shared `ApiClient`; the App detail
 projection is `GET /apps/{appId}/view` within that organization namespace.

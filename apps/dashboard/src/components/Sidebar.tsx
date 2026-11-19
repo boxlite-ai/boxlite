@@ -120,12 +120,12 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
 ]
 
 const APPLICATION_NAV_ITEMS: NavItem[] = [
-  { label: 'App hosting', icon: 'app', path: RoutePath.APPS },
   {
     label: 'CI',
     icon: 'ci',
     path: RoutePath.CI,
   },
+  { label: 'App hosting', icon: 'app', path: RoutePath.APPS },
 ]
 const NAV_SECTIONS = [
   { label: 'Infrastructure', items: PRIMARY_NAV_ITEMS },

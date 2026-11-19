@@ -493,13 +493,18 @@ describe('Sidebar primary navigation', () => {
     expect(applications?.querySelector('[aria-label="Toggle CI navigation"]')).toBeNull()
   })
 
-  it('selects App hosting under Applications, outside Infrastructure', () => {
+  it('selects App hosting immediately after CI in Applications', () => {
     renderRoute('/dashboard/apps/demo')
     const infrastructure = document.querySelector('[role="group"][aria-label="Infrastructure"]')!
     const applications = document.querySelector('[role="group"][aria-label="Applications"]')!
     expect(infrastructure.querySelector('a[href="/dashboard/apps"]')).toBeNull()
     const link = applications.querySelector('a[href="/dashboard/apps"]')!
+    expect([...applications.querySelectorAll('a')].map((item) => item.getAttribute('href'))).toEqual([
+      '/dashboard/ci',
+      '/dashboard/apps',
+    ])
     expect(link.textContent).toBe('App hosting')
+    expect(link.querySelector('[data-icon="app"]')?.getAttribute('data-selected')).toBe('true')
     expect(link.getAttribute('aria-current')).toBe('page')
     expect(document.querySelectorAll('a[href="/dashboard/apps"]')).toHaveLength(1)
   })
