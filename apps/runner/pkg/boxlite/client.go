@@ -872,12 +872,12 @@ func (c *Client) CopyOut(ctx context.Context, boxId string, guestSrc, hostDst st
 }
 
 // CopyInStream streams raw tar bytes from r into guestDst without staging.
-func (c *Client) CopyInStream(ctx context.Context, boxId, guestDst string, r io.Reader) error {
+func (c *Client) CopyInStream(ctx context.Context, boxId, guestDst string, r io.Reader, options ...boxlite.CopyInOption) error {
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
 	}
-	return bx.CopyInStream(ctx, guestDst, r)
+	return bx.CopyInStream(ctx, guestDst, r, options...)
 }
 
 // CopyOutStream streams a tar of guestSrc to w without staging.

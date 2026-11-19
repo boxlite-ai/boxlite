@@ -4,12 +4,12 @@
 //! Guest RAM layout, allocation and the registration lifetime rules, driven
 //! through the mock backend.
 
-use std::{error::Error as _, sync::Arc};
+use std::{error::Error as _, io, sync::Arc};
 
-use boxlite_hypervisor::Error as HypervisorError;
+use boxlite_hypervisor::{Error as HypervisorError, Vm};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
 
-use super::{GuestRam, MAX_MEMORY_MIB, RAM_START, ram_ranges};
+use super::{ARM64_LAYOUT, GuestRam, RAM_START, X86_LAYOUT, check_ram_end, ram_ranges};
 use crate::{
     error::Error,
     mock_vm::{Call, MockVm},
@@ -29,17 +29,116 @@ fn expected_calls(ram: &GuestRam) -> Vec<(Call, Call)> {
         .collect()
 }
 
+/// The mock does not install slices. Seed the second range before injecting
+/// the map failure to model slices left registered by a real backend.
+fn seed_second_registration(ram: &GuestRam, vm: &MockVm) {
+    let second = ram.regions().nth(1).unwrap();
+    // SAFETY: GuestRam owns the backing and the mock only records its address.
+    unsafe { vm.map_memory(&second) }.unwrap();
+}
+
 #[test]
 fn ram_ranges_place_one_mib_aligned_region_at_the_architecture_start() {
     assert_eq!(ram_ranges(1), [(GuestAddress(RAM_START), MIB)]);
-    let largest = ram_ranges(MAX_MEMORY_MIB);
-    assert_eq!(largest, [(GuestAddress(RAM_START), 3072 * MIB)]);
-    for (start, size) in largest {
-        assert_eq!(start.0 % MIB as u64, 0);
-        assert_eq!(size % MIB, 0);
+    assert_eq!(RAM_START % MIB as u64, 0);
+}
+
+// Each case lists the requested MiB and the expected (start GPA, length in MiB).
+const X86_LAYOUT_CASES: &[(u32, &[(u64, u32)])] = &[
+    (0, &[]),
+    (1, &[(0, 1)]),
+    (3072, &[(0, 3072)]),
+    (3073, &[(0, 3072), (0x1_0000_0000, 1)]),
+    (4096, &[(0, 3072), (0x1_0000_0000, 1024)]),
+    (4097, &[(0, 3072), (0x1_0000_0000, 1025)]),
+    (6144, &[(0, 3072), (0x1_0000_0000, 3072)]),
+    (u32::MAX, &[(0, 3072), (0x1_0000_0000, u32::MAX - 3072)]),
+];
+
+fn assert_layout_ranges(
+    memory_mib: u32,
+    actual: &[(GuestAddress, usize)],
+    expected: &[(u64, u32)],
+) {
+    assert_eq!(actual.len(), expected.len(), "memory_mib={memory_mib}");
+    let mut total = 0;
+    for (&(start, len), &(expected_start, expected_len_mib)) in actual.iter().zip(expected) {
+        let len = u64::try_from(len).unwrap();
+        assert_eq!(start.0, expected_start, "memory_mib={memory_mib}");
+        assert_eq!(
+            len,
+            u64::from(expected_len_mib) << 20,
+            "memory_mib={memory_mib}"
+        );
+        assert_ne!(len, 0, "memory_mib={memory_mib}");
+        assert_eq!(start.0 % 4096, 0, "memory_mib={memory_mib}");
+        assert_eq!(len % 4096, 0, "memory_mib={memory_mib}");
+        total += len;
     }
-    #[cfg(target_arch = "x86_64")]
-    assert_eq!(RAM_START + (3072 * MIB) as u64, super::MMIO_HOLE_START);
+    assert_eq!(
+        total,
+        u64::from(memory_mib) << 20,
+        "memory_mib={memory_mib}"
+    );
+}
+
+#[test]
+fn x86_ram_layout_splits_at_the_mmio_hole() {
+    for &(memory_mib, expected) in X86_LAYOUT_CASES {
+        let actual = X86_LAYOUT.ranges(u64::from(memory_mib) << 20).unwrap();
+        assert_layout_ranges(memory_mib, &actual, expected);
+        if memory_mib == 3072 {
+            // The low RAM band is full but does not spill into high RAM.
+            let [(start, len)] = actual[..] else {
+                panic!("one low RAM band");
+            };
+            assert_eq!(start.0 + len as u64, super::MMIO_HOLE_START);
+        }
+    }
+}
+
+#[test]
+fn arm64_ram_layout_keeps_one_nonempty_range() {
+    for &(memory_mib, _) in X86_LAYOUT_CASES {
+        let actual = ARM64_LAYOUT.ranges(u64::from(memory_mib) << 20).unwrap();
+        let expected = [(0x8000_0000, memory_mib)];
+        let expected = if memory_mib == 0 {
+            &[][..]
+        } else {
+            &expected[..]
+        };
+        assert_layout_ranges(memory_mib, &actual, expected);
+    }
+}
+
+#[test]
+fn address_limit_uses_end_of_each_actual_ram_band() {
+    for (layout, limit_end, fits, exceeds, rejected_end) in [
+        (X86_LAYOUT, 1 << 36, 64512, 64513, 0x10_0010_0000),
+        (ARM64_LAYOUT, 1 << 36, 63488, 63489, 0x10_0010_0000),
+        (X86_LAYOUT, 1 << 32, 3072, 3073, 0x1_0010_0000),
+    ] {
+        let ranges = |memory_mib| layout.ranges(u64::from(memory_mib) << 20).unwrap();
+        check_ram_end(fits, &ranges(fits), limit_end, "test GPA").unwrap();
+        let error = check_ram_end(exceeds, &ranges(exceeds), limit_end, "test GPA").unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::GuestMemoryAddressLimit {
+                    memory_mib, end, limit_end: actual_limit, limit: "test GPA",
+                } if memory_mib == exceeds && end == rejected_end && actual_limit == limit_end
+            ),
+            "{error:?}"
+        );
+        assert!(error.source().is_none());
+    }
+}
+
+#[test]
+fn ram_layout_rejects_end_gpa_overflow() {
+    let size = u64::MAX - 4095;
+    assert!(X86_LAYOUT.ranges(size).is_err());
+    assert!(ARM64_LAYOUT.ranges(size).is_err());
 }
 
 #[test]
@@ -83,13 +182,54 @@ fn maps_ascending_and_unmaps_descending_with_the_backing_addresses() {
     assert_eq!(vm.calls(), [map0, map1]);
     ram.unmap(&vm).unwrap();
     assert_eq!(vm.calls(), [map0, map1, unmap1, unmap0]);
+    assert_eq!(
+        vm.unmap_attempts(),
+        [
+            (
+                1 << 32,
+                ram.memory()
+                    .get_host_address(GuestAddress(1 << 32))
+                    .unwrap() as usize,
+                MIB,
+            ),
+            (
+                0,
+                ram.memory().get_host_address(GuestAddress(0)).unwrap() as usize,
+                MIB,
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
+    let mut ram = GuestRam::new(&ram_ranges(16)).unwrap();
+    let vm = MockVm::failing_at(&[0]);
+    let backing = Arc::downgrade(ram.memory());
+
+    assert!(matches!(
+        ram.map(&vm),
+        Err(Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, source }))
+            if guest_addr == RAM_START && size == 16 * MIB
+                && source.kind() == io::ErrorKind::OutOfMemory
+    ));
+    assert_eq!(ram.mapped, 0);
+    assert!(vm.registrations().is_empty());
+    let low_region = ram.regions().next().unwrap();
+    assert_eq!(
+        vm.calls(),
+        [Call::map(&low_region), Call::unmap(&low_region)]
+    );
+    assert_eq!(vm.ioctl_calls(), [Call::map(&low_region)]);
+    drop(ram);
+    assert!(backing.upgrade().is_none());
 }
 
 #[test]
 fn failed_second_map_unmaps_the_first_and_leaves_ram_remappable() {
     let mut ram = two_regions();
     let vm = MockVm::failing_at(&[1]);
-    let [(map0, unmap0), (map1, _)] = expected_calls(&ram)[..] else {
+    let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
         panic!("two regions")
     };
 
@@ -99,33 +239,149 @@ fn failed_second_map_unmaps_the_first_and_leaves_ram_remappable() {
         Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, .. })
             if guest_addr == 1 << 32 && size == MIB
     ));
-    assert_eq!(vm.calls(), [map0, map1, unmap0]);
+    assert_eq!(vm.calls(), [map0, map1, unmap1, unmap0]);
+    assert_eq!(vm.ioctl_calls(), [map0, map1, unmap0]);
+    assert_eq!(ram.mapped, 0);
+    assert!(vm.registrations().is_empty());
 
     let retry = MockVm::new();
     ram.map(&retry).unwrap();
     assert_eq!(retry.calls(), [map0, map1]);
+    assert_eq!(retry.ioctl_calls(), [map0, map1]);
+    assert_eq!(ram.mapped, 2);
     ram.unmap(&retry).unwrap();
+}
+
+#[test]
+fn mock_rejects_a_duplicate_registration() {
+    let ram = two_regions();
+    let vm = MockVm::new();
+    let region = ram.regions().next().unwrap();
+    // SAFETY: GuestRam owns the backing and the mock only records its address.
+    unsafe {
+        vm.map_memory(&region).unwrap();
+        assert!(matches!(
+            vm.map_memory(&region),
+            Err(HypervisorError::MapMemory { source, .. })
+                if source.kind() == io::ErrorKind::AlreadyExists
+        ));
+    }
+    let map = Call::map(&region);
+    assert_eq!(vm.registrations(), [map].into());
+    vm.unmap_memory(&region).unwrap();
+    let expected = [map, map, Call::unmap(&region)];
+    assert_eq!(vm.calls(), expected);
+    assert_eq!(vm.ioctl_calls(), expected);
+}
+
+#[test]
+fn unregistered_unmap_attempts_count_for_failure_injection_but_not_ioctls() {
+    let ram = two_regions();
+    let vm = MockVm::failing_at(&[3]);
+    let mut regions = ram.regions();
+    let low = regions.next().unwrap();
+    let high = regions.next().unwrap();
+    let map_low = Call::map(&low);
+    let unmap_low = Call::unmap(&low);
+    let unmap_high = Call::unmap(&high);
+    let drop_vcpu = Call::DropVcpu { id: 0 };
+
+    // SAFETY: GuestRam owns the backing and the mock only records its address.
+    unsafe { vm.map_memory(&low) }.unwrap();
+    vm.unmap_memory(&high).unwrap();
+    assert_eq!(vm.registrations(), [map_low].into());
+    drop(vm.create_vcpu(0).unwrap());
+    assert!(matches!(
+        vm.unmap_memory(&high),
+        Err(HypervisorError::UnmapMemory { guest_addr, size, source })
+            if guest_addr == high.guest_addr && size == high.size
+                && source.kind() == io::ErrorKind::OutOfMemory
+    ));
+    assert_eq!(vm.registrations(), [map_low].into());
+    vm.unmap_memory(&low).unwrap();
+    assert!(vm.registrations().is_empty());
+    assert_eq!(
+        vm.calls(),
+        [map_low, unmap_high, drop_vcpu, unmap_high, unmap_low]
+    );
+    assert_eq!(vm.ioctl_calls(), [map_low, drop_vcpu, unmap_low]);
+    assert_eq!(
+        vm.unmap_attempts(),
+        [&high, &high, &low].map(|region| (
+            region.guest_addr,
+            region.host_addr.as_ptr() as usize,
+            region.size,
+        ))
+    );
 }
 
 #[test]
 fn failed_rollback_keeps_the_backing_alive() {
     let mut ram = two_regions();
-    let vm = MockVm::failing_at(&[1, 2]);
+    let vm = MockVm::failing_at(&[2, 4]);
+    seed_second_registration(&ram, &vm);
     let weak = Arc::downgrade(ram.memory());
+    let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
+        panic!("two regions")
+    };
 
     let error = ram.map(&vm).unwrap_err();
     assert!(matches!(
         error,
         Error::Hypervisor(HypervisorError::MapMemory { .. })
     ));
-    assert_eq!(vm.calls().len(), 3, "map, failed map, failed rollback");
+    assert_eq!(vm.calls(), [map1, map0, map1, unmap1, unmap0]);
     assert_eq!(ram.mapped, 1);
+    assert_eq!(vm.registrations(), [map0].into());
 
     drop(ram);
     assert!(
         weak.upgrade().is_some(),
         "a registered region keeps its backing"
     );
+}
+
+#[test]
+fn a_map_failure_cleans_up_slices_before_returning() {
+    let mut ram = two_regions();
+    let vm = MockVm::failing_at(&[2]);
+    seed_second_registration(&ram, &vm);
+    let weak = Arc::downgrade(ram.memory());
+    let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
+        panic!("two regions")
+    };
+
+    assert!(ram.map(&vm).is_err());
+    assert_eq!(vm.calls(), [map1, map0, map1, unmap1, unmap0]);
+    assert_eq!(ram.mapped, 0);
+    assert!(vm.registrations().is_empty());
+    drop(ram);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn a_failed_cleanup_keeps_the_backing_alive() {
+    let mut ram = two_regions();
+    let vm = MockVm::failing_with(&[
+        (2, io::ErrorKind::OutOfMemory),
+        (3, io::ErrorKind::NotFound),
+    ]);
+    seed_second_registration(&ram, &vm);
+    let weak = Arc::downgrade(ram.memory());
+    let [(map0, _), (map1, unmap1)] = expected_calls(&ram)[..] else {
+        panic!("two regions")
+    };
+
+    assert!(matches!(
+        ram.map(&vm),
+        Err(Error::Hypervisor(HypervisorError::MapMemory { source, .. }))
+            if source.kind() == io::ErrorKind::OutOfMemory
+    ));
+    assert_eq!(ram.mapped, 2);
+    assert_eq!(vm.calls(), [map1, map0, map1, unmap1]);
+    assert_eq!(vm.registrations(), [map0, map1].into());
+    drop(ram);
+    assert!(weak.upgrade().is_some());
 }
 
 #[test]
@@ -145,10 +401,34 @@ fn failed_unmap_keeps_state_and_retry_unmaps_only_the_remainder() {
     ));
     assert_eq!(ram.mapped, 1);
     assert_eq!(vm.calls(), [map0, map1, unmap1, unmap0]);
+    assert_eq!(
+        vm.unmap_attempts(),
+        [
+            (
+                1 << 32,
+                ram.memory()
+                    .get_host_address(GuestAddress(1 << 32))
+                    .unwrap() as usize,
+                MIB,
+            ),
+            (
+                0,
+                ram.memory().get_host_address(GuestAddress(0)).unwrap() as usize,
+                MIB,
+            ),
+        ]
+    );
 
+    let attempts_before_retry = vm.unmap_attempts().len();
+    let low_region = ram.regions().next().unwrap();
     ram.unmap(&vm).unwrap();
     assert_eq!(ram.mapped, 0);
     assert_eq!(vm.calls(), [map0, map1, unmap1, unmap0, unmap0]);
+    assert_eq!(vm.ioctl_calls(), [map0, map1, unmap1, unmap0, unmap0]);
+    assert_eq!(
+        vm.unmap_attempts()[attempts_before_retry..],
+        [(0, low_region.host_addr.as_ptr() as usize, MIB)]
+    );
     drop(ram);
     assert!(
         weak.upgrade().is_none(),
@@ -172,6 +452,7 @@ fn unmap_without_registrations_records_nothing() {
     let vm = MockVm::new();
     ram.unmap(&vm).unwrap();
     assert!(vm.calls().is_empty());
+    assert!(vm.unmap_attempts().is_empty());
 }
 
 #[test]

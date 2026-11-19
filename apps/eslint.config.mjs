@@ -33,8 +33,14 @@ export default [
         'error',
         {
           enforceBuildableLibDependency: true,
-          // The filestore parser is a dependency-free module shared by apps/api and mdeploy.
-          allow: ['^.*/eslint(\\.base)?\\.config\\.[cm]?js$', '^(\\.\\./)+shared/filestore-instances(\\.ts)?$'],
+          allow: [
+            '^.*/eslint(\\.base)?\\.config\\.[cm]?js$',
+            // Plain shared modules with no package of their own: the API and mdeploy parse
+            // FILESTORE_INSTANCES with one parser, and mbuild's workflow tests read the same
+            // .github sources as mdeploy's. A package would add a link and build step to each.
+            '^\\.\\./\\.\\./\\.\\./shared/filestore-instances(\\.ts)?$',
+            '^\\.\\./\\.\\./mdeploy/test/workflow-source\\.js$',
+          ],
           // Bootstrap and deployment load these helpers eagerly; mdeploy CLI entry points stay lazy.
           checkDynamicDependenciesExceptions: [
             'mdeploy/hosts',

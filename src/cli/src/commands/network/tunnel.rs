@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow};
 use boxlite::{BoxTunnel, SocketAddress, TunnelOptions};
 use clap::Args;
+use tokio::signal::unix::{SignalKind, signal};
 
 use crate::cli::GlobalFlags;
 
@@ -110,6 +111,8 @@ pub(crate) async fn forward_until_interrupted(
     listen: SocketAddress,
     announce: impl FnOnce(&SocketAddress),
 ) -> Result<()> {
+    // Register before publishing readiness: the caller may interrupt immediately.
+    let mut interrupt = signal(SignalKind::interrupt()).context("listen for Ctrl-C")?;
     let forwarder = tunnel
         .forward_with_bound(listen, |address| {
             println!("{address}");
@@ -123,8 +126,7 @@ pub(crate) async fn forward_until_interrupted(
 
     tokio::select! {
         result = forwarder.wait() => result?,
-        signal = tokio::signal::ctrl_c() => {
-            signal.context("wait for Ctrl-C")?;
+        _ = interrupt.recv() => {
             forwarder.close().await?;
         }
     }

@@ -12,6 +12,7 @@ PHONY_TARGETS += _local-registry
 PHONY_TARGETS += _guest-boot-probe
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
 PHONY_TARGETS += test\:integration\:c\:agents
+PHONY_TARGETS += test\:integration\:agent-sdk-parity
 PHONY_TARGETS += test\:integration\:lifecycle-race
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -533,6 +534,18 @@ test\:integration\:c\:agents:
 	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
 		cargo test -p boxlite-c --lib c_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
 
+# Run the same OpenCode scenario in Rust, Python and Node, comparing each SDK
+# result with the Rust result produced in this invocation.
+test\:integration\:agent-sdk-parity: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { echo "Set BOXLITE_TEST_OPENCODE_BINARY" >&2; exit 1; }
+	@set -eu; parity_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/boxlite-agent-parity.XXXXXXXX")"; \
+	trap 'rm -rf "$$parity_dir"' EXIT; \
+	export BOXLITE_AGENT_RUST_BASELINE="$$parity_dir/rust.json"; \
+	$(MAKE) test:integration:agents SETUP_DONE=1 CARGOTEST_FILTER=opencode_agent_creates_sends_streams_and_waits NEXTEST_FILTER="-E 'test(opencode_agent_creates_sends_streams_and_waits)' --no-tests=pass"; \
+	test -s "$$BOXLITE_AGENT_RUST_BASELINE"; \
+	$(MAKE) test:integration:python SETUP_DONE=1 PYTEST_FILTER='-k python_agent_opencode_flow'; \
+	$(MAKE) test:integration:node SETUP_DONE=1 VITEST_FILTER='tests/agents-opencode.integration.test.ts'
+
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
@@ -711,6 +724,11 @@ test\:apps\:infra: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:tooling
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
+
+PHONY_TARGETS += test\:apps\:infra\:auth0
+test\:apps\:infra\:auth0: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:tooling
+	@cd apps/infra && node --import tsx --test bootstrap/auth0*.test.ts bootstrap/configure-auth0-login.test.ts
 
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy

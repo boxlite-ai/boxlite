@@ -24,17 +24,19 @@ use std::{
 use linux_loader::loader::bootparam::boot_params;
 use vm_memory::{Bytes, GuestAddress};
 
-use super::prepare;
+use super::{BOOT_LEAF, prepare};
 use crate::{
     VmExit,
     boot::elf::tests::{ENTRY, fixture},
     config::VmConfig,
+    cpu_features::preflight_x86,
     devices::{
         console::{ConsoleWorker, DEFAULT_QUEUE_BYTES},
         x86_64::{COM1, COM1_GSI, add_legacy_devices},
     },
     error::Error,
     memory::{GuestRam, ram_ranges},
+    x86_boot_layout::{CheckedBootLeaf, PageSize},
 };
 
 mod balloon;
@@ -90,7 +92,8 @@ fn enters_the_loaded_kernel_with_rsi_at_the_zero_page() {
     let kernel = TempFile::new("prepare.elf", &fixture());
     let ram = ram();
 
-    let regs = prepare(&ram, &config(kernel.0.clone(), CMDLINE))
+    let leaf = PageSize::Mib.checked(false).unwrap();
+    let regs = prepare(&ram, &config(kernel.0.clone(), CMDLINE), leaf)
         .unwrap()
         .boot_regs;
 
@@ -124,7 +127,8 @@ fn loads_the_initramfs_at_the_top_of_ram_and_records_it() {
         ..config(kernel.0.clone(), CMDLINE)
     };
 
-    let regs = prepare(&ram, &config).unwrap().boot_regs;
+    let leaf = PageSize::Mib.checked(false).unwrap();
+    let regs = prepare(&ram, &config, leaf).unwrap().boot_regs;
 
     let memory = ram.memory();
     let params: boot_params = memory.read_obj(GuestAddress(regs.rsi)).unwrap();
@@ -170,7 +174,8 @@ fn a_failure_names_its_step_and_keeps_the_io_cause() {
             io::ErrorKind::InvalidInput,
         ),
     ] {
-        let error = prepare(&ram(), &config).unwrap_err();
+        let leaf = PageSize::Mib.checked(false).unwrap();
+        let error = prepare(&ram(), &config, leaf).unwrap_err();
         assert!(
             matches!(
                 error,
@@ -344,23 +349,48 @@ struct LinuxVm {
     gsi_4_edges: Arc<AtomicUsize>,
 }
 
+fn probe_boot(config: &VmConfig) -> (boxlite_hypervisor::PreparedKvm, CheckedBootLeaf) {
+    probe_boot_with_leaf(config, BOOT_LEAF)
+}
+
+fn probe_boot_with_leaf(
+    config: &VmConfig,
+    leaf: PageSize,
+) -> (boxlite_hypervisor::PreparedKvm, CheckedBootLeaf) {
+    config.validate().unwrap();
+    let prepared = boxlite_hypervisor::KvmVm::prepare().unwrap();
+    let leaf = preflight_x86(config.memory_mib, prepared.supported_cpuid(), leaf).unwrap();
+    (prepared, leaf)
+}
+
 /// Builds a KVM VM for `config` with the legacy devices, COM1 writing to
 /// `console`. With `deliver_irqs` off, every device interrupt is dropped.
 fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm {
+    linux_vm_with_leaf(config, deliver_irqs, console, BOOT_LEAF)
+}
+
+fn linux_vm_with_leaf(
+    config: &VmConfig,
+    deliver_irqs: bool,
+    console: Console,
+    leaf: PageSize,
+) -> LinuxVm {
+    let (prepared, leaf) = probe_boot_with_leaf(config, leaf);
     let (writer, console) = ConsoleWorker::spawn(console.sink, console.capacity).unwrap();
     let gsi_4_edges = Arc::new(AtomicUsize::new(0));
+    let edges = Arc::clone(&gsi_4_edges);
     let mut zero_page = None;
     let vm = crate::Vm::with_backend(
         config.clone(),
-        || {
+        move || {
             Ok(Gsi4Counter {
-                kvm: boxlite_hypervisor::KvmVm::new()?,
+                kvm: boxlite_hypervisor::KvmVm::from_prepared(prepared)?,
                 deliver: deliver_irqs,
-                edges: Arc::clone(&gsi_4_edges),
+                edges,
             })
         },
         |ram, config| {
-            let setup = prepare(ram, config)?;
+            let setup = prepare(ram, config, leaf)?;
             let address = GuestAddress(setup.boot_regs.rsi);
             zero_page = Some(ram.memory().read_obj(address).unwrap());
             Ok(setup.boot_regs)
@@ -399,12 +429,16 @@ fn run_linux(
     timeout: Duration,
     console: Console,
 ) -> LinuxRun {
+    run_linux_vm(linux_vm(config, deliver_irqs, console), timeout)
+}
+
+fn run_linux_vm(vm: LinuxVm, timeout: Duration) -> LinuxRun {
     let LinuxVm {
         mut vm,
         zero_page,
         console,
         gsi_4_edges,
-    } = linux_vm(config, deliver_irqs, console);
+    } = vm;
     let (exit, elapsed) = run_with_watchdog(&mut vm, timeout);
     LinuxRun {
         zero_page,
@@ -463,12 +497,14 @@ fn assert_reset(run: &LinuxRun, log: &str) {
 #[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
 fn boots_linux_to_the_root_mount_panic() {
     let log = SerialLog::default();
-    let mut run = run_linux(
+    // Assert E820 from the RAM layout; x86_boot_layout planning tests cover leaf sizes.
+    let vm = linux_vm_with_leaf(
         &linux_config(1, LINUX_CMDLINE, None),
         true,
-        BOOT_TIMEOUT,
         Console::to(&log),
+        PageSize::Mib,
     );
+    let mut run = run_linux_vm(vm, BOOT_TIMEOUT);
 
     run.console.finish();
     let log = log.text();
@@ -499,6 +535,73 @@ fn boots_linux_to_the_root_mount_panic() {
         "{log}"
     );
     assert!(has_prefix("Memory: "), "{log}");
+    assert!(log.contains("VFS: Unable to mount root fs"), "{log}");
+}
+
+/// Boots Linux with RAM on both sides of the MMIO hole and checks the memory
+/// map and the amount of memory Linux took over.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
+fn boots_linux_with_six_gib_of_ram() {
+    const SIX_GIB_MIB: u32 = 6144;
+    let log = SerialLog::default();
+    let mut config = linux_config(1, LINUX_CMDLINE, None);
+    config.memory_mib = SIX_GIB_MIB;
+    let vm = linux_vm_with_leaf(&config, true, Console::to(&log), PageSize::Mib);
+    let mut run = run_linux_vm(vm, BOOT_TIMEOUT);
+
+    run.console.finish();
+    let log = log.text();
+    assert_reset(&run, &log);
+    let lines: Vec<&str> = log.lines().collect();
+    let has_prefix = |prefix: &str| lines.iter().any(|line| line.starts_with(prefix));
+    assert!(has_prefix("Linux version "), "{log}");
+    assert!(
+        lines.contains(&format!("Command line: {LINUX_CMDLINE}").as_str()),
+        "{log}"
+    );
+
+    let e820: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("BIOS-e820:"))
+        .collect();
+    // 6144 MiB occupies [0, 3 GiB) and [4 GiB, 7 GiB), with
+    // [0x9_fc00, 0x10_0000) excluded from usable RAM in E820.
+    let usable_ranges: [(u64, u64); 3] = [
+        (0, 0x9_fc00),
+        (0x10_0000, 0xc000_0000),
+        (0x1_0000_0000, 0x1_c000_0000),
+    ];
+    let expected_e820 = usable_ranges
+        .map(|(start, end)| format!("BIOS-e820: [mem {start:#018x}-{:#018x}] usable", end - 1));
+    assert_eq!(e820, expected_e820, "{log}");
+
+    let memory = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("Memory: "))
+        .unwrap_or_else(|| panic!("missing Memory: line; log:\n{log}"));
+    let (first, second) = memory
+        .split_once(" available ")
+        .and_then(|(counts, _)| counts.split_once('/'))
+        .unwrap_or_else(|| panic!("invalid Memory: line; log:\n{log}"));
+    let [first, second] = [first, second].map(|count| {
+        count
+            .strip_suffix('K')
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("invalid Memory: count {count:?}; log:\n{log}"))
+    });
+    let available = first.min(second);
+    let total = first.max(second);
+    assert!(
+        available > (5 << 20),
+        "only {available}K available; log:\n{log}"
+    );
+    // Present pages exclude the page-aligned gap below 1 MiB and page 0.
+    assert!(
+        total >= (u64::from(SIX_GIB_MIB) << 10) - 512,
+        "only {total}K total; log:\n{log}"
+    );
     assert!(log.contains("VFS: Unable to mount root fs"), "{log}");
 }
 

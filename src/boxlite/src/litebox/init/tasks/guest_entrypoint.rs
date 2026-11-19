@@ -29,6 +29,18 @@ pub(crate) struct GuestEntrypointBuilder {
     limit: usize,
 }
 
+fn unsafe_kernel_cmdline_entry(key: &str, value: &str) -> bool {
+    let mut in_quote = true;
+    for ch in key.chars().chain(std::iter::once('=')).chain(value.chars()) {
+        match ch {
+            '"' => in_quote = !in_quote,
+            ' ' if !in_quote => return true,
+            _ => {}
+        }
+    }
+    !in_quote
+}
+
 impl GuestEntrypointBuilder {
     /// Kernel cmdline size limit for ARM64 (Apple Silicon).
     ///
@@ -116,6 +128,19 @@ impl GuestEntrypointBuilder {
             return false;
         }
 
+        // Tradeoff: omit only the unsafe guest boot-time copy so the VM can start
+        // without a libkrun protocol change. Container init and exec still receive
+        // the original value through independent RPC config. The cost is that
+        // boxlite-guest and guest-executor processes do not inherit skipped
+        // entries; they use defaults, so guest and container environments differ.
+        if unsafe_kernel_cmdline_entry(key, value) {
+            tracing::warn!(
+                env_key = %key,
+                "Skipping guest boot env var: unsafe kernel command-line quoting"
+            );
+            return false;
+        }
+
         // Check size limit
         let var_size = key.len() + value.len() + Self::ENV_VAR_OVERHEAD;
         if self.total_size + var_size > self.limit {
@@ -182,5 +207,46 @@ impl GuestEntrypointBuilder {
                 value.len()
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GuestEntrypointBuilder;
+
+    #[test]
+    fn guest_boot_env_omits_only_unsafe_kernel_entries() {
+        let mut builder = GuestEntrypointBuilder::new("/boxlite-guest".into());
+
+        for value in [
+            r#"{"a": "b c"}"#,
+            "a\" b",
+            "a\" b c\"",
+            r#""abc"#,
+            r#"abc""#,
+            r#"""#,
+        ] {
+            assert!(
+                !builder.with_env("UNSAFE", value),
+                "kernel-split entry must stay out of guest boot env: {value:?}"
+            );
+        }
+
+        for value in [
+            "plain",
+            "a b",
+            "a\\b",
+            r#"\u0022"#,
+            r#"{"a":"b"}"#,
+            r#"{"a": "b"}"#,
+            "a\"b\"c d",
+        ] {
+            assert!(
+                builder.with_env(value, value),
+                "safe entry must remain in guest boot env: {value:?}"
+            );
+        }
+
+        assert_eq!(builder.build().env.len(), 7);
     }
 }

@@ -344,11 +344,32 @@ Wallet and Welcome use the same card setup operation: open a tab, request the
 organization's Checkout URL, and navigate to Stripe. Returning to Welcome or
 choosing Check card status refreshes the wallet and saved payment methods.
 A connected card allows the user to continue without waiting for reward delivery.
-Both entry points tell the user that connecting or updating a card places a
-temporary $0.50 hold that is released automatically: Welcome below
-**Verify card**, Wallet below the Payment Method panel.
+Both entry points tell the user that adding a card places a temporary $0.50
+verification hold: Welcome below **Verify card**, Wallet in the last row of the
+Payment Method panel, next to **Add payment method**.
 
-Both pages redeem coupons through `useRedeemCouponMutation`. Success invalidates
+### Managing saved cards
+
+The Wallet's Payment Method panel lists every saved card. The default card is
+listed first with a **Default** badge and has no actions; the other cards keep
+the API's order. Each other card has a `⋯` menu with **Set as default** and
+**Remove**; removal asks for confirmation first. The last row of the panel holds
+**Add payment method**, which runs the card setup flow above. A newly added
+card becomes the default.
+
+Renewals and top-ups always need a default card, so the panel offers no way to
+remove it; the billing API itself would accept the removal. With one saved
+card, that card is the default, so it cannot be removed either.
+
+Both actions go through `useSetDefaultPaymentMethodMutation` and
+`useRemovePaymentMethodMutation`. Success refreshes the payment methods, wallet
+and plan queries, and the list itself shows the result, so there is no success
+toast. Failure shows an error toast and leaves the list as it was. Both
+endpoints are idempotent, so the menu does not lock while a request runs.
+The mock preview keeps its saved cards in memory, so both actions work there
+until the page reloads.
+
+Codes entered independently on either page redeem through `useRedeemCouponMutation`. Success invalidates
 wallet, transactions, invoices, plan, and usage so the next view reflects the
 server's result. Welcome shows the returned message and offers Quickstart;
 Explore with BoxLite is available without a card or coupon.
@@ -359,19 +380,24 @@ Share `https://<console>/redeem?code=CODE` to hand out a coupon. The `/redeem`
 route opens `/dashboard/billing?tab=wallet&code=CODE`. Signed-out visitors sign
 in first, and the sign-in return path keeps the query.
 
-Wallet opens the coupon form with the code filled in and names the organization
-that receives the credits. When the user owns their only organization, the code
-redeems once on landing, with no click. With several organizations, or without
-the owner role, nothing is redeemed until the user clicks Redeem.
+Wallet submits a reward claim when the signed-in user has a verified email and
+owns their only organization. An owner with multiple organizations can switch
+organizations from Wallet and confirm the claim there. The link keeps its coupon
+code across the switch. If Wallet cannot verify membership, use **Retry verification**.
+Codes entered under **Have a coupon code?** redeem independently.
 
-The result also appears as a toast, since the inline note sits low in the panel.
-A successful redeem removes `code` from the URL. A rejected code is tried once
-and stays in the form for another try. With an unverified email, Wallet asks the
-user to verify it first and redeems nothing.
+When Commerce accepts the claim, Wallet clears `code` from the URL and prompts
+the user to add a card. An organization with a card on file can proceed directly
+to processing. Reopening Wallet in the same tab checks pending claims for the
+active account and organization using their original event IDs. Coupon codes
+with different capitalization or surrounding spaces share an event ID.
 
-Coupon limits such as one use per organization, a total cap, and expiry are set
-on the coupon itself. The link carries only the code. In the mock preview
-(`npm run start:mock`), `ACME50` redeems and any other code is rejected.
+An unconfirmed claim can be retried. A rejection at submission keeps the code
+available for another attempt. Once Commerce records a failed or skipped outcome,
+Wallet closes the claim form and shows the failure. For example, a coupon can
+expire or reach its redemption limit while the organization waits to add a card.
+In the mock preview, `ACME50` returns a pending claim and an unknown code returns
+`coupon_not_found`.
 
 ## A choice says what it does, and shows which one is picked
 
@@ -1455,3 +1481,11 @@ A failed detail refresh retains the last known values with a retry message;
 initial failures continue to offer Retry. The mock preview's `web-api` demonstrates
 15-minute auto-stop and a 75-minute auto-delete threshold; `batch-worker` has all
 three options disabled, and other existing fixtures exercise missing fields.
+
+## Local trial discovery preview
+
+Run the mock Dashboard and open `/dashboard/welcome?preview=trial-onboarding`. The entry starts at organization naming, continues through the existing use-case selection, then offers Starter/Team selection, simulated card verification, explicit activation confirmation and immediate navigation to the existing Quickstart. Add `&step=plans` to inspect the third step directly. Returning from plan choice preserves the use-case selection. Use `&scenario=ineligible` or `&scenario=unavailable` to review alternative fixtures; the default is eligible. Product UI contains no preview tooling or simulation labels. Refresh resets the prototype.
+
+This entry requires development mode and `VITE_ENABLE_MOCKING=true`; the prototype module is excluded from production builds. It never invokes payment APIs or writes simulated subscription results to the Billing cache. Prices and plan concurrency reuse the current presentation source; no trial quota is inferred from bonus credits. Shipping this flow needs a server-confirmed eligibility/price quote and a mutation that rejects eligibility changes instead of silently charging. Registration/authentication and default Welcome remain unchanged.
+
+The choice step also offers “Explore console — no card required”, completing Welcome without verifying a card or activating a plan. “Have a coupon? Redeem code” expands an independent form: use `ACME50` for simulated success, an empty code for required-field feedback, or another code for invalid/expired feedback. Successful trial confirmation and coupon redemption complete Welcome immediately and enter Quickstart, without a separate success screen or another click. Coupon balances are not persisted to the shared mock wallet. Both alternative paths use existing Welcome completion and lead to Quickstart.

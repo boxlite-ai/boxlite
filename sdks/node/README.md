@@ -4,6 +4,10 @@ Embeddable VM runtime for secure, isolated code execution environments.
 
 Access the [agent API](../../docs/reference/agents.md) through `JsBox.agents`
 and `SimpleBox.agents` for agent and turn methods, grouped options and error handling.
+On a local runtime, retain the stream with `const events = agent.events()` and
+await `events.opened()` before sending work when the first live event matters.
+Read from that same `events` stream, use `read({ signal })` to cancel one read,
+and call `events.return()` to close it.
 
 **Think "SQLite for sandboxing"** - a lightweight library embedded directly in your application without requiring a daemon or root privileges.
 
@@ -714,6 +718,10 @@ From the repository root, run
 obtains a handle from a loopback REST server and checks namespace access without
 starting a VM or sending agent requests. Separate tests reject plain-object and
 prototype-only method receivers before the agent operation runs.
+
+To compare Node and Python agent results with Rust in real OpenCode VMs, set
+`BOXLITE_TEST_OPENCODE_BINARY` to the OpenCode 2.2.2 Linux binary and run
+`make test:integration:agent-sdk-parity` from the repository root.
 
 These receiver tests exercise napi-rs callback unwrapping. They do not exercise
 the generated `FromNapiRef` and `FromNapiMutRef` conversions flagged by CodeQL,

@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { ForbiddenException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
-import { DataSource } from 'typeorm'
+import { DataSource, QueryFailedError } from 'typeorm'
 import {
   DEFAULT_RUNNER_LABELS,
   decodeScope,
@@ -368,7 +368,12 @@ export class CiNativeHost implements ListenerHost {
     if (failures.length) throw new AggregateError(failures, 'CI catalog credential retirement failed')
   }
   report(error: unknown, operation: string): void {
-    this.logger.warn({ operation, error: error instanceof Error ? error.name : 'Unknown' })
+    const code = error instanceof QueryFailedError && 'code' in error.driverError ? error.driverError.code : undefined
+    this.logger.warn({
+      operation,
+      error: error instanceof Error ? error.name : 'Unknown',
+      ...(typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? { sqlState: code } : {}),
+    })
   }
   observe(event: WorkerEvent): void {
     if (event.level === 'warn') this.logger.warn(event)

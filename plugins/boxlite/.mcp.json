@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "boxlite": {
+      "type": "http",
+      "url": "https://api.boxlite.ai/mcp"
+    }
+  }
+}

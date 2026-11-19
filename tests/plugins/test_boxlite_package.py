@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 import shlex
@@ -53,7 +54,7 @@ class PackageTests(unittest.TestCase):
         """Reject drift in each Claude identity field before staging a package."""
         manifest = self.root / '.claude-plugin/plugin.json'
         original = manifest.read_text()
-        for key, replacement in (('name', 'another-plugin'), ('version', '0.2.0'),
+        for key, replacement in (('name', 'another-plugin'), ('version', '99.0.0'),
                                  ('description', 'Another plugin description.')):
             with self.subTest(field=key):
                 value = json.loads(original)
@@ -64,6 +65,73 @@ class PackageTests(unittest.TestCase):
                         package.validate(self.root)
                 finally:
                     manifest.write_text(original)
+
+    def test_mcp_declarations_reject_credentials_and_endpoint_drift(self):
+        for filename in ('mcp.json', '.mcp.json'):
+            path = self.root / filename
+            original = path.read_text()
+            for mutation in ('url', 'type', 'headers', 'extensions', 'extra-server'):
+                with self.subTest(file=filename, mutation=mutation):
+                    value = json.loads(original)
+                    server = value['mcpServers']['boxlite']
+                    if mutation == 'extra-server':
+                        value['mcpServers']['unexpected'] = dict(server)
+                    elif mutation == 'url':
+                        server['url'] = 'https://untrusted.example/mcp'
+                    elif mutation == 'type':
+                        server['type'] = 'stdio'
+                    else:
+                        server[mutation] = {'unexpected': 'value'}
+                    path.write_text(json.dumps(value))
+                    try:
+                        with self.assertRaisesRegex(ValueError, 'Invalid MCP'):
+                            package.build(Path(self.temp.name) / 'output', self.root)
+                    finally:
+                        path.write_text(original)
+
+    def test_both_archives_are_reproducible_extractable_and_hashed(self):
+        output = Path(self.temp.name) / 'output'
+        package.build(output, self.root)
+        original = {path.name: path.read_bytes() for path in output.glob('*.zip')}
+        self.assertEqual(len(original), 2)
+        package.build(output, self.root)
+        self.assertEqual(original, {path.name: path.read_bytes() for path in output.glob('*.zip')})
+        for line in (output / 'SHA256SUMS').read_text().splitlines():
+            digest, name = line.split()
+            self.assertEqual(digest, hashlib.sha256((output / name).read_bytes()).hexdigest())
+        marketplace_zip = next(output.glob('boxlite-marketplace-*.zip'))
+        extracted = output / 'extracted'
+        with zipfile.ZipFile(marketplace_zip) as zipped:
+            zipped.extractall(extracted)
+        catalog = json.loads((extracted / '.claude-plugin/marketplace.json').read_text())
+        self.assertTrue(package.validate(extracted / catalog['plugins'][0]['source']))
+
+    def test_inventory_rejects_undeclared_and_missing_resources(self):
+        unknown = self.root / 'unexpected.txt'
+        unknown.write_text('not declared')
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            package.validate(self.root)
+        unknown.unlink()
+        (self.root / 'skills/boxlite/references/local.md').unlink()
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            package.validate(self.root)
+
+    def test_artifact_names_follow_synchronized_stable_semver(self):
+        for filename in ('plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json'):
+            path = self.root / filename
+            manifest = json.loads(path.read_text())
+            manifest['version'] = '2.3.4'
+            path.write_text(json.dumps(manifest))
+        output = Path(self.temp.name) / 'output'
+        self.assertEqual(package.build(output, self.root).name, 'boxlite-2.3.4.zip')
+        self.assertTrue((output / 'boxlite-marketplace-2.3.4.zip').is_file())
+        path = self.root / 'plugin.json'
+        for version in ('02.3.4', '../../outside', '', 123):
+            manifest = json.loads(path.read_text())
+            manifest['version'] = version
+            path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, 'identity/version'):
+                package.build(output, self.root)
 
     def test_rejects_missing_or_drifted_codex_onboarding(self):
         """The compatibility host must resolve the same packaged setup skill."""

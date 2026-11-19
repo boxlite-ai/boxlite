@@ -207,13 +207,26 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer) e
 	}
 }
 
+// CopyInOption configures streaming uploads.
+type CopyInOption func(*bool)
+
+// WithCopyOverwrite controls replacement of existing entries. False permits new
+// files in existing directories and fails on conflicts; earlier writes may remain.
+func WithCopyOverwrite(overwrite bool) CopyInOption {
+	return func(value *bool) { *value = overwrite }
+}
+
 // CopyInStream streams r (raw tar) into guestDst without staging to disk. The
 // guest lands it by its first entry, as docker cp lands a copy.
 //
 // An archive led by one directory becomes a guestDst that does not exist.
 // Every later entry must then lie under that directory, or the copy fails
 // with ErrInvalidArgument and keeps the entries written before it.
-func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) error {
+func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader, options ...CopyInOption) error {
+	overwrite := true
+	for _, option := range options {
+		option(&overwrite)
+	}
 	if r == nil {
 		return &Error{Code: ErrInvalidArgument, Message: "copy-in reader must not be nil"}
 	}
@@ -235,7 +248,7 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) er
 	// Like copy_out_start, copy_in_start may implicitly boot the box and
 	// wait on guest file service under the guard; the returned stream is
 	// independent of the box handle.
-	stream := C.boxlite_copy_in_start(handle, cDst, C.cbCopy(), handleToPtr(h), &cerr)
+	stream := C.boxlite_copy_in_start_with_overwrite(handle, cDst, C.bool(overwrite), C.cbCopy(), handleToPtr(h), &cerr)
 	unlock()
 	if stream == nil {
 		deleteHandleForDispatch(h)
@@ -243,6 +256,7 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) er
 	}
 
 	var writeErr error
+	consumerClosed := false
 	noProgress := 0
 	buf := make([]byte, copyStreamBufferSize)
 	for {
@@ -252,6 +266,11 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) er
 			var werr C.CBoxliteError
 			if code := C.boxlite_copy_in_write(stream, (*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(n), &werr); code != C.Ok {
 				writeErr = freeError(&werr)
+				consumerClosed = true
+				if readErr != nil && readErr != io.EOF {
+					writeErr = readErr
+					consumerClosed = false
+				}
 				break
 			}
 		}
@@ -287,14 +306,19 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, r io.Reader) er
 	}
 	C.boxlite_copy_in_free(stream)
 
-	if writeErr != nil {
+	if writeErr != nil && !consumerClosed {
 		deleteHandleForDispatch(h)
 		return writeErr
 	}
 
+	// A closed consumer can mean the guest already rejected an entry. Its
+	// completion carries the typed conflict; the channel write only says closed.
 	select {
 	case err := <-ch:
-		return err
+		if err != nil {
+			return err
+		}
+		return writeErr
 	case <-ctx.Done():
 		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ctx.Err()

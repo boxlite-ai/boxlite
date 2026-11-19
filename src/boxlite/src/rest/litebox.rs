@@ -76,13 +76,14 @@ impl RestBox {
     }
 
     fn validate_upload(opts: &CopyOptions) -> BoxliteResult<()> {
-        // The HTTP protocol cannot request per-entry skip-if-exists. Refuse
-        // before consuming input so existing guest files cannot be clobbered.
+        // Older runners ignore overwrite=false. Until server support can be
+        // established reliably, retain the SDK's safe refusal before sending
+        // data; blindly forwarding false could silently replace remote files.
         if !opts.overwrite {
             return Err(BoxliteError::Unsupported(
                 "copy_into with overwrite=false is not supported over the REST backend; \
-                 the current upload protocol cannot express per-entry skip-if-exists. \
-                 Use the FFI backend or pre-check the destination before calling."
+                 remote overwrite protection cannot be confirmed. \
+                 Use the local backend for protected copies."
                     .into(),
             ));
         }
