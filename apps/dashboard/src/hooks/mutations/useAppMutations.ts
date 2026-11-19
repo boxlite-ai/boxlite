@@ -235,7 +235,7 @@ export function useSetOAuthClient() {
   })
 }
 
-/** Brings a soft-deleted app back (keys work again; Boxes wake on the next request). */
+/** Brings a soft-deleted app back; its Boxes wake on the next request. */
 export function useRestoreApp() {
   const { client: appsClient, organizationId, canDelete } = useAppsScope()
   const queryClient = useQueryClient()
@@ -248,6 +248,25 @@ export function useRestoreApp() {
       (await appsClient.post(`/apps/deleted/${encodeURIComponent(name)}/restore`)).data,
     onSuccess: (_data, _input, scope) =>
       queryClient.invalidateQueries({ queryKey: queryKeys.apps.organization(scope.organizationId) }),
+  })
+}
+
+/** Permanently removes a soft-deleted App and its retained resources. */
+export function usePurgeApp() {
+  const { client: appsClient, organizationId, canDelete } = useAppsScope()
+  const queryClient = useQueryClient()
+  return useMutation({
+    onMutate: () => {
+      if (!canDelete) throw new Error('You do not have permission to change this App')
+      return { organizationId }
+    },
+    mutationFn: async (name: string) => {
+      await appsClient.delete(`/apps/deleted/${encodeURIComponent(name)}`)
+    },
+    // Cleanup can begin before a failure; read back whether restoration is still available.
+    onSettled: (_data, _error, _name, scope) => {
+      if (scope) return queryClient.invalidateQueries({ queryKey: queryKeys.apps.organization(scope.organizationId) })
+    },
   })
 }
 

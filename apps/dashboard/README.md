@@ -77,6 +77,12 @@ projection is `GET /apps/{appId}/view` within that organization namespace.
 Deployments, environments, services, authentication, database, volumes,
 variables and logs remain within the selected organization and environment.
 
+Deleting an active App moves it to **Recently deleted** for seven days. Choose
+**Restore** to bring it back, or **Delete** beside Restore to remove it permanently
+before the retention period ends. Enter the App name to confirm. Permanent deletion
+removes the App's Boxes, volumes, database project and stored source. Its name
+becomes available again when cleanup finishes.
+
 The App overview provides setup instructions for the CLI and coding agents.
 Use an organization key from **API Keys** to sign in to the CLI, then link the
 project to the App named in the instructions. Key permissions apply across the
@@ -391,7 +397,8 @@ goes unanswered and the console never leaves its loading screen.
 The Apps preview includes a live `demo-shop` and a draft `starter`. Create an App
 or open its detail tabs to explore it. Deleting an App moves it to **Recently
 deleted**. Choose **Restore** there or **Undo** in the notification to bring it
-back. Reloading the preview resets the sample data. Runtime operations require
+back, or choose **Delete** to permanently remove it from the current preview.
+Reloading the preview resets the sample data. Runtime operations require
 the Cloud Apps API.
 
 The image catalog mock answers the way the API does, so the console can be

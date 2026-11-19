@@ -4,12 +4,13 @@ import { z } from 'zod'
 import { environmentViews, summaryView } from '../../console-views'
 import { handoffPrompt } from '../../console-prompt'
 import { fail } from '../../errors'
-import { deleteApp, restoreApp } from '../../lifecycle'
+import { deleteApp, purgeApp, restoreApp } from '../../lifecycle'
 import { capturePreview, previewImage } from '../../preview'
 import { createOpenTicket } from '../../proxy/gate'
 import { createApp } from '../../services/apps'
 import { canSee, orgIdFor } from '../../orgs'
 import { actorOf, type ConsoleKit } from './kit'
+import { principalStorage } from '../../platform-principal'
 
 export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
   const { ctx, cp, appOf, viewer, envOf, v1, detail, json } = k
@@ -55,6 +56,16 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
       throw fail('not_found_app', `no deleted app named "${c.req.param('name')}"`, 'it may have been purged already')
     await restoreApp(ctx, app, actorOf(viewer(c)))
     return c.json(await summaryView(ctx, (await store.appById(app.id))!))
+  })
+
+  api.delete('/apps/deleted/:name', async (c) => {
+    if (!principalStorage.getStore()?.permissions.includes('delete:apps'))
+      throw fail('forbidden', 'permanent App deletion requires delete:apps')
+    const app = await store.appByNameAnyState(c.req.param('name'))
+    if (!app?.deleted_at || !canSee(viewer(c), app))
+      throw fail('not_found_app', `no deleted app named "${c.req.param('name')}"`)
+    await purgeApp(ctx, app, { deletedOnly: true })
+    return c.body(null, 204)
   })
 
   api.get('/apps/:id/view', async (c) => {
