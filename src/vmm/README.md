@@ -1093,57 +1093,20 @@ windows, then adds the legacy devices:
 
 ## CMOS RTC
 
-On x86_64, `devices::cmos::CmosRtc` is the PC's real-time clock. The guest
-writes a register number to port `0x70`, then reads or writes that register
-at `0x71`. Linux registers it as `rtc0`, but takes its boot time from
-kvm-clock: `boot/kernel.config` leaves `RTC_HCTOSYS` off, so the CMOS, which
-reports whole seconds, never overrides it.
+On x86_64, `CmosRtc` serves ports `0x70` (register select) and `0x71` (data).
+Linux exposes the clock as `/dev/rtc0` and takes its boot time from kvm-clock
+because `boot/kernel.config` disables `RTC_HCTOSYS`.
 
-- The time is an injected `Clock` plus an offset that keeps any time the
-  guest sets. `cmos::host_clock` reads the host wall clock; the tests inject
-  a fixed or a running time.
-- As in QEMU, the time registers hold still while register B's SET bit or a
-  divider reset in register A stops the clock.
-- On any release the written time resumes half a second into its second,
-  because Linux writes half a second early (`set_offset_nsec` in
-  `rtc-cmos.c`). QEMU adds the half second only when the divider restarts
-  and otherwise keeps the old phase, which would put a Linux write on AMD,
-  where only SET is used, up to half a second off.
-- A write while the clock runs takes effect at once.
-- Time registers read in BCD unless register B selects binary. Only 24-hour
-  mode is modelled, so register B always reads with that bit set.
-- Register A starts at `0x26` and never reports an update in progress;
-  register D reads `0x80`. The remaining bytes are NVRAM.
-- Linux writes the century byte only through ACPI, so a two-digit year
-  00–69 means 20xx and 70–99 means 19xx unless the guest writes it.
-- The alarm matches the seconds, minutes and hours registers `0x01`, `0x03`
-  and `0x05`; a byte `0xC0`–`0xFF` matches any value, as Linux writes `0xff`
-  for a field it does not care about. An armed alarm compares its target second
-  against the guest RTC time, which the worker resamples at least once per
-  second while waiting. An overdue match latches AF even with AIE off. Writes
-  that change the schedule settle any due match first, then compute the next
-  one. Stopping the clock disarms matching until it restarts.
-  IRQF and the asserted GSI 8 level both follow `AF && AIE`. Reading register C
-  settles any overdue match, returns and clears the flags, and rearms from the
-  current guest RTC second. Clearing AIE lowers IRQ 8 and keeps AF. Further
-  matches coalesce while AF is pending.
-- x86 Linux registers `rtc_cmos` with IRQ 8, so it trusts the alarm and
-  serves update interrupts with it; `hwclock` waits up to 10 s for one on
-  every read. Periodic and update-ended interrupts, and day and month
-  alarms, are not modelled.
-- The worker and port accesses share the alarm state and IRQ line. Dropping the
-  `CmosRtc` stops and joins the worker before the host VM drops. A failed IRQ
-  update ends the VM with `DeviceFailed`.
-- `boot/kernel.config` enables `RTC_INTF_DEV`, so the guest has
-  `/dev/rtc0`.
-
-The fixed IRQ 8 follows Linux's [x86 RTC platform device](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/kernel/rtc.c#L114-L152).
-Latching AF independently of AIE follows [QEMU's alarm update](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L411-L423);
-coalescing and rearming follow its [timer scheduling](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L246-L295)
-and [register C read](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L696-L702).
-Re-enabling AIE with AF pending follows [QEMU's register B handling](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L518-L529).
-This RTC and its alarm do not resynchronize Linux's system clock after host
-sleep; guest clock recovery remains separate work.
+- RTC time follows the host wall clock plus a guest-set offset. SET or a
+  divider reset freezes it. On release, the clock resumes half a second into
+  the written second, matching Linux's RTC write timing. Time registers read
+  in 24-hour BCD or binary.
+- Alarms match hours, minutes, and seconds in guest RTC time. The RTC latches
+  due matches in AF before rescheduling, even with AIE off. Enabling AIE with
+  AF set asserts IRQ 8. Reading register C clears the flags and rearms the
+  alarm. Clearing AIE lowers IRQ 8 and keeps AF.
+- Linux uses the alarm to emulate update interrupts for `hwclock`. A failed
+  IRQ update ends the VM with `DeviceFailed`.
 
 ## Build
 
