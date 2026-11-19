@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Header } from 'tar'
-import { ForbiddenException } from '@nestjs/common'
+import { ConflictException, ForbiddenException } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import {
   WorkerPool,
@@ -957,14 +957,14 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.stop(config.name)).rejects.toThrow('ledger changed')
     expect(platform.stop).not.toHaveBeenCalled()
   })
-  it('distinguishes an unknown original ID from a confirmed absent known Box', async () => {
+  it('distinguishes an unknown original ID from a confirmed destroyed known Box', async () => {
     const unknown = await prepared()
     await expect(unknown.host.get(unknown.config.name)).rejects.not.toBeInstanceOf(ConfirmedWorkerAbsent)
     const box = await unknown.host.create(unknown.config)
     await journal.advance(lease, unknown.row.record.key, unknown.row.record.version, {
       box: { phase: 'known', id: box.box_id },
     })
-    await db.getRepository(Box).delete(box.box_id)
+    await db.getRepository(Box).update(box.box_id, { state: BoxState.DESTROYED })
     await expect(unknown.host.get(unknown.config.name)).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
   })
   it.each(['original', 'wrong tenant', 'wrong ID', 'wrong name', 'wrong worker key'] as const)(
@@ -1042,6 +1042,22 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       expect(await journal.reserve(lease, scopeKey(scope()), replacement, capacity)).toBeDefined()
     },
   )
+  it('keeps a charged tombstone across cleanup and prunes it after quota recovery', async () => {
+    const { box, host } = await deleting()
+    const boxes = db.getRepository(Box)
+    await boxes.update(box.box_id, { state: BoxState.DESTROYED, updatedAt: new Date(Date.now() - 2 * 86400000) })
+    await platform.cleanupDestroyedBoxes()
+    expect(await boxes.existsBy({ id: box.box_id })).toBe(true)
+    const pool = recoveringPool(host)
+    try {
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      expect(await journal.used(org)).toBe(0)
+      await platform.cleanupDestroyedBoxes()
+      expect(await boxes.existsBy({ id: box.box_id })).toBe(false)
+    } finally {
+      await pool.close()
+    }
+  })
   it('preserves confirmed destruction when a concurrent sync returns an error', async () => {
     const { box, host } = await deleting()
     const repository = new BoxRepository(
@@ -1086,6 +1102,46 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       await pool.close()
     }
   })
+  it.each(['requested', 'known'])(
+    'keeps %s quota after historical failed-destroy cleanup even with a prior runner receipt',
+    async (phase) => {
+      const { host, config, row } = await prepared()
+      const { box_id } = await host.create(config)
+      const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
+      await store.state.commit(lease, [
+        { key: ledger.key, expected: ledger.version, payload: { scope: scopeKey(scope()), box: box_id } },
+      ])
+      if (phase === 'known')
+        await journal.advance(lease, row.record.key, row.record.version, { box: { phase: 'known', id: box_id } })
+      const boxes = db.getRepository(Box),
+        jobs = db.getRepository(Job)
+      const destroy = await jobs.save({
+        runnerId,
+        resourceType: ResourceType.BOX,
+        resourceId: box_id,
+        type: JobType.DESTROY_BOX,
+        status: JobStatus.FAILED,
+        completedAt: new Date(),
+      })
+      await jobs.save({ ...destroy, id: randomUUID(), runnerId: randomUUID(), status: JobStatus.COMPLETED })
+      await boxes.update(box_id, {
+        state: BoxState.ERROR,
+        desiredState: BoxDesiredState.DESTROYED,
+        updatedAt: new Date(Date.now() - 8 * 86400000),
+      })
+      // Historical cleanup removed failed deletion rows after seven days.
+      await boxes.delete({ id: box_id, state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED })
+      const capacity = testCapacity({ account: 1, tenant: 1 })
+      const pool = recoveringPool(host)
+      try {
+        const result = await pool.tick(lease, capacity).catch((error: unknown) => error)
+        expect(await journal.used(org)).toBe(1)
+        expect(result).toBeInstanceOf(ConflictException)
+      } finally {
+        await pool.close()
+      }
+    },
+  )
   it('keeps requested quota when the saved Box belongs to a different creation effect', async () => {
     const { host, config } = await prepared()
     const original = await host.create(config)

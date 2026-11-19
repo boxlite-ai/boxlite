@@ -22,3 +22,22 @@ export function pendingDeletionTarget(hostedClientId: string | undefined) {
     parameters: { ciNamespace: 'ci:' + hostedClientId },
   }
 }
+
+/** Retain a terminal Box while its original allocation still needs the destruction receipt. */
+export function chargedNativeTombstone(hostedClientId: string | undefined) {
+  if (!hostedClientId) return { sql: 'FALSE', parameters: {} }
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM ci_listener_state worker
+      JOIN ci_listener_state ledger ON ledger.namespace = worker.namespace
+        AND ledger.record_key = 'box-native/' || substring(worker.record_key from 8)
+      JOIN ci_listener_state scope ON scope.namespace = worker.namespace AND scope.record_key = worker.payload->>'scope'
+      WHERE worker.namespace = :ciNamespace AND worker.record_key LIKE 'worker/%'
+        AND scope.schema_version = 1 AND scope.payload#>>'{scope,organization}' = box."organizationId"::text
+        AND worker.schema_version = 1 AND ledger.schema_version = 1
+        AND ledger.payload->>'box' = box.id AND ledger.payload->>'scope' = worker.payload->>'scope'
+        AND worker.payload#>>'{box,phase}' IN ('requested','known')
+    )`,
+    parameters: { ciNamespace: 'ci:' + hostedClientId },
+  }
+}

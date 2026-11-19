@@ -33,6 +33,10 @@ export class WorkQueue {
   revision(key: string): string | undefined {
     return this.work.get(key)?.revision
   }
+  isCurrent(key: string, revision: string): boolean {
+    const entry = this.work.get(key)
+    return !this.closed && !!entry?.running && !entry.dirty && entry.revision === revision
+  }
   enqueue(key: string, revision: string, run: (queueWaitMs: number) => Promise<void>): boolean {
     if (this.failure) throw this.failure
     if (this.closed) return false
