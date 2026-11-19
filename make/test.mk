@@ -544,7 +544,7 @@ test\:unit\:ffi:
 # Go bridge unit tests for the embedded gvproxy library.
 test\:unit\:gvproxy:
 	@echo "🧪 Running gvproxy bridge unit tests..."
-	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && bash with-patched-deps.sh test ./... $(GOTEST_FILTER)
 
 # OpenAPI reference-server unit tests: the error class the server answers with
 # must be one openapi/box.openapi.yaml declares, and must match the triple

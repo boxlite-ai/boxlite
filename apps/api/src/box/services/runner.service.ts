@@ -312,7 +312,24 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    const eligible = params.requiresProtectedProxyBootstrap
+      ? (
+          await Promise.all(
+            runners.map(async (runner) => ((await this.canBootstrapProtectedBox(runner)) ? runner : undefined)),
+          )
+        ).filter((runner): runner is Runner => runner !== undefined)
+      : runners
+    return eligible.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+  }
+
+  private async canBootstrapProtectedBox(runner: Runner): Promise<boolean> {
+    if (runner.apiVersion !== '0') return false
+    try {
+      const adapter = await this.runnerAdapterFactory.create(runner)
+      return (await adapter.supportsProtectedBootstrap?.()) === true
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -1033,6 +1050,7 @@ export class GetRunnerParams {
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
   requiresPrivileged?: boolean
+  requiresProtectedProxyBootstrap?: boolean
 }
 
 interface AvailabilityScoreParams {

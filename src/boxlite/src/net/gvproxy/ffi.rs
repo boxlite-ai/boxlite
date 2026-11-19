@@ -7,9 +7,10 @@ use std::ffi::{CStr, CString};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::config::GvproxyConfig;
+use super::{ManagedProxyRoute, config::GvproxyConfig};
 use libgvproxy_sys::{
-    gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
+    gvproxy_create, gvproxy_create_managed, gvproxy_destroy, gvproxy_free_string,
+    gvproxy_get_stats, gvproxy_get_version,
 };
 
 /// Create a new gvproxy instance with full configuration
@@ -23,6 +24,22 @@ pub fn create_instance(
     config: &GvproxyConfig,
     revision: Option<&crate::net::OutboundRevision>,
 ) -> BoxliteResult<i64> {
+    create(config, revision, None)
+}
+
+pub(super) fn create_managed_instance(
+    config: &GvproxyConfig,
+    revision: &crate::net::OutboundRevision,
+    route: &ManagedProxyRoute,
+) -> BoxliteResult<i64> {
+    create(config, Some(revision), Some(route))
+}
+
+fn create(
+    config: &GvproxyConfig,
+    revision: Option<&crate::net::OutboundRevision>,
+    route: Option<&ManagedProxyRoute>,
+) -> BoxliteResult<i64> {
     let json = serialize_config(config, revision)?;
 
     let c_json = CString::new(json)
@@ -33,7 +50,17 @@ pub fn create_instance(
     // message (e.g. "listen tcp 0.0.0.0:27380: bind: address already in use"
     // instead of an opaque "gvproxy_create failed").
     let mut err_ptr: *mut std::os::raw::c_char = std::ptr::null_mut();
-    let id = unsafe { gvproxy_create(c_json.as_ptr(), &mut err_ptr) };
+    let id = if let Some(route) = route {
+        let route_json = serde_json::to_vec(route)
+            .ok()
+            .and_then(|bytes| CString::new(bytes).ok())
+            .ok_or_else(|| BoxliteError::Network("Invalid managed proxy route".into()))?;
+        // SAFETY: Both strings live through the synchronous FFI call, which copies them.
+        unsafe { gvproxy_create_managed(c_json.as_ptr(), route_json.as_ptr(), &mut err_ptr) }
+    } else {
+        // SAFETY: c_json lives through the synchronous FFI call, which copies it.
+        unsafe { gvproxy_create(c_json.as_ptr(), &mut err_ptr) }
+    };
 
     if id < 0 {
         let detail = if err_ptr.is_null() {
@@ -47,10 +74,11 @@ pub fn create_instance(
             unsafe { gvproxy_free_string(err_ptr) };
             s
         };
-        return Err(BoxliteError::Network(format!(
-            "gvproxy_create failed: {}",
-            detail
-        )));
+        return Err(BoxliteError::Network(if route.is_some() {
+            "Managed gvproxy startup failed".into()
+        } else {
+            format!("gvproxy_create failed: {detail}")
+        }));
     }
 
     tracing::info!(id, "Created gvproxy instance via FFI");

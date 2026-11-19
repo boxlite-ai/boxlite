@@ -15,6 +15,8 @@ import { UserModule } from '../user/user.module'
 import { RunnerService } from './services/runner.service'
 import { Runner } from './entities/runner.entity'
 import { RunnerController } from './controllers/runner.controller'
+import { ProtectedBootstrapController } from './controllers/protected-bootstrap.controller'
+import { ProtectedBootstrapService } from './services/protected-bootstrap.service'
 import { BoxManager } from './managers/box.manager'
 import { BoxMigrationManager } from './managers/box-migration.manager'
 import { RedisLockProvider } from './common/redis-lock.provider'
@@ -111,6 +113,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
   controllers: [
     BoxController,
     RunnerController,
+    ProtectedBootstrapController,
     PreviewController,
     VolumeController,
     JobController,
@@ -126,6 +129,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxManager,
     BoxWarmPoolService,
     RunnerService,
+    ProtectedBootstrapService,
     BoxLookupCacheInvalidationService,
     RedisLockProvider,
     VolumeService,

@@ -26,6 +26,8 @@ pub mod krun;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub mod native;
 pub mod registry;
+#[doc(hidden)]
+pub mod shim_launch;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
 use crate::jailer::SecurityOptions;

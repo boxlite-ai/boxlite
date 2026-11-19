@@ -16,7 +16,7 @@
   "binding_cases": [
     {"id": "create-omitted-is-unbound", "operation": "create", "input": {"mode": "enabled"}, "expected": "unbound"},
     {"id": "create-null-is-unbound", "operation": "create", "input": {"mode": "enabled", "proxy": null}, "expected": "unbound"},
-    {"id": "eligible-create-binds-fresh-box", "operation": "create", "input": {"mode": "enabled", "proxy": "build-egress"}, "runner": "enrolled_https_v0", "expected": {"route": "build-egress", "claim_warm_box": false}},
+    {"id": "eligible-create-binds-fresh-box", "operation": "create", "input": {"mode": "enabled", "proxy": "build-egress"}, "runner": "https_v0_with_bootstrap", "expected": {"route": "build-egress", "claim_warm_box": false}},
     {"id": "unknown-registration", "operation": "create", "input": {"mode": "enabled", "proxy": "missing"}, "expected": {"http_status": 404, "dispatch": false}},
     {"id": "cross-organization-registration", "operation": "create", "input": {"mode": "enabled", "proxy": "other-organization"}, "expected": {"http_status": 404, "dispatch": false}},
     {"id": "reject-omission-on-bound-replacement", "operation": "replace", "current_proxy": "build-egress", "input": {"mode": "disabled"}, "expected": {"outcome": "incomplete_replacement", "mutation": false}},
@@ -55,6 +55,9 @@
     {"id": "proxy-outage-blocks-business-dns", "failure": "proxy_unreachable", "lookups": ["guest_udp_dns", "guest_tcp_dns", "host_business_dns"], "expected": {"lookup_budget_ms": 5000, "host_business_queries": 0, "outcome": "failed"}},
     {"id": "doh-outage-blocks-business-dns", "failure": "doh_unreachable", "lookups": ["guest_udp_dns", "guest_tcp_dns", "host_business_dns"], "expected": {"lookup_budget_ms": 5000, "host_business_queries": 0, "outcome": "failed"}},
     {"id": "block-existing-udp-before-bind-ack", "phase": "binding", "external_udp_endpoint": "open", "expected": {"external_relay": false, "deliver_late_reply": false, "endpoint": "closed_before_ack"}},
+    {"id": "udp-written-before-bind-ack-can-be-read-later", "reply": "complete_frame_written_to_guest_link_before_ack", "expected": {"guest_read_after_ack": "allowed", "old_link_write_after_ack": false}},
+    {"id": "partial-udp-stream-frame-blocks-confirmation", "reply": "partial_frame_written_to_guest_link", "expected": {"application": "uncertain", "confirm_on_broken_link": false}},
+    {"id": "shutdown-interrupts-blocked-guest-link-write", "reply": "blocked_guest_link_write", "expected": {"guest_link_closed_before_join": true, "wait_for_peer_read": false}},
     {"id": "bound-udp-preserves-gateway-services", "phase": "bound", "expected": {"external_udp": "blocked", "external_quic": "blocked", "gateway_dns": "available", "dhcp": "available"}},
     {"id": "unbind-permits-new-udp-only", "phase": "unbound", "expected": {"new_udp": "allowed_by_policy", "old_closed_endpoint": "closed"}}
   ],

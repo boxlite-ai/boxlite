@@ -4,43 +4,21 @@ use std::path::Path;
 use std::process::Command;
 
 /// Builds libgvproxy from Go sources as a C static archive.
-///
-/// Steps:
-/// 1. Downloads Go module dependencies
-/// 2. Compiles Go code as a C archive (static library)
 fn build_gvproxy(source_dir: &Path, output_path: &Path) {
     println!("cargo:warning=Building libgvproxy from Go sources...");
 
-    // Download Go dependencies
-    let download_status = Command::new("go")
-        .args(["mod", "download"])
+    let build_status = Command::new("bash")
+        .args([
+            "with-patched-deps.sh",
+            "build",
+            "-buildmode=c-archive",
+            "-o",
+        ])
+        .arg(output_path)
+        .arg(".")
         .current_dir(source_dir)
         .status()
-        .expect("Failed to run 'go mod download' - ensure Go is installed");
-
-    if !download_status.success() {
-        panic!("Failed to download Go module dependencies");
-    }
-
-    // Build as C archive (static library)
-    let mut build_cmd = Command::new("go");
-    build_cmd.args(["build", "-buildmode=c-archive"]);
-
-    // Use vendor directory if present
-    if source_dir.join("vendor").exists() {
-        build_cmd.args(["-mod=vendor"]);
-    }
-
-    build_cmd.args([
-        "-o",
-        output_path.to_str().expect("Invalid output path"),
-        ".",
-    ]);
-
-    let build_status = build_cmd
-        .current_dir(source_dir)
-        .status()
-        .expect("Failed to run 'go build' - ensure Go is installed");
+        .expect("Failed to start the gvproxy build script");
 
     if !build_status.success() {
         panic!("Failed to build libgvproxy");
@@ -50,9 +28,9 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
 }
 
 fn main() {
-    // Rebuild when any Go source file changes.
+    // Rebuild when Go sources, module files, or embedded address tables change.
     // cargo:rerun-if-changed on a directory only detects file additions/removals,
-    // not content changes. Walk the directory and watch each .go file individually.
+    // not content changes. Watch the bridge inputs individually.
     let bridge_dir = Path::new("gvproxy-bridge");
     if bridge_dir.is_dir() {
         for entry in fs::read_dir(bridge_dir).expect("Failed to read gvproxy-bridge directory") {
@@ -60,13 +38,15 @@ fn main() {
             let path = entry.path();
             if path
                 .extension()
-                .is_some_and(|ext| ext == "go" || ext == "mod" || ext == "sum")
+                .is_some_and(|ext| ext == "go" || ext == "mod" || ext == "sum" || ext == "csv")
             {
                 println!("cargo:rerun-if-changed={}", path.display());
             }
         }
     }
     println!("cargo:rerun-if-changed=gvproxy-bridge"); // also watch for new files
+    println!("cargo:rerun-if-changed=gvproxy-bridge/with-patched-deps.sh");
+    println!("cargo:rerun-if-changed=gvproxy-bridge/patches");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
     // Auto-detect crates.io download: Cargo injects .cargo_vcs_info.json into

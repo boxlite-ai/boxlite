@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
+import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not, Raw } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
@@ -35,6 +35,17 @@ import { OutboundControl } from '../runner-adapter/outbound-control'
 import { OutboundPolicyCoordinator, OutboundPrecondition } from '../services/outbound-policy.coordinator'
 import { OutboundPolicyStore, persistedOutbound } from '../stores/outbound-policy.store'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+
+function ordinaryLifecycleCondition(update: Partial<Box>): FindOptionsWhere<Box> {
+  if (update.state === BoxState.STARTED) {
+    // The generation remains after retirement, fencing an observation that began before the intent.
+    return { outboundControl: Raw((column) => `(${column}->>'bootstrapGeneration') IS NULL`) }
+  }
+  if (update.state !== undefined || update.runnerId !== undefined) {
+    return { outboundControl: Raw((column) => `(${column}->>'bootstrap') IS NULL`) }
+  }
+  return {}
+}
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -81,6 +92,7 @@ type ParkedBox = { id: string; updatedAt: Date }
 // The fields of a Box before a write that decide its organization's activity.
 type OrganizationActivitySource = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'createdAt'>
 type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
+type BoxBeforeUpdate = OrganizationActivitySource & Pick<Box, 'name' | 'authToken' | 'inboundEnabled'>
 
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
@@ -236,7 +248,7 @@ export class BoxRepository extends BaseRepository<Box> {
     const { updateData, entity, maxCreatedBoxes } = params
 
     if (raw) {
-      await this.repository.update(id, updateData)
+      await this.repository.update({ id, ...ordinaryLifecycleCondition(updateData) }, updateData)
       return
     }
 
@@ -255,6 +267,7 @@ export class BoxRepository extends BaseRepository<Box> {
       const result = await entityManager.update(
         Box,
         {
+          ...ordinaryLifecycleCondition(updateData),
           id: previousBox.id,
           state: previousBox.state,
           desiredState: previousBox.desiredState,
@@ -273,9 +286,7 @@ export class BoxRepository extends BaseRepository<Box> {
       }
     })
 
-    this.emitUpdateEvents(box, previousBox)
-    this.invalidateLookupCacheOnUpdate(box, previousBox)
-    await this.recordOrganizationActivity(box, previousBox)
+    await this.publishCommittedUpdate(box, previousBox)
 
     return box
   }
@@ -436,6 +447,7 @@ export class BoxRepository extends BaseRepository<Box> {
       }
       const whereClause = {
         ...whereCondition,
+        ...ordinaryLifecycleCondition(updateData),
         id,
       }
 
@@ -648,8 +660,14 @@ export class BoxRepository extends BaseRepository<Box> {
   /**
    * Upserts the last activity for a box.
    */
-  private async upsertLastActivity(entityManager: EntityManager, boxId: string, lastActivityAt: Date): Promise<void> {
+  async upsertLastActivity(entityManager: EntityManager, boxId: string, lastActivityAt: Date): Promise<void> {
     await entityManager.upsert(BoxLastActivity, { boxId, lastActivityAt }, ['boxId'])
+  }
+
+  async publishCommittedUpdate(box: Box, previous: BoxBeforeUpdate): Promise<void> {
+    this.emitUpdateEvents(box, previous)
+    this.invalidateLookupCacheOnUpdate(box, previous)
+    await this.recordOrganizationActivity(box, previous)
   }
 
   /**

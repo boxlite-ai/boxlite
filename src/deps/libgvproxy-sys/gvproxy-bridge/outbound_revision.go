@@ -117,13 +117,18 @@ func (p *outboundPolicyController) serveStatus(w http.ResponseWriter, r *http.Re
 		return
 	}
 	snapshot := p.active.Load()
+	var binding *managedProxyBinding
+	if snapshot.proxyDNS != nil {
+		binding = snapshot.proxyDNS.binding
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		Policy       outboundPolicy `json:"policy"`
-		Revision     string         `json:"revision"`
-		State        string         `json:"application_state"`
-		Capabilities []string       `json:"capabilities"`
-	}{snapshot.policy, snapshot.revision, snapshot.state, []string{"revision-v1"}})
+		Policy       outboundPolicy       `json:"policy"`
+		Revision     string               `json:"revision"`
+		State        string               `json:"application_state"`
+		Capabilities []string             `json:"capabilities"`
+		Binding      *managedProxyBinding `json:"binding,omitempty"`
+	}{snapshot.policy, snapshot.revision, snapshot.state, []string{"revision-v1"}, binding})
 }
 
 func outboundETag(revision string) string { return strconv.Quote(revision) }

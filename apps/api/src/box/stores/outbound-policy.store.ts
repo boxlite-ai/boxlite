@@ -1,8 +1,10 @@
-import { NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import { ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { DataSource, EntityManager } from 'typeorm'
 import { Box } from '../entities/box.entity'
-import { OutboundControlRecord } from '../entities/outbound-control-record'
+import { OutboundControlRecord, ProtectedBootstrapIntent } from '../entities/outbound-control-record'
+import { BoxState } from '../enums/box-state.enum'
 import { OutboundSnapshot, validOutboundRevision, validOutboundSnapshot } from '../runner-adapter/outbound-control'
+import type { ProtectedBootReceipt } from '../runner-adapter/protected-runner'
 
 /** COMMIT may have succeeded; callers must inspect a new primary transaction before recovery. */
 export class OutboundCommitUnknown extends Error {
@@ -43,7 +45,13 @@ export function persistedOutbound(box: Box): OutboundSnapshot {
 
 export type LockedOutboundBox = {
   box: Box
+  manager: EntityManager
   write(control: OutboundControlRecord, confirmed?: OutboundSnapshot): Promise<void>
+  writeBootstrap(
+    intent: ProtectedBootstrapIntent | undefined,
+    state?: BoxState,
+    retirement?: ProtectedBootReceipt,
+  ): Promise<void>
 }
 
 /** All callbacks use a primary connection; a failed transaction is released before another operation starts. */
@@ -61,7 +69,7 @@ export class OutboundPolicyStore {
 
   async locked<T>(
     id: string,
-    organizationId: string,
+    organizationId: string | undefined,
     operation: (locked: LockedOutboundBox) => Promise<T>,
   ): Promise<T> {
     const runner = this.dataSource.createQueryRunner('master')
@@ -71,9 +79,16 @@ export class OutboundPolicyStore {
       await runner.startTransaction()
       await runner.query("SET LOCAL lock_timeout = '5s'")
       const box = await this.find(runner.manager, id, organizationId, true)
+      const criteria = { id, organizationId: box.organizationId }
       const result = await operation({
         box,
+        manager: runner.manager,
         write: async (control, confirmed) => {
+          const current = outboundRecord(box)
+          if (current.bootstrap) {
+            throw new ConflictException('Ordinary outbound policy is fenced by protected bootstrap')
+          }
+          control = { ...current, revision: control.revision, pending: control.pending }
           outboundRecord({ outboundControl: control } as Box)
           if (
             confirmed &&
@@ -90,9 +105,32 @@ export class OutboundPolicyStore {
                 }
               : {}),
           }
-          const result = await runner.manager.update(Box, { id, organizationId }, update)
+          const result = await runner.manager.update(Box, criteria, update)
           if (result.affected !== 1) throw new NotFoundException('Box not found')
           Object.assign(box, update)
+        },
+        writeBootstrap: async (bootstrap, state, retirement) => {
+          const current = outboundRecord(box)
+          if (current.pending) throw new ConflictException('Outbound policy is still pending')
+          const update = {
+            outboundControl: {
+              ...current,
+              bootstrap,
+              bootstrapGeneration: bootstrap?.key.attempt_id ?? current.bootstrapGeneration,
+              bootstrapRetirement: retirement ?? current.bootstrapRetirement,
+            },
+            ...(state === undefined
+              ? {}
+              : {
+                  state,
+                  pending: String(state) !== String(box.desiredState),
+                  ...(state === BoxState.STARTED ? { errorReason: null } : {}),
+                }),
+          }
+          const result = await runner.manager.update(Box, criteria, update)
+          if (result.affected !== 1) throw new NotFoundException('Box not found')
+          Object.assign(box, update)
+          if (state !== undefined) box.updatedAt = new Date()
         },
       })
       committing = true
@@ -108,11 +146,14 @@ export class OutboundPolicyStore {
     }
   }
 
-  private async find(manager: EntityManager, id: string, organizationId: string, lock: boolean): Promise<Box> {
-    const query = manager
-      .createQueryBuilder(Box, 'box')
-      .addSelect('box.outboundControl')
-      .where('box.id = :id AND box.organizationId = :organizationId', { id, organizationId })
+  private async find(
+    manager: EntityManager,
+    id: string,
+    organizationId: string | undefined,
+    lock: boolean,
+  ): Promise<Box> {
+    const query = manager.createQueryBuilder(Box, 'box').addSelect('box.outboundControl').where('box.id = :id', { id })
+    if (organizationId !== undefined) query.andWhere('box.organizationId = :organizationId', { organizationId })
     if (lock) query.setLock('pessimistic_write')
     const box = await query.getOne()
     if (!box) throw new NotFoundException('Box not found')

@@ -4,8 +4,8 @@ package main
 //
 // A hostname rule authorizes a NAME, never an address the guest chose. Once
 // SNI/Host inspection (forked_tcp.go) has matched the name, the gateway
-// resolves it itself through the host resolver and dials what it gets; the
-// guest's destination IP cannot select the upstream socket. The hostname is
+// resolves it through the captured outbound route and dials an approved
+// result. The guest's destination IP cannot select the upstream socket. The hostname is
 // the authorization input: a guest that edits /etc/hosts or hard-codes an
 // attacker's address while presenting an allowed SNI still lands on the real
 // host, and a destination whose address changes after the box started is
@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -149,11 +150,9 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 	}
 	var lastErr error
 	for i, ip := range ips {
-		// The one stop condition, as net.dialSerial checks before each
-		// address: the caller is gone, or the budget is spent — the derived
-		// context reports both. Without it a canceled MITM request walks the
-		// whole candidate list, every attempt failing on a context already
-		// done.
+		if errors.Is(lastErr, errProxyCandidate) && proxySetupError(ctx, nil) != nil {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			if lastErr == nil {
 				lastErr = err
@@ -169,6 +168,13 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 			return conn, nil
 		}
 		lastErr = err
+		var failure proxyFailure
+		if !errors.Is(err, errProxyCandidate) && errors.As(err, &failure) {
+			break
+		}
+	}
+	if errors.Is(lastErr, errProxyCandidate) {
+		lastErr = proxySetupError(ctx, lastErr)
 	}
 	return nil, fmt.Errorf("dial %s:%d: %w", target.Hostname, target.Port, lastErr)
 }

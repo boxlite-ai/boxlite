@@ -122,6 +122,13 @@ func (r Restorer) Restore(ctx context.Context, request RestoreRequest, attemptID
 }
 
 func (r Restorer) restore(ctx context.Context, lease *TargetLease, request RestoreRequest, attemptID string) (_ RestoreResult, err error) {
+	allocation, err := lease.ProtectedAllocation()
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if allocation != nil {
+		return RestoreResult{}, fmt.Errorf("checkpoint target is owned by a protected allocation")
+	}
 	record, err := lease.read()
 	if err != nil {
 		return RestoreResult{}, err

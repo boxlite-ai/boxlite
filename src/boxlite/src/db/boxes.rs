@@ -16,6 +16,7 @@ use std::sync::{
 
 use crate::litebox::box_impl::outbound::OutboundControl;
 use crate::litebox::config::BoxConfig;
+use crate::litebox::protected_boot::ProtectedBootState;
 use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -151,7 +152,8 @@ impl BoxStore {
         let rows_affected = db_err!(conn.execute(
             "UPDATE box_state SET status = ?1, pid = ?2, \
              json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
-             '$.outbound_control', json_extract(json, '$.outbound_control')) \
+             '$.outbound_control', json_extract(json, '$.outbound_control'), \
+             '$.protected_boot', json_extract(json, '$.protected_boot')) \
              WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
@@ -252,6 +254,39 @@ impl BoxStore {
              CASE WHEN ?1 IS NULL THEN json ELSE json_set(json, '$.outbound_policy', json(?1)) END, \
              '$.outbound_control', json(?2)) WHERE id = ?3",
             params![policy, control, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn protected_boot(&self, box_id: &str) -> BoxliteResult<Option<ProtectedBootState>> {
+        let body: Option<String> =
+            db_err!(self.db.conn().query_row(
+            "SELECT json_extract(json, '$.protected_boot') FROM box_state WHERE id = ?1",
+            params![box_id], |row| row.get(0),
+        ).optional())?
+            .ok_or_else(|| BoxliteError::NotFound(box_id.into()))?;
+        body.map(|body| {
+            serde_json::from_str(&body)
+                .map_err(|_| BoxliteError::Database("Invalid protected bootstrap state".into()))
+        })
+        .transpose()
+    }
+
+    pub(crate) fn save_protected_boot(
+        &self,
+        box_id: &str,
+        boot: &ProtectedBootState,
+    ) -> BoxliteResult<()> {
+        let record = serde_json::to_string(boot).map_err(|_| {
+            BoxliteError::Database("Failed to encode protected bootstrap state".into())
+        })?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(json, '$.protected_boot', json(?1), \
+             '$.outbound_policy', json('{\"mode\":\"disabled\"}')) WHERE id = ?2",
+            params![record, box_id],
         ))?;
         if changed == 0 {
             return Err(BoxliteError::NotFound(box_id.into()));

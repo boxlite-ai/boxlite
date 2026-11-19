@@ -146,6 +146,33 @@ pub unsafe extern "C" fn boxlite_options_set_name(opts: *mut CBoxliteOptions, na
     options_set_name(opts, name)
 }
 
+/// Internal Runner ABI. Persist the exact attempt with the configured Box.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_runner_allocation(
+    opts: *mut CBoxliteOptions,
+    attempt_id: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let result = (|| {
+        let handle = unsafe { opts.as_mut() }.ok_or_else(|| null_pointer_error("options"))?;
+        let attempt = unsafe { c_str_to_string(attempt_id) }?;
+        handle
+            .options
+            .advanced
+            .set_runner_allocation(boxlite::net::OutboundRevision::parse(attempt)?);
+        handle.checkpoint_override = true;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let code = crate::error::error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_cpus(opts: *mut CBoxliteOptions, cpus: f64) {
     unsafe { mark_checkpoint_override(opts) };

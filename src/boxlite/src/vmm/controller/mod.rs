@@ -23,6 +23,7 @@ use crate::vmm::InstanceSpec;
 use boxlite_shared::BoxliteResult;
 pub use handler::VmmHandler;
 pub use shim::{ShimController, ShimHandler};
+pub(crate) use spawn::ProtectedSpawnEvent;
 
 /// Raw metrics collected from Box processes.
 #[derive(Clone, Debug, Default)]

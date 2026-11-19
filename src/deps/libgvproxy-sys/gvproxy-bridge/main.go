@@ -23,6 +23,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -167,7 +168,7 @@ type DNSRecord struct {
 
 // DNSZone represents a local DNS zone configuration
 // These are local DNS records served by the gateway's embedded DNS server.
-// Queries not matching any zone are forwarded to the host's system DNS.
+// Queries outside the local zones use the active route's resolver.
 type DNSZone struct {
 	Name      string      `json:"name"`              // Zone name (e.g., "myapp.local.", "." for root)
 	Records   []DNSRecord `json:"records,omitempty"` // Exact A records within the zone
@@ -211,6 +212,7 @@ type GvproxyInstance struct {
 	SocketPath    string
 	Config        *types.Configuration
 	Cancel        context.CancelFunc
+	managedDone   <-chan struct{}                // Closed when managed shutdown has joined its work
 	conn          net.Conn                       // For macOS UnixDgram (VFKit)
 	listener      net.Listener                   // For Linux UnixStream (Qemu)
 	vn            *virtualnetwork.VirtualNetwork // Virtual network for stats collection
@@ -302,29 +304,60 @@ var (
 //
 //export gvproxy_create
 func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
-	// setErr surfaces the underlying startup error back to the FFI caller so
-	// the Rust runtime can include it in the user-visible BoxliteError instead
-	// of reporting only an opaque "gvproxy_create failed".
-	setErr := func(err error) {
+	return createGvproxyFFI(configJSON, nil, errOut)
+}
+
+type managedNetworkStartup struct {
+	route *managedRouteConfig
+}
+
+//export gvproxy_create_managed
+func gvproxy_create_managed(configJSON, routeJSON *C.char, errOut **C.char) C.longlong {
+	managed := &managedNetworkStartup{}
+	if routeJSON != nil {
+		decoder := json.NewDecoder(strings.NewReader(C.GoString(routeJSON)))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&managed.route) != nil || decoder.Decode(new(any)) != io.EOF {
+			if errOut != nil {
+				*errOut = C.CString("invalid managed proxy startup route")
+			}
+			return -1
+		}
+	}
+	return createGvproxyFFI(configJSON, managed, errOut)
+}
+
+func createGvproxyFFI(configJSON *C.char, managed *managedNetworkStartup, errOut **C.char) C.longlong {
+	var config GvproxyConfig
+	err := json.Unmarshal([]byte(C.GoString(configJSON)), &config)
+	var id int64
+	if err == nil {
+		id, err = startGvproxy(config, managed)
+	}
+	if err != nil {
 		if errOut != nil {
 			*errOut = C.CString(err.Error())
 		}
-	}
-
-	goJSON := C.GoString(configJSON)
-
-	var config GvproxyConfig
-	if err := json.Unmarshal([]byte(goJSON), &config); err != nil {
-		logrus.WithError(err).Error("Failed to parse gvproxy config")
-		setErr(err)
 		return -1
 	}
+	return C.longlong(id)
+}
 
+func startGvproxy(config GvproxyConfig, managed *managedNetworkStartup) (int64, error) {
+	protocol := types.QemuProtocol
+	if runtime.GOOS == "darwin" {
+		protocol = types.VfkitProtocol
+	}
+	return startGvproxyOnTransport(config, managed, protocol, nil)
+}
+
+// prepareGuestSocket lets the socket lifecycle tests hold a real writer at
+// the final handoff while exercising the same owner on both host platforms.
+func startGvproxyOnTransport(config GvproxyConfig, managed *managedNetworkStartup, protocol types.Protocol, prepareGuestSocket func(net.Conn) net.Conn) (int64, error) {
 	// Reject a bad rate limit outright rather than letting part of it apply.
 	if err := config.RateLimit.Validate(); err != nil {
 		logrus.WithError(err).Error("Invalid gvproxy rate limit config")
-		setErr(err)
-		return -1
+		return -1, err
 	}
 
 	instancesMu.Lock()
@@ -335,22 +368,12 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// Use caller-provided socket path (unique per box)
 	socketPath := config.SocketPath
 	if socketPath == "" {
-		logrus.Error("socket_path is required in GvproxyConfig")
-		setErr(fmt.Errorf("socket_path is required in GvproxyConfig"))
-		return -1
+		return -1, fmt.Errorf("socket_path is required in GvproxyConfig")
 	}
 
 	// Remove stale socket from a previous crash (safe: path is unique per box)
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Warn("Failed to remove existing socket")
-	}
-
-	// Platform-specific protocol selection
-	var protocol types.Protocol
-	if runtime.GOOS == "darwin" {
-		protocol = types.VfkitProtocol
-	} else {
-		protocol = types.QemuProtocol
 	}
 
 	// Create gvisor-tap-vsock configuration from provided config
@@ -367,14 +390,13 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	var listener net.Listener
 	var err error
 
-	if runtime.GOOS == "darwin" {
+	if protocol == types.VfkitProtocol {
 		// macOS: Use UnixDgram with VFKit protocol (SOCK_DGRAM)
 		socketURI := fmt.Sprintf("unixgram://%s", socketPath)
 		conn, err = transport.ListenUnixgram(socketURI)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Error("Failed to create Unix datagram socket")
-			setErr(fmt.Errorf("failed to create Unix datagram socket %q: %w", socketPath, err))
-			return -1
+			return -1, fmt.Errorf("failed to create Unix datagram socket %q: %w", socketPath, err)
 		}
 		logrus.WithField("path", socketPath).Info("Created UnixDgram socket for VFKit protocol")
 	} else {
@@ -382,14 +404,27 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		listener, err = net.Listen("unix", socketPath)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Error("Failed to create Unix stream socket")
-			setErr(fmt.Errorf("failed to create Unix stream socket %q: %w", socketPath, err))
-			return -1
+			return -1, fmt.Errorf("failed to create Unix stream socket %q: %w", socketPath, err)
 		}
 		logrus.WithField("path", socketPath).Info("Created UnixStream socket for Qemu protocol")
 	}
 
 	// Start gvisor-tap-vsock in background
 	ctx, cancel := context.WithCancel(context.Background())
+	closeGuestSocket := func() {
+		if conn != nil {
+			_ = conn.Close()
+		} else if listener != nil {
+			_ = listener.Close()
+		}
+		_ = os.Remove(socketPath)
+	}
+	wrapLink := func(raw net.Conn, prefix int) net.Conn {
+		if prepareGuestSocket != nil {
+			raw = prepareGuestSocket(raw)
+		}
+		return wrapGuestConn(raw, prefix, config.RateLimit, managed != nil)
+	}
 
 	instance := &GvproxyInstance{
 		ID:         id,
@@ -405,9 +440,9 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		ca, err := NewBoxCAFromPEM([]byte(config.CACertPEM), []byte(config.CAKeyPEM))
 		if err != nil {
 			logrus.WithError(err).Error("MITM: failed to parse CA from config")
-			setErr(fmt.Errorf("MITM: failed to parse CA from config: %w", err))
 			cancel()
-			return -1
+			closeGuestSocket()
+			return -1, fmt.Errorf("MITM: failed to parse CA from config: %w", err)
 		}
 		instance.ca = ca
 		instance.secretMatcher = NewSecretHostMatcher(config.Secrets)
@@ -422,6 +457,10 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// optional ServicesMux control socket are ready, and surfaces startup
 	// failures to the FFI caller.
 	initErr := make(chan error, 1)
+	stopped := make(chan struct{})
+	if managed != nil {
+		instance.managedDone = stopped
+	}
 
 	// Start runtime metrics monitoring goroutine
 	go func() {
@@ -451,6 +490,48 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 
 	// Start virtual network in goroutine
 	go func() {
+		defer close(stopped)
+		var vn *virtualnetwork.VirtualNetwork
+		var policy *outboundPolicyController
+		var gateway *gatewayDNS
+		var controlListener net.Listener
+		var controlServer *http.Server
+		var guestDone chan struct{}
+		defer func() {
+			if gateway != nil {
+				policy.stopManagedNetwork()
+			}
+			if controlListener != nil {
+				// Interrupt partial bodies before joining admitted PUT handlers.
+				_ = controlServer.Close()
+				_ = controlListener.Close()
+				_ = os.Remove(config.ControlSocketPath)
+			}
+			closeGuestSocket()
+			if gateway != nil {
+				if guestDone != nil {
+					<-guestDone
+				}
+				policy.waitManagedNetwork(gateway)
+			}
+			if managed != nil && vn != nil {
+				if networkStack, err := stackOf(vn); err == nil {
+					networkStack.Close()
+					networkStack.Wait()
+				}
+			}
+		}()
+		var work *dnsLookupWork
+		var route *proxyDNSResolver
+		if managed != nil {
+			work = newDNSLookupWork(ctx)
+			var routeErr error
+			route, routeErr = managed.route.resolver(config.Subnet, work)
+			if routeErr != nil {
+				initErr <- routeErr
+				return
+			}
+		}
 		vn, err := virtualnetwork.New(tapConfig)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to create virtual network")
@@ -462,10 +543,17 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		if config.OutboundDisabled {
 			mode = "disabled"
 		}
-		policy, err := newOutboundPolicyController(vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, config.OutboundRevision)
+		policy, err = newOutboundPolicyController(vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, config.OutboundRevision)
 		if err != nil {
 			initErr <- fmt.Errorf("initialize outbound policy: %w", err)
 			return
+		}
+		if managed != nil {
+			gateway, err = policy.installManagedNetwork(ctx, work, route)
+			if err != nil {
+				initErr <- fmt.Errorf("initialize managed network: %w", err)
+				return
+			}
 		}
 
 		// Store VirtualNetwork reference for stats collection
@@ -478,7 +566,6 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		// forwarding / DNS / leases on the running box.
 		// ServicesMux (not Mux) excludes the raw L2 /connect, so the VM's NIC
 		// can never be attached through this socket.
-		var controlListener net.Listener
 		if config.ControlSocketPath != "" {
 			// Remove a stale socket from a previous crash (path is unique per box).
 			if rmErr := os.Remove(config.ControlSocketPath); rmErr != nil && !os.IsNotExist(rmErr) {
@@ -492,41 +579,54 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 			} else {
 				controlListener = l
 				logrus.WithField("path", config.ControlSocketPath).Info("Serving gvproxy ServicesMux")
+				mux := http.NewServeMux()
+				mux.Handle("/", controlMux(vn.ServicesMux(), vn.DialContextTCP))
+				mux.Handle("/network/outbound", policy)
+				mux.Handle(outboundStatusPath, policy)
+				mux.Handle(outboundSnapshotPath, policy)
+				if gateway != nil {
+					mux.Handle("/services/dns/all", gateway)
+					mux.Handle("/services/dns/add", gateway)
+				}
+				controlServer = &http.Server{
+					Handler:           mux,
+					ReadHeaderTimeout: 5 * time.Second,
+					BaseContext:       func(net.Listener) context.Context { return ctx },
+				}
 				go func() {
-					mux := http.NewServeMux()
-					mux.Handle("/", controlMux(vn.ServicesMux(), vn.DialContextTCP))
-					mux.Handle("/network/outbound", policy)
-					mux.Handle(outboundStatusPath, policy)
-					mux.Handle(outboundSnapshotPath, policy)
-					if sErr := http.Serve(l, mux); sErr != nil && ctx.Err() == nil {
+					if sErr := controlServer.Serve(l); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
 				}()
 			}
 		}
 		initErr <- nil
+		guestDone = make(chan struct{})
 
 		// Platform-specific packet handling
-		if runtime.GOOS == "darwin" {
+		if protocol == types.VfkitProtocol {
 			// macOS: Handle VFKit datagram packets
 			// VFKit requires a two-step process:
 			// 1. transport.AcceptVfkit() - Waits for incoming data and wraps listener with remote address
 			// 2. vn.AcceptVfkit() - Handles the VFKit protocol
 			go func() {
+				defer close(guestDone)
 				logrus.WithField("id", id).Trace("Waiting for VFKit connection on UnixDgram socket")
 
 				// Wait for incoming connection and get wrapped connection with remote address
 				// AcceptVfkit peeks at the first packet to get the remote address
 				wrappedConn, err := transport.AcceptVfkit(conn.(*net.UnixConn))
 				if err != nil {
-					logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to accept VFKit connection")
+					if ctx.Err() == nil {
+						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to accept VFKit connection")
+					}
 					return
 				}
 
 				logrus.WithFields(logrus.Fields{"id": id, "remote": wrappedConn.RemoteAddr().String()}).Info("VFKit connection accepted")
 
 				// Handle the VFKit protocol with the wrapped connection
-				if err := vn.AcceptVfkit(ctx, wrapConn(wrappedConn, 0, config.RateLimit)); err != nil {
+				if err := serveGuestLink(ctx, wrapLink(wrappedConn, 0), vn.AcceptVfkit); err != nil {
 					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptVfkit error")
 					}
@@ -535,6 +635,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		} else {
 			// Linux: Handle Qemu stream connections
 			go func() {
+				defer close(guestDone)
 				logrus.WithField("id", id).Trace("Waiting for Qemu connection on UnixStream socket")
 
 				// Accept incoming connection (blocks until VM connects)
@@ -552,7 +653,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				listener.Close()
 
 				// Handle the Qemu protocol
-				if err := vn.AcceptQemu(ctx, wrapConn(acceptedConn, 4, config.RateLimit)); err != nil {
+				if err := serveGuestLink(ctx, wrapLink(acceptedConn, 4), vn.AcceptQemu); err != nil {
 					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptQemu error")
 					}
@@ -563,18 +664,6 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		// Wait for context cancellation
 		<-ctx.Done()
 
-		// Cleanup
-		if controlListener != nil {
-			// Closing the listener unblocks the http.Serve goroutine.
-			controlListener.Close()
-			os.Remove(config.ControlSocketPath)
-		}
-		if runtime.GOOS == "darwin" && conn != nil {
-			conn.Close()
-		} else if listener != nil {
-			listener.Close()
-		}
-		os.Remove(socketPath)
 	}()
 
 	// Wait for virtualnetwork.New to complete before returning a valid id.
@@ -583,22 +672,34 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// shipping a broken socket downstream.
 	if err := <-initErr; err != nil {
 		logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("gvproxy init failed; tearing down instance")
-		setErr(err)
 		cancel()
+		<-stopped
 		instancesMu.Lock()
 		delete(instances, id)
 		instancesMu.Unlock()
-		if runtime.GOOS == "darwin" && conn != nil {
-			conn.Close()
-		} else if listener != nil {
-			listener.Close()
-		}
-		os.Remove(socketPath)
-		return -1
+		return -1, err
 	}
 
 	logrus.Info("Created gvproxy instance", "id", id, "socket", socketPath, "protocol", protocol)
-	return C.longlong(id)
+	return id, nil
+}
+
+func wrapGuestConn(conn net.Conn, prefixLen int, config *RateLimitConfig, managed bool) net.Conn {
+	if !managed {
+		return wrapConn(conn, prefixLen, config)
+	}
+	// Managed replies still need the owner check on an unlimited link.
+	if config == nil {
+		config = &RateLimitConfig{}
+	}
+	return newShapedConn(conn, prefixLen, config, nil)
+}
+
+func serveGuestLink(ctx context.Context, conn net.Conn, accept func(context.Context, net.Conn) error) error {
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	defer conn.Close()
+	return accept(ctx, conn)
 }
 
 //export gvproxy_free_string
@@ -608,22 +709,32 @@ func gvproxy_free_string(str *C.char) {
 
 //export gvproxy_destroy
 func gvproxy_destroy(id C.longlong) C.int {
+	if !destroyGvproxy(int64(id)) {
+		return -1
+	}
+	return 0
+}
+
+func destroyGvproxy(id int64) bool {
 	instancesMu.Lock()
-	instance, ok := instances[int64(id)]
+	instance, ok := instances[id]
 	if ok {
-		delete(instances, int64(id))
+		delete(instances, id)
 	}
 	instancesMu.Unlock()
 
 	if !ok {
-		return -1
+		return false
 	}
 
 	// Cancel context to stop goroutines
 	instance.Cancel()
+	if instance.managedDone != nil {
+		<-instance.managedDone
+	}
 
 	logrus.Info("Destroyed gvproxy instance", "id", id)
-	return 0
+	return true
 }
 
 //export gvproxy_get_stats
