@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { Injectable, OnModuleInit, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common'
-import { DEFAULT_RUNNER_LABELS, Listener, VerifiedWebhook } from '@boxlite-ai/ci-listener'
+import { DEFAULT_RUNNER_LABELS, Listener, scaleSetBindings, VerifiedWebhook } from '@boxlite-ai/ci-listener'
 import { TypedConfigService } from '../config/typed-config.service'
 import { CiNativeState } from './ci-native-state'
 import { CiNativeHost } from './ci-native-host'
@@ -38,6 +38,7 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
         labels: DEFAULT_RUNNER_LABELS,
       },
       capacity: this.settings,
+      scaleSets: scaleSetBindings(this.config.get('ci.scaleSetBindings')),
     })
   }
   /** Called by the serving host after HTTP starts listening, never during module initialization. */

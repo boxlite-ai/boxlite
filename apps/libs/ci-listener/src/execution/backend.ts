@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { ActionsScaleSets } from '../scale-set-client'
 import { CredentialSource, ListenerCredentials } from '../credentials'
 import { randomUUID } from 'node:crypto'
 import { JobNotice, WorkflowJob } from '../jobs'
@@ -28,6 +29,10 @@ export class GitHubExecutionBackend implements PoolBackend {
   private readonly journal: ExecutionJournal
   private readonly labels: string[]
   private closed = false
+  readonly scaleSets: ActionsScaleSets
+  private readonly setRegistration: ListenerCredentials
+  private readonly setAuthority: ListenerCredentials
+  private groupRead?: Promise<ReadonlySet<string>>
   constructor(
     private readonly state: ListenerState,
     lease: ExecutionLease,
@@ -56,6 +61,32 @@ export class GitHubExecutionBackend implements PoolBackend {
     )
       throw new Error('Personal token does not belong to the original execution scope')
     this.credentials = new ListenerCredentials(state, this.lease, scopeKey(this.scope), source)
+    this.setRegistration = this.credentials.fork(scopeKey(this.scope) + '/scale-set-registration')
+    this.setAuthority = this.credentials.fork(scopeKey(this.scope) + '/scale-set-authority')
+    const runners = this.scope.runners
+    const route =
+      runners.kind === 'organization'
+        ? '/orgs/' + runners.account.login
+        : '/repos/' + runners.repository.owner.login + '/' + runners.repository.name
+    const configUrl = 'https://github.com/' + route.slice(route.indexOf('/', 1) + 1)
+    this.scaleSets = new ActionsScaleSets(configUrl, async (signal) => {
+      const purpose =
+        runners.kind === 'organization'
+          ? { kind: 'organization-runners' as const }
+          : { kind: 'repository-runners' as const, repository: runners.repository.id }
+      const borrow = await this.setRegistration.open(purpose, signal)
+      try {
+        const result = await borrow.credential.request(route + '/actions/runners/registration-token', {
+          method: 'POST',
+          signal,
+        })
+        if (!result || typeof result !== 'object' || !('token' in result) || typeof result.token !== 'string')
+          throw new Error('Invalid runner registration token')
+        return result.token
+      } finally {
+        await borrow.close()
+      }
+    })
     this.workers = {
       create: async (launch) => {
         const originalLaunch = { ...launch, entrypoint: [...launch.entrypoint] }
@@ -114,10 +145,17 @@ export class GitHubExecutionBackend implements PoolBackend {
     }
   }
   private async repositoryPolicy(name: string, signal?: AbortSignal): Promise<void> {
+    const allocation =
+      this.scope.runners.kind === 'organization'
+        ? await this.journal.allocation(this.lease, 'worker/' + name.slice(7))
+        : undefined
+    if (allocation?.value.supply?.scaleSet) {
+      if (allocation.value.scope !== scopeKey(this.scope)) throw new Error('Original scale set required')
+      await this.scaleSetAuthority(signal)
+      return
+    }
     const repository =
-      this.scope.runners.kind === 'repository'
-        ? this.scope.runners.repository.id
-        : (await this.journal.allocation(this.lease, 'worker/' + name.slice(7)))?.value.job.repository
+      this.scope.runners.kind === 'repository' ? this.scope.runners.repository.id : allocation?.value.job?.repository
     if (repository === undefined) throw new Error('Original worker repository required')
     await readRepositoryJobs(
       this.scope,
@@ -127,6 +165,29 @@ export class GitHubExecutionBackend implements PoolBackend {
       async () => undefined,
       signal,
     )
+  }
+  async scaleSetAuthority(signal?: AbortSignal): Promise<ReadonlySet<string>> {
+    await this.check('admission', signal)
+    if (this.groupRead) return this.groupRead
+    const runners = this.scope.runners
+    const purpose =
+      runners.kind === 'repository'
+        ? { kind: 'repository-runners' as const, repository: runners.repository.id }
+        : { kind: 'organization-runners' as const }
+    this.groupRead = (async () => {
+      const borrow = await this.setAuthority.open(purpose, signal)
+      try {
+        const registry = new GitHubRunners(borrow.credential, runners, this.labels, async () => {
+          throw new Error('Read only')
+        })
+        return await registry.authority(true, signal)
+      } finally {
+        await borrow.close()
+      }
+    })().finally(() => {
+      this.groupRead = undefined
+    })
+    return this.groupRead
   }
   private async check(operation: 'admission' | 'cleanup', signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
@@ -203,9 +264,54 @@ export class GitHubExecutionBackend implements PoolBackend {
     signal?: AbortSignal,
     labels: readonly string[] = this.labels,
     name?: string,
+    scaleSet?: number,
   ): Promise<RunnerSession> {
     labels = [...labels]
     await this.check('cleanup', signal)
+    if (scaleSet !== undefined) {
+      if (!name || !/^ci-jit-[a-f0-9]{32}$/.test(name))
+        throw new Error('Original CI worker required for credential isolation')
+      const allocation = await this.journal.allocation(this.lease, 'worker/' + name.slice(7))
+      const set = allocation?.value.supply?.scaleSet
+      if (set !== scaleSet) throw new Error('Original scale set required')
+      if (set) {
+        if (allocation?.value.scope !== scopeKey(this.scope)) throw new Error('Original scale set required')
+        const guard = async (effect: RunnerEffect) => {
+          await this.check(effect.kind === 'register' ? 'admission' : 'cleanup', signal)
+          if (effect.kind === 'register') await this.scaleSetAuthority(signal)
+          await beforeMutation(effect)
+          await this.journal.check(this.lease)
+        }
+        const owned = this.scaleSets.registry(set, guard)
+        const registry = {
+          ...owned,
+          retireIdle: async (
+            identity: { id: number; name: string },
+            readSignal?: AbortSignal,
+            checkRetirement?: () => void,
+          ) => {
+            if (!(await owned.lookup(identity, readSignal))) return false
+            const runners = this.scope.runners
+            const purpose =
+              runners.kind === 'repository'
+                ? { kind: 'repository-runners' as const, repository: runners.repository.id }
+                : { kind: 'organization-runners' as const }
+            const borrow = await this.credentialsFor(name).open(purpose, readSignal)
+            try {
+              return await new GitHubRunners(borrow.credential, runners, labels, guard).retireKnownIdle(
+                identity,
+                () => owned.lookup(identity, readSignal),
+                readSignal,
+                checkRetirement,
+              )
+            } finally {
+              await borrow.close()
+            }
+          },
+        }
+        return { registry, close: async () => {} }
+      }
+    }
     const purpose =
       this.scope.runners.kind === 'repository'
         ? { kind: 'repository-runners' as const, repository: this.scope.runners.repository.id }
@@ -263,6 +369,8 @@ export class GitHubExecutionBackend implements PoolBackend {
     this.closed = true
     const results = await Promise.allSettled([
       this.credentials.close(),
+      this.setAuthority.close(),
+      this.setRegistration.close(),
       ...[...this.workerCredentials.keys()].map((name) => this.retire(name)),
     ])
     const errors = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))

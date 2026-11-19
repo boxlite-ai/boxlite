@@ -35,6 +35,7 @@ export interface PoolBackend {
     signal?: AbortSignal,
     labels?: readonly string[],
     name?: string,
+    scaleSet?: number,
   ): Promise<RunnerSession>
 }
 export interface PoolSettings {
@@ -65,7 +66,8 @@ export interface WorkerEvent {
   name: string
   boxId: string | null
   runnerId: number | null
-  trigger: JobNotice
+  trigger: JobNotice | null
+  scaleSet?: number
   boxPhase: string
   runnerPhase: string
   effect: EffectKind | null
@@ -142,6 +144,7 @@ export class WorkerPool {
   private busy = false
   private recovery = { lease: '', after: '', version: '', seen: 0, failed: false, ready: false }
   private readonly settings: PoolSettings
+  private readonly setCharges = new Map<number, number>()
   private readonly jit = new Map<string, JitRegistration>()
   private readonly sessions = new Set<RunnerSession>()
   private demandAfter = 0
@@ -277,6 +280,108 @@ export class WorkerPool {
       this.sessions.delete(session)
     }
   }
+  chargedInSet(id: number): number {
+    return this.setCharges.get(id) ?? 0
+  }
+  /** Reconcile the assigned count including charged reservations which have not reached GitHub yet. */
+  async balanceScaleSets(
+    lease: ExecutionLease,
+    targets: readonly { id: number; labels: string[]; assigned: number; check: StateCheck }[],
+    policy: CapacityPolicy,
+    signal: AbortSignal,
+    drain = false,
+  ): Promise<void> {
+    const scope = await this.journal.scope(lease, this.scopeKey)
+    const backend = await this.backend(scope.scope, lease)
+    const rows: AllocationRow[] = []
+    let after = ''
+    while (scope.active) {
+      const page = await this.journal.workers(lease, this.scopeKey, after)
+      rows.push(...page.rows)
+      if (!page.after) break
+      after = page.after
+    }
+    // A membership change invalidates the count used to admit the next worker.
+    let activity = scope.activity
+    const snapshot = await this.journal.scope(lease, this.scopeKey)
+    if (activity.version !== snapshot.activity.version || rows.length !== snapshot.active) throw new StateConflict()
+    for (const row of rows) {
+      if ((!row.value.supply?.scaleSet || drain) && row.value.box.phase === 'none' && !row.value.closing) {
+        Object.assign(row, await this.journal.advance(lease, row.record.key, row.record.version, { closing: true }))
+      }
+    }
+    this.setCharges.clear()
+    for (const row of rows) {
+      const set = row.value.supply?.scaleSet
+      if (set && row.value.box.phase !== 'absent') this.setCharges.set(set, this.chargedInSet(set) + 1)
+    }
+    const checks = new Map<number, StateCheck[]>()
+    const retire = new Set<string>()
+    for (const row of rows)
+      if ((drain || !row.value.supply?.scaleSet) && row.value.delivery === 'done' && !row.value.closing)
+        retire.add(row.record.key)
+    for (const target of targets) {
+      signal.throwIfAborted()
+      const selection = selectRunnerLabels(target.labels, this.settings.labels)
+      if (!selection) throw new StateCorrupt()
+      const original = rows.filter(
+        (row) => row.value.supply?.scaleSet === target.id && !row.value.closing && row.value.box.phase !== 'absent',
+      )
+      const proof = [...(policy.checks ?? []), target.check]
+      checks.set(target.id, proof)
+      // Withdraw undispatched reservations first. An in-flight Box keeps its immutable identity.
+      for (const row of [...original].reverse().slice(0, Math.max(0, original.length - target.assigned))) {
+        if (row.value.box.phase === 'none') {
+          const changed = await this.journal.advance(
+            lease,
+            row.record.key,
+            row.record.version,
+            { closing: true },
+            proof,
+          )
+          Object.assign(row, changed)
+        } else if (row.value.delivery === 'done') retire.add(row.record.key)
+      }
+      if (!this.creationReady(selection.label)) continue
+      for (let count = original.length; count < Math.min(target.assigned, original.length + 16); count++) {
+        await backend.admit(signal)
+        const row = await this.journal.reserve(
+          lease,
+          this.scopeKey,
+          null,
+          {
+            ...policy,
+            checks: [...proof, { key: activity.key, version: activity.version }],
+          },
+          { labels: target.labels, scaleSet: target.id },
+        )
+        if (!row) break
+        const next = await this.journal.scope(lease, this.scopeKey)
+        // A concurrent release may have changed the count; a new pass takes a complete snapshot.
+        if (next.active !== rows.length + 1) throw new StateConflict()
+        activity = next.activity
+        rows.push(row)
+        this.setCharges.set(target.id, this.chargedInSet(target.id) + 1)
+        this.event(scope.scope, row, 'ci-worker-reserved', 'info')
+      }
+    }
+    await this.reconcileAll(
+      lease,
+      rows,
+      backend,
+      scope.scope,
+      signal,
+      retire,
+      true,
+      (row, retiring) => {
+        const set = row.value.supply?.scaleSet
+        if ((row.value.box.phase === 'none' && !row.value.closing) || retiring)
+          return retiring && (drain || !set) ? [] : set ? checks.get(set) : undefined
+        return []
+      },
+      true,
+    )
+  }
   /** Count compatible supply once, reserve missing capacity, then advance independent resources. */
   async balance(
     lease: ExecutionLease,
@@ -345,7 +450,7 @@ export class WorkerPool {
         let labels = row.value.supply?.labels
         if (!labels) {
           try {
-            labels = (await backend.job(row.value.job, signal)).labels
+            labels = (await backend.job(row.value.job!, signal)).labels
           } catch (error) {
             if (
               error instanceof LeaseLost ||
@@ -712,6 +817,7 @@ export class WorkerPool {
     })
     if (
       accepted &&
+      !planned.value.supply?.scaleSet &&
       backend.inventory &&
       planned.value.supply &&
       planned.value.box.phase === 'none' &&
@@ -739,6 +845,7 @@ export class WorkerPool {
         return selection
       }
       const original = row.value.job
+      if (!original) throw new StateCorrupt()
       const current = await backend.job(original, signal)
       if (current.repository !== original.repository || current.run !== original.run || current.job !== original.job)
         throw new Error('Original job identity changed at creation')
@@ -801,6 +908,7 @@ export class WorkerPool {
         signal,
         selection?.labels,
         row.value.name,
+        ...(row.value.supply?.scaleSet ? [row.value.supply.scaleSet] : []),
       )
       this.sessions.add(session)
       try {
@@ -828,7 +936,7 @@ export class WorkerPool {
           }
           const created = await backend.workers.create(launch)
           await update({ box: { phase: 'known', id: created.box_id } })
-          this.creationFailures.delete(selected.label)
+          if (!row.value.supply?.scaleSet) this.creationFailures.delete(selected.label)
         }
       }
       if (row.value.box.phase === 'requested') {
@@ -870,10 +978,14 @@ export class WorkerPool {
           backend.workers.recoverJit
         ) {
           const id = row.value.runner.id!
-          const claimed = await this.journal.claimedRunners(lease, scope, [id])
+          const claimed = row.value.runner.worked
+            ? new Set([id])
+            : await this.journal.claimedRunners(lease, scope, [id])
           const runner = claimed.has(id)
             ? undefined
-            : (await backend.inventory?.(signal))?.find((item) => item.id === id)
+            : row.value.supply?.scaleSet
+              ? undefined
+              : (await backend.inventory?.(signal))?.find((item) => item.id === id)
           if (runner && runner.name !== row.value.name) throw new StateCorrupt()
           if (claimed.has(id) || runner?.busy || runner?.status === 'online') await update({ delivery: 'done' })
           else {
@@ -900,6 +1012,11 @@ export class WorkerPool {
     }
     if ((status === 'stopped' || status === 'error') && !row.value.closing) {
       await update({ closing: true })
+      if (row.value.supply?.scaleSet) {
+        const label = selectRunnerLabels(row.value.supply.labels, this.settings.labels)!.label
+        if (row.value.runner.worked) this.creationFailures.delete(label)
+        else this.creationRejected(label)
+      }
       this.event(scope, row, 'ci-worker-exited', status === 'stopped' && exitCode === 0 ? 'info' : 'warn', {
         status,
         ...(exitCode === undefined ? {} : { exitCode }),
@@ -1008,7 +1125,8 @@ export class WorkerPool {
       name: value.name,
       boxId: value.box.id,
       runnerId: value.runner.id,
-      trigger: { ...value.job },
+      trigger: value.job && { ...value.job },
+      ...(value.supply?.scaleSet ? { scaleSet: value.supply.scaleSet } : {}),
       boxPhase: value.box.phase,
       runnerPhase: value.runner.phase,
       effect: value.effect?.kind ?? null,

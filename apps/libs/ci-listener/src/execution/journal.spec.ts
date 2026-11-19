@@ -378,7 +378,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const active = await journal.activeScopes(lease)
       expect(active.rows).toHaveLength(1)
       expect(active.rows[0].active).toBe(1)
-      expect((await journal.workers(lease, key)).rows.map((row) => row.value.job.job)).toEqual([56])
+      expect((await journal.workers(lease, key)).rows.map((row) => row.value.job!.job)).toEqual([56])
       expect(await journal.used(definition.organization)).toBe(1)
     })
     it('continues keyset recovery after a deleted cursor at an exact page boundary', async () => {

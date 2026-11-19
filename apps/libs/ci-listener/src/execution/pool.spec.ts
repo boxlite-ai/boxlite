@@ -1709,8 +1709,8 @@ describe('CI shared worker lifecycle', () => {
     await pool.tick(lease, two, demand)
     await pool.tick(lease, two, { ...demand, job: 56 })
     const allocations = [...(await rows()).allocations.values()]
-    const first = allocations.find((row) => row.value.job.job === demand.job)!
-    const second = allocations.find((row) => row.value.job.job === 56)!
+    const first = allocations.find((row) => row.value.job!.job === demand.job)!
+    const second = allocations.find((row) => row.value.job!.job === 56)!
     boxes.delete(first.value.name)
     boxes.get(second.value.name)!.status = 'stopped'
     busyRunner = true
@@ -1845,21 +1845,21 @@ describe('CI shared worker lifecycle', () => {
     })
     lease = (await state.acquire(randomUUID(), 300000))!
     await pool.tick(lease, capacity, { ...demand, job: 999 })
-    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(false)
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job!.job === 999)).toBe(false)
     await pool.tick(lease, capacity, { ...demand, job: 999 })
-    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(true)
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job!.job === 999)).toBe(true)
   })
   it('withholds admission when recovery membership changes between pages', async () => {
     const capacity = testCapacity({ account: 100, tenant: 100 })
     for (let job = 100; job < 133; job++) await journal.reserve(lease, key, { ...demand, job }, capacity)
     await pool.tick(lease, capacity, { ...demand, job: 999 })
-    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(false)
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job!.job === 999)).toBe(false)
     await journal.reserve(lease, key, { ...demand, job: 700 }, capacity)
     await pool.tick(lease, capacity, { ...demand, job: 999 })
-    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(false)
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job!.job === 999)).toBe(false)
     await pool.tick(lease, capacity, { ...demand, job: 999 })
     await pool.tick(lease, capacity, { ...demand, job: 999 })
-    expect([...(await rows()).allocations.values()].filter((row) => row.value.job.job === 999)).toHaveLength(1)
+    expect([...(await rows()).allocations.values()].filter((row) => row.value.job!.job === 999)).toHaveLength(1)
   })
   it('keeps later-page failures blocked across cursor wraps until an entirely clean round', async () => {
     const capacity = testCapacity({ account: 100, tenant: 100 })
@@ -1870,7 +1870,7 @@ describe('CI shared worker lifecycle', () => {
       if (name === tail.value.name) throw new Error('tail lookup failed')
       return get(name)
     })
-    const hasDemand = async () => [...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)
+    const hasDemand = async () => [...(await rows()).allocations.values()].some((row) => row.value.job!.job === 999)
     for (let round = 0; round < 2; round++) {
       await pool.tick(lease, capacity, { ...demand, job: 999 })
       expect(await hasDemand()).toBe(false)
@@ -1888,8 +1888,8 @@ describe('CI shared worker lifecycle', () => {
     await pool.tick(lease, two, demand)
     await pool.tick(lease, two, { ...demand, job: 56 })
     const allocations = [...(await rows()).allocations.values()]
-    const first = allocations.find((row) => row.value.job.job === demand.job)!
-    const second = allocations.find((row) => row.value.job.job === 56)!
+    const first = allocations.find((row) => row.value.job!.job === demand.job)!
+    const second = allocations.find((row) => row.value.job!.job === 56)!
     boxes.get(second.value.name)!.status = 'stopped'
     const get = jest.mocked(backend.workers.get).getMockImplementation()!
     jest.mocked(backend.workers.get).mockImplementation(async (name) => {
