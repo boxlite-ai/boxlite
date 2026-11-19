@@ -103,6 +103,8 @@ pub(crate) struct MockVm {
     scripts: Vec<Vec<Step>>,
     /// The vCPU whose `set_cpu_features` fails.
     fail_setup: Option<u32>,
+    /// The vCPU whose `reset` fails once parked.
+    fail_reset: Option<u32>,
     /// The id of each vCPU entry into the guest, in order.
     entries: Arc<Mutex<Vec<u32>>>,
 }
@@ -138,6 +140,14 @@ impl MockVm {
         Self {
             fail_setup: Some(id),
             ..self
+        }
+    }
+
+    /// Fails the reset of parked vCPU `id`, as a grant runs it.
+    pub(crate) fn failing_reset_of(id: u32) -> Self {
+        Self {
+            fail_reset: Some(id),
+            ..Self::default()
         }
     }
 
@@ -209,6 +219,7 @@ impl Vm for MockVm {
             steps: steps.into(),
             log: Arc::clone(&self.log),
             fail_setup: self.fail_setup == Some(id),
+            fail_reset: self.fail_reset == Some(id),
             entries: Arc::clone(&self.entries),
             kick: Arc::default(),
             data: [0; 4],
@@ -225,6 +236,7 @@ pub(crate) struct MockVcpu {
     steps: VecDeque<Step>,
     log: Arc<Mutex<Vec<Call>>>,
     fail_setup: bool,
+    fail_reset: bool,
     entries: Arc<Mutex<Vec<u32>>>,
     kick: Arc<Kick>,
     data: [u8; 4],
@@ -367,6 +379,15 @@ impl boxlite_hypervisor::X86ParkedVcpu for ParkedMockVcpu {
 
     fn reset(&mut self) -> Result<()> {
         self.0.record(Call::ResetVcpu { id: self.0.id });
+        if self.0.fail_reset {
+            let source = io::Error::from(io::ErrorKind::InvalidInput);
+            let (id, operation) = (self.0.id, "reset");
+            return Err(Error::ConfigureVcpu {
+                id,
+                operation,
+                source,
+            });
+        }
         Ok(())
     }
 

@@ -1321,7 +1321,7 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
 #[cfg(target_arch = "x86_64")]
 mod vcpu_control {
     use std::{
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, mpsc},
         thread,
         time::{Duration, Instant},
     };
@@ -1341,7 +1341,10 @@ mod vcpu_control {
 
     impl Running {
         fn start(online: u8, max: u8) -> Self {
-            let backend = MockVm::new();
+            Self::start_with(MockVm::new(), online, max)
+        }
+
+        fn start_with(backend: MockVm, online: u8, max: u8) -> Self {
             let (entries, log) = (backend.entries(), backend.log());
             let config = VmConfig {
                 max_vcpus: max,
@@ -1359,6 +1362,19 @@ mod vcpu_control {
 
         fn calls(&self) -> Vec<Call> {
             self.log.lock().unwrap().clone()
+        }
+
+        /// Asks for `count` vCPUs from another thread, so a request the VM
+        /// never answers fails the test instead of hanging it.
+        fn answer(&self, count: u8) -> crate::Result<u8> {
+            let control = self.control.clone();
+            let (sent, answered) = mpsc::channel();
+            thread::spawn(move || {
+                let _ = sent.send(control.set_online_vcpus(count));
+            });
+            answered
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the VM never answered the request")
         }
 
         /// Waits until vCPU `id` has entered the guest.
@@ -1440,6 +1456,41 @@ mod vcpu_control {
         assert_eq!(parks(&vm.calls())[before..], [2, 1]);
         // A revoked vCPU can be granted again.
         assert_eq!(vm.control.set_online_vcpus(2).unwrap(), 2);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+    }
+
+    /// vCPU 2's reset fails after vCPU 1 started, so the request parks vCPU 1
+    /// again and the guest keeps the vCPUs it had.
+    #[test]
+    fn a_failed_grant_parks_the_vcpus_it_started_again() {
+        let vm = Running::start_with(MockVm::failing_reset_of(2), 1, 3);
+
+        let error = vm.answer(3).unwrap_err();
+
+        assert!(matches!(error, Error::Hypervisor(_)), "{error:?}");
+        let calls = vm.calls();
+        let resumed = calls
+            .iter()
+            .position(|call| *call == Call::ResumeVcpu { id: 1 })
+            .expect("vCPU 1 was granted before vCPU 2");
+        assert!(
+            calls[resumed..].contains(&Call::ParkVcpu { id: 1 }),
+            "{calls:?}"
+        );
+        assert_eq!(vm.answer(1).unwrap(), 1);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+    }
+
+    /// A vCPU whose reset failed never runs again, but the VM still answers
+    /// later requests with the vCPUs it has left.
+    #[test]
+    fn a_vcpu_whose_grant_failed_is_skipped_by_later_requests() {
+        let vm = Running::start_with(MockVm::failing_reset_of(1), 1, 3);
+        assert!(vm.answer(2).is_err());
+
+        assert_eq!(vm.answer(2).unwrap(), 2);
+        vm.wait_entered(2);
+        assert_eq!(vm.answer(3).unwrap(), 2);
         assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
     }
 

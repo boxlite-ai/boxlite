@@ -495,6 +495,10 @@ Linux brings up only those. Design and research:
   parked vCPU, lowest ID first, then resumes it on a new `vcpuN` thread. The
   reset drops INIT and SIPI that KVM latched while the vCPU was parked; without
   it the vCPU would start at a stale SIPI vector.
+- **Failed grant.** A failed reset or thread start returns the error. The
+  request first parks the vCPUs it already started, so the guest keeps its
+  count. The vCPU that failed is dropped and never granted again;
+  later requests use the vCPUs that are left and return the count reached.
 - **Revoke.** Lowering the count asks each running vCPU, highest ID first, to
   park at its next exit, kicks it, and waits up to 5 seconds. Offline the CPU
   in the guest first; a vCPU the guest has not halted is parked anyway and
@@ -580,11 +584,14 @@ are built from. `Vm` owns the chipset they form.
 - **Events.** A device ends the VM by sending `Event::GuestReset` or
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
-  poller. vCPU workers and `StopHandle` send the other events. An event sent
-  after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
-  the oldest event, or `None` at its timeout, and rechecks the queue every
-  second in case a wake-up was lost. Every event ends the VM; the VMM never
-  restarts a guest.
+  poller. vCPU workers and `StopHandle` send the other events. Every event
+  ends the VM; the VMM never restarts a guest.
+  - An event sent after the loop is gone is logged at debug level and
+    discarded.
+  - `EventLoop::wait_once` returns the oldest event, or `None` once it is
+    woken without one or its timeout passes.
+  - The VM thread waits one second at a time, so a lost wake-up only delays
+    an event. It serves vCPU control requests between waits.
 
 ## Virtio-mmio transport
 

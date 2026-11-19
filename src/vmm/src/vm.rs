@@ -273,7 +273,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 }
             }
             let event = loop {
-                match events.wait_once() {
+                match events.wait_once(crate::events::RECHECK) {
                     Ok(Some(event)) => break Ok(Some(event)),
                     Ok(None) => {
                         while let Some(request) = requests.try_next() {
@@ -345,16 +345,19 @@ fn set_online<'scope, H: boxlite_hypervisor::X86Vm>(
     let running = vcpus.slots.running();
     if usize::from(count) > running.len() {
         let wanted = usize::from(count) - running.len();
+        let mut granted = Vec::with_capacity(wanted);
         for id in vcpus.slots.parked().into_iter().take(wanted) {
-            let parked = vcpus.slots.take_for_grant(id)?;
-            std::thread::Builder::new()
-                .name(format!("vcpu{id}"))
-                .spawn_scoped(scope, move || vcpus.resume(parked, id))
-                .map_err(|source| Error::SpawnVcpu {
-                    vcpu: id.into(),
-                    source,
-                })?;
-            vcpus.slots.wait_started(id);
+            if let Err(error) = grant(vcpus, scope, id) {
+                // The guest onlines a CPU only after its grant is answered,
+                // so the vCPUs this request started can park again.
+                for &id in granted.iter().rev() {
+                    if let Err(error) = vcpus.slots.revoke(id) {
+                        tracing::warn!(vcpu = id, %error, "failed to park a vCPU after a failed grant");
+                    }
+                }
+                return Err(error);
+            }
+            granted.push(id);
         }
     } else {
         for &id in running
@@ -366,6 +369,29 @@ fn set_online<'scope, H: boxlite_hypervisor::X86Vm>(
         }
     }
     Ok(u8::try_from(vcpus.slots.running().len()).expect("at most MAX_VCPUS run"))
+}
+
+#[cfg(target_arch = "x86_64")]
+/// Starts a thread for parked vCPU `id` and waits until it owns the vCPU. A
+/// failed reset or spawn drops the vCPU, so it is never granted again.
+fn grant<'scope, H: boxlite_hypervisor::X86Vm>(
+    vcpus: &'scope crate::vcpu::Workers<'scope, H>,
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    id: u8,
+) -> Result<()> {
+    let parked = vcpus.slots.take_for_grant(id)?;
+    std::thread::Builder::new()
+        .name(format!("vcpu{id}"))
+        .spawn_scoped(scope, move || vcpus.resume(parked, id))
+        .map_err(|source| {
+            vcpus.slots.lose(id);
+            Error::SpawnVcpu {
+                vcpu: id.into(),
+                source,
+            }
+        })?;
+    vcpus.slots.wait_started(id);
+    Ok(())
 }
 
 impl<H: HostVm> Drop for Vm<H> {

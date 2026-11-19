@@ -13,6 +13,27 @@ use std::{
 use super::{Event, EventLoop};
 use crate::error::Error;
 
+impl EventLoop {
+    /// The oldest queued event, waiting up to `timeout`, or forever with
+    /// `None`; tests use it to wait for an event a device sends. A timeout
+    /// too long to add counts as forever. Each slice of [`super::RECHECK`]
+    /// rechecks the queue, so an event whose wake-up failed is still found.
+    pub(crate) fn wait(&mut self, timeout: Option<Duration>) -> std::io::Result<Option<Event>> {
+        let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+        loop {
+            let slice = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => super::RECHECK,
+            };
+            match self.wait_once(slice.min(super::RECHECK))? {
+                Some(event) => return Ok(Some(event)),
+                None if slice.is_zero() => return Ok(None),
+                None => {}
+            }
+        }
+    }
+}
+
 #[test]
 fn returns_queued_events_in_order() {
     let mut events = EventLoop::new().unwrap();

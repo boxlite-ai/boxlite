@@ -74,6 +74,9 @@ enum Slot<H: X86Vm> {
     Running { kick: Kick<H>, park: bool },
     /// No thread owns the vCPU.
     Parked(Parked<H>),
+    /// A grant failed after taking it, so its state is unknown and it never
+    /// runs again; the VM keeps running without it.
+    Lost,
 }
 
 /// Every vCPU's [`Slot`], by ID, shared by the workers and the VM thread.
@@ -145,11 +148,15 @@ impl<H: X86Vm> Slots<H> {
         };
         drop(slots);
         if let Err(error) = parked.reset() {
-            // The vCPU is dropped: its state is unknown, so it never runs again.
-            self.set(id, Slot::Absent);
+            self.lose(id);
             return Err(error.into());
         }
         Ok(parked)
+    }
+
+    /// Marks vCPU `id`, which a failed grant dropped, as [`Slot::Lost`].
+    pub(crate) fn lose(&self, id: u8) {
+        self.set(id, Slot::Lost);
     }
 
     /// Waits until every boot thread runs its vCPU or has parked it, so a
