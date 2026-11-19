@@ -676,6 +676,15 @@ describe('Standalone BoxLite execution boundary', () => {
     await expect(pending).rejects.toThrow('lease')
     expect(posts()).toHaveLength(0)
   })
+  it('keeps a requested creation reserved when its original ID disappears from public inventory', async () => {
+    await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })
+    const original = await worker.create(launch())
+    expect((await state.read(['box-rest/' + name]))[0].payload).toMatchObject({ box: original.box_id })
+    notFound = true
+    await expect(worker.get(name)).rejects.not.toBeInstanceOf(ConfirmedWorkerAbsent)
+    expect(await journal.used(scope.organization)).toBe(1)
+    expect(posts()).toHaveLength(1)
+  })
   it.each(['still-listed', 'list-denied', 'principal-changed'])(
     'does not treat one 404 as absence: %s',
     async (kind) => {

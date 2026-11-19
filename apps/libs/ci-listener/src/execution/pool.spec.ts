@@ -565,6 +565,23 @@ describe('CI shared worker lifecycle', () => {
       expect(await journal.used(definition.organization)).toBe(reserved ? 2 : 1)
     },
   )
+  it('admits PAT queue demand up to the configured single slot', async () => {
+    supplyInventory()
+    key = await journal.define(lease, { ...definition, installation: { ...definition.installation, id: 0 } })
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+    const snapshot = await rebuildQueueSnapshot(
+      state,
+      lease,
+      { installationId: 0, accountId: 7, repositoryId: 21 },
+      [],
+      [await backend.job(demand), await backend.job({ ...demand, job: 56 })],
+    )
+    await pool.balance(lease, limits, snapshot.demands.map(decodeDemand), undefined, true, [
+      { key: snapshot.revision.key, version: snapshot.revision.version },
+    ])
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(await journal.used(definition.organization)).toBe(1)
+  })
   it('dispatches an existing unsent allocation before waiting for another reservation', async () => {
     supplyInventory()
     const capacity = testCapacity({ account: 2, tenant: 2 })

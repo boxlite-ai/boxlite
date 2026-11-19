@@ -5,6 +5,7 @@ import { GitHubRunners, JitRegistration, RunnerEffect, RunnerObservation } from 
 import { ExecutionLease, StateCheck } from '../state/store'
 import { LeaseLost, StateConflict, StateCorrupt } from '../state/database'
 import {
+  ConfirmedWorkerAbsent,
   ConfirmedWorkerCreationRejected,
   DEFAULT_WORKER_DISK_GIB,
   validateWorkerResources,
@@ -834,10 +835,16 @@ export class WorkerPool {
         }
       }
       if (row.value.box.phase === 'requested') {
-        // A positive host ledger lookup may recover an original ID. No absence
-        // response can settle an unknown create, and the POST is never repeated.
-        const observed = await backend.workers.get(row.value.name)
-        await update({ box: { phase: 'known', id: observed.box_id } })
+        let originalId: string
+        try {
+          originalId = (await backend.workers.get(row.value.name)).box_id
+        } catch (error) {
+          const proof = error instanceof ConfirmedWorkerAbsent && error.creation
+          if (!proof || row.value.effect?.kind !== 'box-create' || proof.effect !== row.value.effect.id) throw error
+          originalId = proof.boxId
+        }
+        // Persist the recovered identity before the normal known-Box check can release quota.
+        await update({ box: { phase: 'known', id: originalId } })
       }
     } catch (error) {
       if (!(error instanceof ConfirmedWorkerCreationRejected)) throw error
