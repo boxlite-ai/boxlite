@@ -54,6 +54,10 @@ after restart is outside the prior run's AutoStop protection.
 
 REST response decoders and their round-trip tests compile only with the `rest` feature. Shared encoders and CLI input parsers remain available without it. Validate both feature configurations with warnings denied: runtime assembly builds the core library without REST before the Go SDK builds its REST-enabled C dependency.
 
+Decoder tests use the `records::rest` namespace so the default `rest::` selector
+in unit and coverage targets includes them. They cover enum rejection, child
+identity mismatches, optional results, and additive response config fields.
+
 Wire conversion must be shared or tested against the existing CLI record mapping, preserve omitted versus null fields and reject malformed inputs. URL path segments for opaque IDs must be encoded. The current OpenCode adapter supports only its advertised operations; unsupported controls keep their core error.
 
 ## Validation

@@ -1085,3 +1085,102 @@ async fn agent_routes_enforce_authentication_and_reject_invalid_requests() {
     assert_eq!(error["error"]["code"], "invalid_argument");
     server.abort();
 }
+
+#[tokio::test]
+async fn agent_routes_reject_invalid_bodies_before_dispatch() {
+    let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
+    let client = reqwest::Client::new();
+    for (suffix, body) in [
+        ("", json!({"agent":"opencode","options":{"cwd":null}})),
+        ("", json!({"agent":"opencode","options":{"config":null}})),
+        (
+            "",
+            json!({"agent":"opencode","options":{"config":{"extra":true}}}),
+        ),
+        ("/ses_test/close", json!({"extra":true})),
+        (
+            "/ses_test/turns",
+            json!({"text":"hello","options":{"mode":"invalid"}}),
+        ),
+        (
+            "/ses_test/turns",
+            json!({"text":"hello","options":{"mode":null}}),
+        ),
+        (
+            "/ses_test/requests/req/respond",
+            json!({"response":{"type":"unknown"}}),
+        ),
+        (
+            "/ses_test/requests/req/respond",
+            json!({"response":{"type":"permission","approved":null}}),
+        ),
+        (
+            "/ses_test/turns/msg/steer",
+            json!({"text":"hi","extra":true}),
+        ),
+        ("/ses_test/turns/msg/interrupt", json!({"extra":true})),
+    ] {
+        let response = client
+            .post(format!("{url}/v1/boxes/{STUB_BOX_ID}/agents{suffix}"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{suffix}: {body}"
+        );
+        let error: Value = response.json().await.unwrap();
+        assert_eq!(error["error"]["code"], "invalid_argument");
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn agent_routes_validate_idempotency_key_boundaries_before_dispatch() {
+    let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
+    let client = reqwest::Client::new();
+    let path = format!("{url}/v1/boxes/{STUB_BOX_ID}/agents");
+    let invalid_keys = [
+        Vec::new(),
+        vec![b'x'; 257],
+        b"has space".to_vec(),
+        vec![0xff],
+    ];
+    for bytes in invalid_keys {
+        let value = axum::http::HeaderValue::from_bytes(&bytes).unwrap();
+        let response = client
+            .post(&path)
+            .header("Idempotency-Key", value)
+            .json(&json!({"agent":"opencode"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{bytes:?}");
+    }
+    let duplicate = client
+        .post(&path)
+        .header("Idempotency-Key", "one")
+        .header("Idempotency-Key", "two")
+        .json(&json!({"agent":"opencode"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let boundary = client
+        .post(&path)
+        .header("Idempotency-Key", "x".repeat(256))
+        .json(&json!({"agent":"opencode","options":{"cwd":"/work","config":{"model":"provider/model"}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        boundary.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a valid 256-byte key must reach the unavailable backend"
+    );
+    let error: Value = boundary.json().await.unwrap();
+    assert_eq!(error["error"]["code"], "network_unavailable");
+    server.abort();
+}
