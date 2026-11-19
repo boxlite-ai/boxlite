@@ -305,14 +305,16 @@ test('fresh ECS scaling can create its service-linked role', async () => {
   await invoke(aws.run)
   const call = aws.applied('iam put-role-policy')[0]
   const policy = JSON.parse(call[call.indexOf('--policy-document') + 1])
-  const principals = policy.Statement.filter(
-    (s: any) => s.Effect === 'Allow' && s.Action === 'iam:CreateServiceLinkedRole',
-  ).flatMap((s: any) => s.Condition.StringEquals['iam:AWSServiceName'])
+  const principals = new Set<string>(
+    policy.Statement.filter((s: any) => s.Effect === 'Allow' && s.Action === 'iam:CreateServiceLinkedRole').flatMap(
+      (s: any) => s.Condition.StringEquals['iam:AWSServiceName'],
+    ),
+  )
   assert.ok(
-    principals.includes('ecs.application-autoscaling.amazonaws.com'),
+    principals.has('ecs.application-autoscaling.amazonaws.com'),
     'missing ECS Application Auto Scaling service principal',
   )
-  assert.ok(!principals.includes('*'))
+  assert.ok(!principals.has('*'))
 })
 
 test('the runtime boundary limits Parameter Store reads to the workload namespace', async () => {
