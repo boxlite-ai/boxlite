@@ -814,6 +814,13 @@ Management is a primary disclosure after Applications, with Billing and Organiza
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
 Organization switching is in the header; theme and logout are in the account menu.
+The account avatar keeps a fixed 23px box and displays name/email initials while
+its image loads or after loading fails. Missing names and emails use the shared
+account icon. Images appear only after `load`; `error` removes the image without
+automatic retries. The avatar is keyed by OIDC issuer, subject and image URL, so
+identity or URL changes start fresh and late image events cannot affect another
+account. Avatar content is decorative; the profile-menu trigger retains its
+accessible name and keyboard behavior.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
