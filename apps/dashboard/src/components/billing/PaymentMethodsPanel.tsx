@@ -64,7 +64,7 @@ function SetupButton({
       disabled={isLoading}
       className="inline-flex items-center gap-2 whitespace-nowrap"
     >
-      {isLoading && <Spinner />} {connected ? 'Update card' : 'Connect'}
+      {isLoading && <Spinner />} {connected ? 'Change card' : 'Add card'}
     </AsciiButton>
   )
 }
@@ -137,12 +137,12 @@ export function PaymentMethodsPanel({
         </Panel>
       ) : (
         <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
-          <span className="font-sans text-body text-muted-foreground">Payment method not connected</span>
+          <span className="font-sans text-body text-muted-foreground">No card added</span>
           <SetupButton connected={false} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
       )}
       <PanelNote>
-        Connecting or updating a card places a temporary $0.50 hold, which is released automatically after verification.
+        Adding or changing a card places a temporary $0.50 hold, which is released automatically after verification.
       </PanelNote>
     </section>
   )

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { PlanSetupReturn } from '@/components/billing/PlanSetupReturn'
 import { TabIcon } from '@/components/ui/TabIcon'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
@@ -103,6 +104,7 @@ function Billing() {
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
+      <PlanSetupReturn />
       <div className="page-container">
         <div className="pt-6">
           <h1 className="resource-title">Billing</h1>

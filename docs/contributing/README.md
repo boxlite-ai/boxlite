@@ -35,6 +35,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-19 · [Billing purchase and card setup](investigations/2026-11-19-payment-onboarding.md): payment wording, purchase summaries and explicit confirmation after card setup.
 - 2026-11-13 · [Runner data-disk performance scaling](investigations/2026-11-13-runner-data-disk-performance-scaling.md): expansion raises provisioned IOPS/throughput proportionally, clipped to the per-disk ceiling; capacity never waits for performance.
 - 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
 - 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.

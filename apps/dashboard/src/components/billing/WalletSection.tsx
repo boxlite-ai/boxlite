@@ -707,8 +707,7 @@ export function WalletSection({
                     <PanelNote>Target must be at least $10 above the threshold · set both to 0 to disable</PanelNote>
                   ) : (
                     <p className="mt-3 font-sans text-meta leading-relaxed text-warning">
-                      Connect a payment method above to turn auto-reload on. Until it is set, nothing warns you before
-                      the balance runs out.
+                      Add a card above to enable automatic top-ups.
                     </p>
                   ))}
               </>

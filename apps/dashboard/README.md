@@ -1460,3 +1460,30 @@ A failed detail refresh retains the last known values with a retry message;
 initial failures continue to offer Retry. The mock preview's `web-api` demonstrates
 15-minute auto-stop and a 75-minute auto-delete threshold; `batch-worker` has all
 three options disabled, and other existing fixtures exercise missing fields.
+
+## Billing purchase and payment wording
+
+Wallet retains payment-method management above balance and top-up controls.
+Subscription remains the primary purchase path; top-up amounts and defaults remain unchanged.
+Adding or changing a card remains a separate operation. First subscriptions show the target
+plan values without comparisons against an absent subscription. Existing plan
+changes retain comparisons. When checkout navigation does not complete, the
+confirmation keeps a link to the returned checkout URL and an exit to Billing.
+These changes are confined to Billing; registration, login, Welcome, Quickstart
+and onboarding guides retain their existing behavior.
+
+### Local plan verification return preview
+
+Open `/dashboard/billing?tab=plans&preview=plan-setup&mockCard=reset` on the mock dashboard.
+Choose Starter or Team, then **Verify card to continue**. The mock simulates a completed
+card setup and returns to that plan's confirmation page. It does not contact Stripe.
+**Confirm subscription** is an explicit second action; returning never sends it automatically.
+For incomplete verification, open `/dashboard/billing/plan/pro?setup=return&preview=plan-setup&mockCard=reset`.
+
+The real frontend stores the selected plan ID, timestamp and document identifier in tab-scoped session storage,
+keyed by authenticated subject and organization, for 30 minutes. Current organization ownership,
+wallet, catalog and subscription must resolve before confirmation. No signup, login, or onboarding
+flow is changed. Expired or missing selections fall back to choosing a plan again. A tab opened with an opener
+may inherit a copy of session storage and restore confirmation; it still requires an explicit click.
+A document identifier prevents selections created in the current document from being restored
+by internal navigation or browser Back. Explicit tab/coupon destinations retain their URL and clear the scoped pending selection, so later internal navigation cannot resume it.
