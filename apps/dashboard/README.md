@@ -1483,4 +1483,5 @@ For incomplete verification, open `/dashboard/billing/plan/pro?setup=return&prev
 The real frontend stores only the selected plan ID and timestamp in tab-scoped session storage,
 keyed by authenticated subject and organization, for 30 minutes. Current organization ownership,
 wallet, catalog and subscription must resolve before confirmation. No signup, login, or onboarding
-flow is changed. Cross-tab or expired sessions fall back to selecting a plan again.
+flow is changed. Cross-tab or expired sessions fall back to selecting a plan again. Restoration only runs on
+the full-page Billing landing; internal navigation and explicit tab/coupon destinations retain their URL.

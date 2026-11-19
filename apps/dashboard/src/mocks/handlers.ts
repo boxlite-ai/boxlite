@@ -576,7 +576,7 @@ export const handlers = [
       : HttpResponse.json({ message: `Coupon ${params.code} not found` }, { status: 400 }),
   ),
   http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
-    if (newUserPreview)
+    if (newUserPreview || (setupPreview && sessionStorage.getItem('mock:billing-card-added') !== 'true'))
       return HttpResponse.json({ paymentMethods: [], meta: { currentPage: 1, totalPages: 0, totalCount: 0 } })
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)

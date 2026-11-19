@@ -39,9 +39,11 @@ Preserve explicit subscription confirmation because completing card setup is not
 
 ## Evidence and remaining limits
 
-Dashboard tests: 153 files, 1,678 tests passed. Dashboard build passed.
+Dashboard tests: 153 files, 1,682 tests passed. Dashboard build passed.
 Browser mock checks cover selection, card-setup return, explicit confirmation and incomplete setup.
 Real Stripe setup/return and eligibility outcomes have not been exercised.
 The resume mechanism introduces a new navigation contract; full-revert defect proof has not been run for the existing UI wording changes.
 
 Review follow-up: membership lookup failure now exposes a retry rather than an indefinite skeleton. A lifecycle generation rejects late mutation responses even after switching away and back to the same organization. The membership regression test failed against the prior PR revision and passes with the recovery branch. Coverage includes interrupted checkout, unavailable storage, explicit exit, and late success/error responses.
+
+Checkout resume preserves explicit Billing tabs and coupon links and ignores internal route navigation. The backend return has no transaction marker; a matching tab-local intent on the bare full-page Billing landing restores only confirmation, not payment authorization. Plan-setup mocks share the card flag for wallet and payment-method reads.

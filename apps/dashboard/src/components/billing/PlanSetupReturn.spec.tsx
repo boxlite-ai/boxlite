@@ -35,10 +35,14 @@ function Location() {
   const l = useLocation()
   return <output>{l.pathname + l.search}</output>
 }
-function render() {
+function render(path = '/dashboard/billing', key = 'default') {
   act(() =>
     root.render(
-      <MemoryRouter initialEntries={['/dashboard/billing']}>
+      <MemoryRouter
+        initialEntries={[
+          { pathname: path.split('?')[0], search: path.includes('?') ? '?' + path.split('?')[1] : '', key },
+        ]}
+      >
         <PlanSetupReturn />
         <Location />
       </MemoryRouter>,
@@ -90,6 +94,22 @@ it('does not consume intent using membership left over from a previous organizat
   savePlanSetup('user', 'org', 'pro')
   identity.status = 'loading'
   render()
+  expect(host.textContent).toBe('/dashboard/billing')
+  expect(consumePlanSetup('user', 'org')).toBe('pro')
+})
+
+it.each(['?tab=wallet&code=ACME50', '?tab=plans', '?code=ACME50'])(
+  'preserves an explicit Billing destination %s',
+  (query) => {
+    savePlanSetup('user', 'org', 'pro')
+    render('/dashboard/billing' + query)
+    expect(host.textContent).toBe('/dashboard/billing' + query)
+    expect(consumePlanSetup('user', 'org')).toBe('pro')
+  },
+)
+it('does not resume checkout during an internal Billing navigation', () => {
+  savePlanSetup('user', 'org', 'pro')
+  render('/dashboard/billing', 'internal-navigation')
   expect(host.textContent).toBe('/dashboard/billing')
   expect(consumePlanSetup('user', 'org')).toBe('pro')
 })
