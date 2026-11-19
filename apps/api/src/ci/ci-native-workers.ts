@@ -159,13 +159,12 @@ export class CiNativeWorkers {
         value.allocation.box.phase === 'requested' && create?.kind === 'box-create'
           ? { boxId: value.box, effect: create.id }
           : undefined
-      let box: Box
-      try {
-        box = await this.boxes.findOne(value.box, true)
-      } catch (error) {
-        if (error instanceof NotFoundException) throw new ConfirmedWorkerAbsent(creation)
+      // Old cleanup could prune failed destructions. Only the original Box's terminal state releases quota.
+      const box = await this.boxes.findOne(value.box, true).catch((error: unknown) => {
+        if (error instanceof NotFoundException)
+          throw new ConflictException('Original CI Box destruction is unconfirmed')
         throw error
-      }
+      })
       if (box.id !== value.box || box.organizationId !== scope.organization)
         throw new ForbiddenException('Original CI Box ownership changed')
       // Platform deletion renames the tombstone; its original ID and tenant remain authoritative.

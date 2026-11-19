@@ -429,11 +429,12 @@ are wake hints rather than permission to add capacity.
 `job-fact.runner` records GitHub's actual assignment; it does not lock the job to a
 runner provisioned because of that job.
 
-An authoritative scan records the IDs contributing to each label count. Later
-arrivals identify the scan generation they joined. If a scan includes only B,
+An authoritative scan records each job's contribution and generation in its
+job fact. The label counter stores the generation. Later arrivals join it. If a scan includes only B,
 a late completion for A leaves B counted. Replaying either completion has no
 effect. Historical counters with uncertain membership request a fresh scan.
 Pinned PAT repositories use installation ID zero for scans and incremental events.
+A scan superseded during a GitHub read can be queued again immediately. Transport failures and rate limits retain their retry delays.
 
 Demand groups retain their BoxLite organization, original execution scope and
 compatible routing labels. Installation, binding generation, repository/group
@@ -700,6 +701,10 @@ The guest consumes the configuration once and removes both files before running
 the job. Repeating the ready marker can never supply another configuration.
 The scheduler checks current queued demand when it replaces a closed allocation.
 
+A newly busy runner without an assignment claim triggers a demand refresh even
+when it has a pending retirement. Replacing a retirement invalidates its running
+callback before GitHub DELETE. A later retirement must validate its own queue proof.
+
 Before unregistering, the scheduler persists a distinct `runner-retire` intent
 under the original allocation, identity and execution lease. `retireIdle()` reads
 the original runner again and uses the classic repository/organization REST DELETE.
@@ -855,7 +860,11 @@ Box ID, original name and organization in the configured Hosted App's ledger.
 If a V2 Box still says destroying after its last destroy job failed on that runner,
 the manager submits a replacement once no incomplete job remains. A late failure
 from an earlier attempt preserves a confirmed destroyed Box.
-Stale-error cleanup retains that row until confirmation lets CI return the slot.
+Stale-error cleanup retains the row while destruction is pending. The 24-hour
+cleanup keeps a destroyed Box while a charged allocation still needs its receipt.
+If historical cleanup already pruned a failed destruction, recovery keeps the
+slot reserved. A destroy job on a previous runner can refer to an older copy of
+the same Box ID.
 A change to the primary Hosted App ID requires draining its old namespace first.
 
 An absent Box's allocation remains in the journal until runner cleanup is confirmed.

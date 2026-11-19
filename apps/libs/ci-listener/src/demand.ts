@@ -54,6 +54,13 @@ function jobCounts(jobs: readonly number[]): Map<number, number> {
   for (const job of jobs) counts.set(job, (counts.get(job) ?? 0) + 1)
   return counts
 }
+function contribution(fact: StateRecord | undefined, generation: string): number {
+  if (!fact || !object(fact.payload) || fact.payload.countedFor !== generation) return 0
+  const weight = fact.payload.countedWeight
+  if (weight === undefined) return 1
+  if (!positive(weight)) throw new StateCorrupt()
+  return weight
+}
 export const demandKey = (installation: number, repository: number, labels: readonly string[]) =>
   `demand/${installation}/${repository}/` +
   createHash('sha256')
@@ -227,8 +234,7 @@ export async function observeDemand(
     let change = delta
     if (delta < 0 && old?.membership) {
       const scanned = membership.jobs.reduce((sum, id) => sum + Number(id === jobId), 0)
-      const incremented = prior && object(prior.payload) && prior.payload.countedFor === membership.generation
-      change = -(scanned || Number(!!incremented))
+      change = -(scanned || contribution(prior, membership.generation))
       if (!change) continue
     }
     // A historical aggregate carries no evidence that a queued fact survived its last full scan.
@@ -271,8 +277,11 @@ export async function rebuildQueueSnapshot(
       const revision = await readRevision(tx, target)
       if (expectedRevision && revision?.version !== expectedRevision.version) throw new StateConflict()
       let changed = !revision
-      const counts = new Map<string, { labels: string[]; jobs: WorkflowJob[] }>()
-      const incremental = new Map<number, string>()
+      type Member = { job: WorkflowJob; fact?: StateRecord; weight: number }
+      const counts = new Map<
+        string,
+        { labels: string[]; sample: WorkflowJob; queued: number; members: Map<number, Member> }
+      >()
       const queued = jobs.filter(
         (job) => job.repository === target.repositoryId && job.status === 'queued' && job.runner === null,
       )
@@ -280,33 +289,20 @@ export async function rebuildQueueSnapshot(
       for (let offset = 0; offset < queued.length; offset += 100) {
         const batch = queued.slice(offset, offset + 100)
         const facts = new Map((await tx.read(batch.map(factKey))).map((row) => [row.key, row]))
-        const missing = new Map<string, StateChange>()
         for (const job of batch) {
-          const key = factKey(job)
-          const fact = facts.get(key)
+          const fact = facts.get(factKey(job))
           if (fact && object(fact.payload) && ['in_progress', 'completed'].includes(fact.payload.status as string))
             continue
-          if (fact && object(fact.payload) && typeof fact.payload.countedFor === 'string')
-            incremental.set(job.job, fact.payload.countedFor)
-          if (!fact && !missing.has(key))
-            missing.set(key, {
-              key,
-              expected: null,
-              payload: {
-                status: 'queued',
-                labels: labelsFor(job.labels),
-                runner: null,
-                hint: { ...target, job: { id: job.job, runId: job.run } },
-              },
-            })
           const groupKey = demandKey(target.installationId, target.repositoryId, job.labels)
-          const entry = counts.get(groupKey) ?? { labels: labelsFor(job.labels), jobs: [] }
-          entry.jobs.push(job)
-          counts.set(groupKey, entry)
-        }
-        if (missing.size) {
-          await tx.write([...missing.values()])
-          changed = true
+          let group = counts.get(groupKey)
+          if (!group) {
+            group = { labels: labelsFor(job.labels), sample: job, queued: 0, members: new Map() }
+            counts.set(groupKey, group)
+          }
+          group.queued++
+          const existing = group.members.get(job.job)
+          if (existing) existing.weight++
+          else group.members.set(job.job, { job, fact, weight: 1 })
         }
       }
       const known = previous.filter((row) => row.key.startsWith(prefix))
@@ -331,31 +327,57 @@ export async function rebuildQueueSnapshot(
               continue
             }
           }
-          const sample = group?.jobs[0]
-          const ids = group?.jobs.map((job) => job.job) ?? []
+          const sample = group?.sample
           const previousMembership = readMembership(old?.membership)
-          const members = jobCounts(previousMembership?.jobs ?? [])
-          const sameMembers =
-            previousMembership &&
-            old?.dirty === false &&
-            old.queued === ids.length &&
-            [...jobCounts(ids)].every(
-              ([id, count]) =>
-                count === (members.get(id) ?? Number(incremental.get(id) === previousMembership.generation)),
-            )
+          const inline = jobCounts(previousMembership?.jobs ?? [])
+          let generation = previousMembership?.generation
+          if (old?.dirty !== false || old.queued !== (group?.queued ?? 0)) generation = undefined
+          if (generation) {
+            for (const { job, fact, weight } of group?.members.values() ?? []) {
+              if (weight !== (inline.get(job.job) ?? contribution(fact, generation))) {
+                generation = undefined
+                break
+              }
+            }
+          }
+          generation ??= randomUUID()
+          let writes: StateChange[] = []
+          for (const { job, fact, weight } of group?.members.values() ?? []) {
+            if (contribution(fact, generation) === weight) continue
+            const value = fact?.payload ?? {
+              status: 'queued',
+              labels: labelsFor(job.labels),
+              runner: null,
+              hint: { ...target, job: { id: job.job, runId: job.run } },
+            }
+            if (!object(value)) throw new StateCorrupt()
+            writes.push({
+              key: factKey(job),
+              expected: fact?.version ?? null,
+              payload: { ...value, countedFor: generation, countedWeight: weight } as Json,
+            })
+            changed = true
+            if (writes.length === 100) {
+              await tx.write(writes)
+              writes = []
+            }
+          }
+          if (writes.length) await tx.write(writes)
           const payload: LabelDemand = {
             ...target,
             labels: group?.labels ?? (old!.labels as string[]),
-            queued: group?.jobs.length ?? 0,
+            queued: group?.queued ?? 0,
             dirty: false,
             updatedAt: Date.now(),
             job: sample ? { id: sample.job, runId: sample.run } : (old!.job as unknown as LabelDemand['job']),
-            membership: sameMembers ? previousMembership : { generation: randomUUID(), jobs: ids },
+            membership: { generation, jobs: [] },
           }
           if (
             row &&
             old &&
-            sameMembers &&
+            previousMembership?.generation === generation &&
+            !previousMembership.jobs.length &&
+            old.queued === payload.queued &&
             old.installationId === target.installationId &&
             old.accountId === target.accountId &&
             old.repositoryId === target.repositoryId &&
