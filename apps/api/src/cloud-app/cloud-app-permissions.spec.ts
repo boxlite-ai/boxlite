@@ -25,6 +25,12 @@ describe('App management organization permissions', () => {
     expect(() => service.principal(viewer, 'POST', '/apps')).toThrow(ForbiddenException)
     expect(() => service.principal(member([Permission.WRITE_APPS]), 'DELETE', '/apps/crm')).toThrow(ForbiddenException)
     expect(service.principal(member([Permission.DELETE_APPS]), 'DELETE', '/apps/crm').userId).toBe('user')
+    expect(service.principal(member([Permission.DELETE_APPS]), 'DELETE', '/apps/deleted/crm').permissions).toContain(
+      Permission.DELETE_APPS,
+    )
+    expect(() => service.principal(member([Permission.WRITE_APPS]), 'DELETE', '/apps/deleted/crm')).toThrow(
+      ForbiddenException,
+    )
   })
 
   it('uses the organization key permissions for every App in the organization', () => {
@@ -35,6 +41,7 @@ describe('App management organization permissions', () => {
     }
     expect(() => service.principal(reader, 'POST', '/apps')).toThrow(ForbiddenException)
     expect(() => service.principal(reader, 'DELETE', '/apps/crm')).toThrow(ForbiddenException)
+    expect(() => service.principal(reader, 'DELETE', '/apps/deleted/crm')).toThrow(ForbiddenException)
     expect(service.principal(member(permissions, [Permission.WRITE_APPS]), 'POST', '/apps').organizationId).toBe('org')
     const files = '/apps/crm/envs/main/volumes/uploads/files'
     const writer = member(permissions, [Permission.WRITE_APPS])

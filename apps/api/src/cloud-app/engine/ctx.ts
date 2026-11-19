@@ -43,6 +43,8 @@ export interface Deps {
   domains: import('./services/domains').AppDomains
   volumes: AppVolumes
   boxes: AppBoxes
+  /** Serializes irreversible cleanup across API and worker instances without holding a SQL connection. */
+  withPurgeLock<T>(appId: string, operation: (signal: AbortSignal) => Promise<T>): Promise<T>
   tunnelHeaders?: TunnelHeaders
   organizationMember?: (organizationId: string, provider: string, providerUserId: string) => Promise<boolean>
   boxlite: BoxliteClient

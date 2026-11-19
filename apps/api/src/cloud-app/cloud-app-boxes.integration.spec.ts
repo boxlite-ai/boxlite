@@ -211,6 +211,7 @@ describeDatabase('Cloud App Box ownership in PostgreSQL', () => {
       },
       domains: { releaseEnvironment: async () => undefined },
       blobs: { deleteApp: async () => undefined },
+      withPurgeLock: async (_id, work) => work(new AbortController().signal),
     } as unknown as Ctx
     await deleteApp(context, app, 'owner')
     expect(stopped.sort()).toEqual(['web', 'worker'])

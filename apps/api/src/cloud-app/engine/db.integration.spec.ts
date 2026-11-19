@@ -5,6 +5,9 @@ import { EncryptionService } from '../../encryption/encryption.service'
 import { Store, type Deployment, now } from './db'
 import { AddAppBoxOwnership1794500000000 } from '../../migrations/pre-deploy/1794500000000-add-app-box-ownership-migration'
 import { DropAppBoxPointer1794500001000 } from '../../migrations/post-deploy/1794500001000-drop-app-box-pointer-migration'
+import Redis from 'ioredis'
+import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { CloudAppService } from '../cloud-app.service'
 
 async function migrateBoxOwnership(runner: QueryRunner, schema: string) {
   await runner.query(`CREATE TABLE ${schema}.box (id text PRIMARY KEY, "organizationId" uuid)`)
@@ -211,6 +214,7 @@ describeDatabase('Cloud App PostgreSQL repository', () => {
 
 describeDatabase('Cloud App management routes with PostgreSQL', () => {
   let dataSource: DataSource
+  let redis: Redis
   let store: Store
   let server: ReturnType<typeof import('./server').createServer>
   let context: import('./ctx').Ctx
@@ -233,7 +237,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
     }).initialize()
     await dataSource.query(`CREATE SCHEMA ${routeSchema}`)
     await dataSource.query(`CREATE TABLE ${routeSchema}.organization (id UUID PRIMARY KEY)`)
-    await dataSource.query(`INSERT INTO ${routeSchema}.organization VALUES ($1)`, [orgA])
+    await dataSource.query(`INSERT INTO ${routeSchema}.organization VALUES ($1),($2)`, [orgA, orgB])
     const runner = dataSource.createQueryRunner()
     try {
       await new AddCloudAppPlatform1793780100000().up({
@@ -250,6 +254,17 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
       await runner.release()
     }
     store = new Store(dataSource, orgA, undefined, routeSchema)
+    redis = new Redis({
+      host: process.env.REDIS_HOST,
+      port: Number(process.env.REDIS_PORT || 6379),
+      username: process.env.REDIS_USERNAME || undefined,
+      password: process.env.REDIS_PASSWORD,
+      lazyConnect: true,
+    })
+    await redis.connect()
+    const lifecycle = Object.assign(Object.create(CloudAppService.prototype), {
+      locks: new RedisLockProvider(redis),
+    }) as CloudAppService
     const { buildCtx, createServer } = await import('./server')
     const { ensureSqlParser } = await import('./sqlguard')
     await ensureSqlParser()
@@ -314,6 +329,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
           },
         },
         boxes: { list: async () => [] },
+        withPurgeLock: (appId, operation) => lifecycle.withPurgeLock(appId, operation),
         volumes: {
           list: async () => [],
           create: async () => {
@@ -334,6 +350,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
     try {
       await dataSource.query(`DROP SCHEMA ${routeSchema} CASCADE`)
     } finally {
+      redis?.disconnect()
       await dataSource.destroy()
     }
   })
@@ -439,9 +456,145 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
     const { purgeApp } = await import('./lifecycle')
     await purgeApp(context, app)
     expect(deleteSource).toHaveBeenCalledWith(app.id)
-    expect(releaseDomain).toHaveBeenCalledWith(app, expect.objectContaining({ app_id: app.id }))
+    expect(releaseDomain).toHaveBeenCalledWith(
+      expect.objectContaining({ id: app.id, org_id: app.org_id }),
+      expect.objectContaining({ app_id: app.id }),
+    )
     expect(await store.appById(app.id)).toBeUndefined()
     expect(await store.get('SELECT 1 FROM app_secrets WHERE app_id = ?', app.id)).toBeUndefined()
     jest.restoreAllMocks()
+  })
+
+  test('cannot restore after purge cleanup has started and a resource deletion fails', async () => {
+    const created = await request('/v1/apps', 'POST', { name: 'purge-failure' })
+    expect(created.status).toBe(201)
+    const app = (await store.appByName('purge-failure'))!
+    await store.run(
+      'UPDATE apps SET deleted_at = ?, purge_after = ? WHERE id = ?',
+      now(),
+      new Date(Date.now() + 86_400_000).toISOString(),
+      app.id,
+    )
+    const source = jest.spyOn(context.blobs, 'deleteApp').mockRejectedValue(new Error('object storage unavailable'))
+    try {
+      const { purgeApp, restoreApp } = await import('./lifecycle')
+      await expect(purgeApp(context, (await store.appById(app.id))!)).rejects.toThrow('object storage unavailable')
+      await expect(restoreApp(context, (await store.appById(app.id))!, 'user')).rejects.toMatchObject({ status: 409 })
+      expect((await store.appById(app.id))?.deleted_at).toBeTruthy()
+      source.mockResolvedValue(undefined)
+      const { purgeExpired } = await import('./lifecycle')
+      expect(await purgeExpired(context)).toContain(app.name)
+      expect(source).toHaveBeenCalledTimes(2)
+      expect(await store.appById(app.id)).toBeUndefined()
+    } finally {
+      source.mockRestore()
+    }
+  })
+
+  test('permanent deletion accepts only retained Apps in the current organization', async () => {
+    expect((await request('/v1/apps', 'POST', { name: 'retained-app' })).status).toBe(201)
+    const app = (await store.appByName('retained-app'))!
+    expect((await request('/v1/apps/deleted/retained-app', 'DELETE')).status).toBe(404)
+    expect((await request('/v1/apps/deleted/missing-app', 'DELETE')).status).toBe(404)
+    expect(await store.appById(app.id)).toBeDefined()
+    const foreign = new Store(dataSource, orgB, undefined, routeSchema)
+    await foreign.run(
+      'INSERT INTO apps (id,name,created_at,deleted_at,purge_after,org_id) VALUES (?,?,?,?,?,?)',
+      'foreign-retained',
+      'foreign-retained',
+      now(),
+      now(),
+      new Date(Date.now() + 86_400_000).toISOString(),
+      orgB,
+    )
+    expect((await request('/v1/apps/deleted/foreign-retained', 'DELETE')).status).toBe(404)
+    expect(await foreign.appById('foreign-retained')).toBeDefined()
+    expect((await request('/v1/apps/retained-app', 'DELETE')).status).toBe(204)
+    expect((await request('/v1/apps/deleted/retained-app/restore', 'POST')).status).toBe(200)
+    expect((await request('/v1/apps/retained-app', 'DELETE')).status).toBe(204)
+    const denied = await server.request(
+      '/v1/apps/%64eleted/retained-app',
+      { method: 'DELETE' },
+      { platformPrincipal: { ...principal, permissions: ['write:apps'] } },
+    )
+    expect(denied.status).toBe(403)
+    expect(await store.appById(app.id)).toBeDefined()
+    expect((await request('/v1/apps/deleted/retained-app', 'DELETE')).status).toBe(204)
+    expect(await store.appById(app.id)).toBeUndefined()
+    expect((await request('/v1/apps/deleted/retained-app', 'DELETE')).status).toBe(404)
+  })
+
+  test('cleanup rejects concurrent restore and purge without holding a SQL transaction', async () => {
+    expect((await request('/v1/apps', 'POST', { name: 'purge-concurrent' })).status).toBe(201)
+    const active = (await store.appByName('purge-concurrent'))!
+    expect((await request('/v1/apps/purge-concurrent', 'DELETE')).status).toBe(204)
+    let started!: () => void
+    let release!: () => void
+    const cleaning = new Promise<void>((resolve) => (started = resolve))
+    const finish = new Promise<void>((resolve) => (release = resolve))
+    const source = jest.spyOn(context.blobs, 'deleteApp').mockImplementation(async () => {
+      started()
+      await finish
+    })
+    const boxes = jest.spyOn(context.boxes, 'list')
+    const purging = request('/v1/apps/deleted/purge-concurrent', 'DELETE')
+    try {
+      await cleaning
+      expect((await request('/v1/apps/deleted/purge-concurrent/restore', 'POST')).status).toBe(409)
+      expect((await request('/v1/apps/deleted/purge-concurrent', 'DELETE')).status).toBe(409)
+      const { deleteApp, purgeExpired } = await import('./lifecycle')
+      const repeated = await deleteApp(context, active, 'late-soft-delete')
+      expect(new Date(repeated.purge_after).getTime()).toBeLessThanOrEqual(Date.now())
+      expect(boxes).toHaveBeenCalledTimes(1)
+      const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        expect(await purgeExpired(context)).not.toContain(active.name)
+      } finally {
+        errors.mockRestore()
+      }
+      expect(source).toHaveBeenCalledTimes(1)
+      // Remote cleanup has no open SQL transaction or row lock.
+      const other = new Store(dataSource, orgA, undefined, routeSchema)
+      await other.tx(async () => {
+        expect(await other.get('SELECT id FROM apps WHERE id = ? FOR UPDATE NOWAIT', active.id)).toBeDefined()
+      })
+    } finally {
+      release()
+      const response = await purging
+      source.mockRestore()
+      boxes.mockRestore()
+      expect(response.status).toBe(204)
+    }
+    expect(await store.appById(active.id)).toBeUndefined()
+  })
+
+  test('a periodic purge rechecks a candidate restored after its scan', async () => {
+    expect((await request('/v1/apps', 'POST', { name: 'restored-after-scan' })).status).toBe(201)
+    expect((await request('/v1/apps/restored-after-scan', 'DELETE')).status).toBe(204)
+    const app = (await store.appByNameAnyState('restored-after-scan'))!
+    const { purgeExpired, restoreApp } = await import('./lifecycle')
+    const all = store.all.bind(store)
+    const scan = jest.spyOn(store, 'all').mockImplementation(async (sql, ...params) => {
+      const rows = await all(sql, ...params)
+      if (sql.startsWith('SELECT * FROM apps WHERE deleted_at IS NOT NULL')) await restoreApp(context, app, 'user')
+      return rows
+    })
+    const cleanup = jest.spyOn(context.blobs, 'deleteApp')
+    try {
+      expect(await purgeExpired(context, new Date(Date.now() + 8 * 86_400_000))).not.toContain(app.name)
+      expect((await store.appById(app.id))?.deleted_at).toBeNull()
+      expect(cleanup).not.toHaveBeenCalledWith(app.id)
+    } finally {
+      scan.mockRestore()
+      cleanup.mockRestore()
+    }
+  })
+
+  test('the retention deadline rejects restore before the periodic purge runs', async () => {
+    expect((await request('/v1/apps', 'POST', { name: 'retention-ended' })).status).toBe(201)
+    expect((await request('/v1/apps/retention-ended', 'DELETE')).status).toBe(204)
+    const app = (await store.appByNameAnyState('retention-ended'))!
+    await store.run('UPDATE apps SET purge_after = clock_timestamp() WHERE id = ?', app.id)
+    expect((await request('/v1/apps/deleted/retention-ended/restore', 'POST')).status).toBe(409)
   })
 })

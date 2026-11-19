@@ -4,12 +4,20 @@ import { ACTIVE_STATUSES, now } from './db'
 import { fail } from './errors'
 
 /**
- * App deletion (PRD 3.13). Deleting is soft: keys stop working and the URL says the App is
- * gone, but Boxes, volumes, the database and the name are kept for RETENTION_DAYS so a mistake
+ * App deletion (PRD 3.13). Deleting is soft: management and public URLs stop serving the App,
+ * but Boxes, volumes, the database and the name are kept for RETENTION_DAYS so a mistake
  * can be undone. The purger then removes every resource for real.
  */
 export const RETENTION_DAYS = 7
 const PURGE_EVERY_MS = 10 * 60_000
+
+async function lockedApp(ctx: Ctx, app: AppRow): Promise<AppRow | undefined> {
+  return ctx.store.get<AppRow>(
+    'SELECT * FROM apps WHERE id = ? AND org_id = ? FOR UPDATE',
+    app.id,
+    ctx.store.organizationId ?? app.org_id,
+  )
+}
 
 async function assertIdle(ctx: Ctx, app: AppRow): Promise<void> {
   const placeholders = ACTIVE_STATUSES.map(() => '?').join(',')
@@ -32,53 +40,102 @@ export async function deleteApp(
   app: AppRow,
   actor: string,
 ): Promise<{ deleted_at: string; purge_after: string }> {
-  if (app.deleted_at) return { deleted_at: app.deleted_at, purge_after: app.purge_after! }
-  await assertIdle(ctx, app)
-  const at = now()
-  const purgeAfter = new Date(Date.now() + RETENTION_DAYS * 86_400_000).toISOString()
-  await ctx.store.tx(async () => {
+  const { deleted, newlyDeleted } = await ctx.store.tx(async () => {
+    const current = await lockedApp(ctx, app)
+    if (!current) throw fail('not_found_app', `no app named "${app.name}"`)
+    if (current.deleted_at)
+      return { deleted: { deleted_at: current.deleted_at, purge_after: current.purge_after! }, newlyDeleted: false }
+    await assertIdle(ctx, current)
+    const at = now()
+    const purgeAfter = new Date(Date.now() + RETENTION_DAYS * 86_400_000).toISOString()
     await ctx.store.run('UPDATE apps SET deleted_at = ?, purge_after = ? WHERE id = ?', at, purgeAfter, app.id)
+    await ctx.store.recordActivity(app.id, null, actor, 'app.delete', { purge_after: purgeAfter })
+    return { deleted: { deleted_at: at, purge_after: purgeAfter }, newlyDeleted: true }
   })
+  if (!newlyDeleted) return deleted
   for (const boxId of await ctx.boxes.list(app)) {
     await ctx.resources
       .sleep(boxId)
       .catch((err) => console.error(`[lifecycle] stop ${boxId}: ${(err as Error).message}`))
   }
-  await ctx.store.recordActivity(app.id, null, actor, 'app.delete', { purge_after: purgeAfter })
-  return { deleted_at: at, purge_after: purgeAfter }
+  return deleted
 }
 
 export async function restoreApp(ctx: Ctx, app: AppRow, actor: string): Promise<void> {
-  if (!app.deleted_at) return
   await ctx.store.tx(async () => {
-    await ctx.store.run('UPDATE apps SET deleted_at = NULL, purge_after = NULL WHERE id = ?', app.id)
+    const current = await lockedApp(ctx, app)
+    if (!current) throw fail('not_found_app', `no app named "${app.name}"`)
+    if (!current.deleted_at) return
+    const restored = await ctx.store.run(
+      'UPDATE apps SET deleted_at = NULL, purge_after = NULL WHERE id = ? AND purge_after > clock_timestamp()',
+      app.id,
+    )
+    if (!restored.changes)
+      throw fail('conflict', 'App retention has ended or permanent deletion has started', 'create a new App')
+    await ctx.store.recordActivity(app.id, null, actor, 'app.restore')
   })
   // Boxes stay stopped; the first request wakes them like any idle App.
-  await ctx.store.recordActivity(app.id, null, actor, 'app.restore')
 }
 
 /** Removes every resource of the App, then its rows. Safe to re-run after a partial failure. */
-export async function purgeApp(ctx: Ctx, app: AppRow): Promise<void> {
-  await assertIdle(ctx, app)
-  const { store } = ctx
-  const envs = await store.envs(app.id)
-  for (const boxId of await ctx.boxes.list(app)) await ctx.boxlite.deleteBox(boxId)
-  for (const env of envs) {
-    await ctx.resources.deleteVolumes(app, env)
-    await ctx.domains.releaseEnvironment(app, env)
-  }
-  if (app.neon_project_id) await ctx.neon.deleteProject(app.neon_project_id)
-  await ctx.blobs.deleteApp(app.id)
-  await store.tx(async () => {
-    for (const env of envs) {
-      await store.run('DELETE FROM deployment_events WHERE env_id = ?', env.id)
-      await store.run('DELETE FROM logs WHERE env_id = ?', env.id)
+export async function purgeApp(
+  ctx: Ctx,
+  app: AppRow,
+  options: { deletedOnly?: boolean; dueAt?: string } = {},
+): Promise<boolean> {
+  return ctx.withPurgeLock(app.id, async (signal) => {
+    const { store } = ctx
+    signal.throwIfAborted()
+    const committed = await store.tx(async () => {
+      const current = await lockedApp(ctx, app)
+      if (!current) {
+        if (options.dueAt) return undefined
+        throw fail('not_found_app', `no app named "${app.name}"`)
+      }
+      if (options.deletedOnly && !current.deleted_at) throw fail('not_found_app', `no deleted app named "${app.name}"`)
+      // A worker's candidate may have been restored since its scan.
+      if (options.dueAt && (!current.deleted_at || !current.purge_after || current.purge_after > options.dueAt))
+        return undefined
+      await assertIdle(ctx, current)
+      signal.throwIfAborted()
+      // Commit the irreversible boundary before any remote deletion. Failed cleanup remains due for retry.
+      await store.run(
+        'UPDATE apps SET deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP), purge_after = LEAST(COALESCE(purge_after, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP) WHERE id = ?',
+        app.id,
+      )
+      return current
+    })
+    if (!committed) return false
+    const envs = await store.envs(app.id)
+    for (const boxId of await ctx.boxes.list(committed)) {
+      signal.throwIfAborted()
+      await ctx.boxlite.deleteBox(boxId)
     }
-    await store.run('DELETE FROM activity WHERE app_id = ?', app.id)
-    if (app.neon_project_id) await store.run('DELETE FROM db_readers WHERE project_id = ?', app.neon_project_id)
-    await store.run('DELETE FROM apps WHERE id = ?', app.id)
+    for (const env of envs) {
+      signal.throwIfAborted()
+      await ctx.resources.deleteVolumes(committed, env)
+      signal.throwIfAborted()
+      await ctx.domains.releaseEnvironment(committed, env)
+    }
+    signal.throwIfAborted()
+    if (committed.neon_project_id) await ctx.neon.deleteProject(committed.neon_project_id)
+    signal.throwIfAborted()
+    await ctx.blobs.deleteApp(app.id)
+    signal.throwIfAborted()
+    await store.tx(async () => {
+      for (const env of envs) {
+        await store.run('DELETE FROM deployment_events WHERE env_id = ?', env.id)
+        await store.run('DELETE FROM logs WHERE env_id = ?', env.id)
+      }
+      await store.run('DELETE FROM activity WHERE app_id = ?', app.id)
+      if (committed.neon_project_id)
+        await store.run('DELETE FROM db_readers WHERE project_id = ?', committed.neon_project_id)
+      signal.throwIfAborted()
+      await store.run('DELETE FROM apps WHERE id = ?', app.id)
+    })
+    console.log(`[lifecycle] purged app ${app.name}`)
+    return true
   })
-  console.log(`[lifecycle] purged app ${app.name}`)
 }
 
 export async function purgeExpired(ctx: Ctx, at = new Date()): Promise<string[]> {
@@ -91,8 +148,7 @@ export async function purgeExpired(ctx: Ctx, at = new Date()): Promise<string[]>
   const done: string[] = []
   for (const app of due) {
     try {
-      await purgeApp(ctx, app)
-      done.push(app.name)
+      if (await purgeApp(ctx, app, { dueAt: at.toISOString() })) done.push(app.name)
     } catch (err) {
       console.error(`[lifecycle] purge ${app.name}: ${(err as Error).message}`)
     }
