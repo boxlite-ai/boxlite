@@ -351,13 +351,22 @@ jobs:
             esac
           fi
 
-      - name: Notify reviewers of the first approval batch
-        if: inputs.apply && (inputs.stage == 'dev' || inputs.stage == 'prod')
+      - name: Notify dev reviewers
+        if: inputs.apply && inputs.stage == 'dev'
         continue-on-error: true
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets[inputs.stage == 'dev' && 'SLACK_DEV_DEPLOYMENT_WEBHOOK_URL' || 'SLACK_WEBHOOK_URL'] }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
           APPROVAL_PHASE: ${{ steps.classify.outputs.version != '' && 'Release deployment approval' || 'Commit preparation approval' }}
+        run: node apps/infra/scripts/release-pipeline.mjs approval
+
+      - name: Notify prod reviewers
+        if: inputs.apply && inputs.stage == 'prod'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          APPROVAL_PHASE: Release deployment approval
         run: node apps/infra/scripts/release-pipeline.mjs approval
 
   # Each commit artifact plans/builds on its own runner; releases use one apply leg.

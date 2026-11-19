@@ -86,7 +86,7 @@ The GitHub summary includes the E2E result and the prod run link after success, 
 
 ### Slack approval notices
 
-Configure each incoming webhook as a repository Actions secret for its channel.
+Configure each incoming webhook as a repository Actions secret for its channel. Each deployment notification step references only its destination’s secret by name.
 
 | Sender | When | Channel and secret |
 | --- | --- | --- |

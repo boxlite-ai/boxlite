@@ -45,9 +45,12 @@ test('published releases require one target Environment approval for verificatio
 
 test('apply notices precede each protected batch and never fall back to another stage secret', () => {
   const { resolve, plan, deploy, 'notify-deploy': second } = workflow.jobs
-  const first = resolve.steps.at(-1)
-  assert.match(first.run, /release-pipeline.mjs approval$/)
-  assert.equal(first['continue-on-error'], true)
+  const notices = resolve.steps.filter((step: any) => step.run?.endsWith('release-pipeline.mjs approval'))
+  const devSecret = '${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}'
+  const prodSecret = '${{ secrets.SLACK_WEBHOOK_URL }}'
+  assert.deepEqual(notices.map((step: any) => step.env.SLACK_WEBHOOK_URL), [devSecret, prodSecret])
+  assert.deepEqual(resolve.steps.slice(-2), notices)
+  for (const step of notices) assert.equal(step['continue-on-error'], true)
   assert.deepEqual(plan.needs, ['resolve'])
   assert.deepEqual(second.needs, ['resolve', 'plan'])
   assert.ok(deploy.needs.includes('notify-deploy'))
@@ -56,27 +59,23 @@ test('apply notices precede each protected batch and never fall back to another 
   assert.equal(resolve.permissions.actions, 'read')
   assert.deepEqual(second.permissions, { contents: 'read', actions: 'read' })
   const send = second.steps.at(-1)
-  assert.equal(send.run, first.run)
-  assert.equal(send.env.SLACK_WEBHOOK_URL, '${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}')
+  for (const step of notices) assert.equal(send.run, step.run)
+  assert.equal(send.env.SLACK_WEBHOOK_URL, devSecret)
   assert.equal(send.env.APPROVAL_PHASE, 'Commit deployment approval')
   const expr = (value: string) => value.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
-  const route = new Function('inputs', 'secrets', 'return ' + expr(first.env.SLACK_WEBHOOK_URL))
-  const batch = new Function('steps', 'return ' + expr(first.env.APPROVAL_PHASE))
-  const eligible = new Function('inputs', 'return ' + first.if)
+  const batch = new Function('steps', 'return ' + expr(notices[0].env.APPROVAL_PHASE))
+  assert.equal(notices[1].env.APPROVAL_PHASE, 'Release deployment approval')
   const next = new Function('inputs', 'needs', 'return ' + second.if)
   for (const stage of ['dev', 'prod', 'stage']) {
     for (const apply of [false, true]) {
-      assert.equal(eligible({ stage, apply }), apply && stage !== 'stage')
+      const selected = notices.filter((step: any) => new Function('inputs', 'return ' + step.if)({ stage, apply }))
+      const expected = apply && stage !== 'stage' ? [stage === 'dev' ? devSecret : prodSecret] : []
+      assert.deepEqual(selected.map((step: any) => step.env.SLACK_WEBHOOK_URL), expected)
       for (const version of ['', 'v1.2.3']) {
         const needs = { resolve: { outputs: { version } }, plan: { result: 'success' } }
         assert.equal(next({ stage, apply }, needs), stage === 'dev' && apply && !version)
       }
     }
-  }
-  for (const dev of ['', 'dev destination']) {
-    const secrets = { SLACK_DEV_DEPLOYMENT_WEBHOOK_URL: dev, SLACK_WEBHOOK_URL: 'release' }
-    assert.equal(route({ stage: 'dev' }, secrets), dev)
-    assert.equal(route({ stage: 'prod' }, secrets), 'release')
   }
   for (const version of ['', 'v1.2.3']) {
     const phase = batch({ classify: { outputs: { version } } })
