@@ -6,6 +6,7 @@
 
 import { NavigationIcon, type NavigationIconName } from '@/components/NavigationIcon'
 import { SidebarBalance } from '@/components/billing/SidebarBalance'
+import { AccountAvatar } from '@/components/AccountAvatar'
 import { LogoText } from '@/assets/Logo'
 import {
   DropdownMenu,
@@ -286,14 +287,9 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
     }
   }, [navigate])
 
-  const userName = user?.profile.name || user?.profile.email || 'Profile'
-  const initials =
-    userName
-      .split(/\s+/)
-      .map((w) => w[0])
-      .slice(0, 2)
-      .join('')
-      .toUpperCase() || 'U'
+  const accountName = user?.profile.name?.trim() || user?.profile.email?.trim() || ''
+  const userName = accountName || 'Profile'
+  const avatarUrl = user?.profile.picture?.trim() || undefined
 
   const isActive = (path: string) => pathname === path || pathname.startsWith(`${path}/`)
   const railItemClass = (active: boolean) =>
@@ -679,13 +675,11 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               title="Profile"
               className="mr-0 xs:mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-body font-medium text-foreground transition-colors hover:bg-control-hover data-[state=open]:bg-selection data-[state=open]:hover:bg-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
             >
-              <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-meta font-bold text-brand-foreground">
-                {user?.profile.picture ? (
-                  <img src={user.profile.picture} alt={userName} className="h-full w-full object-cover" />
-                ) : (
-                  initials
-                )}
-              </span>
+              <AccountAvatar
+                key={JSON.stringify([user?.profile.iss, user?.profile.sub, avatarUrl])}
+                src={avatarUrl}
+                name={accountName}
+              />
               <span className="hidden min-w-0 truncate md:inline">{userName}</span>
               <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
             </DropdownMenuTrigger>
