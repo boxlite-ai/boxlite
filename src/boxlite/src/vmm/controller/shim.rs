@@ -265,7 +265,7 @@ pub struct ShimController {
 
 struct ProtectedStart {
     network: ProtectedNetworkLaunch,
-    record_spawn: Box<dyn Fn(super::ProtectedSpawnEvent) -> BoxliteResult<()> + Send>,
+    record_spawn: super::spawn::ProtectedSpawnRecorder,
 }
 
 impl ShimController {
@@ -430,7 +430,9 @@ impl VmmController for ShimController {
         .with_nested_virtualization(config.nested_virtualization);
         let spawned = match protected {
             Some(start) => {
-                spawner.spawn_protected(&config_json, config.detach, &*start.record_spawn)?
+                spawner
+                    .spawn_protected(&config_json, config.detach, start.record_spawn)
+                    .await?
             }
             None => spawner.spawn(&config_json, config.detach)?,
         };

@@ -279,6 +279,8 @@ On Linux, the Runner needs a cgroup v2 that can contain the shim and its namespa
 
 Protected bootstrap requires automatic removal to be disabled. Runtime retains protected attempt and retirement records during restart recovery, including when the Box directory is missing.
 
+Runtime gives the private pipe five seconds to transmit the launch record. A timeout or cancellation closes stdin and signals the pending shim to terminate.
+
 The protected receipt requires Guest readiness and exact installed policy, registration, and epoch evidence from gvproxy. Until an authorized bootstrap settles, policy-only changes and legacy recovery cannot replace the protected route. Cloud registry transactions and live rotation use their respective [registry and runtime-update slices](#acceptance-and-ownership).
 
 ```mermaid
@@ -294,7 +296,13 @@ sequenceDiagram
     opt Preparation succeeds
         Runtime->>Runtime: Record potential child before spawn
         Runtime->>Shim: Spawn and verify child identity and containment
-        Runtime->>Shim: Write one launch record and close stdin
+        Runtime->>Shim: Write launch record with a five-second deadline
+        alt Write completes within the deadline
+            Runtime->>Shim: Close stdin for the shim to decode the record
+        else Pipe times out or caller cancels
+            Runtime->>Shim: Close stdin and signal the child to terminate
+            Runtime->>Runtime: Retain attempt until termination is proved
+        end
     end
     alt Guest ready and installed route matches
         Shim-->>Runtime: Confirm policy, registration and epoch
