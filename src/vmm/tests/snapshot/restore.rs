@@ -524,6 +524,149 @@ fn kvm_export_destroy_restore_resume_continues_counter() {
     assert!(counter(&destination) > counter(&source));
     drop(restored);
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires /dev/kvm"]
+fn kvm_split_ram_export_destroy_restore_resume_continues_both_counters() {
+    use std::{
+        io::{Read, Seek, SeekFrom},
+        time::Instant,
+    };
+
+    use crate::{
+        boot::{BOOT_LEAF, entry::long_mode_entry},
+        flat_guest::CODE,
+        x86_boot_layout::plan_boot_tables,
+    };
+
+    const MEMORY_MIB: u32 = 3073;
+    const LOW_RAM_LEN: u64 = 3072 << 20;
+    const RAM_LEN: u64 = (MEMORY_MIB as u64) << 20;
+    const LOW_COUNTER: u32 = 0x8000;
+    const HIGH_COUNTER: u64 = 0x1_0000_0000;
+    const RELEASE: GuestAddress = GuestAddress(LOW_COUNTER as u64 + 4);
+    const INITIAL: [u32; 2] = [0x1234_5678, 0x9abc_def0];
+
+    let config = crate::VmConfig {
+        vcpu_count: 1,
+        memory_mib: MEMORY_MIB,
+        kernel: "unused".into(),
+        cmdline: String::new(),
+        initramfs: None,
+        disks: vec![],
+        filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
+    };
+    let vm = Vm::with_backend(
+        config,
+        boxlite_hypervisor::KvmVm::new,
+        |ram, _| {
+            // Park at the release byte after both initial increments. After
+            // resume, each INC reads its saved counter and writes the next value.
+            let mut program = vec![0xbf]; // mov edi, LOW_COUNTER
+            program.extend_from_slice(&LOW_COUNTER.to_le_bytes());
+            program.extend_from_slice(&[0x48, 0xbb]); // mov rbx, HIGH_COUNTER
+            program.extend_from_slice(&HIGH_COUNTER.to_le_bytes());
+            program.extend_from_slice(&[
+                0xff, 0x07, // inc dword [rdi]
+                0xff, 0x03, // inc dword [rbx]
+                0x80, 0x7f, 0x04, 0x00, // wait: cmp byte [rdi + 4], 0
+                0x74, 0xfa, // je wait
+                0xff, 0x07, // inc dword [rdi]
+                0xff, 0x03, // inc dword [rbx]
+                0xeb, 0xfe, // jmp $ (keep the final counters stable)
+            ]);
+            let memory = ram.memory().as_ref();
+            memory
+                .write_obj(INITIAL[0], GuestAddress(u64::from(LOW_COUNTER)))
+                .unwrap();
+            memory
+                .write_obj(INITIAL[1], GuestAddress(HIGH_COUNTER))
+                .unwrap();
+            memory.write_slice(&program, GuestAddress(CODE)).unwrap();
+            let ranges: Vec<_> = ram.ranges().collect();
+            let plan = plan_boot_tables(
+                &ranges,
+                (CODE, CODE + program.len() as u64),
+                None,
+                BOOT_LEAF,
+            )
+            .unwrap();
+            Ok(long_mode_entry(memory, CODE, 0, &plan).unwrap())
+        },
+        |_, _| Ok(()),
+    )
+    .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("split-ram");
+    let read_counters = || {
+        let mut file = File::open(&path).unwrap();
+        let header = image::Header::read(&mut file).unwrap();
+        let ram_start = 32 + header.machine_len;
+        assert_eq!(header.ram_len, RAM_LEN);
+        assert_eq!(file.metadata().unwrap().len(), ram_start + RAM_LEN);
+        // Packed high RAM follows the low band directly in the image.
+        [u64::from(LOW_COUNTER), LOW_RAM_LEN].map(|offset| {
+            file.seek(SeekFrom::Start(ram_start + offset)).unwrap();
+            let mut bytes = [0; 4];
+            file.read_exact(&mut bytes).unwrap();
+            u32::from_le_bytes(bytes)
+        })
+    };
+
+    let memory = Arc::clone(vm.ram.memory());
+    let mut source = vm.spawn().unwrap();
+    let checkpoint = INITIAL.map(|value| value + 1);
+    let timeout = Duration::from_secs(10);
+    let poll_interval = Duration::from_millis(10);
+    let deadline = Instant::now() + timeout;
+    while memory.read_obj::<u32>(GuestAddress(HIGH_COUNTER)).unwrap() != checkpoint[1] {
+        assert!(
+            Instant::now() < deadline,
+            "source guest missed its checkpoint"
+        );
+        thread::sleep(poll_interval);
+    }
+    source.pause().unwrap();
+    // The release byte takes effect when the restored vCPU resumes.
+    memory.write_obj(1u8, RELEASE).unwrap();
+    source.export(&path).unwrap();
+    assert_eq!(read_counters(), checkpoint, "packed source counters");
+    source.stop();
+    assert_eq!(source.join().unwrap(), crate::VmExit::StopRequested);
+    drop(memory);
+
+    let advanced = checkpoint.map(|value| value + 1);
+    let mut restored = from_kvm_path(&path).unwrap();
+    assert_eq!(restored.status(), VmStatus::Paused);
+    restored.resume().unwrap();
+    let deadline = Instant::now() + timeout;
+    let counters = loop {
+        thread::sleep(Duration::from_millis(50));
+        restored.pause().unwrap();
+        fs::remove_file(&path).unwrap();
+        restored.export(&path).unwrap();
+        let counters = read_counters();
+        for ((counter, saved), next) in counters.into_iter().zip(checkpoint).zip(advanced) {
+            assert!(
+                (saved..=next).contains(&counter),
+                "packed restored counter {counter:#x} outside {saved:#x}..={next:#x}"
+            );
+        }
+        if counters == advanced || Instant::now() >= deadline {
+            break counters;
+        }
+        restored.resume().unwrap();
+    };
+    restored.stop();
+    assert_eq!(restored.join().unwrap(), crate::VmExit::StopRequested);
+    assert_eq!(counters, advanced, "packed restored counters");
+}
+
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
