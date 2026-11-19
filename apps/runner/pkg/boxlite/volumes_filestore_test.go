@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1129,6 +1130,26 @@ func TestFilestoreValidatesTargetForEveryReference(t *testing.T) {
 	}
 }
 
+func TestFilestoreRejectsConflictingTargetsWithinRequest(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(t, c)
+
+	_, err := c.getVolumeMounts(context.Background(), "box1", []dto.VolumeDTO{
+		{VolumeId: "vol-a", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		{VolumeId: "vol-b", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.8", Export: "/vol2"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicting filestore target") {
+		t.Fatalf("conflicting request returned %v, want conflicting-target error", err)
+	}
+	if got := fake.mounts.Load(); got != 1 {
+		t.Fatalf("conflicting request ran %d mount commands, want only the first target to mount", got)
+	}
+	if _, statErr := os.Stat(filestoreDataDir(filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch"), "vol-b")); !os.IsNotExist(statErr) {
+		t.Fatalf("conflicting reference prepared its data directory: %v", statErr)
+	}
+}
+
 func TestFilestoreRejectsReusingDifferentTarget(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
@@ -1239,6 +1260,52 @@ func TestObjectStorageReplayRepairsMalformedRecord(t *testing.T) {
 	root := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"vol-object")
 	if len(repaired.Entries) != 1 || repaired.Entries[0].RootPath != root {
 		t.Fatalf("repaired record = %#v, want only the object-storage root %q", repaired.Entries, root)
+	}
+}
+
+func TestStartReturnsFilestorePreparationFailureBeforeBoxLookup(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	var nativeCalls atomic.Int32
+	c := checkpointRESTClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		nativeCalls.Add(1)
+		http.Error(w, "native box lookup reached", http.StatusInternalServerError)
+	})
+	c.volumeMutexes = make(map[string]*sync.Mutex)
+	installFakeFindmnt(t, "10.0.0.7:/vol1")
+	c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
+	metadata := map[string]string{
+		"volumes": `[{"volumeId":"vol-a","mountPath":"/data","filestore":{"instance":"ml-scratch","server":"10.0.0.8","export":"/vol2"}}]`,
+	}
+
+	_, err := c.Start(context.Background(), "abc123def456", nil, metadata)
+	if err == nil || !strings.Contains(err.Error(), "mount target mismatch") {
+		t.Fatalf("Start returned %v, want the Filestore target mismatch", err)
+	}
+	if got := nativeCalls.Load(); got != 0 {
+		t.Fatalf("Start made %d native box calls after the Filestore failure", got)
+	}
+}
+
+func TestStartPreservesObjectStorageMountFallback(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	var nativeCalls atomic.Int32
+	c := checkpointRESTClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		nativeCalls.Add(1)
+		http.Error(w, "native box lookup reached", http.StatusInternalServerError)
+	})
+	c.testProbeRunner = func(context.Context, string) (bool, error) {
+		return false, errors.New("injected object-storage preparation failure")
+	}
+	metadata := map[string]string{
+		"volumes": `[{"volumeId":"vol-object","mountPath":"/data"}]`,
+	}
+
+	_, err := c.Start(context.Background(), "abc123def456", nil, metadata)
+	if err == nil || strings.Contains(err.Error(), "injected object-storage preparation failure") {
+		t.Fatalf("Start returned %v, want native lookup after the object-storage fallback", err)
+	}
+	if got := nativeCalls.Load(); got == 0 {
+		t.Fatal("object-storage preparation failure blocked the native box lookup")
 	}
 }
 

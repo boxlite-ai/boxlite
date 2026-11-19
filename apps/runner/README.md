@@ -580,9 +580,9 @@ volume ID and guest mount path:
 
 `instance` is the logical mount identity, while `server` and `export` identify
 the NFS target. The runner validates all three on every reference before
-per-call mount deduplication and rejects Filestore `subpath` instead of silently
-ignoring it. Public Volume provisioning and control-plane admission are outside
-this runner-only slice.
+per-call mount deduplication, requires one target per instance within a request,
+and rejects Filestore `subpath` instead of silently ignoring it. Public Volume
+provisioning and control-plane admission are outside this runner-only slice.
 
 ### Mount and record lifecycle
 
@@ -610,10 +610,12 @@ this runner-only slice.
 
 ### Troubleshooting and prerequisites
 
-Start replays lost mounts without failing the box start, matching object-storage
-behavior. A box started while NFS was unreachable can therefore show an empty
-guest directory; stop it, restore connectivity, and start it again. NFS `hard`
-mounts block I/O while the network is down.
+Start returns Filestore preparation errors, including target mismatches, before
+starting the box, and the `START_BOX` job reports that failure. Object-storage-
+only boxes retain the existing fallback: mount replay failures are logged and
+Start proceeds, so a box started while object storage is unreachable can show an
+empty guest directory; stop it, restore connectivity, and start it again. NFS
+`hard` mounts block I/O while the network is down.
 
 If a later request resolves the same logical instance to another server or
 export, the runner rejects the target mismatch instead of binding the old share.

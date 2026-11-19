@@ -139,9 +139,9 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 	volumeMounts := make([]volumeMount, 0, len(volumes))
 
 	fuseMountedVolumes := make(map[string]bool)
-	// Per-call dedup so two volumes on the same Filestore instance run the
-	// ensure-mount once; the per-instance mutex covers cross-request races.
-	filestoreEnsured := make(map[string]bool)
+	// Per-call dedup remembers the verified target so two volumes on one
+	// Filestore instance cannot silently select different shares.
+	filestoreEnsured := make(map[string]string)
 
 	for _, vol := range volumes {
 		if vol.Filestore != nil {
@@ -214,15 +214,14 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 // creates the volume's data directory and writes the referencing record. The data directory is named by the volume's
 // id, not the box's: boxes sharing a volume share the directory (the
 // bucket-alignment contract), and a destroyed box's data stays reachable by
-// mounting the volume into a new box. `ensured` dedups
-// the ensure within one call; `priorMounts` are the mounts prepared earlier in
-// this call.
+// mounting the volume into a new box. `ensured` records the verified target
+// for each instance prepared within this call.
 //
 // Holding the lock across the whole sequence is what makes the reclaim's
 // in-lock record rescan sound: reclaim counts references from records under
 // the same per-instance mutex, so a mount cannot be reclaimed in the window
 // between "usable" and "referenced" (design §4.5).
-func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto.VolumeDTO, ensured map[string]bool) (volumeMount, error) {
+func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto.VolumeDTO, ensured map[string]string) (volumeMount, error) {
 	// The volume id names a data directory under the instance's mount root.
 	// The control plane mints uuids, which cannot carry separators or '..',
 	// but this boundary must not lean on that — the same posture as the box
@@ -257,11 +256,16 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 		return volumeMount{}, err
 	}
 
-	if !ensured[ref.Instance] {
+	target := filestoreTarget(ref)
+	if ensuredTarget, ok := ensured[ref.Instance]; ok {
+		if ensuredTarget != target {
+			return volumeMount{}, fmt.Errorf("conflicting filestore target for instance %s: request already verified %q, reference requests %q", ref.Instance, ensuredTarget, target)
+		}
+	} else {
 		if err := c.ensureFilestoreMounted(ctx, ref, rootPath, mountKey); err != nil {
 			return volumeMount{}, err
 		}
-		ensured[ref.Instance] = true
+		ensured[ref.Instance] = target
 	}
 
 	dataDir := filestoreDataDir(rootPath, vol.VolumeId)
@@ -312,12 +316,35 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	return mount, nil
 }
 
+func filestoreTarget(ref *dto.FilestoreRef) string {
+	return ref.Server + ":" + ref.Export
+}
+
 // filestoreDataDir derives the volume's data directory inside an instance's
 // NFS export: {mount root}/{volume_id}. Volumes are shared resources — boxes
 // mounting the same volume land in the same directory, and a destroyed box's
 // data stays reachable through the volume id.
 func filestoreDataDir(rootPath string, volumeId string) string {
 	return filepath.Join(rootPath, volumeId)
+}
+
+type filestoreVolumePreparationError struct {
+	err error
+}
+
+func (e *filestoreVolumePreparationError) Error() string { return e.err.Error() }
+func (e *filestoreVolumePreparationError) Unwrap() error { return e.err }
+
+func classifyVolumeMetadataError(volumes []dto.VolumeDTO, err error) error {
+	if hasFilestoreRef(volumes) {
+		return &filestoreVolumePreparationError{err: err}
+	}
+	return err
+}
+
+func isFilestoreVolumePreparationError(err error) bool {
+	var target *filestoreVolumePreparationError
+	return errors.As(err, &target)
 }
 
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
@@ -340,10 +367,13 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 
 	volumeMounts, err := c.getVolumeMounts(ctx, boxID, volumes)
 	if err != nil {
-		return err
+		return classifyVolumeMetadataError(volumes, err)
 	}
 
-	return c.recordBoxVolumeMounts(ctx, boxID, volumeMounts)
+	if err := c.recordBoxVolumeMounts(ctx, boxID, volumeMounts); err != nil {
+		return classifyVolumeMetadataError(volumes, err)
+	}
+	return nil
 }
 
 func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, mountPath string) error {
@@ -470,7 +500,7 @@ func verifyFilestoreMountTarget(ctx context.Context, ref *dto.FilestoreRef, moun
 	probeCtx, cancel := context.WithTimeout(ctx, volumeProbeTimeout)
 	defer cancel()
 
-	expected := ref.Server + ":" + ref.Export
+	expected := filestoreTarget(ref)
 	output, err := exec.CommandContext(
 		probeCtx,
 		"findmnt",
@@ -497,7 +527,7 @@ func verifyFilestoreMountTarget(ctx context.Context, ref *dto.FilestoreRef, moun
 // contract with the API's Filestore discovery.
 func nfsMountArgs(ref *dto.FilestoreRef, path string) []string {
 	opts := "vers=4.1,hard"
-	return []string{"-t", "nfs", "-o", opts, ref.Server + ":" + ref.Export, path}
+	return []string{"-t", "nfs", "-o", opts, filestoreTarget(ref), path}
 }
 
 // getNfsMountCmd wraps nfsMountArgs in the command to run. No systemd-run
