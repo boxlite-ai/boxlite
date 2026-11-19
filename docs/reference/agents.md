@@ -33,7 +33,7 @@ and `SimpleBox`. Each SDK retains its error conventions.
 ### Failure contract
 
 Rust, Python, Node.js, the CLI and C calls on a local runtime run the operations listed in
-[OpenCode on a local runtime](#opencode-on-a-local-runtime). Rust can also use
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Rust and C can also use
 these operations over the Box REST API. Go returns unsupported errors before
 agent execution.
 

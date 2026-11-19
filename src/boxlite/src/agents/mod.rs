@@ -3,9 +3,9 @@
 //! BoxLite forwards each operation to a coding agent's native interface inside
 //! the Box. The agent owns its conversation, execution and recovery; BoxLite
 //! owns the Box and the transport, and starts the agent's own service when
-//! none runs. OpenCode 2.2 on a local runtime is the only implementation;
-//! unsupported operations and options fail with `Unsupported` before reaching
-//! the agent.
+//! none runs. OpenCode 2.2 is the local implementation. REST runtimes forward
+//! operations to the server's agent API; unsupported operations and options
+//! fail with `Unsupported` before reaching the agent.
 //!
 //! Each implementation is one module whose agent type implements
 //! [`AgentBackend`]; `Agents::create` maps the implementation name to it.
@@ -228,8 +228,8 @@ impl Agents {
         Ok(())
     }
 
-    /// Checked before any validation, so remote runtimes always see `Unsupported`.
-    /// A cloud tunnel can publish the agent's server; a local one stays on this host.
+    /// Resolve the local Box for direct adapter calls and binary installation.
+    /// REST create and get dispatch through their backend before this check.
     fn require_local_runtime(&self) -> BoxliteResult<Arc<BoxImpl>> {
         Arc::clone(&self.box_backend)
             .as_any_arc()
