@@ -111,9 +111,9 @@ export function AppCards({
                     <StatusBadge label={status.label} color={status.color} />
                   </div>
                   <div className="min-w-0 space-y-1">
-                    <div className="truncate font-mono text-meta text-muted-foreground" title={app.url}>
-                      {app.status === 'draft' ? (
-                        <span className="font-sans">Not published</span>
+                    <div className="truncate font-mono text-meta text-muted-foreground" title={app.url ?? undefined}>
+                      {app.status === 'draft' || !app.url ? (
+                        <span className="font-sans">{app.status === 'draft' ? 'Not published' : 'URL unavailable'}</span>
                       ) : (
                         app.url.replace(/^https?:\/\//, '').replace(/\/$/, '')
                       )}
@@ -149,7 +149,7 @@ export function AppCards({
                     )}
                   </div>
                   <div className="relative z-10 flex shrink-0 items-center gap-2">
-                    {app.status !== 'draft' && app.lastDeploy && (
+                    {app.url && app.status !== 'draft' && app.lastDeploy && (
                       <button
                         type="button"
                         onClick={() => void openApp(app.id, 'main')}

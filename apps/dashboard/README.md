@@ -102,6 +102,10 @@ projection is `GET /apps/{appId}/view` within that organization namespace.
 Deployments, environments, services, authentication, database, volumes,
 variables and logs remain within the selected organization and environment.
 
+The Apps list, App details and environment list show each environment's assigned
+default URL. Environments without a default domain are still visible and manageable
+when the organization's domain quota is full. Viewing them uses no domain quota.
+
 Deleting an active App moves it to **Recently deleted** for seven days. Choose
 **Restore** to bring it back, or **Delete** beside Restore to remove it permanently
 before the retention period ends. Enter the App name to confirm. Permanent deletion

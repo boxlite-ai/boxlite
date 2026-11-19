@@ -308,7 +308,7 @@ export interface AppAuthStatus {
   /** Sign-in works: declared, and at least one of its providers is ready. */
   enforced: boolean
   methods: AppSignInMethod[]
-  loginUrl: string
+  loginUrl: string | null
   users: number
   note: string | null
   /** The App's SMTP sender for email code sign-in; absent from an older control plane. */
@@ -368,8 +368,8 @@ export interface AppSummary {
   id: string
   name: string
   slug: string
-  /** The environment's own origin, from creation on. */
-  url: string
+  /** The environment's assigned origin; null until a domain is available. */
+  url: string | null
   visibility: AppVisibility
   status: AppStatus
   lastDeploy: { releaseId: string; at: string; by: string } | null
@@ -394,7 +394,7 @@ export interface AppSummary {
 export interface EnvironmentSummary {
   name: string
   status: AppStatus
-  url: string
+  url: string | null
   box: string | null
   lastDeploy: { releaseId: string; at: string; by: string } | null
   /** The environment this one was branched from, if any. */
