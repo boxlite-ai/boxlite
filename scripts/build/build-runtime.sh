@@ -252,14 +252,11 @@ collect_libraries() {
             out_dir="$PROJECT_ROOT/target"
         fi
 
-        # Sort by modification time (newest first) to get the most recent build
-        runtime_src=$(find "$out_dir/$PROFILE/build/boxlite-"*/out/runtime -type d -print0 2>/dev/null | \
-            xargs -0 ls -dt 2>/dev/null | head -1)
+        runtime_src=$(bash "$SCRIPT_BUILD_DIR/find-runtime-dir.sh" "$out_dir/$PROFILE/build")
     fi
 
     if [ -z "$runtime_src" ] || [ ! -d "$runtime_src" ]; then
         print_error "Could not find runtime libraries directory"
-        echo "Expected location: $out_dir/$PROFILE/build/boxlite-*/out/runtime"
         exit 1
     fi
 

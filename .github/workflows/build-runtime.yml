@@ -96,8 +96,7 @@ jobs:
       - name: Package runtime
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
-          [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
+          RUNTIME_DIR=$(bash scripts/build/find-runtime-dir.sh target/release/build)
           cp -a "$RUNTIME_DIR" boxlite-runtime
           tar czf "boxlite-runtime-v${VERSION}-${{ matrix.target }}.tar.gz" boxlite-runtime/
           rm -rf boxlite-runtime
