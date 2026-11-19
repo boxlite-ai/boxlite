@@ -8,8 +8,6 @@ import { Json, StateDatabase, StateConflict, StateCorrupt, LeaseLost } from './d
 import { ExecutionLease, ListenerState } from './store'
 import { PostgresStateDatabase, postgresStateTable } from './postgres'
 import { SqliteStateDatabase } from './sqlite'
-import { rebuildDemand, decodeDemand } from '../demand'
-import { WorkflowJob } from '../jobs'
 import { ExecutionJournal } from '../execution/journal'
 
 for (const backend of ['sqlite', 'postgres'] as const) {
@@ -57,31 +55,6 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         }
       }
     })
-    if (backend === 'postgres')
-      it.each([100, 101])('rebuilds %s queue facts with a bounded SQL budget', async (size) => {
-        const lease = (await state.acquire('rebuild', 300000))!
-        const jobs: WorkflowJob[] = Array.from({ length: size }, (_, index) => ({
-          repository: 21,
-          run: 33,
-          job: index + 1,
-          status: 'queued',
-          runner: null,
-          labels: ['boxlite'],
-        }))
-        const queries = jest.spyOn(pg!.logger, 'logQuery').mockImplementation(() => {})
-        const result = await rebuildDemand(
-          state,
-          lease,
-          { installationId: 1, accountId: 7, repositoryId: 21 },
-          [],
-          jobs,
-        )
-        const statements = queries.mock.calls.length
-        queries.mockRestore()
-        expect(result.map(decodeDemand)).toEqual([expect.objectContaining({ queued: size })])
-        expect(await state.recover(lease, 1000, ['job-fact/'])).toHaveLength(size)
-        expect(statements).toBeLessThanOrEqual(40)
-      })
     it.each(['batch', 'fallback'])(
       'preserves ordered reads and duplicate ingress keys with %s storage',
       async (mode) => {
