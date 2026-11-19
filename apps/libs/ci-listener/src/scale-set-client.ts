@@ -115,6 +115,7 @@ export interface SetMessage {
   id: number
   assigned?: number
   worked: RunnerIdentity[]
+  settledRequests: RequestId[]
   available: { id: RequestId; owner: string; repository: string; labels: string[] }[]
 }
 
@@ -122,6 +123,7 @@ export interface SetMessage {
 export class ActionsScaleSets {
   private admin?: Admin
   private refreshing?: Promise<Admin>
+  private registrationAttempt?: { token: string; expires: number; attempts: number; retry?: GitHubRequestError }
   constructor(
     private readonly scope: string,
     private readonly registration: (signal?: AbortSignal) => Promise<string>,
@@ -133,12 +135,36 @@ export class ActionsScaleSets {
       throw new Error('Invalid GitHub scale set scope')
   }
   private async connect(signal?: AbortSignal): Promise<Admin> {
-    const token = secret(await this.registration(signal))
-    const response = await request(new URL(exchange), 'RemoteAuth ' + token, {
-      method: 'POST',
-      body: JSON.stringify({ url: this.scope, runner_event: 'register' }),
-      signal,
-    })
+    let attempt = this.registrationAttempt
+    if (attempt?.retry?.retryAt && attempt.retry.retryAt > Date.now()) throw attempt.retry
+    if (!attempt || attempt.expires <= Date.now()) {
+      attempt = { token: secret(await this.registration(signal)), expires: Date.now() + 5 * 60_000, attempts: 0 }
+      this.registrationAttempt = attempt
+    }
+    let response: unknown
+    try {
+      response = await request(new URL(exchange), 'RemoteAuth ' + attempt.token, {
+        method: 'POST',
+        body: JSON.stringify({ url: this.scope, runner_event: 'register' }),
+        signal,
+      })
+    } catch (error) {
+      // The token may need to propagate. Return the deadline to the supervisor
+      // so other scopes can use its permit during the wait.
+      if (
+        error instanceof GitHubRequestError &&
+        (error.status === 401 || error.status === 403) &&
+        attempt.attempts < 4
+      ) {
+        const retryAt = error.retryAt ?? Date.now() + 1000 * 2 ** attempt.attempts
+        attempt.attempts++
+        attempt.retry = new GitHubRequestError(error.status, false, retryAt)
+        throw attempt.retry
+      }
+      this.registrationAttempt = undefined
+      throw error
+    }
+    this.registrationAttempt = undefined
     if (!object(response)) return invalid()
     const admin = secret(response.token)
     const claims = decode(Buffer.from(admin.split('.')[1] ?? '', 'base64url').toString('utf8'))
@@ -343,8 +369,11 @@ export class ScaleSetSession {
     if (!Array.isArray(events)) return invalid()
     const available: SetMessage['available'] = []
     const worked: RunnerIdentity[] = []
+    const settledRequests: RequestId[] = []
     for (const event of events) {
       if (!object(event) || typeof event.messageType !== 'string') return invalid()
+      if (['JobAssigned', 'JobStarted', 'JobCompleted'].includes(event.messageType) && event.runnerRequestId != null)
+        settledRequests.push(requestId(event.runnerRequestId))
       if (event.messageType === 'JobStarted' || event.messageType === 'JobCompleted') {
         if (
           positive(event.runnerId) &&
@@ -374,6 +403,7 @@ export class ScaleSetSession {
       assigned: raw.statistics == null ? undefined : assigned(raw.statistics),
       available,
       worked,
+      settledRequests,
     }
   }
   async acquire(ids: RequestId[], signal?: AbortSignal): Promise<RequestId[]> {

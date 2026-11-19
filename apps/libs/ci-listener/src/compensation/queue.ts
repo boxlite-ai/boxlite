@@ -379,6 +379,7 @@ export class RepositoryScanQueue {
             accountId: claim.scope.installation.account.id,
             repositoryId: claim.repository,
             job: { id: job.job, runId: job.run },
+            labels: job.labels,
           })
           if (await tx.put(next, null)) continue
           prior = await tx.get(key, true)
@@ -388,6 +389,7 @@ export class RepositoryScanQueue {
           accountId: number
           repositoryId: number
           job: { id: number; runId: number }
+          labels?: string[]
         }>(prior)
         if (
           value.installationId !== claim.scope.installation.id ||
@@ -398,6 +400,12 @@ export class RepositoryScanQueue {
           value.job.runId !== job.run
         )
           throw new StateCorrupt()
+        if (
+          prior &&
+          value.labels === undefined &&
+          !(await tx.put(record(key, { ...value, labels: job.labels }), prior.version))
+        )
+          throw new StateConflict()
       }
       await this.assert(tx, claim)
     })

@@ -3,30 +3,40 @@ import { DataSource } from 'typeorm'
 import { PostgresStateDatabase, postgresStateTable } from './state/postgres'
 import { CredentialSource } from './credentials'
 import { GitHubAppSource, GitHubInstallation } from './github-app'
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { GitHubExecutionBackend } from './execution/backend'
 import { ExecutionJournal } from './execution/journal'
-import { ExecutionScope } from './execution/model'
+import { decodeScope, ExecutionScope } from './execution/model'
 import { Listener, ListenerHost } from './listener'
-import { scaleSetBindings } from './scale-set-controller'
+import { scaleSetBindings, ScaleSetController, ScaleSetWork } from './scale-set-controller'
+import { ActionsScaleSets } from './scale-set-client'
 import { SqliteStateDatabase } from './state/sqlite'
 import { ListenerState } from './state/store'
+import { ListenerInbox, verifyWebhook } from './webhook'
 import { ConfirmedWorkerAbsent, WorkerExecutor, WorkerState } from './worker'
 
 /** Public wire shapes. No external runner or installation is needed by this fixture. */
 class ActionsFixture {
   readonly repository = { id: 21, name: 'repo', owner: { id: 7, login: 'owner' }, private: true }
-  readonly queue = 'https://broker.actions.githubusercontent.com/messages'
-  readonly service = 'https://pipelines.actions.githubusercontent.com/tenant'
+  constructor(private readonly prefix = '') {}
+  get queue() {
+    return 'https://' + this.prefix + 'broker.actions.githubusercontent.com/messages'
+  }
+  get service() {
+    return 'https://' + this.prefix + 'pipelines.actions.githubusercontent.com/tenant'
+  }
   readonly sessions: string[] = []
   readonly runners = new Map<string, { id: number; name: string; runnerScaleSetId: number }>()
   readonly acknowledged: number[] = []
   readonly requests: string[] = []
   readonly acquired: number[][] = []
+  discoverCustom = false
+  defaultSet?: { id: number; name: string; labels: unknown[]; runnerGroupId: number }
+  labels = ['boxlite']
   interruptAcquisition?: () => void
   target = 0
   definition?: { id: number; name: string; labels: unknown[]; runnerGroupId: number }
@@ -46,7 +56,7 @@ class ActionsFixture {
           runnerRequestId,
           ownerName: 'owner',
           repositoryName: 'repo',
-          requestLabels: ['boxlite'],
+          requestLabels: this.labels,
         })),
       ]),
     })
@@ -99,8 +109,34 @@ class ActionsFixture {
       })
     const data = options.body ? JSON.parse(String(options.body)) : undefined
     if (path.endsWith('/runnerscalesets')) {
-      if (method === 'POST') return Response.json((this.definition = { ...data, id: 9 }))
-      return Response.json({ count: this.definition ? 1 : 0, value: this.definition ? [this.definition] : [] })
+      if (method === 'POST') {
+        if (this.discoverCustom && data.labels.some((label: { name: string }) => label.name === 'boxlite'))
+          return Response.json((this.defaultSet = { ...data, id: 8 }))
+        return Response.json((this.definition = { ...data, id: 9 }))
+      }
+      const sets = [this.definition, this.defaultSet].filter(
+        (value) => value && value.name === addr.searchParams.get('name'),
+      )
+      return Response.json({ count: sets.length, value: sets })
+    }
+    if (path.endsWith('/runnerscalesets/8'))
+      return this.defaultSet
+        ? Response.json({ ...this.defaultSet, statistics: { totalAssignedJobs: 0 } })
+        : new Response(null, { status: 404 })
+    if (path.endsWith('/8/sessions') && method === 'POST')
+      return Response.json({
+        sessionId: randomUUID(),
+        messageQueueUrl: this.queue + '/default',
+        messageQueueAccessToken: 'idle',
+        statistics: { totalAssignedJobs: 0 },
+      })
+    if (path.includes('/8/sessions/') && method === 'DELETE') return new Response(null, { status: 204 })
+    if (path === '/messages/default') {
+      const signal = options.signal!
+      await new Promise<never>((_, reject) => {
+        signal.throwIfAborted()
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
     }
     if (path.endsWith('/runnerscalesets/9') && method === 'GET')
       return Response.json({ ...this.definition, statistics: { totalAssignedJobs: this.target } })
@@ -171,6 +207,12 @@ const scenarios = [
   'checks an organization runner group',
   'recovers an acknowledged JIT upload',
   'takes over after acquisition before the ledger commit',
+  'reuses a held slot after cancellation between statistics samples',
+  'returns an undispatched reservation for a deleted set',
+  'rechecks shrinking quota after a long poll',
+  'leaves the remaining quota for already assigned demand',
+  'starts an organization worker with the custom resource label',
+  'discovers a custom resource label from a standalone PAT repository scan',
 ] as const
 for (const storage of ['sqlite', 'postgres'])
   (storage === 'postgres' && !process.env.DB_HOST ? describe.skip : describe)('scale set listener ' + storage, () => {
@@ -209,7 +251,10 @@ for (const storage of ['sqlite', 'postgres'])
           runners: { kind: 'repository', repository: fixture.repository, allowPrivate: true, allowPublic: false },
         }
         let source: CredentialSource = { kind: 'pat', repository: 21, token: () => 'local-token' }
-        if (scenario === 'checks an organization runner group') {
+        if (
+          scenario === 'checks an organization runner group' ||
+          scenario === 'starts an organization worker with the custom resource label'
+        ) {
           scope.binding = 'binding-org'
           scope.installation = { id: 1, account: { ...fixture.repository.owner, type: 'Organization' } }
           scope.runners = {
@@ -231,6 +276,11 @@ for (const storage of ['sqlite', 'postgres'])
             app: new GitHubAppSource({ issuer: 'test', privateKey: () => keys.privateKey }),
             installation: fixture.installation,
           }
+        }
+        const scanOnly = scenario === 'discovers a custom resource label from a standalone PAT repository scan'
+        if (scanOnly || scenario === 'starts an organization worker with the custom resource label') {
+          fixture.labels = ['boxlite-1vcpu-1gbmem-10gbdisk']
+          fixture.discoverCustom = true
         }
         const boxes = new Map<string, WorkerState>()
         const delivered = new Set<string>()
@@ -262,6 +312,7 @@ for (const storage of ['sqlite', 'postgres'])
           }),
         }
         const errors: string[] = []
+        const inbox = new ListenerInbox(state)
         const host: ListenerHost = {
           discover: async () => ({ scopes: [scope], completed: [], pending: false, ready: true }),
           backend: async (original, lease) =>
@@ -270,18 +321,21 @@ for (const storage of ['sqlite', 'postgres'])
             ]),
           report: (error, operation) => errors.push(operation + ': ' + String(error)),
           scan: jest.fn(),
-          accept: jest.fn(),
+          accept: (event) => inbox.receive(event),
         }
+        let listener: Listener
+        let maximum = 2
         const start = () => {
           const controller = new AbortController()
-          const task = new Listener({
+          listener = new Listener({
             state,
             host,
             worker: { image: 'jitbox', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
-            capacity: { resolve: async () => ({ limits: [{ maximum: 2, domain: 'organization' }] }) },
+            capacity: { resolve: async () => ({ limits: [{ maximum, domain: 'organization' }] }) },
             scaleSets: scaleSetBindings(JSON.stringify({ [scope.binding]: ['boxlite'] })),
             timing: { tickMs: 5, leaseMs: 450 },
-          }).run(controller.signal)
+          })
+          const task = listener.run(controller.signal)
           return async () => {
             controller.abort()
             await task
@@ -301,7 +355,68 @@ for (const storage of ['sqlite', 'postgres'])
         let stop: (() => Promise<void>) | undefined
         try {
           await journal.initialize()
+          if (scenario === 'returns an undispatched reservation for a deleted set') {
+            const owner = (await state.acquire(randomUUID(), 600))!
+            const originalScope = await journal.define(owner, scope)
+            await state.commit(owner, [
+              {
+                key: 'scale-set/' + originalScope.slice(6) + '/boxlite',
+                expected: null,
+                payload: { name: 'boxlite-' + 'a'.repeat(32), set: 8, assigned: 1, message: null, session: null },
+              },
+            ])
+            const reservation = await journal.reserve(
+              owner,
+              originalScope,
+              null,
+              { limits: [{ domain: 'organization', maximum: 2 }] },
+              { labels: ['boxlite'], scaleSet: 8 },
+            )
+            expect(reservation).toBeDefined()
+            stop = start()
+            await until(() => fixture.requests.includes('GET /tenant/_apis/runtime/runnerscalesets/8'))
+            await until(async () => (await journal.used('tenant')) === 0)
+            expect(workers.create).not.toHaveBeenCalled()
+            await until(() => fixture.sessions.length === 1)
+            expect(fixture.definition?.id).toBe(9)
+            return
+          }
+          if (scanOnly) {
+            const former = (await state.acquire(randomUUID(), 600))!,
+              scans = state.scans()
+            await scans.synchronize(former, 'personal-token', scope.binding, [scope])
+            const claim = (await scans.claim('label-scanner'))!
+            await scans.publish(
+              claim,
+              [{ repository: 21, job: 55, run: 33, status: 'queued', labels: fixture.labels, runner: null }],
+              ['boxlite'],
+            )
+            await scans.finish(claim, { success: true, intervalMs: 60_000 })
+          }
           stop = start()
+          if (fixture.discoverCustom && !scanOnly) {
+            await until(() => fixture.requests.includes('GET /messages/default'))
+            expect(fixture.definition).toBeUndefined()
+            const secret = Buffer.alloc(32, 1),
+              raw = Buffer.from(
+                JSON.stringify({
+                  action: 'queued',
+                  installation: { id: 1 },
+                  repository: { id: 21, owner: { id: 7 } },
+                  workflow_job: { id: 51, run_id: 31, status: 'queued', labels: fixture.labels },
+                }),
+              )
+            const webhook = verifyWebhook(
+              {
+                raw,
+                event: 'workflow_job',
+                delivery: randomUUID(),
+                signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'),
+              },
+              secret,
+            )!
+            expect(await listener!.receive(webhook)).toBe('stored')
+          }
           await until(() => fixture.sessions.length > 0)
           if (pg) {
             await until(() => fixture.requests.includes('GET /messages'))
@@ -313,6 +428,43 @@ for (const storage of ['sqlite', 'postgres'])
               [schema, cutoff],
             )
             expect(connections[0].waiting).toBe(0)
+          }
+          if (
+            scenario === 'rechecks shrinking quota after a long poll' ||
+            scenario === 'leaves the remaining quota for already assigned demand'
+          ) {
+            await until(() => fixture.requests.includes('GET /messages'))
+            maximum = scenario.startsWith('leaves') ? 1 : 0
+            fixture.publish(0, maximum, [123])
+            await until(() => fixture.acknowledged.includes(0))
+            expect(fixture.acquired).toEqual([])
+            if (maximum) await until(() => (workers.deliverJit as jest.Mock).mock.calls.length === 1)
+            else expect(workers.create).not.toHaveBeenCalled()
+            return
+          }
+          if (scenario === 'reuses a held slot after cancellation between statistics samples') {
+            maximum = 1
+            await until(() => fixture.requests.includes('GET /messages'))
+            fixture.publish(0, 0, [123])
+            await until(() => fixture.acknowledged.includes(0))
+            expect(fixture.acquired).toEqual([[123]])
+            fixture.publish(
+              1,
+              0,
+              [],
+              [
+                { messageType: 'JobAssigned', runnerRequestId: 123 },
+                { messageType: 'JobCompleted', runnerRequestId: 123, runnerId: 0, runnerName: '', result: 'canceled' },
+              ],
+            )
+            await until(() => fixture.acknowledged.includes(1))
+            for (const message of [2, 3, 4]) {
+              fixture.publish(message, 0, [124])
+              await until(() => fixture.acknowledged.includes(message))
+              if (fixture.acquired.some((ids) => ids.includes(124))) break
+            }
+            expect(fixture.acquired).toEqual([[123], [124]])
+            return
           }
           if (scenario === 'takes over after acquisition before the ledger commit') {
             let acquired!: () => void
@@ -359,6 +511,12 @@ for (const storage of ['sqlite', 'postgres'])
           fixture.publish(1, 2)
           await until(() => (workers.deliverJit as jest.Mock).mock.calls.length === 2)
           expect(await journal.used('tenant')).toBe(2)
+          if (fixture.discoverCustom) {
+            expect(fixture.definition?.runnerGroupId).toBe(scanOnly ? 1 : 5)
+            expect(fixture.definition?.labels).toContainEqual({ name: fixture.labels[0], type: 'System' })
+            for (const [launch] of (workers.create as jest.Mock).mock.calls)
+              expect(launch).toMatchObject({ cpus: 1, memoryMiB: 1024, diskGiB: 10 })
+          }
           if (scenario.startsWith('backs off')) {
             for (const box of boxes.values()) {
               if (scenario === 'backs off failed Box startup') {
@@ -369,6 +527,14 @@ for (const storage of ['sqlite', 'postgres'])
             await until(() => (workers.create as jest.Mock).mock.calls.length > 2 || boxes.size === 0)
             await delay(300)
             expect(workers.create).toHaveBeenCalledTimes(2)
+            fixture.publish(2, 0, [126])
+            await until(() => fixture.acknowledged.includes(2))
+            expect(fixture.acquired).toEqual([[123, 124]])
+            fixture.publish(3, 1)
+            await until(() => fixture.acknowledged.includes(3))
+            await delay(200)
+            expect(workers.create).toHaveBeenCalledTimes(2)
+            await until(() => (workers.create as jest.Mock).mock.calls.length === 3)
             return
           }
           if (scenario === 'checks an organization runner group') {
@@ -411,3 +577,76 @@ for (const storage of ['sqlite', 'postgres'])
       20000,
     )
   })
+
+it('reserves one shared global slot for concurrent offers to two tenants', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ci-set-global-'))
+  const db = new SqliteStateDatabase(directory)
+  const state = new ListenerState(db, 'concurrent'),
+    journal = new ExecutionJournal(state)
+  const fixtures = [new ActionsFixture('first-'), new ActionsFixture('second-')]
+  const work = new ScaleSetWork(),
+    lifetime = new AbortController(),
+    controllers: ScaleSetController[] = []
+  const requests = jest.spyOn(globalThis, 'fetch').mockImplementation((input, options = {}) => {
+    const url = new URL(String(input))
+    const first =
+      url.hostname.startsWith('first-') ||
+      (url.pathname === '/actions/runner-registration' &&
+        new Headers(options.headers).get('authorization') === 'RemoteAuth first')
+    return fixtures[first ? 0 : 1].fetch(input, options)
+  })
+  const until = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 5000
+    while (!predicate()) {
+      if (Date.now() > deadline) throw Error('Timed out waiting for competing offers')
+      await delay(5)
+    }
+  }
+  try {
+    await journal.initialize()
+    const lease = (await state.acquire(randomUUID(), 30000))!
+    for (const [index, fixture] of fixtures.entries()) {
+      const tenant = index === 0 ? 'first' : 'second'
+      const scope = decodeScope({
+        binding: tenant,
+        actor: tenant,
+        generation: 1,
+        organization: tenant,
+        installation: { id: 0, account: { ...fixture.repository.owner, type: 'User' } },
+        runners: { kind: 'repository', repository: fixture.repository, allowPrivate: true, allowPublic: false },
+      })
+      await journal.define(lease, scope)
+      const controller = new ScaleSetController(
+        state,
+        lease,
+        scope,
+        ['boxlite'],
+        journal,
+        work,
+        {
+          service: new ActionsScaleSets('https://github.com/owner/repo', async () => tenant),
+          authority: async () => new Set(['repo']),
+          creationReady: () => true,
+          charged: () => 0,
+          policy: async () => ({ limits: [{ domain: 'global', maximum: 1 }] }),
+          report: () => {},
+          wake: () => {},
+        },
+        lifetime.signal,
+      )
+      controllers.push(controller)
+      await controller.restore(['boxlite'])
+    }
+    await until(() => fixtures.every((f) => f.requests.includes('GET /messages')))
+    for (const fixture of fixtures) fixture.publish(0, 0, [123])
+    await until(() => fixtures.every((f) => f.acknowledged.includes(0) || f.sessions.length > 1))
+    expect(fixtures.flatMap((f) => f.acquired).flat()).toHaveLength(1)
+    expect((await journal.used('first')) + (await journal.used('second'))).toBe(1)
+  } finally {
+    lifetime.abort()
+    await Promise.all(controllers.map((controller) => controller.close()))
+    requests.mockRestore()
+    await db.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
