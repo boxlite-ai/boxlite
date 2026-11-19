@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { Json, StateCorrupt, StateRecord } from './state/database'
 import { ExecutionLease, IngressTransaction, ListenerState, StateChange } from './state/store'
 import { object, positive } from './execution/model'
@@ -25,6 +25,7 @@ export interface LabelDemand {
   dirty: boolean
   updatedAt: number
   job: { id: number; runId: number }
+  membership?: { generation: string; jobs: number[] }
 }
 const rank = { queued: 0, in_progress: 1, completed: 2 }
 export class DemandUncertain extends Error {
@@ -37,6 +38,22 @@ export class DemandUncertain extends Error {
 }
 export class DemandIdentityConflict extends Error {}
 const labelsFor = (labels: readonly string[]) => [...new Set(labels.map((label) => label.toLowerCase()))].sort()
+function readMembership(value: unknown): LabelDemand['membership'] {
+  if (
+    !object(value) ||
+    typeof value.generation !== 'string' ||
+    !value.generation ||
+    !Array.isArray(value.jobs) ||
+    !value.jobs.every(positive)
+  )
+    return undefined
+  return { generation: value.generation, jobs: value.jobs }
+}
+function jobCounts(jobs: readonly number[]): Map<number, number> {
+  const counts = new Map<number, number>()
+  for (const job of jobs) counts.set(job, (counts.get(job) ?? 0) + 1)
+  return counts
+}
 export const demandKey = (installation: number, repository: number, labels: readonly string[]) =>
   `demand/${installation}/${repository}/` +
   createHash('sha256')
@@ -48,7 +65,8 @@ export function decodeDemand(row: StateRecord): LabelDemand {
   if (
     row.schema !== 1 ||
     !object(value) ||
-    !positive(value.installationId) ||
+    !Number.isSafeInteger(value.installationId) ||
+    (value.installationId as number) < 0 ||
     !positive(value.accountId) ||
     !positive(value.repositoryId) ||
     !Array.isArray(value.labels) ||
@@ -58,11 +76,12 @@ export function decodeDemand(row: StateRecord): LabelDemand {
     !Number.isSafeInteger(value.queued) ||
     (value.queued as number) < 0 ||
     typeof value.dirty !== 'boolean' ||
+    (value.membership !== undefined && !readMembership(value.membership)) ||
     !Number.isSafeInteger(value.updatedAt) ||
     !object(value.job) ||
     !positive(value.job.id) ||
     !positive(value.job.runId) ||
-    row.key !== demandKey(value.installationId, value.repositoryId, value.labels as string[])
+    row.key !== demandKey(value.installationId as number, value.repositoryId, value.labels as string[])
   )
     throw new StateCorrupt()
   return {
@@ -106,7 +125,8 @@ export async function observeDemand(
     throw new StateCorrupt()
   const observation = { ...supplied, labels: labelsFor(supplied.labels) }
   if (observation.runner !== null && !positive(observation.runner)) throw new StateCorrupt()
-  const factKey = `job-fact/${hint.installationId}/${hint.job.id}`
+  const jobId = hint.job.id
+  const factKey = `job-fact/${hint.installationId}/${jobId}`
   const [prior] = await tx.read([factKey])
   let previous: JobObservation | undefined
   if (prior) {
@@ -148,6 +168,7 @@ export async function observeDemand(
     deltas.set(key, { labels: observation.labels, delta: (deltas.get(key)?.delta ?? 0) + 1 })
   }
   const revision = await readRevision(tx, hint)
+  const fact = { ...observation, hint } as typeof observation & { hint: WakeHint; countedFor?: string }
   const changes: StateChange[] = [
     {
       key: revisionKey(hint),
@@ -161,7 +182,7 @@ export async function observeDemand(
     {
       key: factKey,
       expected: prior?.version ?? null,
-      payload: { ...observation, hint } as unknown as Json,
+      payload: fact as unknown as Json,
     },
   ]
   if (observation.status !== 'queued' && observation.runner !== null) {
@@ -201,16 +222,28 @@ export async function observeDemand(
   for (const [key, { labels, delta }] of deltas) {
     const [row] = await tx.read([key])
     const old = row ? decodeDemand(row) : undefined
-    const queued = (old?.queued ?? 0) + delta
+    const membership = old?.membership ?? { generation: randomUUID(), jobs: [] }
+    if (delta > 0) fact.countedFor = membership.generation
+    let change = delta
+    if (delta < 0 && old?.membership) {
+      const scanned = membership.jobs.reduce((sum, id) => sum + Number(id === jobId), 0)
+      const incremented = prior && object(prior.payload) && prior.payload.countedFor === membership.generation
+      change = -(scanned || Number(!!incremented))
+      if (!change) continue
+    }
+    // A historical aggregate carries no evidence that a queued fact survived its last full scan.
+    const uncertain = !!old && !old.membership
+    const queued = (old?.queued ?? 0) + (uncertain && change < 0 ? 0 : change)
     const value: LabelDemand = {
       installationId: hint.installationId,
       accountId: hint.accountId,
       repositoryId: hint.repositoryId,
       labels,
       queued: Math.max(0, queued),
-      dirty: (old?.dirty ?? false) || queued < 0,
+      dirty: (old?.dirty ?? false) || uncertain || queued < 0,
       updatedAt: Date.now(),
       job: { ...hint.job },
+      membership,
     }
     changes.push({ key, expected: row?.version ?? null, payload: value as unknown as Json })
   }
@@ -239,6 +272,7 @@ export async function rebuildQueueSnapshot(
       if (expectedRevision && revision?.version !== expectedRevision.version) throw new StateConflict()
       let changed = !revision
       const counts = new Map<string, { labels: string[]; jobs: WorkflowJob[] }>()
+      const incremental = new Map<number, string>()
       const queued = jobs.filter(
         (job) => job.repository === target.repositoryId && job.status === 'queued' && job.runner === null,
       )
@@ -252,6 +286,8 @@ export async function rebuildQueueSnapshot(
           const fact = facts.get(key)
           if (fact && object(fact.payload) && ['in_progress', 'completed'].includes(fact.payload.status as string))
             continue
+          if (fact && object(fact.payload) && typeof fact.payload.countedFor === 'string')
+            incremental.set(job.job, fact.payload.countedFor)
           if (!fact && !missing.has(key))
             missing.set(key, {
               key,
@@ -296,6 +332,17 @@ export async function rebuildQueueSnapshot(
             }
           }
           const sample = group?.jobs[0]
+          const ids = group?.jobs.map((job) => job.job) ?? []
+          const previousMembership = readMembership(old?.membership)
+          const members = jobCounts(previousMembership?.jobs ?? [])
+          const sameMembers =
+            previousMembership &&
+            old?.dirty === false &&
+            old.queued === ids.length &&
+            [...jobCounts(ids)].every(
+              ([id, count]) =>
+                count === (members.get(id) ?? Number(incremental.get(id) === previousMembership.generation)),
+            )
           const payload: LabelDemand = {
             ...target,
             labels: group?.labels ?? (old!.labels as string[]),
@@ -303,12 +350,12 @@ export async function rebuildQueueSnapshot(
             dirty: false,
             updatedAt: Date.now(),
             job: sample ? { id: sample.job, runId: sample.run } : (old!.job as unknown as LabelDemand['job']),
+            membership: sameMembers ? previousMembership : { generation: randomUUID(), jobs: ids },
           }
           if (
             row &&
             old &&
-            old.queued === payload.queued &&
-            old.dirty === false &&
+            sameMembers &&
             old.installationId === target.installationId &&
             old.accountId === target.accountId &&
             old.repositoryId === target.repositoryId &&

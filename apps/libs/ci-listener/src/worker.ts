@@ -42,7 +42,7 @@ export interface WorkerState {
 /** Host adapters use this marker only for a known original Box ID under verified original authority. */
 export class ConfirmedWorkerAbsent extends Error {
   readonly confirmedBoxAbsent = true
-  constructor() {
+  constructor(readonly creation?: { boxId: string; effect: string }) {
     super('Original CI Box is confirmed absent')
   }
 }

@@ -123,6 +123,9 @@ export class CiNativeWorkers {
         } else if (
           typeof value.box !== 'string' ||
           value.rejectedCreationEffect !== undefined ||
+          (value.creationEffect !== undefined &&
+            allocation.value.box.phase === 'requested' &&
+            (allocation.value.effect?.kind !== 'box-create' || value.creationEffect !== allocation.value.effect.id)) ||
           !/^[A-Za-z0-9_-]{1,128}$/.test(value.box) ||
           (allocation.value.box.id !== null && value.box !== allocation.value.box.id)
         )
@@ -151,17 +154,22 @@ export class CiNativeWorkers {
           return rejectUndispatchedCreate(name, value.allocation.effect.id)
         throw new ConflictException('Original CI Box ID is not durably known')
       }
+      const create = value.allocation.effect
+      const creation =
+        value.allocation.box.phase === 'requested' && create?.kind === 'box-create'
+          ? { boxId: value.box, effect: create.id }
+          : undefined
       let box: Box
       try {
         box = await this.boxes.findOne(value.box, true)
       } catch (error) {
-        if (error instanceof NotFoundException) throw new ConfirmedWorkerAbsent()
+        if (error instanceof NotFoundException) throw new ConfirmedWorkerAbsent(creation)
         throw error
       }
       if (box.id !== value.box || box.organizationId !== scope.organization)
         throw new ForbiddenException('Original CI Box ownership changed')
       // Platform deletion renames the tombstone; its original ID and tenant remain authoritative.
-      if (box.state === BoxState.DESTROYED) throw new ConfirmedWorkerAbsent()
+      if (box.state === BoxState.DESTROYED) throw new ConfirmedWorkerAbsent(creation)
       if (box.name !== name) throw new ForbiddenException('Original CI Box ownership changed')
       return box
     }
@@ -318,12 +326,13 @@ export class CiNativeWorkers {
                 box.organizationId !== scope.organization ||
                 box.name !== launch.name ||
                 original.record ||
+                original.allocation.effect?.id !== creationEffect ||
                 original.allocation.box.phase !== 'requested' ||
                 original.allocation.box.id !== null
               )
                 throw new ForbiddenException('Original CI persistence intent changed')
               await state.commit(lease, [
-                { key: original.key, expected: null, payload: { scope: originalScope, box: box.id } },
+                { key: original.key, expected: null, payload: { scope: originalScope, box: box.id, creationEffect } },
               ])
             },
           })

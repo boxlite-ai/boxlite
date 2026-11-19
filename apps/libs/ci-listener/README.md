@@ -429,6 +429,12 @@ are wake hints rather than permission to add capacity.
 `job-fact.runner` records GitHub's actual assignment; it does not lock the job to a
 runner provisioned because of that job.
 
+An authoritative scan records the IDs contributing to each label count. Later
+arrivals identify the scan generation they joined. If a scan includes only B,
+a late completion for A leaves B counted. Replaying either completion has no
+effect. Historical counters with uncertain membership request a fresh scan.
+Pinned PAT repositories use installation ID zero for scans and incremental events.
+
 Demand groups retain their BoxLite organization, original execution scope and
 compatible routing labels. Installation, binding generation, repository/group
 membership and visibility still constrain eligibility. Matching labels alone
@@ -829,6 +835,13 @@ outcomes keep the reservation. The standalone REST adapter does not infer this
 proof from a 429 or an error-body property. Unknown creates are never repeated.
 The general resource state machine still forbids requested-to-absent transitions;
 the explicit refusal path is limited to an unmaterialized Box with no runner.
+
+When Hosted has already persisted the original Box and confirms destruction,
+the adapter returns the Box ID and creation effect for the requested allocation.
+The pool saves that ID, then follows ordinary known-Box recovery. A restart
+between those writes resumes at the same ID. A stale synchronization error
+cannot overwrite a later destroy callback. Standalone keeps a requested slot
+when only a REST 404 and a filtered public inventory are available.
 
 Stopped/error Boxes are deleted by their original IDs; a lookup error retains
 capacity. Confirmed absence releases physical

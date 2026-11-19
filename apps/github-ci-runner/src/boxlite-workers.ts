@@ -172,11 +172,13 @@ export class BoxLiteWorkers {
         ...(value.exit_code === undefined ? {} : { exit_code: value.exit_code as number | null }),
       }
     }
-    const read = async (name: string, original: string): Promise<WorkerState> => {
+    const read = async (name: string, original: string, requested: boolean): Promise<WorkerState> => {
       try {
         return observe(await this.http.request('GET', '/boxes/' + original), name, original)
       } catch (error) {
         if (!(error instanceof BoxLiteRequestError) || error.status !== 404) throw error
+        // Public inventory also hides failed deletions. A requested creation still needs its original Box.
+        if (requested) throw new Error('Original CI Box creation outcome is still unknown', { cause: error })
         const seen = new Set<string>(),
           tokens = new Set<string>()
         let token: string | undefined
@@ -206,7 +208,8 @@ export class BoxLiteWorkers {
     }
     const get = async (name: string): Promise<WorkerState> => {
       const original = await ledger(name)
-      let box = await read(name, original.id)
+      const requested = original.row.value.box.phase === 'requested'
+      let box = await read(name, original.id, requested)
       if (original.row.value.box.phase !== 'requested' || original.row.value.closing) return box
       if (['running', 'stopped', 'error'].includes(box.status)) return box
       if (!['starting', 'created'].includes(box.status)) throw new Error('Original CI Box boot is pending')
@@ -229,7 +232,7 @@ export class BoxLiteWorkers {
       }
       const deadline = Date.now() + 120000
       for (;;) {
-        box = await read(name, original.id)
+        box = await read(name, original.id, requested)
         if (['running', 'stopped', 'error'].includes(box.status)) return box
         if (!['starting', 'created'].includes(box.status) || Date.now() >= deadline)
           throw new Error('Original CI Box boot is pending')

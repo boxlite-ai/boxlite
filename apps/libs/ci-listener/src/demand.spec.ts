@@ -141,6 +141,80 @@ describe('CI label demand counters and fallback', () => {
       labels: ['boxlite'],
     })
   })
+  it.each(['scan', 'events'])('counts two queued jobs from the pinned PAT repository through %s', async (source) => {
+    const pat = { ...target, installationId: 0 }
+    if (source === 'scan') await rebuildDemand(state, lease, pat, [], [job(55), job(56)])
+    else {
+      for (const id of [55, 56]) {
+        await state.ingress('0/21', async (tx) => {
+          const changes = await observeDemand(
+            tx,
+            { ...pat, job: { id, runId: 33 } },
+            {
+              status: 'queued',
+              labels: ['boxlite'],
+              runner: null,
+            },
+          )
+          await tx.write(changes)
+        })
+      }
+    }
+    const rows = await counters()
+    expect(rows.map(decodeDemand)).toEqual([expect.objectContaining({ installationId: 0, queued: 2, dirty: false })])
+    for (const invalid of [-1, 0.5, '0']) {
+      expect(() =>
+        decodeDemand({
+          ...rows[0],
+          payload: { ...(rows[0].payload as Record<string, Json>), installationId: invalid },
+        }),
+      ).toThrow(StateCorrupt)
+    }
+  })
+  it('retains the other queued job after replacement and a late completion', async () => {
+    await send('queued', 55)
+    await rebuildDemand(state, lease, target, await counters(), [job(56)], await wake())
+    await send('completed', 55)
+    await send('completed', 55)
+    expect((await state.read(['job-fact/1/56']))[0].payload).toMatchObject({ status: 'queued' })
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 1, dirty: false })
+    await send('completed', 56)
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 0, dirty: false })
+  })
+  it('keeps the scanned job after a later scan excludes an incremental arrival', async () => {
+    await rebuildDemand(state, lease, target, [], [job(56)])
+    await send('queued', 57)
+    await rebuildDemand(state, lease, target, await counters(), [job(56)], await wake())
+    await send('completed', 57)
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 1, dirty: false })
+    await send('completed', 56)
+    expect(decodeDemand((await counters())[0]).queued).toBe(0)
+  })
+  it('rebuilds a historical counter when a completion has no membership evidence', async () => {
+    await send('queued', 55)
+    const [count] = await counters()
+    const [fact] = await state.read(['job-fact/1/55'])
+    const counterPayload = { ...(count.payload as Record<string, Json>) }
+    const factPayload = { ...(fact.payload as Record<string, Json>) }
+    delete counterPayload.membership
+    delete factPayload.countedFor
+    await state.commit(lease, [
+      { key: count.key, expected: count.version, payload: counterPayload },
+      { key: fact.key, expected: fact.version, payload: factPayload },
+    ])
+    await send('completed', 55)
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 1, dirty: true })
+    await rebuildDemand(state, lease, target, await counters(), [job(56)], await wake())
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 1, dirty: false })
+  })
+  it('replaces contributors when a repeated job preserves the total count', async () => {
+    await rebuildDemand(state, lease, target, [], [job(55), job(56)])
+    await rebuildDemand(state, lease, target, await counters(), [job(56), job(56)])
+    await send('completed', 55)
+    expect(decodeDemand((await counters())[0]).queued).toBe(2)
+    await send('completed', 56)
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 0, dirty: false })
+  })
   it('does not resurrect a job whose running notification arrived before queued', async () => {
     await send('in_progress', 55, ['boxlite'], 91)
     await send('queued')
