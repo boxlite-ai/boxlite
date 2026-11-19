@@ -54,21 +54,51 @@ describe('cycleFacts', () => {
     })
   })
 
-  it.each(['pending', 'succeeded'] as const)('trial countdown ignores a %s conversion', (conversionState) => {
+  it('trial countdown keeps the trial window while conversion is pending', () => {
     const facts = cycleFacts(
       {
         ...plan,
+        cycleTo: new Date('2026-08-17T12:00:00.000Z'),
         trial: {
           startedAt: new Date('2026-08-05T12:00:00.000Z'),
           endsAt: new Date('2026-08-17T12:00:00.000Z'),
           conversionAmountCents: 14900,
           currency: 'USD',
-          conversionState,
+          conversionState: 'pending',
         },
       },
-      now,
+      new Date('2026-08-17T12:00:00.000Z'),
     )
-    expect(facts).toMatchObject({ daysLeft: 22, rollDay: 'Sep 5', trialActive: false })
+    expect(facts).toMatchObject({
+      daysLeft: 0,
+      rollDay: 'Aug 17',
+      window: 'Aug 5 – Aug 17',
+      trialActive: false,
+    })
+  })
+
+  it('trial countdown uses the reanchored paid cycle after conversion succeeds', () => {
+    const facts = cycleFacts(
+      {
+        ...plan,
+        cycleFrom: new Date('2026-08-17T12:00:00.000Z'),
+        cycleTo: new Date('2026-09-17T12:00:00.000Z'),
+        trial: {
+          startedAt: new Date('2026-08-05T12:00:00.000Z'),
+          endsAt: new Date('2026-08-17T12:00:00.000Z'),
+          conversionAmountCents: 14900,
+          currency: 'USD',
+          conversionState: 'succeeded',
+        },
+      },
+      new Date('2026-08-20T12:00:00.000Z'),
+    )
+    expect(facts).toMatchObject({
+      daysLeft: 28,
+      rollDay: 'Sep 17',
+      window: 'Aug 17 – Sep 17',
+      trialActive: false,
+    })
   })
 
   it('never counts below zero after the cycle lapsed', () => {
