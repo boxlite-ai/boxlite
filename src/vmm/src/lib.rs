@@ -70,6 +70,11 @@ mod virtio;
     )
 )]
 mod vm;
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 boots guests yet.")
+)]
+mod x86_boot_layout;
 
 pub use chipset::{BusKind, Conflict};
 pub use config::{
