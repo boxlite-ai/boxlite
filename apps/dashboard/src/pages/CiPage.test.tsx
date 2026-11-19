@@ -118,7 +118,7 @@ describe('CI page', () => {
   it.each(['/dashboard/ci', '/dashboard/ci/connects'])('opens setup directly from the header on %s', async (path) => {
     await render(path)
     const guide = document.querySelector<HTMLButtonElement>('.resource-page-header button')!
-    expect(guide.textContent).toBe(path.endsWith('/connects') ? 'Run workflows on BoxLite' : 'How to run a job')
+    expect(guide.textContent).toBe('How to run a job')
     expect(document.querySelector('[aria-expanded="true"]')).toBeNull()
     await act(async () => guide.click())
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Run GitHub Actions on BoxLite')
@@ -134,8 +134,8 @@ describe('CI page', () => {
       if (state === 'member') mocks.selection.authenticatedUserOrganizationMember.role = 'member'
       if (state === 'unavailable') mocks.api.getCiSettings.mockResolvedValue({ available: false, connections: [] })
       await render()
-      const body = document.querySelector('[role="tabpanel"]')!
-      expect(body.querySelectorAll('h2, h3')).toHaveLength(1)
+      const body = document.querySelector('[role="tabpanel"][data-state="active"]')!
+      expect(body.querySelectorAll('h2, h3')).toHaveLength(state === 'disconnected' ? 2 : 1)
       expect(body.textContent).not.toContain('removed after completion')
       expect(body.textContent).not.toContain('Set up a job')
       expect(body.textContent).not.toContain('Trigger the workflow in GitHub Actions')
@@ -161,7 +161,8 @@ describe('CI page', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 30))
     })
-    expect(document.body.textContent).toContain('Set up a job')
+    expect(document.querySelector('details')?.open).toBe(true)
+    expect(document.querySelector('ins')?.textContent).toContain('runs-on: boxlite')
   })
   it('does not treat a failed refresh of an empty connection cache as disconnected', async () => {
     mocks.api.getCiRunners.mockResolvedValue({ items: [], total: 0, page: 1, totalPages: 0, capacity })
@@ -212,21 +213,22 @@ describe('CI page', () => {
     expect(mocks.api.getCiRunners).toHaveBeenCalledTimes(attempts + 1)
     expect(document.querySelector('tbody')?.textContent).toContain(runner.name)
   })
-  it('associates the selected CI tab with its rendered panel', async () => {
+  it('keeps both CI tabs visible and associates the selected tab with its panel', async () => {
     await render()
-    const tab = document.querySelector('[role="tab"][aria-selected="true"]')!
-    const panel = document.getElementById(tab.getAttribute('aria-controls')!)
-    expect(panel?.getAttribute('role')).toBe('tabpanel')
-    expect(panel?.textContent).toContain(runner.name)
+    const tabs = [...document.querySelectorAll('[role="tab"]')]
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Runners', 'GitHub connections'])
+    const selected = document.querySelector('[role="tab"][aria-selected="true"]')!
+    expect(document.getElementById(selected.getAttribute('aria-controls')!)?.textContent).toContain(runner.name)
+    expect(document.querySelector('h1')?.textContent).toBe('CI')
   })
   it('omits table headings for a confirmed empty runner inventory', async () => {
     mocks.api.getCiRunners.mockResolvedValue({ items: [], total: 0, page: 1, totalPages: 0, capacity })
     await render()
     expect(document.body.textContent).toContain('No active runners')
-    expect(document.querySelector('[role="tabpanel"]')?.querySelectorAll('h2, h3')).toHaveLength(1)
-    expect(document.body.textContent).toContain('Open the guide to configure a workflow')
+    expect(document.querySelector('[role="tabpanel"][data-state="active"]')?.querySelectorAll('h2, h3')).toHaveLength(1)
+    expect(document.body.textContent).toContain('Configure a workflow')
     expect(
-      [...document.querySelectorAll('button')].filter((button) => button.textContent === 'Set up a job'),
+      [...document.querySelectorAll('button')].filter((button) => button.textContent === 'Copy runs-on'),
     ).toHaveLength(1)
     expect(document.querySelector('thead')).toBeNull()
   })
@@ -362,7 +364,7 @@ describe('CI page', () => {
   })
   it('shows JIT Boxes and navigates between independently addressable table views', async () => {
     await render()
-    expect(document.querySelector('h1')?.textContent).toBe('Runners')
+    expect(document.querySelector('h1')?.textContent).toBe('CI')
     expect(document.querySelector('tbody a')?.getAttribute('href')).toBe('/dashboard/boxes/runner-original')
     expect([...document.querySelectorAll('thead th')].map((cell) => cell.textContent)).toEqual([
       'Name',
@@ -380,7 +382,9 @@ describe('CI page', () => {
     expect(document.body.textContent).toContain('CI slots 2 / 5')
     expect(mocks.api.getCiRunners).toHaveBeenCalledWith('account-a', 1, 25)
     expect([...document.querySelectorAll('button')].some((button) => button.textContent === 'Refresh')).toBe(false)
-    const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent === 'Connects')!
+    const tab = [...document.querySelectorAll('[role="tab"]')].find(
+      (item) => item.textContent === 'GitHub connections',
+    )!
     await act(async () => tab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -388,7 +392,10 @@ describe('CI page', () => {
     expect(document.querySelector('output')?.textContent).toBe('/dashboard/ci/connects')
     expect(document.querySelector('tbody')?.textContent).toContain('alice')
     expect([...document.querySelectorAll('button')].some((button) => button.textContent === 'Refresh')).toBe(false)
-    expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Connects')
+    expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('GitHub connections')
+    const runnersTab = document.querySelector('[role="tab"][data-state="inactive"]')!
+    await act(async () => runnersTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
+    expect(document.querySelector('h1')?.textContent).toBe('CI')
   })
   it('lets organization members inspect runners without connection-management actions', async () => {
     mocks.selection.authenticatedUserOrganizationMember.role = 'member'
@@ -421,7 +428,9 @@ describe('CI page', () => {
     })
     expect(document.body.textContent).toContain('No active runners')
     expect(mocks.api.getCiRunners).toHaveBeenCalledTimes(2)
-    const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent === 'Connects')!
+    const tab = [...document.querySelectorAll('[role="tab"]')].find(
+      (item) => item.textContent === 'GitHub connections',
+    )!
     await act(async () => tab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
     expect(mocks.events.size).toBe(0)
   })

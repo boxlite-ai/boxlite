@@ -124,14 +124,6 @@ const APPLICATION_NAV_ITEMS: NavItem[] = [
     label: 'CI',
     icon: 'ci',
     path: RoutePath.CI,
-    children: [
-      { label: 'Runners', path: RoutePath.CI, icon: 'box' },
-      {
-        label: 'Connects',
-        path: RoutePath.CI_CONNECTS,
-        icon: 'github',
-      },
-    ],
   },
 ]
 const NAV_SECTIONS = [
