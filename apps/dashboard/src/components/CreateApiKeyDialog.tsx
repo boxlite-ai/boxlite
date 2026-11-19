@@ -187,13 +187,14 @@ function ApiKeyForm({
             <span className="min-w-0 text-right">{apiKeyExpirationDate(result.expiresAt)}</span>
           </div>
           <div className="ph-no-capture flex min-w-0 items-center gap-3 border border-border bg-card px-3 py-2">
-            <p
+            <div
+              role="region"
               className="ph-mask min-w-0 flex-1 overflow-x-auto whitespace-nowrap select-all font-mono text-body"
               tabIndex={0}
               aria-label="API key"
             >
               {result.value}
-            </p>
+            </div>
             <AsciiButton
               type="button"
               variant="quiet"
