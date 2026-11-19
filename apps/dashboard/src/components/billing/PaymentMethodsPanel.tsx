@@ -81,7 +81,11 @@ export function PaymentMethodsPanel({
   onSetDefault,
   onRemove,
 }: PaymentMethodsPanelProps) {
-  const [pendingRemoval, setPendingRemoval] = useState<PaymentMethod | null>(null)
+  const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null)
+  // Resolved against the current list: a card that became the default or
+  // disappeared while the dialog was open closes it for good.
+  const pendingRemoval = paymentMethods.find((method) => method.id === pendingRemovalId && !method.isDefault) ?? null
+  if (pendingRemovalId && !pendingRemoval) setPendingRemovalId(null)
   const removalDisplay = pendingRemoval ? paymentMethodDisplay(pendingRemoval.details) : null
   // The default card leads; the rest keep the API's order (sort is stable).
   const orderedMethods = [...paymentMethods].sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
@@ -144,7 +148,7 @@ export function PaymentMethodsPanel({
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="cursor-pointer text-red-600 dark:text-red-400"
-                          onSelect={() => setPendingRemoval(method)}
+                          onSelect={() => setPendingRemovalId(method.id)}
                         >
                           Remove
                         </DropdownMenuItem>
@@ -170,7 +174,7 @@ export function PaymentMethodsPanel({
         </div>
       </Panel>
 
-      <AlertDialog open={!!pendingRemoval} onOpenChange={(open) => !open && setPendingRemoval(null)}>
+      <AlertDialog open={!!pendingRemoval} onOpenChange={(open) => !open && setPendingRemovalId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>

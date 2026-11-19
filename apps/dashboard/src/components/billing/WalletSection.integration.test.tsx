@@ -1112,6 +1112,28 @@ describe('WalletSection top-up checkout', () => {
       expect(toast.error).not.toHaveBeenCalled()
     })
 
+    it('closes the removal confirmation when its card becomes the default', async () => {
+      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
+      await renderWallet()
+
+      await act(async () => menuItem(await openMenu('1111'), 'Remove')!.click())
+      await flush()
+      expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
+
+      // A set-default request for the same card lands while the dialog is open.
+      mocks.paymentMethods = [card('card-default', false, '4242'), card('card-other', true, '1111')]
+      await act(async () => root!.render(<WalletSection />))
+      await flush()
+      expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+
+      // Losing the default again must not reopen the abandoned confirmation.
+      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
+      await act(async () => root!.render(<WalletSection />))
+      await flush()
+      expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+      expect(mocks.removePaymentMethod).not.toHaveBeenCalled()
+    })
+
     it('offers no action on the default card', async () => {
       mocks.paymentMethods = [card('card-default', true, '4242')]
       await renderWallet()
