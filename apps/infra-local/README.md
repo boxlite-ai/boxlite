@@ -103,7 +103,7 @@ for uploaded source files.
    ```
 
 4. Open the `main` environment URL from the Apps page. A live deployment serves
-   `Hello from a BoxLite App!` on `/` through the local proxy. This example only needs
+   `Hello from a BoxLite App! (v2)` on `/` through the local proxy. This example only needs
    a Node runtime. Apps that declare `[database]` also need the official Neon API settings.
 
 ### Stack commands
