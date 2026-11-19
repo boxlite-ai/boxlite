@@ -5,11 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
 
-#[cfg(any(
-    test,
-    all(feature = "native", target_os = "linux", target_arch = "x86_64")
-))]
-pub(crate) mod control;
 pub mod controller;
 pub mod engine;
 pub mod exit_info;
@@ -31,6 +26,11 @@ pub mod krun;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub mod native;
 pub mod registry;
+#[cfg(any(
+    test,
+    all(feature = "native", target_os = "linux", target_arch = "x86_64")
+))]
+pub(crate) mod vmm_socket;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
 use crate::jailer::SecurityOptions;

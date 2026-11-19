@@ -189,5 +189,5 @@ fn restrict_to_owner(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-#[path = "tests/control.rs"]
+#[path = "tests/vmm_socket.rs"]
 mod tests;

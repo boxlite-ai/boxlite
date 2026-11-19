@@ -65,7 +65,7 @@ const READY_SOCK: &str = "ready.sock";
 /// Network backend (gvproxy) socket filename.
 const NET_SOCK: &str = "net.sock";
 /// The shim's VMM control socket.
-const CONTROL_SOCK: &str = "vmm.sock";
+const VMM_SOCK: &str = "vmm.sock";
 
 /// Base directory for binding symlinks. Deliberately literal — see module docs.
 const SYMLINK_BASE: &str = "/tmp";
@@ -128,8 +128,8 @@ impl BoxSockets {
 
     /// Host-only VMM control socket the native shim serves; never bridged
     /// into guest vsock.
-    pub fn control_sock(&self) -> PathBuf {
-        self.binding_dir().join(CONTROL_SOCK)
+    pub fn vmm_sock(&self) -> PathBuf {
+        self.binding_dir().join(VMM_SOCK)
     }
 
     /// Network backend socket (gvproxy binds; libkrun derives a sibling
@@ -342,13 +342,13 @@ mod tests {
         assert_eq!(s.binding_dir(), expect);
         assert_eq!(s.box_sock(), expect.join("box.sock"));
         assert_eq!(s.ready_sock(), expect.join("ready.sock"));
-        assert_eq!(s.control_sock(), expect.join("vmm.sock"));
+        assert_eq!(s.vmm_sock(), expect.join("vmm.sock"));
         assert_eq!(s.net_backend_sock(), expect.join("net.sock"));
         assert_eq!(s.net_backend_peer_sock(), expect.join("net.sock-krun.sock"));
         for p in [
             s.box_sock(),
             s.ready_sock(),
-            s.control_sock(),
+            s.vmm_sock(),
             s.net_backend_sock(),
             s.net_backend_peer_sock(),
         ] {

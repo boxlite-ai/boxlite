@@ -8,6 +8,7 @@ use std::{fs::File, io, path::PathBuf, time::Duration};
 use crate::experimental::custom_kernel::KernelFormat;
 use crate::rootfs::guest::Strategy;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::vmm::vmm_socket::{self, ControlError, ControlOp, ControlReply, ControlResponse};
 use crate::vmm::{
     DiskFormat, InstanceSpec, Vmm, VmmConfig, VmmInstance, VmmKind, engine::VmmInstanceImpl,
     guest_args, registry::EngineFactoryRegistration,
@@ -37,7 +38,7 @@ struct NativeVmmInstance {
     config: VmConfig,
     console: Option<PathBuf>,
     /// Where the host reaches this VM's control channel.
-    control: PathBuf,
+    vmm_socket_path: PathBuf,
 }
 
 impl VmmInstanceImpl for NativeVmmInstance {
@@ -54,10 +55,14 @@ impl VmmInstanceImpl for NativeVmmInstance {
         let mut vm = Vm::new(self.config, sink).map_err(map_vmm_error)?;
         let vm_control = vm.control();
         // Without the channel the box still runs; it only cannot grow online.
-        if let Err(error) =
-            crate::vmm::control::serve(&self.control, move |op| control(&vm_control, op))
-        {
-            tracing::warn!(%error, path = %self.control.display(), "VMM control channel unavailable");
+        if let Err(error) = vmm_socket::serve(&self.vmm_socket_path, move |op| {
+            handle_control_op(&vm_control, op)
+        }) {
+            tracing::warn!(
+                %error,
+                path = %self.vmm_socket_path.display(),
+                "VMM control socket unavailable"
+            );
         }
         let exit = vm.run().map_err(map_vmm_error)?;
         tracing::info!(?exit, "native VM ended");
@@ -69,12 +74,7 @@ impl VmmInstanceImpl for NativeVmmInstance {
 const GROW_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Serves one control operation against the VM's disks.
-pub(crate) fn control(
-    vm: &VmControl,
-    op: crate::vmm::control::ControlOp,
-) -> crate::vmm::control::ControlResponse {
-    use crate::vmm::control::{ControlError, ControlOp, ControlReply};
-
+pub(crate) fn handle_control_op(vm: &VmControl, op: ControlOp) -> ControlResponse {
     match op {
         ControlOp::ResizeDisk { block_id, bytes } => vm
             .resize_disk(&block_id, bytes, GROW_TIMEOUT)
@@ -306,15 +306,15 @@ impl Vmm for Native {
             .exit_file
             .parent()
             .ok_or_else(|| BoxliteError::Engine("the exit file has no box directory".into()))?;
-        let control = crate::net::socket_path::BoxSockets::new(
+        let vmm_socket_path = crate::net::socket_path::BoxSockets::new(
             config.box_id.clone(),
             box_dir.join(crate::runtime::layout::dirs::SOCKETS_DIR),
         )
-        .control_sock();
+        .vmm_sock();
         Ok(VmmInstance::new(Box::new(NativeVmmInstance {
             config: vm_config,
             console: config.console_output,
-            control,
+            vmm_socket_path,
         })))
     }
 }

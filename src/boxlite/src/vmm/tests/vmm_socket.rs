@@ -14,7 +14,7 @@ fn grow_to(block_id: &str, bytes: u64) -> ControlRequest {
 #[test]
 fn a_request_reaches_the_handler_and_its_answer_returns() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("control.sock");
+    let path = dir.path().join("vmm.sock");
     serve(&path, |op| match op {
         ControlOp::ResizeDisk { block_id, bytes } if block_id == "container" => {
             Ok(ControlReply::DiskSize(bytes))
@@ -83,7 +83,7 @@ fn accept_recovers_from_temporary_errors_with_bounded_backoff() {
 #[test]
 fn another_version_is_unsupported_and_the_shim_keeps_serving() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("control.sock");
+    let path = dir.path().join("vmm.sock");
     serve(&path, |_| Ok(ControlReply::DiskSize(1))).unwrap();
     let timeout = Duration::from_secs(5);
     let mut future = grow_to("container", 512);
@@ -101,7 +101,7 @@ fn another_version_is_unsupported_and_the_shim_keeps_serving() {
 #[test]
 fn an_oversized_or_unknown_request_is_bounded() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("control.sock");
+    let path = dir.path().join("vmm.sock");
     serve(&path, |_| Ok(ControlReply::DiskSize(1))).unwrap();
 
     // An oversized frame ends the connection without a reply.
@@ -129,7 +129,7 @@ fn an_oversized_or_unknown_request_is_bounded() {
 #[test]
 fn serving_replaces_a_stale_socket() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("control.sock");
+    let path = dir.path().join("vmm.sock");
     drop(UnixListener::bind(&path).unwrap());
     serve(&path, |_| Ok(ControlReply::DiskSize(7))).unwrap();
     assert_eq!(
@@ -141,7 +141,7 @@ fn serving_replaces_a_stale_socket() {
 #[test]
 fn resize_requires_a_block_id_and_rejects_index_only_requests() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("control.sock");
+    let path = dir.path().join("vmm.sock");
     serve(&path, |_| {
         panic!("invalid requests must not reach the handler")
     })

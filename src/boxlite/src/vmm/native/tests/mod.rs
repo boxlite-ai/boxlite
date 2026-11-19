@@ -488,7 +488,7 @@ async fn reports_a_missing_kernel_through_the_exit_file() {
 #[tokio::test]
 #[ignore = "requires Linux x86_64 with /dev/kvm, VMM_KERNEL, VMM_DISK_GROW_INIT and a boxlite-shim built with native"]
 async fn grows_a_disk_through_the_shim_control_socket() {
-    use crate::vmm::control::{ControlOp, ControlReply, ControlRequest, VERSION, request};
+    use crate::vmm::vmm_socket::{ControlOp, ControlReply, ControlRequest, VERSION, request};
 
     let test_box = TestBox::new();
     let kernel = fs::read(std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL")).unwrap();
@@ -528,7 +528,7 @@ async fn grows_a_disk_through_the_shim_control_socket() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let path = test_box.layout.sockets().control_sock();
+    let path = test_box.layout.sockets().vmm_sock();
     let grow = ControlRequest {
         version: VERSION,
         op: ControlOp::ResizeDisk {
