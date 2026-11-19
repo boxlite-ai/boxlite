@@ -51,6 +51,9 @@ stop clears the canonical Box's turn reservations and cached handle. Observers
 check metadata without starting a Box and release protection when its run ends;
 pauses and transient metadata failures retain protection. Work OpenCode resumes
 after restart is outside the prior run's AutoStop protection.
+Capture PID and `started_at` from the original handle before sending the turn;
+compare available markers while polling so a fast stop/restart cannot inherit
+the prior run's reservation just because its current status is Running.
 
 REST response decoders and their round-trip tests compile only with the `rest` feature. Shared encoders and CLI input parsers remain available without it. Validate both feature configurations with warnings denied: runtime assembly builds the core library without REST before the Go SDK builds its REST-enabled C dependency.
 

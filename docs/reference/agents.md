@@ -208,6 +208,9 @@ Stopping a Box releases its admitted-turn protection. Observers read Box metadat
 without resuming a stopped Box and exit when its run ends. If OpenCode resumes
 an earlier turn after restart, that resumed turn is not protected from AutoStop;
 only turns admitted through the server in the new run receive protection.
+The observer captures PID and start time from the original Box handle before
+dispatch. A changed available run marker also releases protection when a restart
+occurs between metadata checks.
 
 Agent config responses accept additional fields while validating known fields.
 Agent config request bodies reject unknown fields.

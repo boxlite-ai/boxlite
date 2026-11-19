@@ -13,7 +13,7 @@ use boxlite::agents::{
     self, AgentControlOptions, AgentCreateOptions, AgentEventsOptions, AgentSendMode,
     AgentSendOptions, AgentTurnStatus,
 };
-use boxlite::{Agent, BoxStatus, BoxliteError};
+use boxlite::{Agent, BoxInfo, BoxStatus, BoxliteError};
 use futures::StreamExt;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
@@ -165,6 +165,7 @@ fn observe_turn(
     box_id: String,
     generation: u64,
     agent: Agent,
+    run: BoxInfo,
     turn_id: String,
 ) {
     tokio::spawn(async move {
@@ -181,6 +182,11 @@ fn observe_turn(
             // Metadata reads cannot start the service or reuse the spent handle.
             match state.runtime.get_info(&box_id).await {
                 Ok(Some(info)) if info.status.is_running() => {
+                    let replaced = matches!((run.pid, info.pid), (Some(before), Some(current)) if before != current)
+                        || matches!((run.started_at, info.started_at), (Some(before), Some(current)) if before != current);
+                    if replaced {
+                        break;
+                    }
                     if let Ok(turn) = agent.get_turn(&turn_id).await
                         && let Ok(snapshot) = turn.state()
                         && matches!(
@@ -359,8 +365,23 @@ pub(in crate::commands::serve) async fn send(
             drop(turns);
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         };
-        let agent = match open(&state, &canonical, &agent_id).await {
-            Ok(agent) => agent,
+        // Bind observation to the handle's run before dispatch can cross a restart.
+        let opened = async {
+            let sandbox = get_or_resume_box(&state, &canonical).await?;
+            let agent = sandbox
+                .agents()
+                .get(&agent_id)
+                .await
+                .map_err(|error| error_from_boxlite(&error))?;
+            let run = sandbox
+                .info()
+                .await
+                .map_err(|error| error_from_boxlite(&error))?;
+            Ok::<_, Response>((agent, run))
+        }
+        .await;
+        let (agent, run) = match opened {
+            Ok(opened) => opened,
             Err(response) => {
                 let mut turns = state.agent_turns.lock().await;
                 release_turn(&mut turns, &canonical, generation);
@@ -385,6 +406,7 @@ pub(in crate::commands::serve) async fn send(
                         canonical,
                         generation,
                         agent,
+                        run,
                         snapshot.id.clone(),
                     );
                     (

@@ -450,6 +450,7 @@ struct AutoStopFixture {
     fail_admission: Arc<std::sync::atomic::AtomicBool>,
     observations: Arc<std::sync::atomic::AtomicUsize>,
     running: Arc<std::sync::atomic::AtomicBool>,
+    run: Arc<std::sync::atomic::AtomicUsize>,
     invalidated: Arc<std::sync::atomic::AtomicBool>,
     starts: Arc<std::sync::atomic::AtomicUsize>,
     hold_observation: Arc<std::sync::atomic::AtomicBool>,
@@ -469,6 +470,7 @@ impl AutoStopFixture {
         let fail_admission = Arc::new(AtomicBool::new(false));
         let observations = Arc::new(AtomicUsize::new(0));
         let running = Arc::new(AtomicBool::new(true));
+        let run = Arc::new(AtomicUsize::new(1));
         let invalidated = Arc::new(AtomicBool::new(false));
         let starts = Arc::new(AtomicUsize::new(0));
         let hold_observation = Arc::new(AtomicBool::new(false));
@@ -476,43 +478,49 @@ impl AutoStopFixture {
         let finish_observation = Arc::new(tokio::sync::Notify::new());
         let admission_started = Arc::new(tokio::sync::Notify::new());
         let finish_admission = Arc::new(tokio::sync::Notify::new());
-        fn box_info(running: bool) -> Value {
+        fn box_info(running: bool, run: usize) -> Value {
             json!({"box_id":STUB_BOX_ID,"name":"friendly-box","status":if running { "running" } else { "stopped" },
             "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
-            "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512,"auto_resume":true})
+            "pid":run,"image":"alpine:latest","cpus":1,"memory_mib":512,"auto_resume":true})
         }
         let app = Router::new()
             .route("/v1/boxes", get({
                 let running = Arc::clone(&running);
-                move || { let running = Arc::clone(&running); async move {
-                    Json(json!({"boxes":[box_info(running.load(Ordering::SeqCst))]}))
+                let run = Arc::clone(&run);
+                move || { let running = Arc::clone(&running); let run = Arc::clone(&run); async move {
+                    Json(json!({"boxes":[box_info(running.load(Ordering::SeqCst), run.load(Ordering::SeqCst))]}))
                 }}
             }))
             .route("/v1/boxes/{id}", get({
                 let running = Arc::clone(&running);
-                move || { let running = Arc::clone(&running); async move {
-                    Json(box_info(running.load(Ordering::SeqCst)))
+                let run = Arc::clone(&run);
+                move || { let running = Arc::clone(&running); let run = Arc::clone(&run); async move {
+                    Json(box_info(running.load(Ordering::SeqCst), run.load(Ordering::SeqCst)))
                 }}
             }))
             .route("/v1/boxes/{id}/start", post({
                 let running = Arc::clone(&running);
                 let starts = Arc::clone(&starts);
-                move || { let running = Arc::clone(&running); let starts = Arc::clone(&starts); async move {
+                let run = Arc::clone(&run);
+                move || { let running = Arc::clone(&running); let starts = Arc::clone(&starts);
+                    let run = Arc::clone(&run); async move {
                     starts.fetch_add(1, Ordering::SeqCst);
                     running.store(true, Ordering::SeqCst);
-                    Json(box_info(true))
+                    let next_run = run.fetch_add(1, Ordering::SeqCst) + 1;
+                    Json(box_info(true, next_run))
                 }}
             }))
             .route("/v1/boxes/{id}/stop", post({
                 let stops = Arc::clone(&stops);
                 let running = Arc::clone(&running);
                 let invalidated = Arc::clone(&invalidated);
+                let run = Arc::clone(&run);
                 move || { let stops = Arc::clone(&stops); let running = Arc::clone(&running);
-                    let invalidated = Arc::clone(&invalidated); async move {
+                    let invalidated = Arc::clone(&invalidated); let run = Arc::clone(&run); async move {
                     stops.fetch_add(1, Ordering::SeqCst);
                     running.store(false, Ordering::SeqCst);
                     invalidated.store(true, Ordering::SeqCst);
-                    Json(box_info(false))
+                    Json(box_info(false, run.load(Ordering::SeqCst)))
                 }}
             }))
             .route("/v1/boxes/{id}/agents/{agent}", get(|| async { Json(resource()) }))
@@ -544,6 +552,7 @@ impl AutoStopFixture {
                     let starts = Arc::clone(&starts); let hold = Arc::clone(&hold);
                     let started = Arc::clone(&started); let finish = Arc::clone(&finish);
                     async move {
+                        let observation = observations.fetch_add(1, Ordering::SeqCst);
                         // An agent lookup can resume the service; metadata reads must not.
                         if !running.swap(true, Ordering::SeqCst) { starts.fetch_add(1, Ordering::SeqCst); }
                         if hold.swap(false, Ordering::SeqCst) {
@@ -553,7 +562,7 @@ impl AutoStopFixture {
                         if invalidated.load(Ordering::SeqCst) {
                             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))).into_response();
                         }
-                        if observations.fetch_add(1, Ordering::SeqCst) == 0 {
+                        if observation == 0 {
                             return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({}))).into_response();
                         }
                         let mut state = turn();
@@ -587,6 +596,7 @@ impl AutoStopFixture {
             fail_admission,
             observations,
             running,
+            run,
             invalidated,
             starts,
             hold_observation,
@@ -824,6 +834,46 @@ async fn rest_review_observer_releases_a_stopped_run_without_resuming_it() {
         "observer resumed a stopped Box"
     );
     assert!(!fixture.running.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn rest_review_restart_before_first_observation_releases_the_old_run() {
+    use std::sync::atomic::Ordering;
+    let fixture = AutoStopFixture::new().await;
+    let request = fixture.start().await;
+    fixture.running.store(false, Ordering::SeqCst);
+    fixture.invalidated.store(true, Ordering::SeqCst);
+    fixture.run.fetch_add(1, Ordering::SeqCst);
+    fixture.running.store(true, Ordering::SeqCst);
+    fixture.finish_admission.notify_one();
+    assert_eq!(
+        request.await.unwrap().unwrap().status(),
+        StatusCode::CREATED
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while fixture
+            .state
+            .agent_turns
+            .lock()
+            .await
+            .contains_key(STUB_BOX_ID)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a replacement run retained the old reservation");
+    assert_eq!(
+        fixture.observations.load(Ordering::SeqCst),
+        0,
+        "the old agent handle was polled in a replacement run"
+    );
+    fixture.sweep().await;
+    assert_eq!(
+        fixture.stops(),
+        1,
+        "stale protection prevented AutoStop after restart"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
