@@ -95,7 +95,10 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
 
 export const MOCK_ORGANIZATION: Organization = {
   id: MOCK_ORGANIZATION_ID,
-  name: 'Mock Org',
+  name:
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'trial-onboarding'
+      ? 'Personal workspace'
+      : 'Mock Org',
   createdBy: MOCK_USER.sub,
   isDefaultForAuthenticatedUser: true,
   personal: true,

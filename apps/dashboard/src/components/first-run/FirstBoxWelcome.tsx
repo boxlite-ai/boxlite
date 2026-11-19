@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { Button } from '@/components/ui/button'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { AsciiButton } from '@/components/ascii'
 import { Check, ChevronRight, Code2, Terminal, Globe, Bot, Container, SparklesIcon } from '@/components/ui/icon'
@@ -15,6 +15,15 @@ import { getLocalStorageItem } from '@/lib/local-storage'
 import FirstBoxAtmosphere from './FirstBoxAtmosphere'
 import WelcomeJourneyArtwork from './WelcomeJourneyArtwork'
 import WelcomeCreditsStep from './WelcomeCreditsStep'
+
+const trialPreviewEnabled =
+  import.meta.env.DEV &&
+  import.meta.env.VITE_ENABLE_MOCKING === 'true' &&
+  new URLSearchParams(window.location.search).get('preview') === 'trial-onboarding'
+const TrialWelcomePreview =
+  import.meta.env.DEV && import.meta.env.VITE_ENABLE_MOCKING === 'true'
+    ? lazy(() => import('./TrialWelcomePreview'))
+    : null
 
 const USE_CASE_ICONS = {
   'coding-agent': Code2,
@@ -62,6 +71,17 @@ export default function FirstBoxWelcome() {
     note: profile.data?.note ?? '',
     completedAt,
   }
+  if (trialPreviewEnabled)
+    return (
+      <WelcomeForm
+        key={`trial:${user?.profile.sub}:${orgId}`}
+        initial={
+          new URLSearchParams(window.location.search).get('step') === 'plans'
+            ? { organizationName: selectedOrganization.name, useCase: 'exploring', note: '', completedAt: null }
+            : { organizationName: '', useCase: null, note: '', completedAt: null }
+        }
+      />
+    )
   return <WelcomeForm key={`${user?.profile.sub}:${orgId}`} initial={initial} />
 }
 
@@ -97,10 +117,10 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
       />
       <main
         ref={setMainElement}
-        className={`mx-auto w-full px-6 pb-12 pt-10 font-display sm:pt-16 min-[1180px]:pt-20 ${gettingCredits ? 'max-w-[1080px] lg:pt-20' : 'max-w-[620px] min-[1180px]:max-w-[960px]'}`}
+        className={`mx-auto w-full px-6 font-display ${trialPreviewEnabled && gettingCredits ? 'max-w-[1080px] py-6 lg:py-8' : `pb-12 pt-10 sm:pt-16 min-[1180px]:pt-20 ${gettingCredits ? 'max-w-[1080px] lg:pt-20' : 'max-w-[620px] min-[1180px]:max-w-[960px]'}`}`}
       >
         <div
-          className={`flex items-center gap-3 font-sans text-label text-muted-foreground ${gettingCredits ? 'mb-10 lg:mb-16' : 'mb-8'} ${!gettingCredits ? 'welcome-journey-form' : ''}`}
+          className={`flex items-center gap-3 font-sans text-label text-muted-foreground ${trialPreviewEnabled && gettingCredits ? 'mb-6' : gettingCredits ? 'mb-10 lg:mb-16' : 'mb-8'} ${!gettingCredits ? 'welcome-journey-form' : ''}`}
           aria-label="Onboarding progress"
         >
           <span className={step === 'organization' ? 'text-foreground' : ''}>1 Organization</span>
@@ -109,7 +129,9 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
           {billingEnabled && (
             <>
               <span aria-hidden="true">/</span>
-              <span className={step === 'credits' ? 'text-foreground' : ''}>3 Get credits</span>
+              <span className={step === 'credits' ? 'text-foreground' : ''}>
+                {trialPreviewEnabled ? '3 Get started' : '3 Get credits'}
+              </span>
             </>
           )}
         </div>
@@ -297,17 +319,32 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
             </div>
           </form>
         )}
-        {step === 'credits' && billingEnabled && (
-          <WelcomeCreditsStep
-            onContinue={complete}
-            illustrationRef={setIllustrationAnchor}
-            useCase={welcome.useCase}
-            onBack={() => {
-              action.reset()
-              setStep('intent')
-            }}
-          />
-        )}
+        {step === 'credits' &&
+          billingEnabled &&
+          (trialPreviewEnabled && TrialWelcomePreview ? (
+            <Suspense fallback={<p>Loading plans…</p>}>
+              <TrialWelcomePreview
+                organizationName={welcome.organizationName}
+                onContinue={complete}
+                illustrationRef={setIllustrationAnchor}
+                onBack={() => {
+                  action.reset()
+                  setStep('intent')
+                }}
+                initialScenario={new URLSearchParams(window.location.search).get('scenario') ?? undefined}
+              />
+            </Suspense>
+          ) : (
+            <WelcomeCreditsStep
+              onContinue={complete}
+              illustrationRef={setIllustrationAnchor}
+              useCase={welcome.useCase}
+              onBack={() => {
+                action.reset()
+                setStep('intent')
+              }}
+            />
+          ))}
         {error && (
           <p role="alert" className="mt-4 text-meta text-destructive">
             {error}
