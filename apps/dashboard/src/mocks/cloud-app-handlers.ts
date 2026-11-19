@@ -127,20 +127,50 @@ export function cloudAppHandlers() {
     managedAvailable: true,
   }))
   const apps = new Map([live, draftApp('starter')].map((app) => [app.id, app]))
+  const deleted = new Map<string, { app: AppDetail; deletedAt: string; purgeAfter: string }>()
   const base = `*/v1/${MOCK_ORGANIZATION_ID}/apps`
   const missing = () => HttpResponse.json({ error: { code: 'not_found', message: 'App not found.' } }, { status: 404 })
 
   return [
     http.get(base, () => HttpResponse.json([...apps.values()].map((app) => ({ ...app, environments: 1 })))),
-    http.get(`${base}/deleted`, () => HttpResponse.json([])),
+    http.get(`${base}/deleted`, () =>
+      HttpResponse.json(
+        [...deleted.values()].map(({ app, deletedAt, purgeAfter }) => ({
+          name: app.name,
+          deletedAt,
+          purgeAfter,
+          environments: 1,
+        })),
+      ),
+    ),
     http.post(base, async ({ request }) => {
       const { name } = (await request.json()) as { name: string }
       const problem = typeof name === 'string' ? nameProblem(name) : 'An App name is required.'
       if (problem) return HttpResponse.json({ error: { message: problem } }, { status: 400 })
-      if (apps.has(name)) return HttpResponse.json({ error: { message: 'That App name is taken.' } }, { status: 409 })
+      if (apps.has(name) || deleted.has(name))
+        return HttpResponse.json({ error: { message: 'That App name is taken.' } }, { status: 409 })
       const app = draftApp(name)
       apps.set(app.id, app)
       return HttpResponse.json({ app, prompt: app.handoffPrompt }, { status: 201 })
+    }),
+    http.delete(`${base}/:app`, ({ params }) => {
+      const app = apps.get(String(params.app))
+      if (!app) return missing()
+      const now = Date.now()
+      deleted.set(app.name, {
+        app,
+        deletedAt: new Date(now).toISOString(),
+        purgeAfter: new Date(now + 7 * 86_400_000).toISOString(),
+      })
+      apps.delete(app.id)
+      return new HttpResponse(null, { status: 204 })
+    }),
+    http.post(`${base}/deleted/:name/restore`, ({ params }) => {
+      const retained = deleted.get(String(params.name))
+      if (!retained) return missing()
+      apps.set(retained.app.id, retained.app)
+      deleted.delete(retained.app.name)
+      return HttpResponse.json({ ...retained.app, environments: 1 })
     }),
     http.get(`${base}/:app/:section`, ({ params }) => {
       const app = apps.get(String(params.app))

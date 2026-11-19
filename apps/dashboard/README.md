@@ -413,9 +413,11 @@ in `src/mocks`, with no backend and no login. Its `VITE_BASE_API_URL` must end i
 handlers are mounted under `VITE_API_URL`. When the two disagree, `/config`
 goes unanswered and the console never leaves its loading screen.
 
-The Apps preview includes a live `demo-shop` and a draft `starter`, with local
-App creation and the detail tabs. Its data resets on reload. Runtime operations
-require the Cloud Apps API.
+The Apps preview includes a live `demo-shop` and a draft `starter`. Create an App
+or open its detail tabs to explore it. Deleting an App moves it to **Recently
+deleted**. Choose **Restore** there or **Undo** in the notification to bring it
+back. Reloading the preview resets the sample data. Runtime operations require
+the Cloud Apps API.
 
 The image catalog mock answers the way the API does, so the console can be
 judged against real refusals rather than happy paths: a tenant image is listed
