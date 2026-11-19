@@ -56,17 +56,18 @@ const render = (overrides: Partial<Parameters<typeof renderRunnerBoot>[0]> = {})
     'base64',
   ).toString('utf8')
 
+const protectedProxy = {
+  runnerId: '8137cc0d-5d3f-43b8-aa32-b9304740269e',
+  url: 'https://runner-2.example.com:3003/',
+  caPem: '',
+  certFile: '/etc/boxlite/listener.pem',
+  keyFile: '/etc/boxlite/listener.key',
+  caFile: '/etc/boxlite/enrollment-ca.pem',
+  dohUrl: 'https://resolver.example.com/dns-query',
+  dohAddress: '1.1.1.1:443',
+}
+
 test('the enrolled slot boots V0 and is excluded from automatic V2 registration', () => {
-  const protectedProxy = {
-    runnerId: '8137cc0d-5d3f-43b8-aa32-b9304740269e',
-    url: 'https://runner-2.example.com:3003/',
-    caPem: '',
-    certFile: '/etc/boxlite/listener.pem',
-    keyFile: '/etc/boxlite/listener.key',
-    caFile: '/etc/boxlite/enrollment-ca.pem',
-    dohUrl: 'https://resolver.example.com/dns-query',
-    dohAddress: '1.1.1.1:443',
-  }
   const slot = (name: string) => ({ resourceName: `Runner-${name}`, nameTag: name, controlPlaneRunnerName: name })
   const assignments = [
     { slot: slot('default'), token: 't0' },
@@ -80,6 +81,21 @@ test('the enrolled slot boots V0 and is excluded from automatic V2 registration'
   assert.ok(script.includes(`BOXLITE_PROTECTED_PROXY_RUNNER_ID=${protectedProxy.runnerId}`))
   assert.ok(script.includes(`TLS_KEY_FILE=${protectedProxy.keyFile}`))
   assert.match(render(), /^API_VERSION=2$/m)
+})
+
+test('managed environment convergence refuses enrollment overrides', () => {
+  const apiUrl = 'https://api.example.test'
+  for (const [key, value] of Object.entries({
+    BOXLITE_PROTECTED_PROXY_RUNNER_ID: 'd02ae8d4-f05c-42f4-bb57-d1fdb71b5d42',
+    TLS_CERT_FILE: '/etc/boxlite/custom.pem',
+  })) {
+    const runnerEnv = JSON.stringify({ [key]: value })
+    const enrolled = { apiUrl, runnerEnv, protectedProxy }
+    assert.throws(() => renderUnitEnvironmentPolicyScripts(enrolled), new RegExp(`deployment-owned key ${key}`))
+  }
+  assert.doesNotThrow(() =>
+    renderUnitEnvironmentPolicyScripts({ apiUrl, runnerEnv: '{"TLS_CERT_FILE":"/etc/boxlite/custom.pem"}' }),
+  )
 })
 
 test('health probing uses the deployed name and CA for an enrolled Runner', () => {

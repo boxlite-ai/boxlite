@@ -53,7 +53,7 @@ impl BoxImpl {
                     || has_shim(&self.layout.pid_file_path())
                 {
                     return Err(conflict(
-                        "Protected bootstrap requires a fresh Guest network",
+                        "Protected bootstrap requires a fresh Guest network and disabled automatic removal",
                     ));
                 }
             }
@@ -124,7 +124,7 @@ impl BoxImpl {
                 && !self.can_admit_protected_boot(state.status, !record.retired.is_empty())
             {
                 return Err(conflict(
-                    "Protected bootstrap requires a fresh Guest network",
+                    "Protected bootstrap requires a fresh Guest network and disabled automatic removal",
                 ));
             }
             if state.status.is_active()
@@ -156,6 +156,7 @@ impl BoxImpl {
 
     fn can_admit_protected_boot(&self, status: BoxStatus, has_retirement: bool) -> bool {
         matches!(self.config.options.network, NetworkSpec::Disabled)
+            && !self.config.options.removes_on_stop()
             && status.can_start()
             && (has_retirement || status == BoxStatus::Configured)
     }

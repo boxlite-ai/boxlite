@@ -342,6 +342,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
             apiUrl: apiUrl as string,
             otlpUrl: otlpUrl as string,
             runnerEnv: runnerEnv as string,
+            protectedProxy: slot.protectedProxy,
           }),
       )
       previousUpgrade = new command.local.Command(

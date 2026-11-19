@@ -252,6 +252,8 @@ Each entry contains `runnerId`, `url`, `caPem`, `caFile`, `certFile`, `keyFile`,
 
 For `Runner-runner-2`, provide the pre-registered slot token through the deployment secret `STACK_RUNNER_PROTECTED_PROXY_TOKEN_RUNNER_RUNNER_2`. Cloud uses the same token saved by the admin registration, and the deployment renders it only for that Runner slot.
 
+`BOXLITE_RUNNER_ENV` cannot override the enrolled identity, TLS, or resolver settings during boot or managed updates.
+
 For example, an enrolled slot can listen at `https://runner-2.example.com:3003/` with a deployment CA and use a pinned DoH endpoint at `1.1.1.1:443`. Ordinary extra slots use automatic V2 registration and loopback HTTP readiness. Cloud checks the enrolled Runner's authenticated bootstrap capability before scoring and truncating candidates for a protected placement.
 
 ```mermaid
@@ -274,6 +276,8 @@ flowchart LR
 Cloud prepares the selected Box with ordinary startup skipped and no network interface configured. The enrolled Runner checks TLS, bearer authorization, and the assigned UUID before decoding the host-only request. Runtime stores the attempt and its epoch, then sends the route and effective policy to the shim on a versioned, single-use stdin record.
 
 On Linux, the Runner needs a cgroup v2 that can contain the shim and its namespace descendants. Runtime checks membership before sending credentials and keeps the attempt unresolved until it can establish that the exact child and its process tree have exited. A delayed request for a retired attempt is refused even after the Runner reopens the Box.
+
+Protected bootstrap requires automatic removal to be disabled. Runtime retains protected attempt and retirement records during restart recovery, including when the Box directory is missing.
 
 The protected receipt requires Guest readiness and exact installed policy, registration, and epoch evidence from gvproxy. Until an authorized bootstrap settles, policy-only changes and legacy recovery cannot replace the protected route. Cloud registry transactions and live rotation use their respective [registry and runtime-update slices](#acceptance-and-ownership).
 
