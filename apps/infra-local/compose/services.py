@@ -1,7 +1,7 @@
 """Declarative registry of services the orchestrator manages.
 
-11 daemon boxes (the legacy minio service name now runs RustFS):
-  postgres, redis, minio, registry, dex, jaeger,
+11 daemon boxes:
+  postgres, redis, rustfs, registry, rauthy, jaeger,
   pgadmin, registry-ui, maildev, otel-collector, caddy.
 
 otel-collector runs the upstream `otel/opentelemetry-collector` image and
@@ -11,7 +11,9 @@ unified reverse proxy; see `_caddyfile()`.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
+import secrets
 from typing import Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -110,21 +112,20 @@ SPEC_REDIS = ServiceSpec(
 )
 
 
-SPEC_MINIO = ServiceSpec(
-    name="minio",
+SPEC_RUSTFS = ServiceSpec(
+    name="rustfs",
     image="ghcr.io/rustfs/rustfs:1.0.4-glibc",
     cpus=1,
     memory_mib=512,
     ports=[(29000, 9000), (29001, 9001)],
     env=lambda cfg: {
-        "RUSTFS_ACCESS_KEY": cfg.minio_user,
-        "RUSTFS_SECRET_KEY": cfg.minio_password,
+        "RUSTFS_ACCESS_KEY": cfg.rustfs_user,
+        "RUSTFS_SECRET_KEY": cfg.rustfs_password,
         "RUSTFS_CONSOLE_ENABLE": "true",
     },
     cmd=["/data"],
     # Run as root inside this dev VM; do not chown the developer's host files.
     user="0:0",
-    # RustFS cannot consume a MinIO data directory; keep old data untouched.
     volumes=lambda cfg: [(str(cfg.data_dir / "rustfs"), "/data")],
     depends_on=[],
     healthcheck=HealthCheck(
@@ -153,80 +154,33 @@ SPEC_REGISTRY = ServiceSpec(
 
 # ─── 3b services ──────────────────────────────────────────────────────────
 
-_DEX_CONFIG = """\
-issuer: ${DEX_ISSUER}
-storage:
-  type: sqlite3
-  config:
-    file: /var/dex/dex.db
-web:
-  http: 0.0.0.0:5556
-  allowedOrigins: ['*']
-  allowedHeaders: ['x-requested-with']
-staticClients:
-  - id: boxlite
-    redirectURIs:
-      - '${REDIRECT_URI}'
-      - 'http://localhost:3000'
-      - 'http://localhost:5173'
-      # `boxlite auth login` (browser/OIDC) loopback callback — RFC 8252 §8.3
-      # loopback IP literal on the CLI's fixed default port 5555. The CLI binds
-      # exactly this port or fails; `--callback-port N` needs its own entry.
-      - 'http://127.0.0.1:5555/callback'
-    name: 'BoxLite'
-    public: true
-  # The MCP endpoint's token audience (MCP_RESOURCE_URL in api.env). `boxlite`
-  # gets a token for it with the scope `audience:server:client_id:<this id>`.
-  - id: 'http://localhost:3001/mcp'
-    name: 'BoxLite MCP'
-    public: true
-    trustedPeers: ['boxlite']
-enablePasswordDB: true
-staticPasswords:
-  - email: 'admin@boxlite.dev'
-    hash: '$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W'
-    username: 'admin'
-    userID: '1234'
-  # Normal (non-admin) test user. Password is 'password'.
-  # OIDC sub on first login = CgQ1Njc4EgVsb2NhbA (base64 of
-  # protobuf-encoded {userID:'5678', connectorID:'local'}).
-  # Registration creates the `user` row + Personal organization after the
-  # Turnstile challenge; see README.md#local-registration for the dev widget.
-  - email: 'test01@boxlite.dev'
-    hash: '$2a$10$SihmD3KSn9pNA02TCkvTBe1EzYCog6bcf8ztMcI1m4rIGtJIV47ge'
-    username: 'test01'
-    userID: '5678'
-"""
-
-_DEX_ENTRYPOINT = """\
-set -e
-mkdir -p /var/dex /tmp
-cat > /tmp/dex-config.yaml <<'__CFG__'
-""" + _DEX_CONFIG + """\
-__CFG__
-sed -i "s|\\${DEX_ISSUER}|${DEX_ISSUER}|g" /tmp/dex-config.yaml
-sed -i "s|\\${REDIRECT_URI}|${REDIRECT_URI}|g" /tmp/dex-config.yaml
-exec /usr/local/bin/dex serve /tmp/dex-config.yaml
-"""
+def _rauthy_env(cfg) -> dict[str, str]:
+    """Per-Box settings; the static ones live in apps/rauthy/config.toml."""
+    public = f"localhost:{cfg.rauthy_host_port}"
+    return {
+        "PUB_URL": public,
+        "RP_ORIGIN": f"http://{public}",
+        # Random per Box: the database lives on the Box disk and is
+        # re-seeded whenever the Box is recreated.
+        "ENC_KEYS": f"local/{base64.b64encode(secrets.token_bytes(32)).decode()}",
+        "ENC_KEY_ACTIVE": "local",
+        "HQL_SECRET_RAFT": secrets.token_hex(16),
+        "HQL_SECRET_API": secrets.token_hex(16),
+    }
 
 
-SPEC_DEX = ServiceSpec(
-    name="dex",
-    image="dexidp/dex:v2.42.0",
+SPEC_RAUTHY = ServiceSpec(
+    name="rauthy",
+    image="ghcr.io/sebadob/rauthy:0.37.2@sha256:d733b7580f53c1601c286b5504853b2774e70245f5f9427d9bcda32496b753ee",
     cpus=1,
     memory_mib=256,
-    ports=[(25556, 5556)],
-    env=lambda cfg: {
-        "DEX_ISSUER": cfg.dex_issuer,
-        "REDIRECT_URI": "http://localhost:3000",
-    },
+    ports=[(25556, 8080)],
+    env=_rauthy_env,
+    volumes=lambda cfg: [(str(cfg.repo_root / "apps" / "rauthy"), "/rauthy")],
+    cmd=["serve", "--config-file", "/rauthy/config.toml"],
     depends_on=[],
-    # dex image's default entrypoint is /usr/local/bin/dex; override to sh
-    # so we can run the inline script that env-substitutes the config.
-    entrypoint=["sh"],
-    cmd=["-c", _DEX_ENTRYPOINT],
     healthcheck=HealthCheck(
-        http_url="http://127.0.0.1:25556/dex/.well-known/openid-configuration",
+        http_url="http://127.0.0.1:25556/auth/v1/.well-known/openid-configuration",
         interval_s=2.0,
         retries=30,
     ),
@@ -262,19 +216,25 @@ SPEC_JAEGER = ServiceSpec(
 )
 
 
+# pgAdmin runs as uid 5050. In a Box its python lacks the image's
+# CAP_NET_BIND_SERVICE file capability and ports below 1024 stay privileged,
+# so the image default :80 fails with EACCES; listen on an unprivileged port.
+PGADMIN_GUEST_PORT = 5050
+
 SPEC_PGADMIN = ServiceSpec(
     name="pgadmin",
     image="dpage/pgadmin4:9.2.0",
     cpus=1,
     memory_mib=512,
-    ports=[(25051, 80)],
+    ports=[(25051, PGADMIN_GUEST_PORT)],
     env=lambda cfg: {
         "PGADMIN_DEFAULT_EMAIL": cfg.pgadmin_email,
         "PGADMIN_DEFAULT_PASSWORD": cfg.pgadmin_password,
         # Skip the password-setup wizard so probes don't redirect forever.
         "PGADMIN_CONFIG_SERVER_MODE": "False",
         "PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED": "False",
-        # Force IPv4 bind (image default is [::]:80 dual-stack).
+        "PGADMIN_LISTEN_PORT": str(PGADMIN_GUEST_PORT),
+        # Force IPv4 bind (image default is [::] dual-stack).
         "PGADMIN_LISTEN_ADDRESS": "0.0.0.0",
     },
     depends_on=["postgres"],
@@ -442,14 +402,14 @@ def _caddyfile(cfg) -> str:
 \thandle_path /jaeger/* {{
 \t\treverse_proxy {cfg.host_hub}:{cfg.jaeger_host_port}
 \t}}
-\thandle_path /dex/* {{
-\t\treverse_proxy {cfg.host_hub}:{cfg.dex_host_port}
+\thandle /auth/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.rauthy_host_port}
 \t}}
-\thandle_path /minio-console/* {{
+\thandle_path /rustfs-console/* {{
 \t\treverse_proxy {cfg.host_hub}:29001
 \t}}
-\thandle_path /minio/* {{
-\t\treverse_proxy {cfg.host_hub}:{cfg.minio_host_port}
+\thandle_path /rustfs/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.rustfs_host_port}
 \t}}
 \thandle_path /registry-ui/* {{
 \t\treverse_proxy {cfg.host_hub}:{cfg.registry_ui_host_port}
@@ -467,9 +427,9 @@ def _caddyfile(cfg) -> str:
 routes:
   /pgadmin/        -> pgadmin
   /jaeger/         -> jaeger
-  /dex/            -> dex (OIDC)
-  /minio/          -> minio S3 API
-  /minio-console/  -> minio console UI
+  /auth/           -> rauthy (OIDC)
+  /rustfs/         -> rustfs S3 API
+  /rustfs-console/ -> rustfs console UI
   /registry-ui/    -> registry UI
   /registry/       -> docker registry v2
   /maildev/        -> maildev (caught mail)
@@ -501,7 +461,7 @@ SPEC_CADDY = ServiceSpec(
     ],
     entrypoint=["sh"],
     cmd=lambda cfg: ["-c", _CADDY_ENTRYPOINT_TEMPLATE.format(caddyfile=_caddyfile(cfg))],
-    depends_on=["dex", "jaeger", "pgadmin", "minio", "registry", "registry-ui", "maildev"],
+    depends_on=["rauthy", "jaeger", "pgadmin", "rustfs", "registry", "registry-ui", "maildev"],
     healthcheck=HealthCheck(
         # Caddy admin API on :2019/config/ returns 200 once config loaded.
         http_url="http://127.0.0.1:12019/config/",
@@ -514,9 +474,9 @@ SPEC_CADDY = ServiceSpec(
 SERVICES: dict[str, ServiceSpec] = {
     "postgres":    SPEC_PG,
     "redis":       SPEC_REDIS,
-    "minio":       SPEC_MINIO,
+    "rustfs":      SPEC_RUSTFS,
     "registry":    SPEC_REGISTRY,
-    "dex":         SPEC_DEX,
+    "rauthy":      SPEC_RAUTHY,
     "jaeger":      SPEC_JAEGER,
     "pgadmin":     SPEC_PGADMIN,
     "registry-ui": SPEC_REGISTRY_UI,
