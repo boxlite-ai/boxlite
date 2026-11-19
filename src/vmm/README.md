@@ -784,41 +784,20 @@ took, and then announces that slot on the kernel command line.
   the VM. The native adapter preserves the ID assigned by BoxLite. IDs do not
   affect attachment order or Linux device names. Invalid IDs fail VM creation
   before host resources or images are opened.
-- **Online grow.** `Vm::control()` returns a cloneable `VmControl`. Its
-  `resize_disk(block_id, bytes, timeout)` routes to the private sender registered
-  by that device during construction. Each channel carries a
-  `BlockControlRequest` enum; `Resize` carries its absolute target and a typed
-  reply sender. `DiskSender` shares submission, wakeup and reply waiting across
-  operations, while the device matches requests on its worker. Additional block
-  operations extend this inbox; only `Resize` is implemented.
-  The registry becomes immutable when construction finishes;
-  `devices::add_all` returns `Result<()>`. An unknown
-  ID returns `InvalidInput`. A request queues the absolute target and writes
-  one byte to a doorbell socket pair; the device registers the other end at
-  each activation, after the backend source, and on its `BackendReady` drains the doorbell and applies
-  every queued target on the worker thread. A grow refuses a read-only disk
-  (`PermissionDenied`) and a smaller or unaligned size (`InvalidInput`),
-  succeeds unchanged at the current size, and otherwise calls `resize_grow`,
-  re-encodes the configuration space and raises the configuration interrupt.
-  On Linux, the Raw preflight rejects a target above the shim's current
-  `RLIMIT_FSIZE` soft limit before attempting the grow.
-  For qcow2, the preflight adds a temporary allowance of 1 MiB for every
-  started GiB of target virtual capacity and compares the estimate to that
-  limit.
+- **Online grow.** `vm.control().resize_disk("data", 2 << 30, timeout)`
+  grows the writable disk with `block_id: "data"` to 2 GiB. Targets must be
+  sector-aligned and at least the current capacity. A same-size request is a no-op.
 
-  With QEMU 8.2.2, fresh standalone qcow2 images created with
-  `preallocation=metadata`, 64 KiB clusters, and 16-bit refcounts used 384 KiB
-  of extra host file length at 1 GiB and 10.25 MiB at 64 GiB. Existing images
-  can require more depending on cluster layout. The kernel enforces the limit
-  on actual host file growth.
+  After growth succeeds, the device worker updates guest capacity and raises a
+  configuration interrupt. A timeout ends the wait and the request can still complete.
 
-  A target sent while the device is inactive waits for the next activation;
-  the caller times out with `TimedOut` and may retry. A timeout does not cancel
-  the queued operation. A dropped device returns `BrokenPipe`.
+  On Linux, preflight rejects a Raw target or qcow2 estimate above the shim's
+  `RLIMIT_FSIZE` soft limit. The temporary qcow2 estimate adds 1 MiB per
+  started GiB of target capacity.
 
-  For example, `vm.control().resize_disk("data", 2 << 30, timeout)` grows the
-  disk configured with `block_id: "data"` to 2 GiB, regardless of its position
-  in `VmConfig.disks`; the caller supplies the ID before VM creation.
+  Fresh standalone samples from QEMU 8.2.2 (`preallocation=metadata`,
+  64 KiB clusters, 16-bit refcounts) added 384 KiB to file length at 1 GiB
+  and 10.25 MiB at 64 GiB. Existing image layouts can require more space.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
   backend and control sources, fails the device with `Fatal` if a request is still in
   flight (no completion can arrive any more, and the guest may already
