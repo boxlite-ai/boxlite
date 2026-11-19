@@ -63,14 +63,12 @@ enum VmState {
 
 /// The guest machine on host backend `H`.
 pub struct Vm<H: HostVm> {
-    // Field order is load-bearing: devices go first, then the host VM, which
-    // releases its guest mappings, then the RAM that backs them. `Drop`
-    // unmaps the RAM anyway, since a device's interrupt line holds the host
-    // VM longer.
-    chipset: Chipset,
+    // Devices drop before the host VM, and the host VM drops before the RAM.
+    // `Drop` can take these fields to close a fresh VM before releasing RAM.
+    chipset: Option<Chipset>,
     /// Runs every virtio device's events on one thread; `run` and `Drop` shut
     /// them down before the RAM is released.
-    workers: VirtioWorkers,
+    workers: Option<VirtioWorkers>,
     /// The worker writing the guest console to the caller's sink; `run`
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
     /// `Sync`; `run` reaches it through `&mut self`.
@@ -80,7 +78,8 @@ pub struct Vm<H: HostVm> {
     boot_regs: BootRegisters,
     vcpu_count: u8,
     state: VmState,
-    host_vm: Arc<H>,
+    fresh_vm: bool,
+    host_vm: Option<Arc<H>>,
     ram: GuestRam,
 }
 
@@ -116,9 +115,11 @@ impl Vm<boxlite_hypervisor::KvmVm> {
         )?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
-        let mut vm = Self::with_devices(
+        let mut vm = Self::build(
             config,
             move || boxlite_hypervisor::KvmVm::from_prepared(prepared),
+            true,
+            VirtioWorkers::new,
             move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
             |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
         )?;
@@ -145,13 +146,26 @@ impl<H: HostVm> Vm<H> {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_devices(
+        config: VmConfig,
+        host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
+        boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
+        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
+    ) -> Result<Self>
+    where
+        H: 'static,
+    {
+        Self::build(config, host_vm, false, VirtioWorkers::new, boot, devices)
+    }
+
     /// Validates `config`, allocates the RAM layout, creates the host VM with
     /// `host_vm`, builds the chipset from the devices `devices` adds,
     /// registers every RAM range and writes the boot data with `boot`.
     /// `devices` also gets the guest memory, the virtio workers and the
     /// mutable configuration. Invalid configuration fails before `host_vm`
-    /// runs, and a chipset conflict before any RAM is registered; tests pass
-    /// a mock backend and devices.
+    /// runs, and a chipset conflict before any RAM is registered.
+    /// `fresh_vm` requires a newly created VM with no independent vCPUs.
     #[cfg_attr(
         not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
         expect(
@@ -159,9 +173,11 @@ impl<H: HostVm> Vm<H> {
             reason = "Only the Linux x86_64 Vm::new composes devices yet."
         )
     )]
-    pub(crate) fn with_devices(
+    fn build(
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
+        fresh_vm: bool,
+        create_workers: impl FnOnce(EventSender) -> std::io::Result<VirtioWorkers>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
         devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
     ) -> Result<Self>
@@ -178,7 +194,7 @@ impl<H: HostVm> Vm<H> {
         let host_vm = Arc::new(host_vm()?);
         // No worker thread starts before a virtio device activates, so an
         // early return leaves nothing running.
-        let workers = VirtioWorkers::new(sender.clone()).map_err(Error::VirtioWorker)?;
+        let workers = create_workers(sender.clone()).map_err(Error::VirtioWorker)?;
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
         devices(
             &mut chipset,
@@ -189,18 +205,29 @@ impl<H: HostVm> Vm<H> {
             &mut config,
         )?;
         let chipset = chipset.build()?;
-        ram.map(&*host_vm)?;
-        // From here on `Drop` unmaps the RAM if a later step fails.
+        if let Err(error) = ram.map(&*host_vm) {
+            drop(chipset);
+            drop(workers);
+            if fresh_vm && let Some(host_vm) = Arc::into_inner(host_vm) {
+                drop(host_vm);
+                // SAFETY: The fresh host VM has closed and no vCPUs or virtio
+                // workers have started.
+                unsafe { ram.release_after_vm_close() };
+            }
+            return Err(error);
+        }
+
         let mut vm = Self {
-            chipset,
-            workers,
+            chipset: Some(chipset),
+            workers: Some(workers),
             console: Mutex::new(None),
             events: Mutex::new(events),
             sender,
             boot_regs: BootRegisters::default(),
             vcpu_count: config.vcpu_count,
             state: VmState::Created,
-            host_vm,
+            fresh_vm,
+            host_vm: Some(host_vm),
             ram,
         };
         vm.boot_regs = boot(&vm.ram, &config)?;
@@ -235,10 +262,10 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         let gate = StartGate::default();
         let kicks = Mutex::new(Vec::new());
         let vcpus = Workers {
-            host_vm: &*self.host_vm,
+            host_vm: self.host_vm.as_deref().expect("live VM has a host VM"),
             vcpu_count: self.vcpu_count,
             boot_regs: &self.boot_regs,
-            chipset: &self.chipset,
+            chipset: self.chipset.as_ref().expect("live VM has a chipset"),
             sender: &self.sender,
             kicks: &kicks,
             gate: &gate,
@@ -279,7 +306,8 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         });
         // No vCPU notifies a queue any more. Stop the virtio devices before the
         // console finishes, so a device's last output still reaches the sink.
-        let shutdown = self.workers.shutdown().map_err(Error::from);
+        let workers = self.workers.as_ref().expect("live VM has virtio workers");
+        let shutdown = workers.shutdown().map_err(Error::from);
         let console = self
             .console
             .get_mut()
@@ -318,14 +346,31 @@ impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
         // A device event that outlived the shutdown may still touch guest
         // RAM, so the registrations stay and `GuestRam` leaks the backing.
-        if let Err(ShutdownError::Join(error)) = self.workers.shutdown() {
+        let workers = self.workers.as_ref().expect("live VM has virtio workers");
+        if let Err(ShutdownError::Join(error)) = workers.shutdown() {
             tracing::warn!(%error, "the virtio workers did not stop; leaking guest RAM");
             return;
         }
-        // Quiesce failure after joining cannot leave a live callback. A VM
-        // that never ran also holds registrations; remove them so the backing
-        // can be released. `GuestRam` leaks it on unmap failure.
-        let _ = self.ram.unmap(&*self.host_vm);
+        // Quiesce failure after joining cannot leave a live callback.
+        let host_vm = self.host_vm.as_deref().expect("live VM has a host VM");
+        if let Err(error) = self.ram.unmap(host_vm) {
+            tracing::warn!(
+                %error,
+                cause = ?std::error::Error::source(&error),
+                "failed to unmap guest RAM"
+            );
+        }
+        if self.fresh_vm && self.state == VmState::Created {
+            drop(self.chipset.take());
+            drop(self.workers.take());
+            let host_vm = self.host_vm.take().expect("live VM has a host VM");
+            if let Some(host_vm) = Arc::into_inner(host_vm) {
+                drop(host_vm);
+                // SAFETY: The fresh host VM has closed, no vCPUs started,
+                // and the virtio workers have stopped.
+                unsafe { self.ram.release_after_vm_close() };
+            }
+        }
     }
 }
 

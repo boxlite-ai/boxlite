@@ -4,9 +4,9 @@
 //! Backing-memory ownership and guest address layout.
 //!
 //! [`GuestRam`] allocates the RAM a VM uses and registers it with the host
-//! hypervisor. It releases the backing only after every registration has been
-//! removed again: a `GuestRam` dropped while a registration may still exist
-//! leaks the backing instead, so the host VM never references freed memory.
+//! hypervisor. It releases the backing once every registration is removed or
+//! the VM and its vCPUs are closed. A `GuestRam` dropped while a registration may
+//! still exist leaks the backing, so the host VM never references freed memory.
 //! Host-side users of guest memory hold clones of the shared [`Arc`] and go
 //! through vm-memory's volatile access API, never plain references.
 
@@ -326,15 +326,18 @@ impl GuestRam {
         for region in &regions {
             // SAFETY: the region is a private anonymous mapping this `GuestRam`
             // owns, and it backs only this guest range. The backing stays
-            // mapped until `unmap` succeeds for every region: `Drop` leaks it
-            // otherwise. Host-side access goes through vm-memory's volatile API
-            // on `memory`, never through Rust references.
+            // mapped until all registrations are removed or the VM and its vCPUs
+            // close. `Drop` leaks it if a registration may still exist. Host-side
+            // access goes through vm-memory's volatile API on `memory`, never
+            // through Rust references.
             if let Err(error) = unsafe { vm.map_memory(region) } {
                 // The backend may keep slices it registered before the failure. Count this
                 // region so the rollback below attempts it too; a failed removal keeps the
                 // backing alive.
                 self.mapped += 1;
-                let _ = self.unmap(vm);
+                if let Err(rollback) = self.unmap(vm) {
+                    tracing::warn!(?rollback, "failed to roll back guest RAM mappings");
+                }
                 return Err(error.into());
             }
             self.mapped += 1;
@@ -354,6 +357,16 @@ impl GuestRam {
             self.mapped -= 1;
         }
         Ok(())
+    }
+
+    /// Allows the backing to be freed on drop after its host VM has closed.
+    ///
+    /// # Safety
+    ///
+    /// The VM that registered this RAM and all its vCPUs must have been
+    /// dropped, and all host-side users must have stopped accessing the RAM.
+    pub(crate) unsafe fn release_after_vm_close(&mut self) {
+        self.mapped = 0;
     }
 }
 

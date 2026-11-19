@@ -27,7 +27,7 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -98,12 +98,19 @@ for the scope and interface trade-offs.
 remaining RAM starting at 4 GiB. The `[3 GiB, 4 GiB)` MMIO hole does not count
 as RAM. The arm64 layout is a single region starting at 2 GiB.
 
-On Linux x86_64, the exclusive end of each backed region must fit both the
-KVM-supported GPA width and the four-level identity map's `2^47` limit. For
-example, 36 GPA bits give an exclusive limit of 64 GiB and allow at most
-64512 MiB (63 GiB) of x86 RAM; 64513 MiB crosses the limit. At the same GPA
-limit the arm64 layout would fit 63488 MiB (62 GiB); this is a layout example,
-not an arm64 host capability check.
+On Linux x86_64, preflight checks that the exclusive end of each backed region
+fits both the host KVM GPA width and the VMM's four-level startup identity
+map (`2^47`). For example, 36 GPA bits give an exclusive limit of 64 GiB and
+allow at most 64512 MiB (63 GiB) of x86 RAM; 64513 MiB crosses the limit. At
+the same GPA limit the arm64 layout would fit 63488 MiB (62 GiB); this is a
+layout example, not an arm64 host capability check.
+
+The pinned Linux guest kernel's four-level direct map has a 46-bit (64 TiB)
+usable physical address limit. On hosts with at least 47 GPA bits, the kernel
+truncates high RAM at that limit.
+With `2^46` as the exclusive guest physical address limit, subtracting the 1 GiB
+MMIO hole leaves a maximum x86 RAM configuration of
+**64 TiB - 1 GiB (67,107,840 MiB)** before truncation.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
 vm-memory and registers it with the host VM. Three rules keep the backend's
@@ -116,17 +123,21 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
   a registration fails. `GuestRam` also rolls back attempted regions, including
   any slices the backend could not remove. `unmap` works from high to low and
   retains failed registrations for retry.
-- The backing is released only after every registration is gone. Dropping a
-  `GuestRam` that may still be registered leaks the backing instead.
+- The backing is released after all registrations are removed or a freshly
+  created host VM with exclusive ownership is closed before `run` starts.
+  If registrations may still exist, `GuestRam` retains the backing.
 
 `Vm::new` validates the configuration, then opens and checks the KVM system fd
 and reads supported CPUID once. It preflights the RAM addresses and boot leaf
-before spawning the console worker or allocating RAM. `Vm::with_devices`
+before spawning the console worker or allocating RAM. The VM builder
 allocates RAM first, then creates the VM fd using that system handle, composes
-devices, registers RAM and writes the boot data. This order drops the host VM
-before RAM on early returns; `Vm`'s `Drop` unmaps as a backstop. `with_backend`
-is the same constructor without the mutable configuration, for tests. The
-`memory` and `vm` tests and that backend live in `tests/` and are included
+devices, registers RAM, then constructs the `Vm` before writing boot data.
+A boot error or panic unwind runs `Vm::drop`, which shuts down the virtio
+workers and quiesces devices before attempting to unmap RAM. If the workers
+fail to join, teardown logs a warning and retains the registrations and
+backing. Teardown also logs unmap failures. The original boot error reaches
+the caller. `with_backend` is the test constructor without mutable configuration.
+The `memory` and `vm` tests and the mock backend live in `tests/` and are included
 as unit-test modules, which
 keeps them outside the counted sources and the coverage denominator; `config`
 and `error` keep inline test modules.
@@ -690,7 +701,7 @@ cause a RAM leak.
 ## Device composition
 
 `devices::add_all` is the one place that names device types. `Vm::new` calls it
-through `Vm::with_devices`; the helper adds the legacy platform devices, then
+through `Vm::build`; the helper adds the legacy platform devices, then
 each configured device type in slot order, and finally announces every slot on
 the front of the kernel command line, which is always before any `--` that
 starts the init arguments, so the caller's text is never parsed.
@@ -703,12 +714,11 @@ starts the init arguments, so the caller's text is never parsed.
   adds the device's worker slot and builds the `MmioTransport`; every
   virtio-mmio device uses it, so the wiring is not copied into each device
   module.
-- **Test seam.** `Vm::with_backend` keeps the old closure signature for tests
-  that add mock, conflict or legacy devices directly; `with_devices` hands the
-  closure the mutable `VmConfig` so `add_all` can announce slots. The aggregate
-  filesystem wiring test checks both device announcements followed by the
-  original command line: without disks, the balloon occupies slot 0 and
-  virtio-fs occupies slot 1.
+- **Test seam.** `Vm::with_backend` lets tests add mock, conflict or legacy
+  devices directly. `Vm::with_devices` also passes the mutable `VmConfig`, so
+  tests can use `add_all` to announce slots. The aggregate filesystem wiring
+  test checks both device announcements followed by the original command line:
+  without disks, the balloon occupies slot 0 and virtio-fs occupies slot 1.
 
 ## Virtio block device
 
@@ -1021,8 +1031,8 @@ devices:
 - **Constructors.** A constructor only claims resources and builds state; a
   device that needs a thread starts it after `build`, and a virtio device's
   events run on the worker thread, which starts at its first DRIVER_OK.
-  `Vm::with_devices` passes the guest memory, the workers and the mutable
-  configuration in a `DeviceContext`; `devices::add_all` adds the
+  `Vm::build` passes the guest memory and workers in a `DeviceContext` and
+  supplies the mutable `VmConfig`; `devices::add_all` adds the
   [block devices](#virtio-block-device) and tests use `with_backend` to add a
   transport. A line from `Resources::line` is not armed until `build`
   succeeds: using it earlier fails with `Error::LineNotArmed` and makes no
