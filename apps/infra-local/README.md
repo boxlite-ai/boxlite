@@ -34,8 +34,16 @@ configure [local registration](#local-registration), then sign in at
 
 Upgrading from a stack that still runs `dex` or `minio` boxes takes three steps:
 
-1. Run `make down ARGS=--all`. The old boxes hold the host ports the `rauthy`
-   and `rustfs` boxes need.
+1. Remove the old boxes; they hold the host ports `rauthy` and `rustfs` need.
+   Run `make down ARGS=--all` before switching to this version. After
+   switching, `make down` no longer knows them, so remove them by name from the
+   repository root:
+
+   ```bash
+   h=$(python3 -c 'import hashlib, os; print(hashlib.sha1(os.getcwd().encode()).hexdigest()[:8])')
+   boxlite --home ~/.bl/$h/h rm -f boxlite-local-dex boxlite-local-minio
+   ```
+
 2. Delete `apps/api/.env`. It still names the Dex issuer and MinIO keys, and
    `make up` re-seeds it from [`api.env`](api.env) when it is missing.
 3. Optionally run `make reset ARGS=--hard`. Rauthy assigns new user ids, so the
