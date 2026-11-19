@@ -357,13 +357,15 @@ the API's order. Each other card has a `⋯` menu with **Set as default** and
 **Add payment method**, which runs the card setup flow above. A newly added
 card becomes the default.
 
-Renewals and top-ups always need a card on file, so the panel offers no way to
-remove the default card or the only saved card. These rules live in the
-dashboard; the billing API accepts both removals.
+Renewals and top-ups always need a default card, so the panel offers no way to
+remove it; the billing API itself would accept the removal. With one saved
+card, that card is the default, so it cannot be removed either.
 
 Both actions go through `useSetDefaultPaymentMethodMutation` and
 `useRemovePaymentMethodMutation`. Success refreshes the payment methods, wallet
-and plan queries; failure shows an error toast and leaves the list as it was.
+and plan queries, and the list itself shows the result, so there is no success
+toast. Failure shows an error toast and leaves the list as it was. Both
+endpoints are idempotent, so the menu does not lock while a request runs.
 The mock preview keeps its saved cards in memory, so both actions work there
 until the page reloads.
 

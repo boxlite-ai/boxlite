@@ -331,7 +331,6 @@ export function WalletSection({
 
       try {
         await setDefaultPaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
-        toast.success('Default card updated')
       } catch (error) {
         toast.error('Failed to set the default card', { description: String(error) })
       }
@@ -347,7 +346,6 @@ export function WalletSection({
 
       try {
         await removePaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
-        toast.success('Card removed')
       } catch (error) {
         toast.error('Failed to remove the card', { description: String(error) })
       }
@@ -506,13 +504,6 @@ export function WalletSection({
             isLoading={paymentMethodsQuery.isLoading}
             isError={paymentMethodsQuery.isError}
             isAddLoading={isCheckoutUrlLoading}
-            pendingMethodId={
-              setDefaultPaymentMethodMutation.isPending
-                ? setDefaultPaymentMethodMutation.variables.paymentMethodId
-                : removePaymentMethodMutation.isPending
-                  ? removePaymentMethodMutation.variables.paymentMethodId
-                  : null
-            }
             onAdd={connectCard}
             onSetDefault={handleSetDefaultPaymentMethod}
             onRemove={handleRemovePaymentMethod}

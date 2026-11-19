@@ -1087,7 +1087,7 @@ describe('WalletSection top-up checkout', () => {
         organizationId: 'org-without-card',
         paymentMethodId: 'card-other',
       })
-      expect(toast.success).toHaveBeenCalledWith('Default card updated')
+      expect(toast.error).not.toHaveBeenCalled()
     })
 
     it('removes a card only after the confirmation dialog', async () => {
@@ -1109,7 +1109,7 @@ describe('WalletSection top-up checkout', () => {
         organizationId: 'org-without-card',
         paymentMethodId: 'card-other',
       })
-      expect(toast.success).toHaveBeenCalledWith('Card removed')
+      expect(toast.error).not.toHaveBeenCalled()
     })
 
     it('offers no action on the default card', async () => {
@@ -1117,21 +1117,6 @@ describe('WalletSection top-up checkout', () => {
       await renderWallet()
 
       expect(document.querySelector('button[aria-label^="Actions for"]')).toBeNull()
-    })
-
-    it('does not remove the only saved card', async () => {
-      // No card is marked default, so the lone card still shows its menu.
-      mocks.paymentMethods = [card('card-only', false, '1111')]
-      await renderWallet()
-
-      const items = await openMenu('1111')
-      expect(menuItem(items, 'Remove')?.getAttribute('aria-disabled')).toBe('true')
-      expect(document.body.textContent).toContain('Add another card before removing this one.')
-      await act(async () => menuItem(items, 'Remove')!.click())
-      await flush()
-
-      expect(document.querySelector('[role="alertdialog"]')).toBeNull()
-      expect(mocks.removePaymentMethod).not.toHaveBeenCalled()
     })
 
     it('reports a failed action and leaves the list as it was', async () => {
@@ -1145,7 +1130,6 @@ describe('WalletSection top-up checkout', () => {
       expect(toast.error).toHaveBeenCalledWith('Failed to set the default card', {
         description: 'Error: Request failed with status code 404',
       })
-      expect(toast.success).not.toHaveBeenCalled()
       const rows = [...document.querySelectorAll('ul[aria-label="Saved payment methods"] li')]
       expect(rows.map((row) => row.textContent?.includes('Default'))).toEqual([true, false])
       expect(rows[0].textContent).toContain('•••• 4242')

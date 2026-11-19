@@ -27,8 +27,6 @@ type PaymentMethodsPanelProps = {
   isLoading: boolean
   isError: boolean
   isAddLoading: boolean
-  /** The card whose set-default or remove request is in flight. */
-  pendingMethodId: string | null
   onAdd: () => void
   onSetDefault: (paymentMethodId: string) => void
   onRemove: (paymentMethodId: string) => void
@@ -73,18 +71,12 @@ function AddCardButton({ isLoading, onClick }: { isLoading: boolean; onClick: ()
   )
 }
 
-/** Renewals and top-ups need a card on file, so the only saved card cannot be removed. */
-function removalBlockedReason(cardCount: number): string | null {
-  return cardCount === 1 ? 'Add another card before removing this one.' : null
-}
-
 /** Lists saved cards with set-default and remove actions; adding a card stays available in every state. */
 export function PaymentMethodsPanel({
   paymentMethods,
   isLoading,
   isError,
   isAddLoading,
-  pendingMethodId,
   onAdd,
   onSetDefault,
   onRemove,
@@ -112,8 +104,6 @@ export function PaymentMethodsPanel({
           <ul aria-label="Saved payment methods" className="w-full divide-y divide-border">
             {orderedMethods.map((method) => {
               const display = paymentMethodDisplay(method.details)
-              const isPending = pendingMethodId === method.id
-              const blockedReason = removalBlockedReason(paymentMethods.length)
               return (
                 <li key={method.id} className="flex items-center justify-between gap-4 px-[22px] py-5">
                   <div className="min-w-0">
@@ -144,9 +134,8 @@ export function PaymentMethodsPanel({
                           variant="quiet"
                           size="icon"
                           aria-label={`Actions for ${display.brand} ${display.cardNumber}`}
-                          disabled={pendingMethodId !== null}
                         >
-                          {isPending ? <Spinner /> : <MoreHorizontal className="h-4 w-4" />}
+                          <MoreHorizontal className="h-4 w-4" />
                         </AsciiButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
@@ -155,16 +144,10 @@ export function PaymentMethodsPanel({
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="cursor-pointer text-red-600 dark:text-red-400"
-                          disabled={blockedReason !== null}
                           onSelect={() => setPendingRemoval(method)}
                         >
                           Remove
                         </DropdownMenuItem>
-                        {blockedReason && (
-                          <p className="max-w-56 px-2 pb-1.5 font-sans text-meta text-muted-foreground">
-                            {blockedReason}
-                          </p>
-                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
