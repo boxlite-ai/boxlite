@@ -69,6 +69,7 @@ integration('Replay Redis ownership and storage failures', () => {
       { status: 201, body: '', headers: { cookie: 'secret' } },
       { status: 201, body: '', resource: { id: 'volume' } },
       { status: 201, body: '', encoding: 'utf16' },
+      { status: 201, body: '', auditTargetId: { id: 'box' } },
     ]) {
       await redis.hset(record(key), 'response', JSON.stringify(response))
       expect(await service.peekCompleted(org, 'u', 'op', key, 'fingerprint')).toBeUndefined()
@@ -146,7 +147,7 @@ integration('Replay Redis ownership and storage failures', () => {
     slow.onModuleDestroy()
   })
 
-  it('refuses capacity without discarding an existing execution fence', async () => {
+  async function withIsolatedRedis(run: (client: Redis) => Promise<void>): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), 'replay-capacity-'))
     const socket = join(directory, 'redis.sock')
     const server = spawn(
@@ -160,10 +161,74 @@ integration('Replay Redis ownership and storage failures', () => {
     })
     server.once('error', ready.reject)
     let isolated: Redis | undefined
-    let engine: BoxRequestReplayService | undefined
+    server.once('exit', (code) => ready.reject(new Error(`Test Redis exited with code ${code}`)))
     try {
       await ready.promise
       isolated = new Redis({ path: socket })
+      await run(isolated)
+    } finally {
+      await isolated?.quit()
+      if (server.pid && server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit')
+        server.kill()
+        await exited
+      }
+      await rm(directory, { recursive: true, force: true })
+    }
+  }
+
+  it('replays with a Redis user that cannot run CONFIG', async () => {
+    await withIsolatedRedis(async (isolated) => {
+      await isolated.acl('SETUSER', 'replay', 'on', '>test-password', '~*', '+@all', '-config')
+      const client = isolated.duplicate({ username: 'replay', password: 'test-password', lazyConnect: true })
+      const engine = new BoxRequestReplayService(client)
+      const key = randomUUID()
+      try {
+        const owner = await engine.session(org, 'u', 'op', key, 'fp')
+        await owner.complete({ status: 201, body: 'original' })
+        const replay = await engine.session(org, 'u', 'op', key, 'fp')
+        expect(replay.response).toMatchObject({ status: 201, body: 'original' })
+      } finally {
+        engine.onModuleDestroy()
+        client.disconnect()
+      }
+    })
+  })
+
+  it.each(['new', 'retryable'])('releases a %s reservation after a real Redis command timeout', async (state) => {
+    await withIsolatedRedis(async (isolated) => {
+      const engine = new BoxRequestReplayService(isolated)
+      const reserve = (key: string, fingerprint = 'fp') => engine.session(org, 'u', 'op', key, fingerprint)
+      try {
+        const warm = await reserve(randomUUID())
+        const key = randomUUID()
+        if (state === 'retryable') {
+          const previous = await reserve(key)
+          await previous.markRetryable()
+          await isolated.expire(record(key), 60)
+        }
+        await isolated.call('CLIENT', 'PAUSE', '1500', 'ALL')
+        await expect(reserve(key)).rejects.toMatchObject({ status: 503 })
+        // Redis resumes before the heartbeat is queued on the same connection as the abandoned claim.
+        await isolated.ping()
+        await warm.heartbeat()
+        if (state === 'retryable') {
+          await expect(reserve(key, 'changed')).rejects.toMatchObject({
+            response: { code: 'idempotency_payload_mismatch' },
+          })
+        } else {
+          expect(await isolated.exists(record(key))).toBe(0)
+        }
+        expect((await reserve(key)).isOwner).toBe(true)
+        if (state === 'retryable') expect(await isolated.pttl(record(key))).toBeLessThan(60_000)
+      } finally {
+        engine.onModuleDestroy()
+      }
+    })
+  })
+
+  it('refuses capacity without discarding an existing execution fence', async () => {
+    await withIsolatedRedis(async (isolated) => {
       await isolated.config('SET', 'maxmemory-policy', 'allkeys-lru')
       const unsafe = new BoxRequestReplayService(isolated)
       try {
@@ -172,21 +237,16 @@ integration('Replay Redis ownership and storage failures', () => {
         unsafe.onModuleDestroy()
       }
       await isolated.config('SET', 'maxmemory-policy', 'noeviction')
-      engine = new BoxRequestReplayService(isolated)
-      const key = randomUUID()
-      expect((await engine.session(org, 'u', 'op', key, 'fp')).isOwner).toBe(true)
-      await isolated.config('SET', 'maxmemory', '1')
-      await expect(engine.session(org, 'u', 'op', randomUUID(), 'fp')).rejects.toMatchObject({ status: 503 })
-      await expect(engine.session(org, 'u', 'op', key, 'fp')).rejects.toMatchObject({ status: 409 })
-    } finally {
-      engine?.onModuleDestroy()
-      await isolated?.quit()
-      if (server.pid && server.exitCode === null) {
-        const exited = once(server, 'exit')
-        server.kill()
-        await exited
+      const engine = new BoxRequestReplayService(isolated)
+      try {
+        const key = randomUUID()
+        expect((await engine.session(org, 'u', 'op', key, 'fp')).isOwner).toBe(true)
+        await isolated.config('SET', 'maxmemory', '1')
+        await expect(engine.session(org, 'u', 'op', randomUUID(), 'fp')).rejects.toMatchObject({ status: 503 })
+        await expect(engine.session(org, 'u', 'op', key, 'fp')).rejects.toMatchObject({ status: 409 })
+      } finally {
+        engine.onModuleDestroy()
       }
-      await rm(directory, { recursive: true, force: true })
-    }
+    })
   })
 })

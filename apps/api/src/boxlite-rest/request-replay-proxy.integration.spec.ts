@@ -148,16 +148,16 @@ describeWithRedis('Request replay through the production HTTP runner proxy', () 
       body: body === undefined ? undefined : JSON.stringify(body),
     })
 
-  async function waitForState(key: string, state = 'complete') {
+  async function waitForState(key: string, expected = ['complete']) {
     const deadline = Date.now() + 2_000
     while (Date.now() < deadline) {
       const hash = createHash('sha256').update(key).digest('hex')
       const keys = await redis.keys(`replay:${organizationId}:*:${hash}`)
       const states = await Promise.all(keys.map((record) => redis.hget(record, 'state')))
-      if (states.includes(state)) return
+      if (states.some((state) => state !== null && expected.includes(state))) return
       await delay(5)
     }
-    throw new Error(`The proxy response did not reach replay state ${state}`)
+    throw new Error(`The proxy response did not reach replay state ${expected.join(' or ')}`)
   }
 
   it.each([
@@ -215,11 +215,36 @@ describeWithRedis('Request replay through the production HTTP runner proxy', () 
     const first = await send('POST', path, key, { command: 'effect' })
     expect(first.status).toBe(status)
     await first.text()
-    await waitForState(key, 'unknown')
+    await waitForState(key, ['unknown'])
     const retry = await send('POST', path, key, { command: 'effect' })
     expect(retry.status).toBe(422)
     expect(await retry.json()).toMatchObject({ code: 'idempotency_outcome_unknown' })
     expect(runnerCalls).toBe(1)
+  })
+
+  it('fences a runner disconnect after a partial success response', async () => {
+    let upstream: ServerResponse | undefined
+    reply = (_req, res) => {
+      upstream = res
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.write('{"execution_id":')
+    }
+    const key = randomUUID()
+    const path = `${randomUUID()}/exec`
+    const body = { command: 'effect' }
+    try {
+      const first = await send('POST', path, key, body)
+      expect(first.status).toBe(201)
+      upstream?.destroy()
+      await Promise.allSettled([first.text()])
+      await waitForState(key, ['complete', 'unknown'])
+      const retry = await send('POST', path, key, body)
+      expect(retry.status).toBe(422)
+      expect(await retry.json()).toMatchObject({ code: 'idempotency_outcome_unknown' })
+      expect(runnerCalls).toBe(1)
+    } finally {
+      upstream?.destroy()
+    }
   })
 
   it('rejects keyed file downloads before runner dispatch', async () => {

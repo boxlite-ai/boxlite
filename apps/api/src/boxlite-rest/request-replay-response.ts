@@ -2,8 +2,19 @@
  * Copyright 2026 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
  */
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Response } from 'express'
 import { ReplayResponse, REPLAY_MAX_RESPONSE_BYTES } from './box-request-replay.service'
+
+const replayUpstreams = new WeakMap<ServerResponse, IncomingMessage | undefined>()
+
+export function trackReplayUpstream(
+  upstream: IncomingMessage,
+  _request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  if (replayUpstreams.has(response)) replayUpstreams.set(response, upstream)
+}
 
 /** Side-channel capture: forwarding keeps Node's exact callback, return value and backpressure behavior. */
 export function captureReplayResponse(
@@ -43,6 +54,7 @@ export function captureReplayResponse(
     if (response.end === wrappedEnd) response.end = end
     response.off('close', onClose)
     response.off('error', onClose)
+    replayUpstreams.delete(response)
     chunks = []
     stopHeartbeat()
   }
@@ -68,7 +80,15 @@ export function captureReplayResponse(
         const value = response.getHeader(name)
         if (typeof value === 'string') headers[name] = value
       }
-      if (status >= 200 && status < 300 && !overflow && !headers['content-type']?.includes('text/event-stream')) {
+      const upstream = replayUpstreams.get(response)
+      // A proxy error can end the downstream response after a partial upstream 2xx.
+      if (
+        status >= 200 &&
+        status < 300 &&
+        !overflow &&
+        !headers['content-type']?.includes('text/event-stream') &&
+        (!upstream || upstream.complete)
+      ) {
         const body = status === 204 ? '' : Buffer.concat(chunks, size).toString('base64')
         complete({ status, body, encoding: 'base64', headers })
       } else unknown()
@@ -76,6 +96,7 @@ export function captureReplayResponse(
     }
     return Reflect.apply(end, response, args)
   }
+  replayUpstreams.set(response, undefined)
   response.write = wrappedWrite
   response.end = wrappedEnd
   response.once('close', onClose)

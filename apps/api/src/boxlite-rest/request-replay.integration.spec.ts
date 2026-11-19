@@ -29,6 +29,11 @@ import { BoxRequestReplayService, REPLAY_MAX_RESPONSE_BYTES } from './box-reques
 import { RequestReplayInterceptor } from './request-replay.interceptor'
 import { ReplayParseIntPipe, ReplayValidationPipe } from '../common/replay-validation.pipe'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
+import { Audit } from '../audit/decorators/audit.decorator'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor'
+import { AuditService } from '../audit/services/audit.service'
 
 class Input {
   @IsString() value!: string
@@ -74,6 +79,7 @@ class ProbeController {
     return this.create({ count })
   }
   @Post('dto')
+  @Audit({ action: AuditAction.CREATE, targetType: AuditTarget.BOX, targetIdFromResult: (result) => result.id })
   @UseInterceptors(ClassSerializerInterceptor)
   dto() {
     effects++
@@ -106,6 +112,10 @@ integration('Replay HTTP contract with shared Redis', () => {
   const bases: string[] = []
   let redis: Redis
   const services: BoxRequestReplayService[] = []
+  const audit = {
+    createLog: jest.fn(async () => ({ id: randomUUID() })),
+    updateLog: jest.fn(async () => undefined),
+  }
   beforeAll(async () => {
     redis = new Redis({
       host: process.env.REDIS_HOST,
@@ -117,17 +127,29 @@ integration('Replay HTTP contract with shared Redis', () => {
     for (let i = 0; i < 2; i++) {
       const module = await Test.createTestingModule({
         controllers: [ProbeController, VolumeWriteController],
-        providers: [BoxRequestReplayService, { provide: getRedisConnectionToken(), useValue: redis }],
+        providers: [
+          AuditInterceptor,
+          BoxRequestReplayService,
+          { provide: getRedisConnectionToken(), useValue: redis },
+          { provide: AuditService, useValue: audit },
+        ],
       }).compile()
       services.push(module.get(BoxRequestReplayService))
       const app = module.createNestApplication()
       app.setGlobalPrefix('api')
       app.use((req: Request & { user?: unknown }, res: Response, next: NextFunction) => {
-        req.user = { organizationId: req.headers['x-org'] ?? org, userId: req.headers['x-user'] ?? 'user' }
+        req.user = {
+          organizationId: req.headers['x-org'] ?? org,
+          userId: req.headers['x-user'] ?? 'user',
+          role: 'user',
+        }
         res.setHeader('x-request-id', randomUUID())
         next()
       })
-      app.useGlobalInterceptors(new RequestReplayInterceptor(module.get(BoxRequestReplayService)))
+      app.useGlobalInterceptors(
+        app.get(AuditInterceptor),
+        new RequestReplayInterceptor(module.get(BoxRequestReplayService)),
+      )
       await app.listen(0, '127.0.0.1')
       apps.push(app)
       bases.push(await app.getUrl())
@@ -326,6 +348,24 @@ integration('Replay HTTP contract with shared Redis', () => {
     expect(retry.text).toBe(original.text)
     expect(retry.text).not.toContain('secret')
     expect(effects).toBe(before + 1)
+  })
+
+  it('audits the same created resource on a replay from another replica', async () => {
+    audit.createLog.mockClear()
+    audit.updateLog.mockClear()
+    const key = randomUUID()
+    const original = await send(key, 'probe/target/dto')
+    expect(original.status).toBe(201)
+    const { id } = JSON.parse(original.text)
+    expect(id).toEqual(expect.any(String))
+    await completed(key)
+    const retry = await send(key, 'probe/target/dto', {}, 1)
+    expect(retry.status).toBe(201)
+    const [first, replay] = audit.createLog.mock.results
+    expect(audit.updateLog.mock.calls).toEqual([
+      [(await first.value).id, expect.objectContaining({ targetId: id }), expect.any(Number)],
+      [(await replay.value).id, expect.objectContaining({ targetId: id }), expect.any(Number)],
+    ])
   })
 
   it('forwards an oversized success while keeping its unknown fence', async () => {

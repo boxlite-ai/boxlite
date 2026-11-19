@@ -48,7 +48,11 @@ export function createFoundation(region: string, isProd: boolean): FoundationRes
       },
     },
   })
-  const redis = new sst.aws.Redis('Cache', { vpc, cluster: false })
+  const redis = new sst.aws.Redis('Cache', {
+    vpc,
+    cluster: false,
+    parameters: { 'maxmemory-policy': 'noeviction' },
+  })
   const storage = new sst.aws.Bucket('Storage', { versioning: true })
   const cluster = new sst.aws.Cluster('Cluster', {
     forceUpgrade: 'v2',

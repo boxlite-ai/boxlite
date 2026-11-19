@@ -22,11 +22,13 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { hasOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { hasNoEffect } from '../common/replay-no-effect'
+import { AUDIT_TARGET_ID } from '../audit/decorators/audit.decorator'
 import { RESPONSE_PASSTHROUGH_METADATA, ROUTE_ARGS_METADATA } from '@nestjs/common/constants'
 import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum'
 
 type ReplayRequest = Request & {
   user?: OrganizationAuthContext
+  [AUDIT_TARGET_ID]?: string
   [REPLAY_ONLY]?: boolean
   [REPLAY_RESOURCE]?: ReplayResource
 }
@@ -83,6 +85,7 @@ export class RequestReplayInterceptor implements NestInterceptor, OnModuleDestro
     const response = context.switchToHttp().getResponse<Response>()
     if (session.response) {
       const stored = session.response
+      if (stored.auditTargetId) req[AUDIT_TARGET_ID] = stored.auditTargetId
       response.status(stored.status)
       for (const [name, value] of Object.entries(stored.headers ?? { 'content-type': 'application/json' }))
         response.setHeader(name, value)
@@ -133,7 +136,9 @@ export class RequestReplayInterceptor implements NestInterceptor, OnModuleDestro
     const captureCleanup = captureReplayResponse(
       response,
       (result) => {
-        void session.complete({ ...result, resource: req[REPLAY_RESOURCE] }).catch(logFailure)
+        void session
+          .complete({ ...result, resource: req[REPLAY_RESOURCE], auditTargetId: req[AUDIT_TARGET_ID] })
+          .catch(logFailure)
         this.active.delete(cleanup)
       },
       () => {

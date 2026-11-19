@@ -50,6 +50,7 @@ import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
 import { noEffect } from '../common/replay-no-effect'
 import { ReplayParseIntPipe, ReplayValidationPipe } from '../common/replay-validation.pipe'
+import { trackReplayUpstream } from './request-replay-response'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -592,6 +593,7 @@ export class BoxliteProxyController {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
         },
+        proxyRes: trackReplayUpstream,
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }

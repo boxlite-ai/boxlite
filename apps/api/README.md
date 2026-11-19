@@ -198,12 +198,34 @@ Records expire 24 hours after first use. Heartbeats and retries preserve this ab
 Only trusted validation or proven pre-effect admission errors make the same key retryable.
 Submitted work, downstream errors, disconnects, and unclassified exceptions retain the fence;
 the original owner can still record a late success. Never automatically switch keys after unknown.
-The response representation is limited to 1 MiB; oversized or incomplete responses retain unknown.
-Only response bytes and request hashes are retained, excluding credentials and request bodies.
+The response representation is limited to 1 MiB. Oversized responses and interrupted runner
+responses retain unknown. Records store the response, request fingerprint, and trusted resource
+metadata so audit entries for the original request and its replays identify the same resource.
 Cookie, CORS, authentication, and tracking headers belong to the current request.
 
 Replay uses a dedicated Redis connection with one-second connection and command deadlines,
-no offline command queue or command resend, and `maxmemory-policy=noeviction`.
+and no offline command queue or command resend. It requires `maxmemory-policy=noeviction`,
+which it checks with `INFO memory`. The ElastiCache and Memorystore stacks set this policy.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant Redis
+    Client->>API: Send keyed write
+    API->>Redis: Send claim with owner token
+    API-->>Client: Deadline expires, 503 before dispatch
+    API->>Redis: Queue cleanup on the same connection
+    Note over Redis: Redis resumes and processes the claim before cleanup
+    alt Token still owns a fresh reservation
+        Redis->>Redis: Delete reservation
+    else Token still owns a reclaimed reservation
+        Redis->>Redis: Restore retryable state with original fingerprint and expiry
+    else Owner differs or a response exists
+        Note over Redis: Preserve the current record
+    end
+```
+
 Capacity refusal rejects new keyed work before dispatch. Success delivery does not wait for
 response persistence; a retry in that short window receives 409. Redis loss, expiration, or
 manual deletion ends the guarantee. `GET /config` advertises `PT24H` and served operation IDs.
