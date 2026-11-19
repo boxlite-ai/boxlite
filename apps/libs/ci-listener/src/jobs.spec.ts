@@ -89,10 +89,11 @@ describe('CI shared GitHub jobs', () => {
         options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true })
       })
     }) as typeof fetch
+    const reason = new Error('caller stopped')
     const result = reader.pending([notice], controller.signal)
-    const rejected = expect(result).rejects.toBeInstanceOf(GitHubRequestError)
+    const rejected = expect(result).rejects.toBe(reason)
     await reading
-    controller.abort(new Error('caller stopped'))
+    controller.abort(reason)
     await rejected
   })
   it('drains aborted sibling requests before credential close and preserves the initiating 429', async () => {

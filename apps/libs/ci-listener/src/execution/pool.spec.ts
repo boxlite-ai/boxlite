@@ -712,70 +712,90 @@ describe('CI shared worker lifecycle', () => {
     expect(await journal.hasCapacity(lease, key, limits)).toBe(true)
     expect((await rows()).allocations.size).toBe(0)
   })
-  it.each(['ordinary', 'needed', 'positive needed', 'positive partial', 'positive empty', 'positive active', 'stale'])(
-    'rechecks a pending retirement when the next plan is %s',
-    async (next) => {
-      supplyInventory()
-      let release!: () => void
-      const barrier = new Promise<void>((done) => {
-        release = done
-      })
-      let started!: () => void
-      const entered = new Promise<void>((done) => {
-        started = done
-      })
-      idleRetirement(
-        true,
-        next === 'positive active'
-          ? async () => {
-              started()
-              await barrier
-            }
-          : undefined,
-      )
-      const remove = jest.spyOn(runners, 'delete')
-      const workers = next === 'positive partial' ? 2 : 1
-      const capacity = testCapacity({ account: workers, tenant: workers })
-      await pool.balance(lease, capacity, countedDemand(workers), undefined, true)
-      await ageRunners()
-      const [fence] = await state.commit(lease, [{ key: 'proof/idle', expected: null, payload: true }])
-      const errors: unknown[] = []
-      const queue = new WorkQueue(1, (error) => errors.push(error))
-      if (next !== 'positive active') queue.enqueue('hold', '1', () => barrier)
-      pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
-      try {
-        await pool.balance(lease, capacity, [], undefined, true, [{ key: fence.key, version: fence.version }])
-        if (next === 'positive active') await entered
-        if (next.startsWith('positive')) {
-          await pool.balance(lease, capacity, next === 'positive empty' ? [] : countedDemand(), undefined, 'positive')
-        } else if (next === 'needed') {
-          await pool.balance(lease, capacity, countedDemand(), undefined, true, [
-            { key: fence.key, version: fence.version },
-          ])
-        } else {
-          if (next === 'stale') {
-            await state.commit(lease, [{ key: fence.key, expected: fence.version, payload: false }])
+  it.each([
+    'ordinary',
+    'needed',
+    'positive needed',
+    'positive partial',
+    'positive empty',
+    'positive active',
+    'positive replacement',
+    'stale',
+  ])('rechecks a pending retirement when the next plan is %s', async (next) => {
+    const active = next === 'positive active' || next === 'positive replacement'
+    const busy = new Set<string>()
+    supplyInventory(busy)
+    let release!: () => void
+    const barrier = new Promise<void>((done) => {
+      release = done
+    })
+    let started!: () => void
+    const entered = new Promise<void>((done) => {
+      started = done
+    })
+    idleRetirement(
+      true,
+      active
+        ? async () => {
+            started()
+            await barrier
           }
-          await pool.balance(lease, capacity, [], undefined).catch((error: unknown) => {
-            if (!(error instanceof DemandUncertain)) throw error
-          })
+        : undefined,
+    )
+    const remove = jest.spyOn(runners, 'delete')
+    const workers = next === 'positive partial' ? 2 : 1
+    const capacity = testCapacity({ account: active ? 2 : workers, tenant: active ? 2 : workers })
+    await pool.balance(lease, capacity, countedDemand(workers), undefined, true)
+    await ageRunners()
+    const [fence] = await state.commit(lease, [{ key: 'proof/idle', expected: null, payload: true }])
+    const errors: unknown[] = []
+    const queue = new WorkQueue(1, (error) => errors.push(error))
+    if (!active) queue.enqueue('hold', '1', () => barrier)
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    try {
+      await pool.balance(lease, capacity, [], undefined, true, [{ key: fence.key, version: fence.version }])
+      if (active) await entered
+      if (next.startsWith('positive')) {
+        await pool.balance(lease, capacity, next === 'positive empty' ? [] : countedDemand(), undefined, 'positive')
+      } else if (next === 'needed') {
+        await pool.balance(lease, capacity, countedDemand(), undefined, true, [
+          { key: fence.key, version: fence.version },
+        ])
+      } else {
+        if (next === 'stale') {
+          await state.commit(lease, [{ key: fence.key, expected: fence.version, payload: false }])
         }
-        const drained = new Promise<void>((done) => {
-          queue.enqueue('drain', '1', async () => done())
+        await pool.balance(lease, capacity, [], undefined).catch((error: unknown) => {
+          if (!(error instanceof DemandUncertain)) throw error
         })
-        release()
-        await drained
-        const retired = next === 'ordinary' || next === 'positive empty' || next === 'positive partial'
-        expect(backend.workers.stop).toHaveBeenCalledTimes(retired ? 1 : 0)
-        expect(runners.size).toBe(workers - (retired ? 1 : 0))
-        expect(remove).toHaveBeenCalledTimes(retired ? 1 : 0)
-        expect(errors).toEqual(next === 'stale' || next === 'positive active' ? [expect.any(StateConflict)] : [])
-      } finally {
-        release()
-        await queue.close()
       }
-    },
-  )
+      if (next === 'positive replacement') {
+        await state.commit(lease, [{ key: fence.key, expected: fence.version, payload: false }])
+        await pool.balance(lease, capacity, [], undefined, true, [{ key: fence.key, version: fence.version }])
+      }
+      const drained = new Promise<void>((done) => {
+        queue.enqueue('drain', '1', async () => done())
+      })
+      release()
+      await drained
+      const retired = next === 'ordinary' || next === 'positive empty' || next === 'positive partial'
+      expect(backend.workers.stop).toHaveBeenCalledTimes(retired ? 1 : 0)
+      expect(runners.size).toBe(workers - (retired ? 1 : 0))
+      expect(remove).toHaveBeenCalledTimes(retired ? 1 : 0)
+      expect(errors).toEqual(next === 'stale' || active ? [expect.any(StateConflict)] : [])
+      if (next === 'positive active') {
+        busy.add((await allocation()).value.name)
+        await expect(pool.balance(lease, capacity, countedDemand(), undefined, 'positive')).rejects.toBeInstanceOf(
+          DemandUncertain,
+        )
+        expect(backend.workers.create).toHaveBeenCalledTimes(1)
+        expect((await allocation()).value.effect?.kind).not.toBe('runner-retire')
+      }
+    } finally {
+      release()
+      await queue.close()
+    }
+  })
   it('recovers surplus idle capacity after a lost JIT acknowledgement and restart', async () => {
     supplyInventory()
     const retire = idleRetirement()

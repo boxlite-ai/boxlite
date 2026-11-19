@@ -122,7 +122,15 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
         : value,
     )
     return { data, link }
-  } catch {
+  } catch (error) {
+    if (
+      method === 'GET' &&
+      options.signal?.aborted &&
+      (status === undefined || (status >= 200 && status < 300)) &&
+      (error === options.signal.reason || (error instanceof Error && error.name === 'AbortError'))
+    ) {
+      throw options.signal.reason
+    }
     // A successful-but-unreadable POST can still have produced a remote effect.
     throw new GitHubRequestError(
       status,

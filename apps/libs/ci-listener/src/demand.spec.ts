@@ -436,6 +436,41 @@ describe('CI label demand counters and fallback', () => {
     expect((await counters()).map(decodeDemand)).toEqual([expect.objectContaining({ queued: others + 2 })])
     expect(await state.recover(lease, 1000, ['job-fact/'])).toHaveLength(others + 1)
   })
+  it('migrates inline snapshot membership and preserves duplicate contributions', async () => {
+    const scanned = [job(55), job(55), job(56)]
+    const { demands } = await rebuildQueueSnapshot(state, lease, target, [], scanned)
+    const [counter] = demands
+    const legacy = decodeDemand(counter)
+    const facts = await state.read(['job-fact/1/55', 'job-fact/1/56'])
+    await state.commit(lease, [
+      {
+        key: counter.key,
+        expected: counter.version,
+        payload: {
+          ...(counter.payload as Record<string, Json>),
+          membership: { generation: legacy.membership!.generation, jobs: scanned.map((item) => item.job) },
+        },
+      },
+      ...facts.map((fact) => {
+        const payload = { ...(fact.payload as Record<string, Json>) }
+        delete payload.countedFor
+        delete payload.countedWeight
+        return { key: fact.key, expected: fact.version, payload }
+      }),
+    ])
+    const rebuilt = await rebuildQueueSnapshot(state, lease, target, await counters(), scanned)
+    expect(decodeDemand(rebuilt.demands[0]).membership?.jobs).toHaveLength(0)
+    await send('completed', 55)
+    expect(decodeDemand((await counters())[0]).queued).toBe(1)
+  })
+  it('publishes an oversized label group and debits its last job on completion', async () => {
+    const jobs = Array.from({ length: 90000 }, (_, index) => job(10000000000 + index))
+    const { demands, revision } = await rebuildQueueSnapshot(state, lease, target, [], jobs)
+    expect(decodeDemand(demands[0]).queued).toBe(jobs.length)
+    expect((await state.read(['queue-revision/1/21']))[0].version).toBe(revision.version)
+    await send('completed', jobs[jobs.length - 1].job)
+    expect(decodeDemand((await counters())[0]).queued).toBe(jobs.length - 1)
+  }, 90000)
   it('does not resurrect a terminal job from a stale GitHub scan', async () => {
     await send('queued')
     await send('completed')

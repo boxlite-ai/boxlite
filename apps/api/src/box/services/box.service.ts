@@ -29,7 +29,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { pendingDeletionTarget } from '../constants/checkpoint-deletion'
+import { chargedNativeTombstone, pendingDeletionTarget } from '../constants/checkpoint-deletion'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -1412,10 +1412,13 @@ export class BoxService {
     const twentyFourHoursAgo = new Date()
     twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24)
 
-    const destroyedBoxs = await this.boxRepository.delete({
-      state: BoxState.DESTROYED,
-      updatedAt: LessThan(twentyFourHoursAgo),
-    })
+    const retained = chargedNativeTombstone(this.configService.get('ci.githubClientId'))
+    const destroyedBoxs = await this.boxRepository
+      .createQueryBuilder()
+      .delete()
+      .where({ state: BoxState.DESTROYED, updatedAt: LessThan(twentyFourHoursAgo) })
+      .andWhere(`NOT ${retained.sql}`, retained.parameters)
+      .execute()
 
     if (destroyedBoxs.affected > 0) {
       this.logger.debug(`Cleaned up ${destroyedBoxs.affected} destroyed boxes`)

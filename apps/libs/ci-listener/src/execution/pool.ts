@@ -362,6 +362,13 @@ export class WorkerPool {
         if (!selection) throw new StateCorrupt()
         const runner = row.value.runner.id === null ? undefined : inventory.get(row.value.runner.id)
         if (runner && runner.name !== row.value.name) throw new StateCorrupt()
+        if (runner?.busy) {
+          if (!claims.has(runner.id)) {
+            unknownBusy.add(selection.label)
+            if (!this.busyRefreshes.has(runner.id)) newBusy.set(runner.id, selection.label)
+          }
+          continue
+        }
         if (row.value.effect?.kind === 'runner-retire') {
           if (runner?.status === 'online' && !runner.busy) {
             supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
@@ -380,13 +387,6 @@ export class WorkerPool {
             // JIT delivery does not prove the runner has connected. Pending startup
             // consumes the same demand and quota until its bounded grace expires.
             supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
-          }
-          continue
-        }
-        if (runner?.busy) {
-          if (!claims.has(runner.id)) {
-            unknownBusy.add(selection.label)
-            if (!this.busyRefreshes.has(runner.id)) newBusy.set(runner.id, selection.label)
           }
           continue
         }
@@ -680,39 +680,36 @@ export class WorkerPool {
     const key = planned.record.key
     const retirement = planned.record.version + '/retire/'
     if (!replaceRetirement && !retireIdle && this.retirementQueued(planned)) return true
-    const accepted = queue.enqueue(
-      key,
-      (retireIdle ? retirement : planned.record.version + '/recover/') + JSON.stringify(checks),
-      async (queueWaitMs) => {
-        signal?.throwIfAborted()
-        const current = await this.journal.allocation(lease, planned.record.key)
-        if (!current) return
-        if (retireIdle && current.record.version !== planned.record.version) return
-        const startedAt = Date.now()
-        const timed = current.value.delivery !== 'done' || current.value.closing || retireIdle
-        if (timed) this.event(scope, current, 'ci-worker-execution-started', 'info', { queueWaitMs })
+    const revision = (retireIdle ? retirement : planned.record.version + '/recover/') + JSON.stringify(checks)
+    const accepted = queue.enqueue(key, revision, async (queueWaitMs) => {
+      signal?.throwIfAborted()
+      const current = await this.journal.allocation(lease, planned.record.key)
+      if (!current) return
+      if (retireIdle && current.record.version !== planned.record.version) return
+      const startedAt = Date.now()
+      const timed = current.value.delivery !== 'done' || current.value.closing || retireIdle
+      if (timed) this.event(scope, current, 'ci-worker-execution-started', 'info', { queueWaitMs })
+      try {
+        await backend.retire?.(current.value.name)
+        const checkRetirement = retireIdle
+          ? () => {
+              if (!queue.isCurrent(key, revision)) throw new StateConflict()
+            }
+          : undefined
+        await this.reconcile(lease, current, backend, scope, signal, retireIdle, checks, checkRetirement)
+      } finally {
         try {
           await backend.retire?.(current.value.name)
-          const checkRetirement = retireIdle
-            ? () => {
-                if (!/^[^/]+\/retire\//.test(queue.revision(key) ?? '')) throw new StateConflict()
-              }
-            : undefined
-          await this.reconcile(lease, current, backend, scope, signal, retireIdle, checks, checkRetirement)
         } finally {
-          try {
-            await backend.retire?.(current.value.name)
-          } finally {
-            const latest = await this.journal.allocation(lease, planned.record.key)
-            if (latest?.record.version !== current.record.version) this.execution!.wake()
-            if (timed)
-              this.event(scope, latest ?? current, 'ci-worker-execution-settled', 'info', {
-                durationMs: Date.now() - startedAt,
-              })
-          }
+          const latest = await this.journal.allocation(lease, planned.record.key)
+          if (latest?.record.version !== current.record.version) this.execution!.wake()
+          if (timed)
+            this.event(scope, latest ?? current, 'ci-worker-execution-settled', 'info', {
+              durationMs: Date.now() - startedAt,
+            })
         }
-      },
-    )
+      }
+    })
     if (
       accepted &&
       backend.inventory &&
@@ -911,12 +908,29 @@ export class WorkerPool {
     if (!row.value.closing && retireIdle && row.value.runner.phase === 'known' && status === 'running') {
       if ((this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now()) {
         this.idleRetryAt.set(row.record.key, Date.now() + 60000)
-        const retired = await registry(
-          (client) =>
-            client.retireIdle?.({ id: row.value.runner.id!, name: row.value.name }, signal, checkRetirement) ??
-            Promise.resolve(false),
-          true,
-        )
+        const previousEffect = row.value.effect
+        let withdrawn = false
+        const beforeDelete = () => {
+          try {
+            checkRetirement?.()
+          } catch (error) {
+            withdrawn = true
+            throw error
+          }
+        }
+        let retired: boolean
+        try {
+          retired = await registry(
+            (client) =>
+              client.retireIdle?.({ id: row.value.runner.id!, name: row.value.name }, signal, beforeDelete) ??
+              Promise.resolve(false),
+            true,
+          )
+        } catch (error) {
+          if (withdrawn && previousEffect?.kind !== 'runner-retire' && row.value.effect?.kind === 'runner-retire')
+            await update({ effect: previousEffect })
+          throw error
+        }
         if (retired) {
           if (row.value.effect?.kind !== 'runner-retire') throw new StateCorrupt()
           await update({ runner: { phase: 'absent', id: row.value.runner.id }, closing: true })
