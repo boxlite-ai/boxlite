@@ -100,6 +100,14 @@ function assigned(value: unknown): number {
   if (!object(value) || !natural(value.totalAssignedJobs)) return invalid()
   return value.totalAssignedJobs
 }
+function statistics(value: unknown) {
+  if (!object(value)) return invalid()
+  const count = assigned(value)
+  const acquired = value.totalAcquiredJobs
+  if (acquired === undefined) return { assigned: count, acquired: undefined }
+  if (!natural(acquired)) return invalid()
+  return { assigned: count, acquired }
+}
 interface Admin {
   url: URL
   token: string
@@ -247,12 +255,8 @@ export class ActionsScaleSets {
   }
   async currentStatistics(id: number, signal: AbortSignal) {
     const raw = await this.service(sets + '/' + id, { signal })
-    if (!object(raw) || raw.id !== id || !object(raw.statistics)) return invalid()
-    const acquired = raw.statistics.totalAcquiredJobs
-    const count = assigned(raw.statistics)
-    if (acquired === undefined) return { assigned: count, acquired: undefined }
-    if (!natural(acquired)) return invalid()
-    return { assigned: count, acquired }
+    if (!object(raw) || raw.id !== id) return invalid()
+    return statistics(raw.statistics)
   }
   async open(id: number, owner: string, signal?: AbortSignal): Promise<ScaleSetSession> {
     if (!positive(id) || !owner || owner.length > 128) return invalid()
@@ -319,19 +323,21 @@ function sessionData(value: unknown, setId: number) {
     id: value.sessionId,
     queue: serviceUrl(value.messageQueueUrl),
     token: secret(value.messageQueueAccessToken),
-    assigned: value.statistics == null ? undefined : assigned(value.statistics),
+    statistics: value.statistics == null ? undefined : statistics(value.statistics),
   }
 }
 export class ScaleSetSession {
   private data: ReturnType<typeof sessionData>
   readonly initial: number
+  readonly initialAcquired?: number
   constructor(
     private readonly client: ActionsScaleSets,
     private readonly set: number,
     raw: unknown,
   ) {
     this.data = sessionData(raw, set)
-    this.initial = this.data.assigned ?? invalid()
+    this.initial = this.data.statistics?.assigned ?? invalid()
+    this.initialAcquired = this.data.statistics?.acquired
   }
   get id(): string {
     return this.data.id

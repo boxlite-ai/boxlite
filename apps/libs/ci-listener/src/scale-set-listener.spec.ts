@@ -40,7 +40,9 @@ class ActionsFixture {
   rejectAcquisition = new Set<number>()
   loseBeforeAcquire = false
   interruptAcquisition?: () => void
-  acquiredCount = 0
+  acquiredCount: number | undefined = 0
+  initialAcquired?: number
+  readonly throttledSets = new Map<number, number>()
   target = 0
   definition?: { id: number; name: string; labels: unknown[]; runnerGroupId: number }
   installation?: GitHubInstallation
@@ -126,6 +128,11 @@ class ActionsFixture {
       )
       return Response.json({ count: sets.length, value: sets })
     }
+    const setId = Number(path.match(/\/runnerscalesets\/(\d+)$/)?.[1])
+    if (method === 'GET' && this.throttledSets.has(setId)) {
+      this.throttledSets.set(setId, this.throttledSets.get(setId)! + 1)
+      return new Response(null, { status: 429, headers: { 'retry-after': '60' } })
+    }
     if (path.endsWith('/runnerscalesets/8'))
       return this.defaultSet
         ? Response.json({ ...this.defaultSet, statistics: { totalAssignedJobs: 0 } })
@@ -157,7 +164,7 @@ class ActionsFixture {
         sessionId,
         messageQueueUrl: this.queue,
         messageQueueAccessToken: 'session',
-        statistics: { totalAssignedJobs: this.target },
+        statistics: { totalAssignedJobs: this.target, totalAcquiredJobs: this.initialAcquired },
       })
     }
     if (method === 'DELETE' && path.includes('/9/sessions/')) return new Response(null, { status: 204 })
@@ -236,6 +243,11 @@ const scenarios = [
   'reuses a held slot after cancellation between statistics samples',
   'returns an undispatched reservation for a deleted set',
   'restores a scope containing more than 64 valid specifications',
+  'opens a healthy specification while 64 sessions back off',
+  'releases a confirmed request that settled while disconnected',
+  'preserves a confirmed acquisition reported by the new session',
+  'recovers one confirmed hold after two accepted requests settle partially offline',
+  'releases remaining ambiguous holds after a second reconnect reports zero',
   'rechecks shrinking quota after a long poll',
   'leaves the remaining quota for already assigned demand',
   'starts an organization worker with the custom resource label',
@@ -381,6 +393,37 @@ for (const storage of ['sqlite', 'postgres'])
         let stop: (() => Promise<void>) | undefined
         try {
           await journal.initialize()
+          if (scenario === 'opens a healthy specification while 64 sessions back off') {
+            const owner = (await state.acquire(randomUUID(), 600))!
+            const key = await journal.define(owner, scope)
+            for (let n = 1; n <= 64; n++) {
+              fixture.throttledSets.set(100 + n, 0)
+              await state.commit(owner, [
+                {
+                  key: 'scale-set/' + key.slice(6) + '/boxlite-1vcpu-1gbmem-' + n + 'gbdisk',
+                  expected: null,
+                  payload: {
+                    name: 'boxlite-' + randomUUID().replaceAll('-', ''),
+                    set: 100 + n,
+                    assigned: 1,
+                    held: 0,
+                    pending: [],
+                    message: null,
+                    session: null,
+                  },
+                },
+              ])
+            }
+            stop = start()
+            await until(
+              () =>
+                fixture.sessions.length === 1 && [...fixture.throttledSets.values()].every((attempts) => attempts > 0),
+            )
+            expect(fixture.definition?.labels).toEqual(expect.arrayContaining([{ name: 'boxlite', type: 'System' }]))
+            await delay(1550)
+            expect([...fixture.throttledSets.values()]).toEqual(Array(64).fill(1))
+            return
+          }
           if (scenario === 'restores a scope containing more than 64 valid specifications') {
             const owner = (await state.acquire(randomUUID(), 600))!
             const key = await journal.define(owner, scope)
@@ -622,6 +665,68 @@ for (const storage of ['sqlite', 'postgres'])
             fixture.publish(2, 0, [32])
             await until(() => fixture.acknowledged.includes(2))
             expect(fixture.acquired).toEqual([[31], [32]])
+            expect(await journal.used('tenant')).toBe(1)
+            return
+          }
+          if (scenario === 'releases remaining ambiguous holds after a second reconnect reports zero') {
+            maximum = 2
+            fixture.publish(1, 0, [31, 32])
+            await until(() => fixture.acknowledged.includes(1))
+            await stop()
+            fixture.initialAcquired = 1
+            stop = start()
+            await until(() => fixture.sessions.length === 2)
+            await until(async () => (await journal.used('tenant')) === 1)
+            await stop()
+            fixture.initialAcquired = 0
+            fixture.acquiredCount = undefined
+            stop = start()
+            await until(() => fixture.sessions.length === 3)
+            await until(async () => (await journal.used('tenant')) === 0)
+            fixture.publish(2, 0, [33, 34])
+            await until(() => fixture.acknowledged.includes(2))
+            expect(fixture.acquired).toEqual([
+              [31, 32],
+              [33, 34],
+            ])
+            return
+          }
+          if (scenario === 'recovers one confirmed hold after two accepted requests settle partially offline') {
+            maximum = 2
+            fixture.publish(1, 0, [31, 32])
+            await until(() => fixture.acknowledged.includes(1))
+            await stop()
+            fixture.initialAcquired = 1
+            fixture.acquiredCount = 1
+            stop = start()
+            await until(() => fixture.sessions.length === 2)
+            for (const message of [2, 3, 4]) {
+              fixture.publish(message, 0, [32])
+              await until(() => fixture.acknowledged.includes(message))
+              if (fixture.acquired.length > 1) break
+            }
+            expect(fixture.acquired).toEqual([[31, 32], [32]])
+            expect(await journal.used('tenant')).toBe(2)
+            return
+          }
+          if (
+            scenario === 'releases a confirmed request that settled while disconnected' ||
+            scenario === 'preserves a confirmed acquisition reported by the new session'
+          ) {
+            maximum = 1
+            fixture.publish(1, 0, [31])
+            await until(() => fixture.acknowledged.includes(1))
+            await stop()
+            const retained = scenario === 'preserves a confirmed acquisition reported by the new session'
+            fixture.initialAcquired = retained ? 1 : 0
+            stop = start()
+            await until(() => fixture.sessions.length === 2)
+            for (const message of [2, 3, 4]) {
+              fixture.publish(message, 0, [32])
+              await until(() => fixture.acknowledged.includes(message))
+              if (fixture.acquired.length > 1) break
+            }
+            expect(fixture.acquired).toEqual(retained ? [[31]] : [[31], [32]])
             expect(await journal.used('tenant')).toBe(1)
             return
           }
