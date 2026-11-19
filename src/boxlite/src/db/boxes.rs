@@ -312,12 +312,19 @@ impl BoxStore {
     // Reboot detection via alive table
     // ========================================================================
 
-    /// Check if this is a fresh boot (alive record is stale or missing).
+    /// Record the current boot ID when available.
     ///
-    /// Returns true if reboot detected (need to reset active boxes).
+    /// Returns true when it differs from a previously recorded boot ID.
     pub fn check_and_update_boot(&self) -> BoxliteResult<bool> {
-        let conn = self.db.conn();
         let current_boot_id = get_boot_id();
+        self.check_and_update_boot_with(current_boot_id.as_deref())
+    }
+
+    fn check_and_update_boot_with(&self, current_boot_id: Option<&str>) -> BoxliteResult<bool> {
+        let Some(current_boot_id) = current_boot_id else {
+            return Ok(false);
+        };
+        let conn = self.db.conn();
 
         // Check existing alive record
         let existing: Option<String> = db_err!(
@@ -326,16 +333,7 @@ impl BoxStore {
                 .optional()
         )?;
 
-        let is_reboot = match existing {
-            None => {
-                // First run ever - not a reboot
-                false
-            }
-            Some(stored_boot_id) => {
-                // Reboot if boot ID changed
-                stored_boot_id != current_boot_id
-            }
-        };
+        let is_reboot = existing.is_some_and(|stored_boot_id| stored_boot_id != current_boot_id);
 
         // Update alive record
         let now = Utc::now().timestamp();
@@ -368,33 +366,35 @@ impl BoxStore {
     }
 }
 
-/// Get system boot ID (unique per boot).
+/// Get the system boot ID when the host provides one.
 ///
 /// On macOS: Uses kern.bootsessionuuid
 /// On Linux: Uses /proc/sys/kernel/random/boot_id
-fn get_boot_id() -> String {
+fn get_boot_id() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        Command::new("sysctl")
+        let output = Command::new("sysctl")
             .args(["-n", "kern.bootsessionuuid"])
             .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let boot_id = std::str::from_utf8(&output.stdout).ok()?.trim();
+        (!boot_id.is_empty()).then(|| boot_id.to_owned())
     }
 
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+        let boot_id = boot_id.trim();
+        (!boot_id.is_empty()).then(|| boot_id.to_owned())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        uuid::Uuid::new_v4().to_string()
+        None
     }
 }
 
@@ -615,10 +615,72 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_boot_id_leaves_alive_table_empty() {
+        let (store, _dir) = create_test_db();
+
+        assert!(!store.check_and_update_boot_with(None).unwrap());
+
+        let alive_rows: i64 = store
+            .db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM alive", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(alive_rows, 0);
+    }
+
+    #[test]
+    fn test_missing_boot_id_preserves_frozen_boxes() {
+        let (store, _dir) = create_test_db();
+        store
+            .db
+            .conn()
+            .execute(
+                "INSERT INTO alive (id, boot_id, started_at) VALUES (1, 'original-boot-id', 0)",
+                [],
+            )
+            .unwrap();
+
+        let frozen_boxes = [(BoxStatus::Paused, 1000), (BoxStatus::Parked, 1001)];
+        for (status, pid) in frozen_boxes {
+            let config = create_test_config(status.as_str());
+            let mut state = BoxState::new();
+            state.set_status(status);
+            state.set_pid(Some(pid));
+            store.save(&config, &state).unwrap();
+        }
+
+        let is_reboot = store.check_and_update_boot_with(None).unwrap();
+        assert!(
+            !is_reboot,
+            "an unavailable boot ID must not signal a reboot"
+        );
+        let alive: (String, i64) = store
+            .db
+            .conn()
+            .query_row(
+                "SELECT boot_id, started_at FROM alive WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(alive, ("original-boot-id".to_string(), 0));
+
+        for (status, pid) in frozen_boxes {
+            let state = store.load_state(status.as_str()).unwrap().unwrap();
+            assert_eq!((state.status, state.pid), (status, Some(pid)));
+        }
+    }
+
+    #[test]
     fn test_reset_active_boxes_after_reboot() {
         use BoxStatus::*;
 
         let store = BoxStore::new(Database::open(Path::new(":memory:")).unwrap());
+        assert!(
+            !store
+                .check_and_update_boot_with(Some("original-boot-id"))
+                .unwrap()
+        );
         let cases = [
             (Parked, 1000, Stopped, None),
             (Paused, 1001, Stopped, None),
@@ -633,6 +695,20 @@ mod tests {
             state.set_pid(Some(pid));
             store.save(&config, &state).unwrap();
         }
+
+        assert!(
+            store
+                .check_and_update_boot_with(Some("different-boot-id"))
+                .unwrap()
+        );
+        let boot_id: String = store
+            .db
+            .conn()
+            .query_row("SELECT boot_id FROM alive WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(boot_id, "different-boot-id");
 
         let reset_ids = store.reset_active_boxes_after_reboot().unwrap();
         for (status, _, expected_status, expected_pid) in cases {

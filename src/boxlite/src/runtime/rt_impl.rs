@@ -1647,7 +1647,7 @@ impl RuntimeImpl {
                     );
                 }
                 ProcessIdentity::Absent => {
-                    // PID is dead or missing — clean the stale PID file.
+                    // Discard any PID file that provides no usable shim identity.
                     let _ = std::fs::remove_file(&pid_path);
 
                     if had_stale_exit && crate::vmm::ExitInfo::from_file(&exit_path).is_some() {
@@ -1671,11 +1671,24 @@ impl RuntimeImpl {
                             box_id = %box_id,
                             "Box crashed; marked Failed with crash report"
                         );
-                    } else if matches!(state.status, BoxStatus::Parked | BoxStatus::Paused) {
-                        // No matching live shim: do not claim a successful
-                        // recovery or retain a frozen state for a dead VM.
+                    } else if matches!(state.status, BoxStatus::Parked | BoxStatus::Paused)
+                        || (state.status == BoxStatus::Unknown
+                            && state
+                                .pid
+                                .is_none_or(|pid| !crate::util::process::pid_may_be_alive(pid)))
+                    {
                         state.mark_stop();
-                        tracing::warn!(box_id = %box_id, "Frozen box shim not verifiable; marked Stopped");
+                        tracing::warn!(
+                            box_id = %box_id,
+                            previous_status = %original_status,
+                            "Marked box Stopped after recovery found no matching live shim or valid exit record"
+                        );
+                    } else if state.status == BoxStatus::Unknown {
+                        tracing::warn!(
+                            box_id = %box_id,
+                            pid = ?state.pid,
+                            "Preserving Unknown box state because the recorded PID is still alive"
+                        );
                     } else if state.status == BoxStatus::Running {
                         // A Running box whose shim is gone: the guest powered
                         // off because its main command exited (docker
@@ -3263,7 +3276,7 @@ mod tests {
             ] {
                 let (runtime, _dir) = create_test_runtime();
                 let (pid, child) = spawn_dummy_process();
-                let _child = ChildGuard(child);
+                let mut child = ChildGuard(child);
                 let config = test_box_config_in_layout(false, &runtime);
                 let mut state = running_state(pid);
                 state.status = frozen;
@@ -3311,6 +3324,32 @@ mod tests {
                     let second = runtime.box_manager.update_box(&config.id).unwrap();
                     assert_eq!(second.pid, Some(pid));
                     repeated.push((frozen, identity, second.status));
+                }
+                if identity == "legacy" {
+                    std::fs::remove_file(&pid_file).unwrap();
+
+                    runtime.recover_boxes().unwrap();
+
+                    let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+                    assert_eq!(
+                        (recovered.status, recovered.pid),
+                        (BoxStatus::Unknown, Some(pid)),
+                        "{frozen}, {identity} with a live PID and missing shim.pid"
+                    );
+                    assert!(runtime.remove_box(&config.id, false).is_err());
+
+                    child.0.kill().unwrap();
+                    child.0.wait().unwrap();
+
+                    runtime.recover_boxes().unwrap();
+
+                    let settled = runtime.box_manager.update_box(&config.id).unwrap();
+                    assert_eq!(
+                        (settled.status, settled.pid),
+                        (BoxStatus::Stopped, None),
+                        "{frozen}, {identity} after shim exit"
+                    );
+                    runtime.remove_box(&config.id, false).unwrap();
                 }
             }
         }
