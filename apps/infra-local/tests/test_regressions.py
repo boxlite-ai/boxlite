@@ -276,6 +276,10 @@ class NativeRegressions(unittest.TestCase):
         self.assertNotIn("runner", stopped)
         self.assertEqual(built, [])
 
+    def test_storage_does_not_depend_on_withdrawn_images_or_one_shot_completion(self):
+        self.assertNotIn("minio-init", services.SERVICES)
+        self.assertEqual(services.SERVICES["rustfs"].image, "ghcr.io/rustfs/rustfs:1.0.4-glibc")
+
 
 class BootstrapRegressions(unittest.TestCase):
     def test_existing_venv_without_install_stamp_reinstalls_package(self):

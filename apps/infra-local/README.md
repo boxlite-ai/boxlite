@@ -32,10 +32,14 @@ First run pulls 11 images; later runs reuse their cache. Before the first login,
 configure [local registration](#local-registration), then sign in at
 <http://localhost:3000> through Rauthy (`admin@boxlite.dev` / `password`).
 
-Upgrading from a stack that still runs `dex` or `minio` boxes: run
-`make down ARGS=--all` once first. Those boxes hold the host ports the `rauthy`
-and `rustfs` boxes need. Rauthy assigns new user ids, so the first login creates
-a new local user; `make reset ARGS=--hard` drops the old rows.
+Upgrading from a stack that still runs `dex` or `minio` boxes takes three steps:
+
+1. Run `make down ARGS=--all`. The old boxes hold the host ports the `rauthy`
+   and `rustfs` boxes need.
+2. Delete `apps/api/.env`. It still names the Dex issuer and MinIO keys, and
+   `make up` re-seeds it from [`api.env`](api.env) when it is missing.
+3. Optionally run `make reset ARGS=--hard`. Rauthy assigns new user ids, so the
+   first login creates a new local user; the reset drops the old rows.
 
 ### Local registration
 
