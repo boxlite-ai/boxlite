@@ -59,6 +59,25 @@ const API_URL = import.meta.env.VITE_API_URL
 const billingPreview = new URLSearchParams(window.location.search).get('preview')
 const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-user-unfunded'
 
+// Saved cards answer set-default and remove like the billing API: removing the
+// default card promotes the next saved card.
+const MOCK_PAYMENT_METHODS: PaymentMethod[] = [
+  {
+    id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
+    isDefault: true,
+    paymentProviderType: 'stripe',
+    providerMethodId: 'pm_mock_visa',
+    details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
+  },
+  {
+    id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
+    isDefault: false,
+    paymentProviderType: 'stripe',
+    providerMethodId: 'pm_mock_mastercard',
+    details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
+  },
+]
+
 // Quickstart's agent handoff waits for a box created after it handed the key
 // over, then for that box enabling inbound access. Static fixtures can reach neither
 // stage, so both are exposed behind a switch that is off by default:
@@ -626,22 +645,7 @@ export const handlers = [
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
-    const paymentMethods: PaymentMethod[] = [
-      {
-        id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
-        isDefault: true,
-        paymentProviderType: 'stripe',
-        providerMethodId: 'pm_mock_visa',
-        details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
-      },
-      {
-        id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
-        isDefault: false,
-        paymentProviderType: 'stripe',
-        providerMethodId: 'pm_mock_mastercard',
-        details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
-      },
-    ]
+    const paymentMethods = MOCK_PAYMENT_METHODS
     const totalCount = paymentMethods.length
     const totalPages = Math.ceil(totalCount / perPage)
     const start = (page - 1) * perPage
@@ -656,6 +660,20 @@ export const handlers = [
         prevPage: page > 1 ? page - 1 : null,
       },
     })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/payment-methods/:cardId/default`, ({ params }) => {
+    if (!MOCK_PAYMENT_METHODS.some((method) => method.id === params.cardId)) {
+      return new HttpResponse(null, { status: 404 })
+    }
+    for (const method of MOCK_PAYMENT_METHODS) method.isDefault = method.id === params.cardId
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${BILLING_API_URL}/organization/:organizationId/payment-methods/:cardId`, ({ params }) => {
+    const index = MOCK_PAYMENT_METHODS.findIndex((method) => method.id === params.cardId)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    const [removed] = MOCK_PAYMENT_METHODS.splice(index, 1)
+    if (removed.isDefault && MOCK_PAYMENT_METHODS.length > 0) MOCK_PAYMENT_METHODS[0].isDefault = true
+    return new HttpResponse(null, { status: 204 })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
     const preview = billingPreview

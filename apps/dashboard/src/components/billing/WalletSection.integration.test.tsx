@@ -37,6 +37,8 @@ const mocks = vi.hoisted(() => ({
   // Two organizations make the target ambiguous, so a coupon link waits for a click.
   organizations: [{ id: 'org-without-card' }, { id: 'org-other' }] as Array<{ id: string }>,
   setAutomaticTopUp: vi.fn(),
+  setDefaultPaymentMethod: vi.fn(),
+  removePaymentMethod: vi.fn(),
   topUpWallet: vi.fn(),
   invoicesQuery: vi.fn(),
   walletTransactionsQuery: vi.fn(),
@@ -165,6 +167,14 @@ vi.mock('@/hooks/mutations/useSetAutomaticTopUpMutation', () => ({
   useSetAutomaticTopUpMutation: () => ({ mutateAsync: mocks.setAutomaticTopUp, isPending: false }),
 }))
 
+vi.mock('@/hooks/mutations/useSetDefaultPaymentMethodMutation', () => ({
+  useSetDefaultPaymentMethodMutation: () => ({ mutateAsync: mocks.setDefaultPaymentMethod, isPending: false }),
+}))
+
+vi.mock('@/hooks/mutations/useRemovePaymentMethodMutation', () => ({
+  useRemovePaymentMethodMutation: () => ({ mutateAsync: mocks.removePaymentMethod, isPending: false }),
+}))
+
 vi.mock('@/hooks/mutations/useTopUpWalletMutation', () => ({
   useTopUpWalletMutation: () => ({ mutateAsync: mocks.topUpWallet, isPending: mocks.topUpPending }),
 }))
@@ -195,6 +205,8 @@ describe('WalletSection top-up checkout', () => {
     mocks.wallet.creditCardConnected = false
     mocks.wallet.usageChargeMultiplier = undefined
     mocks.topUpWallet.mockClear()
+    mocks.setDefaultPaymentMethod.mockReset().mockResolvedValue(undefined)
+    mocks.removePaymentMethod.mockReset().mockResolvedValue(undefined)
     mocks.fetchCheckoutUrl.mockReset()
     mocks.invoicesQuery.mockClear()
     mocks.walletTransactionsQuery.mockClear()
@@ -240,7 +252,9 @@ describe('WalletSection top-up checkout', () => {
       root = createRoot(host)
       root.render(<WalletSection />)
     })
-    const connect = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Connect')
+    const connect = [...host.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Add payment method',
+    )
     expect(connect).toBeDefined()
     await act(async () => connect!.click())
     expect(open).toHaveBeenCalledWith('', '_blank')
@@ -269,7 +283,7 @@ describe('WalletSection top-up checkout', () => {
       (button) => button.textContent?.trim() === 'Top up →',
     )
     const connectButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.trim() === 'Connect',
+      (button) => button.textContent?.trim() === 'Add payment method',
     )
     expect(connectButton).toBeDefined()
     expect(topUpButton).toBeDefined()
@@ -592,8 +606,9 @@ describe('WalletSection top-up checkout', () => {
     const list = document.querySelector('ul[aria-label="Saved payment methods"]')
     const rows = [...(list?.querySelectorAll('li') ?? [])]
     expect(rows).toHaveLength(3)
-    expect(rows[0].querySelector('img')?.getAttribute('src')).toBe(visaLogo)
-    expect(rows[1].querySelector('img')?.getAttribute('src')).toBe(mastercardLogo)
+    // The default card leads; the others keep the API's order.
+    expect(rows[0].querySelector('img')?.getAttribute('src')).toBe(mastercardLogo)
+    expect(rows[1].querySelector('img')?.getAttribute('src')).toBe(visaLogo)
     expect(rows[2].querySelector('[aria-label="CARD"]')).not.toBeNull()
     expect(list?.textContent).toContain('VISA')
     expect(list?.textContent).toContain('•••• 4242')
@@ -603,15 +618,16 @@ describe('WalletSection top-up checkout', () => {
     expect(list?.textContent).toContain('exp 12/29')
     expect(list?.textContent).toContain('CARD')
     expect(list?.textContent).toContain('Saved card')
-    expect(rows[0].textContent).not.toContain('Used for subscription renewal and top-up charges')
-    expect(rows[1].textContent).toContain('Used for subscription renewal and top-up charges')
-    const updateButtons = [...document.querySelectorAll('button')].filter(
-      (button) => button.textContent?.trim() === 'Update card',
+    expect(rows[0].textContent).toContain('Default')
+    expect(rows[0].textContent).toContain('Your default card is used for subscription renewals and top-ups.')
+    expect(rows[1].textContent).not.toContain('Default')
+    // Only non-default cards carry actions; Update card is gone.
+    expect(rows[0].querySelector('button')).toBeNull()
+    expect(rows[1].querySelector('button[aria-label^="Actions for"]')).not.toBeNull()
+    expect(rows[2].querySelector('button[aria-label^="Actions for"]')).not.toBeNull()
+    expect([...document.querySelectorAll('button')].some((button) => button.textContent?.includes('Update card'))).toBe(
+      false,
     )
-    expect(updateButtons).toHaveLength(1)
-    // Keeping the action inside the first full-width row lets that row's
-    // divider reach the panel's right edge instead of stopping at an action rail.
-    expect(rows[0].contains(updateButtons[0])).toBe(true)
     expect(document.body.textContent).not.toContain('pm_default')
   })
 
@@ -1024,5 +1040,131 @@ describe('WalletSection top-up checkout', () => {
     await act(async () => button('Redeem')!.click())
     expect(host.textContent).toContain('Coupon redeemed')
     expect(mocks.claimCoupon).not.toHaveBeenCalled()
+  })
+
+  describe('saved card management', () => {
+    const card = (id: string, isDefault: boolean, last4: string) => ({
+      id,
+      isDefault,
+      paymentProviderType: 'stripe' as const,
+      providerMethodId: `pm_${id}`,
+      details: { brand: 'visa', last4, expMonth: 8, expYear: 2027 },
+    })
+
+    async function renderWallet() {
+      mocks.wallet.creditCardConnected = true
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      await act(async () => {
+        root = createRoot(host)
+        root.render(<WalletSection />)
+      })
+      await flush()
+    }
+
+    async function openMenu(last4: string) {
+      const trigger = document.querySelector<HTMLButtonElement>(`button[aria-label="Actions for VISA •••• ${last4}"]`)
+      expect(trigger).not.toBeNull()
+      // Radix opens menus on pointerdown; jsdom has no PointerEvent, and React reads only `button`.
+      await act(async () =>
+        trigger!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+      )
+      return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    }
+
+    const menuItem = (items: HTMLElement[], label: string) => items.find((item) => item.textContent === label)
+
+    it('sets a non-default card as the default', async () => {
+      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
+      await renderWallet()
+
+      const items = await openMenu('1111')
+      expect(items.map((item) => item.textContent)).toEqual(['Set as default', 'Remove'])
+      await act(async () => menuItem(items, 'Set as default')!.click())
+      await flush()
+
+      expect(mocks.setDefaultPaymentMethod).toHaveBeenCalledExactlyOnceWith({
+        organizationId: 'org-without-card',
+        paymentMethodId: 'card-other',
+      })
+      expect(toast.success).toHaveBeenCalledWith('Default card updated')
+    })
+
+    it('removes a card only after the confirmation dialog', async () => {
+      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
+      await renderWallet()
+
+      await act(async () => menuItem(await openMenu('1111'), 'Remove')!.click())
+      await flush()
+
+      const dialog = document.querySelector('[role="alertdialog"]')
+      expect(dialog?.textContent).toContain('Remove VISA •••• 1111?')
+      expect(mocks.removePaymentMethod).not.toHaveBeenCalled()
+
+      const confirm = [...dialog!.querySelectorAll('button')].find((button) => button.textContent === 'Remove')
+      await act(async () => confirm!.click())
+      await flush()
+
+      expect(mocks.removePaymentMethod).toHaveBeenCalledExactlyOnceWith({
+        organizationId: 'org-without-card',
+        paymentMethodId: 'card-other',
+      })
+      expect(toast.success).toHaveBeenCalledWith('Card removed')
+    })
+
+    it('keeps the card when the confirmation is cancelled', async () => {
+      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
+      await renderWallet()
+
+      await act(async () => menuItem(await openMenu('1111'), 'Remove')!.click())
+      await flush()
+      const cancel = [...document.querySelectorAll('[role="alertdialog"] button')].find(
+        (button) => button.textContent === 'Cancel',
+      ) as HTMLButtonElement
+      await act(async () => cancel.click())
+      await flush()
+
+      expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+      expect(mocks.removePaymentMethod).not.toHaveBeenCalled()
+    })
+
+    it('offers no action on the default card', async () => {
+      mocks.paymentMethods = [card('card-default', true, '4242')]
+      await renderWallet()
+
+      expect(document.querySelector('button[aria-label^="Actions for"]')).toBeNull()
+    })
+
+    it('does not remove the only saved card', async () => {
+      // No card is marked default, so the lone card still shows its menu.
+      mocks.paymentMethods = [card('card-only', false, '1111')]
+      await renderWallet()
+
+      const items = await openMenu('1111')
+      expect(menuItem(items, 'Remove')?.getAttribute('aria-disabled')).toBe('true')
+      expect(document.body.textContent).toContain('Add another card before removing this one.')
+      await act(async () => menuItem(items, 'Remove')!.click())
+      await flush()
+
+      expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+      expect(mocks.removePaymentMethod).not.toHaveBeenCalled()
+    })
+
+    it('reports a failed action and leaves the list as it was', async () => {
+      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
+      mocks.setDefaultPaymentMethod.mockRejectedValue(new Error('Request failed with status code 404'))
+      await renderWallet()
+
+      await act(async () => menuItem(await openMenu('1111'), 'Set as default')!.click())
+      await flush()
+
+      expect(toast.error).toHaveBeenCalledWith('Failed to set the default card', {
+        description: 'Error: Request failed with status code 404',
+      })
+      expect(toast.success).not.toHaveBeenCalled()
+      const rows = [...document.querySelectorAll('ul[aria-label="Saved payment methods"] li')]
+      expect(rows.map((row) => row.textContent?.includes('Default'))).toEqual([true, false])
+      expect(rows[0].textContent).toContain('•••• 4242')
+    })
   })
 })

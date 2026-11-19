@@ -17,6 +17,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useRedeemCouponMutation } from '@/hooks/mutations/useRedeemCouponMutation'
+import { useRemovePaymentMethodMutation } from '@/hooks/mutations/useRemovePaymentMethodMutation'
+import { useSetDefaultPaymentMethodMutation } from '@/hooks/mutations/useSetDefaultPaymentMethodMutation'
 import { useSetAutomaticTopUpMutation } from '@/hooks/mutations/useSetAutomaticTopUpMutation'
 import { useTopUpWalletMutation } from '@/hooks/mutations/useTopUpWalletMutation'
 import { useConnectCard } from '@/hooks/useConnectCard'
@@ -293,6 +295,8 @@ export function WalletSection({
   const setAutomaticTopUpMutation = useSetAutomaticTopUpMutation()
   const redeemCouponMutation = useRedeemCouponMutation()
   const topUpWalletMutation = useTopUpWalletMutation()
+  const setDefaultPaymentMethodMutation = useSetDefaultPaymentMethodMutation()
+  const removePaymentMethodMutation = useRemovePaymentMethodMutation()
 
   useEffect(() => {
     if (!wallet) {
@@ -318,6 +322,38 @@ export function WalletSection({
       })
     }
   }, [selectedOrganization, automaticTopUp, setAutomaticTopUpMutation])
+
+  const handleSetDefaultPaymentMethod = useCallback(
+    async (paymentMethodId: string) => {
+      if (!selectedOrganization) {
+        return
+      }
+
+      try {
+        await setDefaultPaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
+        toast.success('Default card updated')
+      } catch (error) {
+        toast.error('Failed to set the default card', { description: String(error) })
+      }
+    },
+    [selectedOrganization, setDefaultPaymentMethodMutation],
+  )
+
+  const handleRemovePaymentMethod = useCallback(
+    async (paymentMethodId: string) => {
+      if (!selectedOrganization) {
+        return
+      }
+
+      try {
+        await removePaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
+        toast.success('Card removed')
+      } catch (error) {
+        toast.error('Failed to remove the card', { description: String(error) })
+      }
+    },
+    [selectedOrganization, removePaymentMethodMutation],
+  )
 
   const handleRedeemCoupon = useCallback(async () => {
     if (!selectedOrganization || !couponCode) {
@@ -465,14 +501,21 @@ export function WalletSection({
 
       {wallet && (
         <div className="flex flex-col gap-8">
-          {/* Card enumeration is its own read model; checkout remains the one action. */}
           <PaymentMethodsPanel
             paymentMethods={paymentMethodsQuery.data ?? []}
             isLoading={paymentMethodsQuery.isLoading}
             isError={paymentMethodsQuery.isError}
-            hasConnectedCard={cardConnected}
-            isActionLoading={isCheckoutUrlLoading}
-            onAction={connectCard}
+            isAddLoading={isCheckoutUrlLoading}
+            pendingMethodId={
+              setDefaultPaymentMethodMutation.isPending
+                ? setDefaultPaymentMethodMutation.variables.paymentMethodId
+                : removePaymentMethodMutation.isPending
+                  ? removePaymentMethodMutation.variables.paymentMethodId
+                  : null
+            }
+            onAdd={connectCard}
+            onSetDefault={handleSetDefaultPaymentMethod}
+            onRemove={handleRemovePaymentMethod}
           />
 
           <section>

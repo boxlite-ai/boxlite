@@ -360,3 +360,20 @@ describe('PR 829 real-data parity: wallet transactions', () => {
     )
   })
 })
+
+describe('saved card actions', () => {
+  it('sets the default card through its own path', async () => {
+    const api = serve(undefined)
+    await expect(api.setDefaultPaymentMethod('org-1', 'card-2')).resolves.toBeUndefined()
+    expect(requestedMethod).toBe('post')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/payment-methods/card-2/default')
+    expect(requestedData).toBeUndefined()
+  })
+
+  it('removes a card with DELETE on the card path', async () => {
+    const api = serve(undefined)
+    await expect(api.removePaymentMethod('org-1', 'card-2')).resolves.toBeUndefined()
+    expect(requestedMethod).toBe('delete')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/payment-methods/card-2')
+  })
+})
