@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net"
 
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -14,25 +16,74 @@ type outboundSnapshot struct {
 	revision string
 	filter   *AllowNetFilter
 	dialer   *egressDialer
+	proxyDNS *proxyDNSResolver
+	udpRelay *managedUDP
+	managed  bool
+	blockAll bool
 	state    string
 }
 
 type snapshotSource func() *outboundSnapshot
 
 func (p *outboundPolicyController) compile(policy outboundPolicy, revision string) (*outboundSnapshot, error) {
+	var route *proxyDNSResolver
+	if previous := p.active.Load(); previous != nil {
+		route = previous.proxyDNS
+	}
+	return p.compileRoute(policy, revision, route)
+}
+
+func (p *outboundPolicyController) compileRoute(policy outboundPolicy, revision string, route *proxyDNSResolver) (*outboundSnapshot, error) {
 	policy.AllowNet = append([]string{}, policy.AllowNet...)
 	filter := NewAllowNetFilter(policy.AllowNet, p.config.GatewayIP, p.guestIP)
 	dialer, err := newEgressDialer(filter, p.config.Subnet)
 	if err != nil {
 		return nil, err
 	}
-	return &outboundSnapshot{policy: policy, revision: revision, filter: filter, dialer: dialer}, nil
+	next := &outboundSnapshot{
+		policy: policy, revision: revision, filter: filter, dialer: dialer,
+		proxyDNS: route, managed: p.newUDPRelay != nil,
+	}
+	next.configureResolution(p.dnsWork)
+	return next, nil
 }
 
-func (p *outboundPolicyController) publish(snapshot *outboundSnapshot, state string) {
+func (s *outboundSnapshot) ingressClosed() bool {
+	return s.blockAll || s.policy.Mode == "disabled"
+}
+
+func (s *outboundSnapshot) configureResolution(work *dnsLookupWork) {
+	if s.proxyDNS == nil && work == nil {
+		return
+	}
+	dialer := *s.dialer
+	if s.proxyDNS != nil {
+		dialer.resolve = s.proxyDNS.lookupIP
+		dialer.connect = s.proxyDNS.connect
+	} else {
+		resolve := dialer.resolve
+		dialer.resolve = func(ctx context.Context, name string) ([]net.IP, error) {
+			ctx, release, err := work.begin(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defer release()
+			return resolve(ctx, name)
+		}
+	}
+	s.dialer = &dialer
+}
+
+func (p *outboundPolicyController) publish(snapshot *outboundSnapshot, state string) bool {
+	p.publication.Lock()
+	defer p.publication.Unlock()
+	if p.stopped || (p.managedContext != nil && p.managedContext.Err() != nil) {
+		return false
+	}
 	next := *snapshot
 	next.state = state
 	p.active.Store(&next)
+	return true
 }
 
 // The input/forward gate precedes endpoint demultiplexing, including registered
@@ -44,7 +95,7 @@ type outboundModeTarget struct {
 }
 
 func (t *outboundModeTarget) Action(*stack.PacketBuffer, stack.Hook, *stack.Route, stack.AddressableEndpoint) (stack.RuleVerdict, int) {
-	if t.snapshot().policy.Mode == "disabled" {
+	if t.snapshot().ingressClosed() {
 		return stack.RuleDrop, 0
 	}
 	return stack.RuleJump, t.next

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +22,134 @@ type proxyDeadlineConn struct {
 
 func (c proxyDeadlineConn) SetDeadline(deadline time.Time) error {
 	return c.setDeadline(deadline)
+}
+
+// A caller that finds the descriptor already closing can return before the
+// initiating Close finishes, as it can on a real TCP socket.
+type blockedTunnelClose struct {
+	net.Conn
+	started chan struct{}
+	release <-chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *blockedTunnelClose) Close() error {
+	if c.calls.Add(1) != 1 {
+		return net.ErrClosed
+	}
+	close(c.started)
+	<-c.release
+	return c.Conn.Close()
+}
+
+func TestProxyConnector_CancellationJoinsNegotiationClose(t *testing.T) {
+	await := func(ch <-chan struct{}, message string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(time.Second):
+			t.Fatal(message)
+		}
+	}
+	requested, respond, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	sendResponse := sync.OnceFunc(func() { close(respond) })
+	finishClose := sync.OnceFunc(func() { close(release) })
+	defer sendResponse()
+	defer finishClose()
+	peer := startProxyTestPeer(t, func(conn *net.TCPConn) error {
+		if err := readTestProxyCONNECT(conn, "93.184.216.34:443", ""); err != nil {
+			return err
+		}
+		close(requested)
+		<-respond
+		if _, err := io.WriteString(conn, "HTTP/1.1 200 OK\r\n\r\n"); err != nil {
+			return err
+		}
+		return requirePeerClose(conn)
+	})
+	cfg := proxyTestConfig("http")
+	dial := proxyTestDial(peer, cfg.endpoint)
+	closing := &blockedTunnelClose{started: make(chan struct{}), release: release}
+	connect := mustProxyConnector(t, cfg, func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		closing.Conn = conn
+		return closing, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var conn net.Conn
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err = connect(ctx, proxyTestTarget(proxyTestFirstIP))
+	}()
+	await(requested, "connector did not send CONNECT")
+	cancel()
+	await(closing.started, "cancellation did not start closing the proxy socket")
+	sendResponse()
+	select {
+	case <-done:
+		t.Error("proxy setup returned before the initiating close finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+	finishClose()
+	await(done, "proxy setup did not finish after the socket closed")
+	requireProxyFailure(t, conn, err, context.Canceled)
+	if attempts := closing.calls.Load(); attempts != 1 {
+		t.Fatalf("underlying proxy socket closed %d times, want once", attempts)
+	}
+	peer.check(t)
+}
+
+func TestProxyConnector_CloseReleasesUnreadHTTPSProxy(t *testing.T) {
+	cfg := proxyTestConfig("https")
+	proxyTLS, roots := proxyTestTLS(t, newTestCA(t), proxyTestTLSName)
+	cfg.roots = roots
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	if err := peer.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	proxy := make(chan error, 1)
+	go func() {
+		conn := tls.Server(peer, proxyTLS)
+		if err := readTestProxyCONNECT(conn, "93.184.216.34:443", ""); err != nil {
+			proxy <- err
+			return
+		}
+		// This HTTPS proxy sends its response and stops reading the stream.
+		_, err := io.WriteString(conn, "HTTP/1.1 200 OK\r\n\r\n")
+		proxy <- err
+	}()
+	connect := mustProxyConnector(t, cfg, func(context.Context, string, string) (net.Conn, error) { return client, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	tunnel, err := connect(ctx, proxyTestTarget(proxyTestFirstIP))
+	if err != nil {
+		t.Fatalf("establish HTTPS CONNECT: %v", err)
+	}
+	if err := <-proxy; err != nil {
+		t.Fatalf("proxy failed to send CONNECT response: %v", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- tunnel.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close HTTPS tunnel: %v", err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("closing the HTTPS tunnel waited for the proxy to read")
+	}
+	var data [1]byte
+	if _, err := peer.Read(data[:]); err != io.EOF {
+		t.Fatalf("proxy socket remained open: %v", err)
+	}
 }
 
 func TestProxyConnector_Handoff(t *testing.T) {

@@ -2,10 +2,9 @@ package main
 
 // forked_udp.go — UDP forwarding gated by the allow_net allowlist.
 //
-// Unlike the TCP path, this is not a fork of upstream's forwarder. The policy
-// check runs at the protocol-handler level, before upstream's forwarder
-// creates an endpoint, and allowed datagrams are handed to that forwarder
-// untouched — same shape as Tailscale's wrapUDPProtocolHandler.
+// The policy check runs before endpoint creation. Stock networks use the
+// upstream forwarder. Managed networks use a relay generation tracked through
+// the guest-link writer.
 //
 // Traffic that never reaches here: upstream's DNS server (bound to
 // GatewayIP:53, services.go:62) and DHCP (bound to :67, dhcp.go:93) are
@@ -25,10 +24,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
-// UDPWithFilter returns a UDP protocol handler that drops datagrams whose
-// destination is outside the allowlist and forwards the rest through
-// upstream's forwarder. Enabled snapshots without an allowlist delegate to
-// that forwarder; disabled snapshots consume the packet without forwarding.
+// UDPWithFilter applies pre-NAT policy, then chooses the snapshot's relay.
 func UDPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 	natLock *sync.Mutex, snapshot snapshotSource) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
 
@@ -36,10 +32,21 @@ func UDPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 	blocked := newBlockedDestinationLog()
 	return func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
 		current := snapshot()
-		if current.policy.Mode == "disabled" {
+		if current.ingressClosed() {
 			return true
 		}
 		filter := current.filter
+		if current.managed {
+			if current.udpRelay == nil || current.state != "confirmed" ||
+				linkLocalSubnet.Contains(id.LocalAddress) || id.LocalAddress == header.IPv4Broadcast {
+				return true
+			}
+			if filter != nil && !udpDestinationAllowed(id.LocalAddress, filter) {
+				blocked.note(id.LocalAddress, id.LocalPort)
+				return true
+			}
+			return current.udpRelay.handle(id, pkt)
+		}
 		if filter == nil {
 			return upstream.HandlePacket(id, pkt)
 		}

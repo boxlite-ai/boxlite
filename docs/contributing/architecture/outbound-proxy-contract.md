@@ -93,14 +93,43 @@ inspected TCP, and secrets MITM use the same selected route.
 Setup, including resolution and candidate retries, has a 30-second budget or the shorter
 caller deadline. Direct bootstrap DNS resolves only registered proxy endpoint names.
 
-Gateway DNS serves local records. Both gateway DNS listeners and the host business resolver
-use a deployment-pinned DoH endpoint for external lookups. Those queries use the captured
-proxy and a five-second budget.
+Gateway DNS serves local records. With a binding, both gateway listeners and the host business
+resolver send external lookups to a deployment-pinned DoH endpoint through the captured proxy.
+An unbound route uses its configured system resolver.
 
-Proxy or DoH failure ends the operation. Bind blocks external UDP, including UDP DNS and
-QUIC, before acknowledgement, closes existing external UDP endpoints, and drops late replies.
+Proxy or DoH failure ends the operation. A proxy-capable bridge limits external DNS to 64
+concurrent lookups and accepts up to 32 gateway TCP DNS sessions in either mode.
+
+The lookup budget is five seconds. The bridge closes a session after a ten-second message read or write deadline.
+
+Bind blocks external UDP, including UDP DNS and QUIC, and closes existing external UDP endpoints
+before acknowledgement. The UDP delivery boundary is a complete frame written to the guest-link
+Unix socket. The bridge discards old replies still queued for that writer and waits for admitted writes.
+
+Guest reads can occur after acknowledgement for frames completely written before it. A partial
+stream frame leaves the link unusable for confirmation until framing is re-established. Shutdown closes
+the guest-link socket to release blocked writes before joining delivery work.
 
 Gateway DNS and DHCP remain available. Unbind restores ordinary policy for new direct endpoints.
+
+The trusted host startup call selects a proxy-capable bridge. It supplies an optional binding
+separately from the ordinary bridge configuration.
+
+The host-only snapshot PUT carries the next route and its revision. A null route explicitly unbinds.
+The services socket exposes the same zone store as the two managed DNS listeners.
+
+```text
+Bound DNS lookup → captured proxy → pinned DoH
+Old UDP reply → IPv4 fragments retain the generation → tap → guest-link writer drops sealed fragments
+```
+
+The UDP relay marks replies with their generation. The bridge applies two version-pinned dependency
+patches to preserve that marker through IPv4 fragmentation and the tap frame writer.
+
+The native archive build, bridge unit tests, coverage, and vet use the same patch script. It runs
+`git apply` on temporary copies, so the module cache and any local vendor tree keep their upstream sources.
+
+Dependency upgrades must rebase both patches and pass the real-tap IPv4 fragment test.
 
 ### Bridge proxy connector
 
@@ -166,7 +195,8 @@ the update precondition, complete snapshot, and common acknowledgement format. T
 registration revision identifies the proxy version independently of the Box policy revision.
 A stale public `If-Match` returns `412` before mutation or Runner dispatch.
 
-The proposed bind acknowledges publication after the host has stopped external UDP relays.
+Bind acknowledges publication after the host has stopped external UDP relays and settled writes
+to the guest-link socket.
 
 ```mermaid
 sequenceDiagram
@@ -175,7 +205,7 @@ sequenceDiagram
     participant Host as Runtime and gvproxy
     Cloud->>Runner: Conditional bind for the assigned epoch
     Runner->>Host: Apply the complete candidate
-    Note over Host: Block external UDP, close endpoints, drop late replies
+    Note over Host: Close external UDP endpoints and fence guest-link writes
     Note over Host: Install and persist the new snapshot
     Host-->>Runner: Report installed route and epoch
     Runner-->>Cloud: Return authenticated application evidence

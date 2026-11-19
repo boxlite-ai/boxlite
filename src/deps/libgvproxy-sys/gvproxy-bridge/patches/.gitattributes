@@ -1,0 +1,2 @@
+# The prefix of a unified diff context line is part of the patch.
+*.patch whitespace=-blank-at-eol,-space-before-tab
