@@ -12,7 +12,7 @@ import { GitHubExecutionBackend } from './execution/backend'
 import { ExecutionJournal } from './execution/journal'
 import { decodeScope, ExecutionScope } from './execution/model'
 import { Listener, ListenerHost } from './listener'
-import { scaleSetBindings, ScaleSetController, ScaleSetWork } from './scale-set-controller'
+import { ScaleSetController, ScaleSetWork } from './scale-set-controller'
 import { ActionsScaleSets } from './scale-set-client'
 import { SqliteStateDatabase } from './state/sqlite'
 import { ListenerState } from './state/store'
@@ -37,11 +37,18 @@ class ActionsFixture {
   discoverCustom = false
   defaultSet?: { id: number; name: string; labels: unknown[]; runnerGroupId: number }
   labels = ['boxlite']
+  rejectAcquisition = new Set<number>()
+  loseBeforeAcquire = false
   interruptAcquisition?: () => void
+  acquiredCount = 0
   target = 0
   definition?: { id: number; name: string; labels: unknown[]; runnerGroupId: number }
   installation?: GitHubInstallation
-  private messages: object[] = []
+  private messages: (object | null)[] = []
+  idle() {
+    this.messages.push(null)
+    this.waiter?.()
+  }
   private waiter?: () => void
   publish(id: number, assigned: number, offers: number[] = [], extra: object[] = []) {
     this.target = assigned
@@ -139,7 +146,10 @@ class ActionsFixture {
       })
     }
     if (path.endsWith('/runnerscalesets/9') && method === 'GET')
-      return Response.json({ ...this.definition, statistics: { totalAssignedJobs: this.target } })
+      return Response.json({
+        ...this.definition,
+        statistics: { totalAssignedJobs: this.target, totalAcquiredJobs: this.acquiredCount },
+      })
     if (path.endsWith('/9/sessions') && method === 'POST') {
       const sessionId = randomUUID()
       this.sessions.push(sessionId)
@@ -167,13 +177,18 @@ class ActionsFixture {
           }
           signal.addEventListener('abort', abort, { once: true })
         })
-      return Response.json(this.messages.shift())
+      const message = this.messages.shift()
+      return message === null ? new Response(null, { status: 202 }) : Response.json(message)
     }
     if (path.startsWith('/messages/') && method === 'DELETE') {
       this.acknowledged.push(Number(path.split('/').at(-1)))
       return new Response(null, { status: 204 })
     }
     if (path.endsWith('/acquirejobs')) {
+      if (this.loseBeforeAcquire) {
+        this.loseBeforeAcquire = false
+        throw Error('Request did not reach Actions')
+      }
       this.acquired.push(data)
       if (this.interruptAcquisition) {
         this.target += data.length
@@ -181,7 +196,8 @@ class ActionsFixture {
         this.interruptAcquisition = undefined
         throw Error('Lost acquisition reply')
       }
-      return Response.json({ count: data.length, value: data })
+      const accepted = data.filter((id: number) => !this.rejectAcquisition.has(id))
+      return Response.json({ count: accepted.length, value: accepted })
     }
     if (path.endsWith('/generatejitconfig')) {
       const runner = { id: 100 + this.runners.size, name: data.name, runnerScaleSetId: 9 }
@@ -207,8 +223,19 @@ const scenarios = [
   'checks an organization runner group',
   'recovers an acknowledged JIT upload',
   'takes over after acquisition before the ledger commit',
+  'retries a redelivered offer with its original charged slot',
+  'releases an interrupted request omitted from the replacement session',
+  'retains an interrupted acquisition that Actions still counts without a reoffer',
+  'keeps the second hold after a delayed start confirms the first assignment',
+  'releases a rejected redelivery for another offer',
+  'uses the free slot after a partially accepted retry',
+  'acquires a reoffered request excluded from a partial reply',
+  'requires spare quota to reacquire one of several ambiguous requests',
+  'preserves an uncertain acquisition still counted by Actions',
+  'holds accepted quota through idle polls and an owner restart',
   'reuses a held slot after cancellation between statistics samples',
   'returns an undispatched reservation for a deleted set',
+  'restores a scope containing more than 64 valid specifications',
   'rechecks shrinking quota after a long poll',
   'leaves the remaining quota for already assigned demand',
   'starts an organization worker with the custom resource label',
@@ -332,7 +359,6 @@ for (const storage of ['sqlite', 'postgres'])
             host,
             worker: { image: 'jitbox', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
             capacity: { resolve: async () => ({ limits: [{ maximum, domain: 'organization' }] }) },
-            scaleSets: scaleSetBindings(JSON.stringify({ [scope.binding]: ['boxlite'] })),
             timing: { tickMs: 5, leaseMs: 450 },
           })
           const task = listener.run(controller.signal)
@@ -355,6 +381,31 @@ for (const storage of ['sqlite', 'postgres'])
         let stop: (() => Promise<void>) | undefined
         try {
           await journal.initialize()
+          if (scenario === 'restores a scope containing more than 64 valid specifications') {
+            const owner = (await state.acquire(randomUUID(), 600))!
+            const key = await journal.define(owner, scope)
+            for (let n = 1; n <= 65; n++) {
+              await state.commit(owner, [
+                {
+                  key: 'scale-set/' + key.slice(6) + '/boxlite-1vcpu-1gbmem-' + n + 'gbdisk',
+                  expected: null,
+                  payload: {
+                    name: 'boxlite-' + randomUUID().replaceAll('-', ''),
+                    set: null,
+                    assigned: 0,
+                    held: 0,
+                    pending: [],
+                    message: null,
+                    session: null,
+                  },
+                },
+              ])
+            }
+            stop = start()
+            await until(() => fixture.sessions.length > 0 || errors.some((error) => error.includes('StateCorrupt')))
+            expect(fixture.sessions.length).toBeGreaterThan(0)
+            return
+          }
           if (scenario === 'returns an undispatched reservation for a deleted set') {
             const owner = (await state.acquire(randomUUID(), 600))!
             const originalScope = await journal.define(owner, scope)
@@ -362,7 +413,15 @@ for (const storage of ['sqlite', 'postgres'])
               {
                 key: 'scale-set/' + originalScope.slice(6) + '/boxlite',
                 expected: null,
-                payload: { name: 'boxlite-' + 'a'.repeat(32), set: 8, assigned: 1, message: null, session: null },
+                payload: {
+                  name: 'boxlite-' + 'a'.repeat(32),
+                  set: 8,
+                  assigned: 1,
+                  held: 0,
+                  pending: [],
+                  message: null,
+                  session: null,
+                },
               },
             ])
             const reservation = await journal.reserve(
@@ -464,6 +523,172 @@ for (const storage of ['sqlite', 'postgres'])
               if (fixture.acquired.some((ids) => ids.includes(124))) break
             }
             expect(fixture.acquired).toEqual([[123], [124]])
+            return
+          }
+          if (scenario === 'keeps the second hold after a delayed start confirms the first assignment') {
+            maximum = 2
+            fixture.publish(1, 0, [11, 12])
+            await until(() => fixture.acknowledged.includes(1))
+            await stop()
+            fixture.target = 1
+            stop = start()
+            await until(() => fixture.sessions.length === 2)
+            fixture.publish(2, 1, [13], [{ messageType: 'JobStarted', runnerRequestId: 11 }])
+            await until(() => fixture.acknowledged.includes(2))
+            fixture.publish(3, 1, [13])
+            await until(() => fixture.acknowledged.includes(3))
+            expect(fixture.acquired).toEqual([[11, 12]])
+            expect(await journal.used('tenant')).toBe(2)
+            return
+          }
+          if (scenario === 'preserves an uncertain acquisition still counted by Actions') {
+            maximum = 1
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [31])
+            await until(() => fixture.sessions.length === 2)
+            fixture.acquiredCount = 1
+            fixture.rejectAcquisition.add(31)
+            fixture.publish(1, 0, [31])
+            await until(() => fixture.acknowledged.includes(1))
+            fixture.publish(2, 0, [32])
+            await until(() => fixture.acknowledged.includes(2))
+            expect(fixture.acquired).toEqual([[31]])
+            expect(await journal.used('tenant')).toBe(1)
+            fixture.acquiredCount = 0
+            fixture.idle()
+            await until(async () => (await journal.used('tenant')) === 0)
+            fixture.publish(3, 0, [32])
+            await until(() => fixture.acknowledged.includes(3))
+            expect(fixture.acquired).toEqual([[31], [32]])
+            return
+          }
+          if (scenario === 'requires spare quota to reacquire one of several ambiguous requests') {
+            maximum = 2
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [31, 32])
+            await until(() => fixture.sessions.length === 2)
+            fixture.acquiredCount = 1
+            fixture.rejectAcquisition.add(31)
+            fixture.rejectAcquisition.add(32)
+            fixture.publish(1, 0, [31, 32])
+            await until(() => fixture.acknowledged.includes(1))
+            expect(await journal.used('tenant')).toBe(1)
+            maximum = 1
+            fixture.rejectAcquisition.delete(32)
+            fixture.publish(2, 0, [32])
+            await until(() => fixture.acknowledged.includes(2))
+            expect(fixture.acquired).toEqual([[31, 32]])
+            maximum = 2
+            for (const message of [3, 4, 5]) {
+              fixture.publish(message, 0, [32])
+              await until(() => fixture.acknowledged.includes(message))
+              if (fixture.acquired.length > 1) break
+            }
+            expect(fixture.acquired).toEqual([[31, 32], [32]])
+            expect(await journal.used('tenant')).toBe(2)
+            return
+          }
+          if (
+            scenario === 'uses the free slot after a partially accepted retry' ||
+            scenario === 'acquires a reoffered request excluded from a partial reply'
+          ) {
+            maximum = 2
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [31, 32])
+            await until(() => fixture.sessions.length === 2)
+            fixture.acquiredCount = 1
+            fixture.rejectAcquisition.add(32)
+            fixture.publish(1, 0, [31, 32])
+            await until(() => fixture.acknowledged.includes(1))
+            const next = scenario === 'acquires a reoffered request excluded from a partial reply' ? 32 : 33
+            fixture.rejectAcquisition.delete(next)
+            for (const message of [2, 3, 4]) {
+              fixture.publish(message, 0, [next])
+              await until(() => fixture.acknowledged.includes(message))
+              if (fixture.acquired.length > 1) break
+            }
+            expect(fixture.acquired).toEqual([[31, 32], [next]])
+            expect(await journal.used('tenant')).toBe(2)
+            return
+          }
+          if (scenario === 'releases a rejected redelivery for another offer') {
+            maximum = 1
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [31])
+            await until(() => fixture.sessions.length === 2)
+            fixture.rejectAcquisition.add(31)
+            fixture.publish(1, 0, [31])
+            await until(() => fixture.acknowledged.includes(1))
+            fixture.publish(2, 0, [32])
+            await until(() => fixture.acknowledged.includes(2))
+            expect(fixture.acquired).toEqual([[31], [32]])
+            expect(await journal.used('tenant')).toBe(1)
+            return
+          }
+          if (scenario === 'holds accepted quota through idle polls and an owner restart') {
+            maximum = 1
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.acknowledged.includes(1))
+            expect(fixture.acquired).toEqual([[123]])
+            const checkHold = async (id: number) => {
+              fixture.idle()
+              fixture.publish(id, 0, [124])
+              await until(() => fixture.acknowledged.includes(id))
+              expect(fixture.acquired).toEqual([[123]])
+              expect(await journal.used('tenant')).toBe(1)
+              expect(workers.create).not.toHaveBeenCalled()
+            }
+            await checkHold(2)
+            await stop()
+            stop = start()
+            await until(() => fixture.sessions.length === 2)
+            await checkHold(3)
+            fixture.publish(4, 0, [], [{ messageType: 'JobCompleted', runnerRequestId: 123 }])
+            await until(() => fixture.acknowledged.includes(4))
+            await until(async () => (await journal.used('tenant')) === 0)
+            fixture.publish(5, 0, [124])
+            await until(() => fixture.acknowledged.includes(5))
+            expect(fixture.acquired).toEqual([[123], [124]])
+            return
+          }
+          if (
+            scenario === 'releases an interrupted request omitted from the replacement session' ||
+            scenario === 'retains an interrupted acquisition that Actions still counts without a reoffer'
+          ) {
+            maximum = 1
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [31])
+            await until(() => fixture.sessions.length === 2)
+            const owned = scenario === 'retains an interrupted acquisition that Actions still counts without a reoffer'
+            fixture.acquiredCount = owned ? 1 : 0
+            fixture.idle()
+            fixture.publish(2, 0, [32])
+            await until(() => fixture.acknowledged.includes(2))
+            if (owned) {
+              expect(fixture.acquired).toEqual([])
+              expect(await journal.used('tenant')).toBe(1)
+              fixture.acquiredCount = 0
+              fixture.idle()
+            }
+            for (const message of [3, 4, 5]) {
+              fixture.publish(message, 0, [32])
+              await until(() => fixture.acknowledged.includes(message))
+              if (fixture.acquired.length) break
+            }
+            expect(fixture.acquired).toEqual([[32]])
+            expect(await journal.used('tenant')).toBe(1)
+            return
+          }
+          if (scenario === 'retries a redelivered offer with its original charged slot') {
+            maximum = 1
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.sessions.length === 2)
+            expect(await journal.used('tenant')).toBe(1)
+            fixture.publish(1, 0, [123, 124])
+            await until(() => fixture.acknowledged.includes(1))
+            expect(fixture.acquired).toEqual([[123]])
+            expect(await journal.used('tenant')).toBe(1)
             return
           }
           if (scenario === 'takes over after acquisition before the ledger commit') {
@@ -635,7 +860,7 @@ it('reserves one shared global slot for concurrent offers to two tenants', async
         lifetime.signal,
       )
       controllers.push(controller)
-      await controller.restore(['boxlite'])
+      await controller.restore()
     }
     await until(() => fixtures.every((f) => f.requests.includes('GET /messages')))
     for (const fixture of fixtures) fixture.publish(0, 0, [123])

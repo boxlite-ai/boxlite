@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { Json, Listener, ListenerState, scaleSetBindings } from '@boxlite-ai/ci-listener'
+import { Json, Listener, ListenerState } from '@boxlite-ai/ci-listener'
 import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
 import { BoxLiteWorkers } from './boxlite-workers'
 import { loadConfig } from './config'
@@ -63,7 +63,6 @@ async function main(): Promise<void> {
       host,
       worker: config.worker,
       capacity: new EnvironmentCapacity(config.max),
-      scaleSets: scaleSetBindings(config.scaleSetBindings),
     })
     const routes = new Map<string, { application: string; secret: Buffer }>()
     if (auth.kind === 'app')

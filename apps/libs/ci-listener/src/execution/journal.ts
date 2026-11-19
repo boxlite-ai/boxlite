@@ -242,34 +242,6 @@ export class ExecutionJournal {
     }
     return Math.max(0, free)
   }
-  async claimedRunners(lease: ExecutionLease, scope: ExecutionScope, ids: readonly number[]): Promise<Set<number>> {
-    const known = new Set<number>()
-    for (let offset = 0; offset < ids.length; offset += 100) {
-      const keys = ids.slice(offset, offset + 100).map((id) => `runner-claim/${scope.installation.id}/${id}`)
-      if (!keys.length) continue
-      for (const row of await this.state.read(keys, lease)) {
-        if (
-          !object(row.payload) ||
-          !positive(row.payload.repository) ||
-          !positive(row.payload.job) ||
-          !positive(row.payload.run) ||
-          !['in_progress', 'completed'].includes(row.payload.status as string) ||
-          (row.payload.ambiguous !== undefined && typeof row.payload.ambiguous !== 'boolean')
-        )
-          throw new StateCorrupt()
-        const repository = row.payload.repository
-        if (
-          scope.runners.kind === 'repository'
-            ? repository !== scope.runners.repository.id
-            : !scope.runners.repositories.includes(repository)
-        )
-          throw new StateCorrupt()
-        if (!row.payload.ambiguous) known.add(Number(row.key.split('/')[2]))
-      }
-    }
-    return known
-  }
-
   /** Dashboard aggregate: an entirely new domain has no usage; a broken pair is corruption. */
   async used(organization: string): Promise<number> {
     if (!organization || organization.length > 128) throw new Error('Invalid CI capacity organization')

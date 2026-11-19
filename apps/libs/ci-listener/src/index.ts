@@ -56,5 +56,3 @@ export { RepositoryScanQueue } from './compensation/queue'
 export type { ScanClaim } from './compensation/queue'
 export { GitHubRepositoryScanner } from './compensation/scanner'
 export type { RepositoryScanSession } from './compensation/scanner'
-
-export { scaleSetBindings } from './scale-set-controller'
