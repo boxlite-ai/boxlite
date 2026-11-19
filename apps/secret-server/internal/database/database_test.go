@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -165,7 +164,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	if !t.Run("concurrent migrations and newer schema", func(t *testing.T) {
-		databaseURL, err := testDatabaseURL(url, name)
+		databaseURL, err := testdb.DatabaseURL(url, name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -591,13 +590,18 @@ func testCipher(t *testing.T, key byte) *encryption.Cipher {
 
 func bytesOf(value byte, n int) []byte { return []byte(strings.Repeat(string([]byte{value}), n)) }
 
-func testDatabaseURL(raw, name string) (string, error) {
-	u, err := url.Parse(raw)
+func TestDatabaseURLOverridesQueryDatabase(t *testing.T) {
+	got, err := testdb.DatabaseURL("postgres://localhost/old?dbname=postgres&database=postgres&sslmode=disable", "isolated")
 	if err != nil {
-		return "", err
+		t.Fatal(err)
 	}
-	u.Path = "/" + name
-	return u.String(), nil
+	cfg, err := pgxpool.ParseConfig(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnConfig.Database != "isolated" || strings.Contains(got, "dbname=") || strings.Contains(got, "database=") || !strings.Contains(got, "sslmode=disable") {
+		t.Fatalf("fixture database URL = %q, database = %q", got, cfg.ConnConfig.Database)
+	}
 }
 
 func TestMigrationProcess(t *testing.T) {

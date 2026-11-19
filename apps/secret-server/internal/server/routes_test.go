@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,6 +56,38 @@ func TestRoutes(t *testing.T) {
 			}
 			if got := request("/internal/v1/write", "secret"); got != 404 {
 				t.Fatalf("unimplemented write: %d", got)
+			}
+		})
+	}
+}
+
+func TestHealthAndReadinessRejectOtherMethods(t *testing.T) {
+	handler := routes(Config{}, func(context.Context) error { t.Error("unexpected ping"); return nil }, nil)
+	for _, path := range []string{"/health", "/ready"} {
+		t.Run(path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+			if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET, HEAD" {
+				t.Fatalf("status = %d, Allow = %q", w.Code, w.Header().Get("Allow"))
+			}
+		})
+	}
+}
+
+func TestDatabaseErrorCategories(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"timeout", context.DeadlineExceeded, "database connection timed out"},
+		{"canceled", context.Canceled, "database connection canceled"},
+		{"rejected", &pgconn.PgError{Code: "28P01", Message: "secret-marker"}, "database connection rejected (SQLSTATE 28P01)"},
+		{"network", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("secret-marker")}, "database network connection failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := databaseError(tc.err).Error(); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})
 	}

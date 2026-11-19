@@ -102,6 +102,43 @@ func TestMigrateUsesDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestMigrateInvalidURLRedactsPassword(t *testing.T) {
+	const password = "fixture-password-marker"
+	t.Setenv("DATABASE_URL", "postgres://localhost:999999/db?password="+password)
+	err := run(context.Background(), []string{"migrate"})
+	if err == nil || strings.Contains(err.Error(), password) {
+		t.Fatalf("migration configuration error = %v; password must be redacted", err)
+	}
+}
+
+func TestIntegration(t *testing.T) {
+	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("SECRET_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	_, databaseURL := testdb.Create(t, ctx, admin, dsn, false)
+	t.Setenv("DATABASE_URL", databaseURL)
+	if err := run(ctx, []string{"migrate"}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var exists bool
+	if err := pool.QueryRow(ctx, "SELECT to_regclass('goose_db_version') IS NOT NULL").Scan(&exists); err != nil || !exists {
+		t.Fatalf("migration table exists = %v, error = %v", exists, err)
+	}
+}
+
 func TestMigrateSIGTERM(t *testing.T) {
 	if os.Getenv("SECRET_TEST_SIGNAL_CHILD") == "1" {
 		os.Args = []string{"secret-server", "migrate"}

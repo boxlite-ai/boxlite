@@ -56,12 +56,18 @@ func TestStartupRejectsWrongPersistentKey(t *testing.T) {
 }
 
 func TestPostgresStartupAndReadiness(t *testing.T) {
-	databaseURL := os.Getenv("SECRET_SERVER_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("SECRET_SERVER_TEST_DATABASE_URL is not set")
+	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("SECRET_TEST_DATABASE_URL is not set")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	_, databaseURL := testdb.Create(t, ctx, admin, dsn, false)
 	c := Config{Role: "write", Environment: "local", DatabaseURL: databaseURL, KeyID: "env:test", Key: base64.StdEncoding.EncodeToString(make([]byte, 32)), AuthMode: "dev", DevToken: "integration-token", Port: "0", ShutdownTimeout: 5 * time.Second}
 	s, err := New(ctx, c)
 	if err != nil {

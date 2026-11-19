@@ -35,10 +35,24 @@ func Create(t *testing.T, ctx context.Context, admin *pgxpool.Pool, dsn string, 
 			t.Errorf("drop test database: %v", err)
 		}
 	})
-	u, err := url.Parse(dsn)
+	databaseURL, err := DatabaseURL(dsn, name)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return name, databaseURL
+}
+
+// DatabaseURL selects the test database while preserving other connection options.
+func DatabaseURL(raw, name string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
 	u.Path = "/" + name
-	return name, u.String()
+	u.RawPath = ""
+	q := u.Query()
+	q.Del("dbname")
+	q.Del("database")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }

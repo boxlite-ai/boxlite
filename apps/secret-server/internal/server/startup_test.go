@@ -33,3 +33,11 @@ func TestStartupRejectsUnavailableDatabaseWithoutLeakingDSN(t *testing.T) {
 		t.Fatalf("database startup error = %v", err)
 	}
 }
+
+func TestStartupRejectsInvalidKeyID(t *testing.T) {
+	c := Config{KeyID: "invalid-key-id", Key: base64.StdEncoding.EncodeToString(make([]byte, 32))}
+	s, err := New(context.Background(), c)
+	if s != nil || err == nil || !strings.Contains(err.Error(), "SECRET_MASTER_KEY_ID") {
+		t.Fatalf("New with invalid key ID = %v, %v", s, err)
+	}
+}

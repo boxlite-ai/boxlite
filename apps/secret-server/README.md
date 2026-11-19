@@ -38,9 +38,9 @@ to `write`; set `SECRET_SERVER_ROLE=fetch` to select fetch. Do not commit or pri
 the key or token. The local database must use the same key across restarts.
 
 To exercise startup and readiness against a disposable PostgreSQL database, set
-`SECRET_SERVER_TEST_DATABASE_URL` and run `make test:apps:secret-server`. The
-integration test is skipped when this variable is absent. The database must be
-disposable because initialization creates persistent state.
+`SECRET_TEST_DATABASE_URL` and run `make test:apps:secret-server`. Integration
+tests are skipped when this variable is absent. The configured user must be able
+to create and drop temporary databases.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
@@ -251,9 +251,9 @@ make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=
 ```
 
 The unit test target runs with the race detector and `GOWORK=off`. The integration
-target requires infra-local PostgreSQL and permission to create a temporary database.
-It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
-creates a uniquely named database and drops it after the test.
+target requires PostgreSQL and permission to create a temporary database. Set
+`SECRET_TEST_DATABASE_URL` to run it; without that variable, integration tests
+are skipped. Tests create uniquely named databases and drop them afterward.
 The coverage target runs the same tests and writes `target/coverage/secret-server-integration.out`.
 Database and command tests share the temporary database setup and cleanup helper.
 It also checks that SIGTERM cancels the migration command while it waits for a lock.
