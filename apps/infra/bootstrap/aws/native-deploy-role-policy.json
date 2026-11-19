@@ -2,9 +2,36 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "RegistryLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "StageRepository",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:CompleteLayerUpload",
+        "ecr:CreateRepository",
+        "ecr:DescribeImageScanFindings",
+        "ecr:DescribeImages",
+        "ecr:DescribeRepositories",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "arn:aws:ecr:<REGION>:<ACCOUNT>:repository/<ECR_REPOSITORY>"
+    },
+    {
       "Sid": "CreateCloudMapPrivateZone",
       "Effect": "Allow",
-      "Action": ["route53:CreateHostedZone", "route53:ListHostedZonesByName"],
+      "Action": [
+        "route53:CreateHostedZone",
+        "route53:ListHostedZonesByName"
+      ],
       "Resource": "*"
     },
     {
@@ -24,7 +51,6 @@
         "cloudfront-keyvaluestore:*",
         "cloudwatch:*",
         "ec2:*",
-        "ecr:*",
         "ecs:*",
         "elasticache:*",
         "elasticloadbalancing:*",
@@ -45,19 +71,24 @@
       "Effect": "Allow",
       "Action": "secretsmanager:*",
       "Resource": [
-        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:<APP>-<STAGE>-*",
-        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:boxlite-<STAGE>-*",
-        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:registry-credential-<APP>-<STAGE>-*"
+        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:boxlite/workloads/<APP>/<STAGE>/*",
+        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:registry-credential-<APP>_<STAGE>_-*"
       ]
     },
     {
       "Sid": "NativeStateBucketRead",
       "Effect": "Allow",
-      "Action": ["s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation"],
-      "Resource": ["arn:aws:s3:::<STATE_BUCKET>"]
+      "Action": [
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": [
+        "arn:aws:s3:::<STATE_BUCKET>"
+      ]
     },
     {
-      "Sid": "NativeStateAndOwnership",
+      "Sid": "NativeState",
       "Effect": "Allow",
       "Action": [
         "s3:AbortMultipartUpload",
@@ -73,24 +104,18 @@
         "arn:aws:s3:::<STATE_BUCKET>/.pulumi/history/<APP>/<STAGE>/*",
         "arn:aws:s3:::<STATE_BUCKET>/.pulumi/backups/<APP>/<STAGE>/*",
         "arn:aws:s3:::<STATE_BUCKET>/.pulumi/locks/organization/<APP>/<STAGE>/*",
-        "arn:aws:s3:::<STATE_BUCKET>/migration/aws/<STAGE>/*",
         "arn:aws:s3:::<STATE_BUCKET>/secret/<APP>/<STAGE>.json"
       ]
     },
     {
       "Sid": "RunnerRollout",
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
-      "Resource": ["arn:aws:s3:::<STATE_BUCKET>/rollouts/aws/<APP>/<STAGE>/<REGION>/i-*.json"]
-    },
-    {
-      "Sid": "LegacyCheckpointEvidence",
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
       "Resource": [
-        "arn:aws:s3:::<STATE_BUCKET>/app/boxlite/<STAGE>.json",
-        "arn:aws:s3:::<STATE_BUCKET>/app/<APP>/<STAGE>.json",
-        "arn:aws:s3:::<STATE_BUCKET>/secret/boxlite/<STAGE>.json"
+        "arn:aws:s3:::<STATE_BUCKET>/rollouts/aws/<APP>/<STAGE>/<REGION>/i-*.json"
       ]
     },
     {
@@ -98,22 +123,27 @@
       "Effect": "Allow",
       "Action": "s3:*",
       "Resource": [
-        "arn:aws:s3:::<APP>-<STAGE>-*",
-        "arn:aws:s3:::<APP>-<STAGE>-*/*",
-        "arn:aws:s3:::boxlite-<STAGE>-*",
-        "arn:aws:s3:::boxlite-<STAGE>-*/*",
-        "arn:aws:s3:::<VOLUME_PREFIX>-*",
-        "arn:aws:s3:::<VOLUME_PREFIX>-*/*"
+        "arn:aws:s3:::<ARTIFACT_BUCKET>",
+        "arn:aws:s3:::<ARTIFACT_BUCKET>/*",
+        "arn:aws:s3:::<STORAGE_BUCKET>",
+        "arn:aws:s3:::<STORAGE_BUCKET>/*",
+        "arn:aws:s3:::<CHECKPOINT_BUCKET>",
+        "arn:aws:s3:::<CHECKPOINT_BUCKET>/*"
       ]
     },
     {
-      "Sid": "SstSharedBootstrapRead",
+      "Sid": "ReadRegionalBootstrap",
       "Effect": "Allow",
-      "Action": ["ssm:GetParameter", "ssm:GetParameters"],
-      "Resource": ["arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/sst/bootstrap"]
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/boxlite/pulumi/bootstrap"
+      ]
     },
     {
-      "Sid": "SstParametersForThisStage",
+      "Sid": "StageParameters",
       "Effect": "Allow",
       "Action": [
         "ssm:GetParameter",
@@ -124,15 +154,9 @@
         "ssm:ListTagsForResource"
       ],
       "Resource": [
-        "arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/sst/passphrase/<APP>/<STAGE>",
-        "arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/boxlite/<STAGE>/*"
+        "arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/boxlite/pulumi/passphrase/<APP>/<STAGE>",
+        "arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/boxlite/workloads/<APP>/<STAGE>/*"
       ]
-    },
-    {
-      "Sid": "LegacyConfigurationPassphrase",
-      "Effect": "Allow",
-      "Action": ["ssm:GetParameter", "ssm:GetParameters"],
-      "Resource": ["arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/sst/passphrase/boxlite/<STAGE>"]
     },
     {
       "Sid": "BoxLiteMailIdentity",
@@ -165,14 +189,21 @@
     {
       "Sid": "ReadMailIdentityVerification",
       "Effect": "Allow",
-      "Action": ["ses:GetIdentityVerificationAttributes"],
+      "Action": [
+        "ses:GetIdentityVerificationAttributes"
+      ],
       "Resource": "*"
     },
     {
       "Sid": "RunnerCommandChannel",
       "Effect": "Allow",
-      "Action": ["ssm:SendCommand"],
-      "Resource": ["arn:aws:ec2:<REGION>:<ACCOUNT>:instance/*", "arn:aws:ssm:<REGION>::document/AWS-RunShellScript"]
+      "Action": [
+        "ssm:SendCommand"
+      ],
+      "Resource": [
+        "arn:aws:ec2:<REGION>:<ACCOUNT>:instance/*",
+        "arn:aws:ssm:<REGION>::document/AWS-RunShellScript"
+      ]
     },
     {
       "Sid": "RunnerCommandStatus",
@@ -208,7 +239,10 @@
       "Sid": "CreateBoundedBoxLiteRoles",
       "Effect": "Allow",
       "Action": "iam:CreateRole",
-      "Resource": ["arn:aws:iam::<ACCOUNT>:role/<APP>-<STAGE>-*", "arn:aws:iam::<ACCOUNT>:role/boxlite-<STAGE>-*"],
+      "Resource": [
+        "arn:aws:iam::<ACCOUNT>:role/<APP>-<STAGE>-*",
+        "arn:aws:iam::<ACCOUNT>:role/boxlite-<STAGE>-*"
+      ],
       "Condition": {
         "StringEquals": {
           "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT>:policy/<APP>-<STAGE>-runtime-boundary"
@@ -277,7 +311,10 @@
       "Sid": "SetBoxLiteRoleBoundary",
       "Effect": "Allow",
       "Action": "iam:PutRolePermissionsBoundary",
-      "Resource": ["arn:aws:iam::<ACCOUNT>:role/<APP>-<STAGE>-*", "arn:aws:iam::<ACCOUNT>:role/boxlite-<STAGE>-*"],
+      "Resource": [
+        "arn:aws:iam::<ACCOUNT>:role/<APP>-<STAGE>-*",
+        "arn:aws:iam::<ACCOUNT>:role/boxlite-<STAGE>-*"
+      ],
       "Condition": {
         "StringEquals": {
           "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT>:policy/<APP>-<STAGE>-runtime-boundary"
@@ -296,7 +333,10 @@
         "iam:TagPolicy",
         "iam:UntagPolicy"
       ],
-      "Resource": ["arn:aws:iam::<ACCOUNT>:policy/<APP>-<STAGE>-*", "arn:aws:iam::<ACCOUNT>:policy/boxlite-<STAGE>-*"]
+      "Resource": [
+        "arn:aws:iam::<ACCOUNT>:policy/<APP>-<STAGE>-*",
+        "arn:aws:iam::<ACCOUNT>:policy/boxlite-<STAGE>-*"
+      ]
     },
     {
       "Sid": "CreateRequiredServiceLinkedRoles",
@@ -309,6 +349,7 @@
             "autoscaling.amazonaws.com",
             "elasticache.amazonaws.com",
             "ecs.amazonaws.com",
+            "ecs.application-autoscaling.amazonaws.com",
             "elasticloadbalancing.amazonaws.com",
             "rds.amazonaws.com"
           ]

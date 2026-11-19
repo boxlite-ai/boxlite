@@ -1,14 +1,12 @@
 {
   "Version": "2012-10-17",
   "Statement": [
+    {"Sid": "PullStageImages", "Effect": "Allow", "Action": ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource": "arn:aws:ecr:<REGION>:<ACCOUNT>:repository/<ECR_REPOSITORY>"},
     {
       "Sid": "RuntimeAccountWideControlChannels",
       "Effect": "Allow",
       "Action": [
         "ecr:GetAuthorizationToken",
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:BatchGetImage",
-        "ecr:GetDownloadUrlForLayer",
         "logs:CreateLogGroup",
         "logs:CreateLogStream",
         "logs:DescribeLogGroups",
@@ -19,8 +17,6 @@
         "ssm:GetDeployablePatchSnapshotForInstance",
         "ssm:GetDocument",
         "ssm:GetManifest",
-        "ssm:GetParameter",
-        "ssm:GetParameters",
         "ssm:ListAssociations",
         "ssm:ListInstanceAssociations",
         "ssm:PutComplianceItems",
@@ -43,12 +39,17 @@
       "Resource": "*"
     },
     {
+      "Sid": "ReadStageWorkloadParameters",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters"],
+      "Resource": "arn:aws:ssm:<REGION>:<ACCOUNT>:parameter/boxlite/workloads/<APP>/<STAGE>/*"
+    },
+    {
       "Sid": "BoxLiteStageSecrets",
       "Effect": "Allow",
       "Action": ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"],
       "Resource": [
-        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:boxlite-<STAGE>-*",
-        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:<APP>-<STAGE>-*"
+        "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:boxlite/workloads/<APP>/<STAGE>/*"
       ]
     },
     {
@@ -75,7 +76,7 @@
         "s3:GetBucketTagging",
         "s3:ListBucketMultipartUploads"
       ],
-      "Resource": ["arn:aws:s3:::boxlite-<STAGE>-*", "arn:aws:s3:::<APP>-<STAGE>-*", "arn:aws:s3:::<VOLUME_PREFIX>-*"]
+      "Resource": ["arn:aws:s3:::<ARTIFACT_BUCKET>", "arn:aws:s3:::<STORAGE_BUCKET>", "arn:aws:s3:::<CHECKPOINT_BUCKET>", "arn:aws:s3:::<VOLUME_PREFIX>-*"]
     },
     {
       "Sid": "BoxLiteBucketObjects",
@@ -89,8 +90,8 @@
         "s3:ListMultipartUploadParts"
       ],
       "Resource": [
-        "arn:aws:s3:::boxlite-<STAGE>-*/*",
-        "arn:aws:s3:::<APP>-<STAGE>-*/*",
+        "arn:aws:s3:::<ARTIFACT_BUCKET>/*",
+        "arn:aws:s3:::<STORAGE_BUCKET>/*", "arn:aws:s3:::<CHECKPOINT_BUCKET>/*",
         "arn:aws:s3:::<VOLUME_PREFIX>-*/*"
       ]
     },
@@ -109,7 +110,7 @@
         "secretsmanager:GetSecretValue",
         "secretsmanager:DeleteSecret"
       ],
-      "Resource": "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:registry-credential-<APP>-<STAGE>-*"
+      "Resource": "arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:registry-credential-<APP>_<STAGE>_-*"
     },
     {
       "Sid": "RunnerDiskInspection",

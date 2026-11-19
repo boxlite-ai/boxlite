@@ -40,7 +40,7 @@ const bucket = ({ lock, meanwhile }: { lock?: string; meanwhile?: () => void } =
   const clients = {
     ssm: {
       send: async (command: any) => {
-        if (command.input.Name === '/sst/bootstrap') {
+        if (command.input.Name === '/boxlite/pulumi/bootstrap') {
           return { Parameter: { Value: JSON.stringify({ state: STATE_BUCKET }) } }
         }
         throw notFound('ParameterNotFound')

@@ -27,6 +27,7 @@ export const deploymentComponents = ({
 export type DeployedResource = {
   urn: string
   type: string
+  protect?: boolean
   delete?: boolean
   id?: string
   inputs?: {

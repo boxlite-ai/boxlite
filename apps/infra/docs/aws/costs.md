@@ -6,8 +6,7 @@ Budget for AWS hosting, state, storage, networking and operational services acco
 
 [Cloud guide](README.md) · [Infrastructure index](../../README.md)
 
-This inventory follows the [AWS provider](../../mdeploy/stack/providers/aws/) and retained
-[legacy stack](../../stack/); it is not a live bill or a fixed monthly estimate.
+This inventory lists resources provisioned by the [AWS provider](../../mdeploy/stack/providers/aws/).
 
 | Resource family | BoxLite use |
 | --- | --- |

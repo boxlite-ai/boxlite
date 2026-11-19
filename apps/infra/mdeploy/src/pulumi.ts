@@ -1,11 +1,8 @@
-import { deployedReleases } from './deployed-releases.ts'
 /** Pulumi drives both clouds; configuration and deployment state share the stage's own cloud. */
 
-import { isDeepStrictEqual } from 'node:util'
-import type { EngineEvent, StepEventMetadata } from '@pulumi/pulumi/automation/index.js'
+import type { EngineEvent } from '@pulumi/pulumi/automation/index.js'
 import { gcpProgram, type ProgramOutputs } from '../pulumi/program.ts'
 import { awsProgram } from '../pulumi/aws-program.ts'
-import { assertAwsMigrationReady } from './aws-migration.ts'
 import { publicHostsFor } from '../stack/api.ts'
 import { userDomainFrom } from './stack-env.ts'
 import {
@@ -142,12 +139,37 @@ export const createStack: StackFactory = async ({
   }
   const stack = { stackName, projectName, program }
   const workspace = {
+    ...(backendUrl.startsWith('s3://') && { pulumiCommand: await awsPulumiCommand(automation, envVars) }),
     envVars,
     projectSettings: { name: projectName, runtime: 'nodejs', backend: { url: backendUrl } },
   }
   return selectOnly
     ? automation.LocalWorkspace.selectStack(stack, workspace)
     : automation.LocalWorkspace.createOrSelectStack(stack, workspace)
+}
+
+// The SDK can prepare an update after the deadline and attaches its abort listener after spawn.
+async function awsPulumiCommand(automation: any, envVars: Record<string, string>) {
+  const cli = await automation.PulumiCommand.get({
+    skipVersionCheck: Boolean(
+      envVars.PULUMI_AUTOMATION_API_SKIP_VERSION_CHECK || process.env.PULUMI_AUTOMATION_API_SKIP_VERSION_CHECK,
+    ),
+  })
+  return {
+    command: cli.command,
+    version: cli.version,
+    run(
+      args: string[],
+      cwd: string,
+      env: Record<string, string>,
+      onOutput?: (line: string) => void,
+      onError?: (line: string) => void,
+      signal?: AbortSignal,
+    ) {
+      signal?.throwIfAborted()
+      return cli.run(args, cwd, env, onOutput, onError, signal)
+    },
+  }
 }
 
 export type PulumiDeployInput = {
@@ -168,8 +190,6 @@ export type PulumiDeployInput = {
   stageEnvironment?: Record<string, string>
   log: (line: string) => void
   createStackWith?: StackFactory
-  beforeMutation?: () => Promise<void>
-  ownershipSignal?: AbortSignal
   /**
    * Who answers what the project already holds for this stage's API host.
    *
@@ -194,8 +214,6 @@ export const pulumiDeploy = async ({
   log,
   createStackWith = createStack,
   lookupAuthorizations,
-  beforeMutation,
-  ownershipSignal,
 }: PulumiDeployInput): Promise<number> => {
   deploymentComponents({ value: components, home: scope.home, intent })
   /*
@@ -266,27 +284,14 @@ export const pulumiDeploy = async ({
     })
   }
 
-  let resources: DeployedResource[] = []
+  const common = { app, stage, region: scope.region, environment, cwd: config.root }
   const stack = await createStackWith({
     projectName: app,
     stackName: stage,
-    program: async () => {
-      const retained =
-        components === 'api+runner'
-          ? undefined
-          : deployedReleases({ components, home: scope.home, app, stage, resources })
-      const common = {
-        app,
-        stage,
-        region: scope.region,
-        environment: { ...environment, ...retained?.releaseEnvironment },
-        cwd: config.root,
-        retainedImages: retained?.retainedImages,
-      }
-      return scope.home === 'aws'
-        ? awsProgram({ ...common, stateBucket: state.bucket, protectedStage: scope.protect })()
-        : gcpProgram({ ...common, project: project!, zone: scope.zone })()
-    },
+    program:
+      scope.home === 'aws'
+        ? awsProgram({ ...common, stateBucket: state.bucket, protectedStage: scope.protect })
+        : gcpProgram({ ...common, project: project!, zone: scope.zone }),
     /*
      * The whole stage environment, not only the credentials and the passphrase.
      * The engine spawns a provider plugin per provider, and those are the
@@ -298,8 +303,18 @@ export const pulumiDeploy = async ({
     ...(components === 'api+runner' ? {} : { selectOnly: true }),
   })
 
-  // Keep exported inputs in memory for the inline program. They can contain secrets.
-  if (components !== 'api+runner') resources = (await stack.exportStack()).deployment?.resources ?? []
+  let resources: DeployedResource[] = []
+  if (components !== 'api+runner' || (scope.home === 'aws' && intent === 'remove')) {
+    const checkpoint = await stack.exportStack()
+    if (!Array.isArray(checkpoint.deployment?.resources))
+      throw new PulumiDeployError('Cannot inspect the current stack resources')
+    resources = checkpoint.deployment.resources
+  }
+  if (scope.home === 'aws' && intent === 'remove' && resources.some((resource) => resource.protect)) {
+    throw new PulumiDeployError(
+      'Protected resources remain; follow the retained-data teardown in docs/aws/deployment.md#retained-data-teardown before removal',
+    )
+  }
   const targets =
     components === 'api+runner'
       ? undefined
@@ -341,20 +356,13 @@ export const pulumiDeploy = async ({
     120 * 60_000,
     expiresAt ? Math.max(1, expiresAt.getTime() - Date.now() - 60_000) : Infinity,
   )
-  const signal =
-    scope.home === 'aws'
-      ? AbortSignal.any([AbortSignal.timeout(deadlineMs), ...(ownershipSignal ? [ownershipSignal] : [])])
-      : undefined
+  const signal = scope.home === 'aws' ? AbortSignal.timeout(deadlineMs) : undefined
   try {
-    if (targets) {
-      await previewComponentChanges({ stack, targets, onOutput, signal })
-      if (intent === 'diff') return 0
-    }
     signal?.throwIfAborted()
-    if (intent !== 'diff') await beforeMutation?.()
     await ACT[intent](stack, {
       onOutput,
       ...(signal ? { signal } : {}),
+      ...(targets || (scope.home === 'aws' && intent === 'deploy') ? { refresh: true } : {}),
       ...(targets ? { target: targets, targetDependents: false } : {}),
     })
     return 0
@@ -364,54 +372,6 @@ export const pulumiDeploy = async ({
     log(`pulumi ${intent} failed for ${app} stage ${stage}: ${(error as Error).message}`)
     return 1
   }
-}
-
-/** Inspect the entire refreshed graph before restricting an apply to selected resources. */
-export const previewComponentChanges = async ({
-  stack,
-  targets,
-  onOutput,
-  signal,
-}: {
-  stack: PulumiStack
-  targets: string[]
-  onOutput: (output: string) => void
-  signal?: AbortSignal
-}): Promise<void> => {
-  const violations = new Set<string>()
-  let summary = false
-  const allowed = (urn: string) =>
-    targets.some((pattern) => (pattern.endsWith('*') ? urn.startsWith(pattern.slice(0, -1)) : urn === pattern))
-  const inspect = (metadata: StepEventMetadata, refreshed: boolean) => {
-    if (metadata.type === 'pulumi:pulumi:Stack' || metadata.op === 'same' || metadata.op === 'read') return
-    if (metadata.op === 'refresh') {
-      if (!refreshed) return
-      if (
-        metadata.old &&
-        metadata.new &&
-        isDeepStrictEqual(metadata.old.inputs, metadata.new.inputs) &&
-        isDeepStrictEqual(metadata.old.outputs, metadata.new.outputs) &&
-        metadata.old.id === metadata.new.id
-      )
-        return
-    }
-    if (!allowed(metadata.urn)) violations.add(metadata.urn + ' (' + metadata.op + ')')
-  }
-  await stack.preview({
-    refresh: true,
-    onOutput,
-    ...(signal ? { signal } : {}),
-    onEvent: (event) => {
-      if (event.summaryEvent) summary = true
-      if (event.resourcePreEvent) inspect(event.resourcePreEvent.metadata, false)
-      if (event.resOutputsEvent) inspect(event.resOutputsEvent.metadata, true)
-    },
-  })
-  if (!summary) throw new PulumiDeployError('Scoped deployment received no complete preview evidence; refusing apply')
-  if (violations.size)
-    throw new PulumiDeployError(
-      'Scoped deployment includes shared resource changes; use api+runner: ' + [...violations].sort().join(', '),
-    )
 }
 
 export type PulumiTargetInput = {
@@ -445,37 +405,16 @@ const cloudTarget = (
 
   async run({ intent = 'deploy', components, stageEnvironment = {}, log }: DeployRequest): Promise<number> {
     deploymentComponents({ value: components, home: cloud, intent })
-    if (cloud === 'aws')
-      await assertAwsMigrationReady({
-        backend,
-        app: scope.app as string,
-        stage: scope.stage as string,
-        intent,
-        environment: stageEnvironment,
-      })
-    // Resolve once, before leasing; previews remain available during adoption.
-    const bucket = await stateBucket()
-    const execute = (beforeMutation?: () => Promise<void>, ownershipSignal?: AbortSignal) =>
-      pulumiDeploy({
-        intent,
-        components,
-        config,
-        scope,
-        identity,
-        state: { bucket },
-        stageEnvironment,
-        log,
-        beforeMutation,
-        ownershipSignal,
-        ...(createStackWith ? { createStackWith } : {}),
-      })
-    if (cloud !== 'aws' || intent === 'diff') return execute()
-    if (!backend.ownership) throw new Error('AWS backend has no deployment ownership guard')
-    return backend.ownership.run({ app: scope.app!, stage: scope.stage!, action: 'native' }, async (lease) => {
-      const result = await execute(lease.markNativeUpdateStarted, lease.signal)
-      if (result !== 0)
-        throw new Error('AWS deployment failed; reconcile cloud work before recovering the ownership lease')
-      return result
+    return pulumiDeploy({
+      intent,
+      components,
+      config,
+      scope,
+      identity,
+      stageEnvironment,
+      log,
+      state: { bucket: await stateBucket() },
+      ...(createStackWith ? { createStackWith } : {}),
     })
   },
 })

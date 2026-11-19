@@ -18,7 +18,6 @@ AWS runtime roles are bounded, but several bootstrap grants intentionally reach 
 The encrypted stage map lives in S3, with its passphrase in SSM; native Pulumi checkpoints use separate keys in that bucket.
 Follow the shared [secret-handling and resource-protection rules](../security.md).
 Inspect live GitHub Environment reviewers and OIDC trust separately from workflow declarations.
-Existing SST stages require the [ownership and IAM fence](migration.md).
 
 ## Policy scope and shared grants
 
@@ -32,15 +31,16 @@ stage state, secrets and runtime IAM resources, while some permissions remain sh
 | SES `identity/*` management | Sender domains are not stage-named resources |
 | List operations and shared bootstrap reads | May reveal names/metadata without granting secret-value access |
 
-A runtime permissions boundary caps a role's grants; it does not grant access by itself.
-The retained legacy role also grants shared `sst-asset-*` bucket writes.
-Its wrapper additionally hydrates its `BOXLITE_STAGE_CONFIG` manifest and removes
-Pulumi event logs.
+The deployment role manages the named storage, checkpoint and Runner artifact buckets for its stage. Runner promotion reads objects under `runner/` in the declared source bucket. Copies transfer the archive and checksum bytes across the configured regions.
 
-Those legacy controls should not be attributed to every mdeploy invocation.
-Runner updates use [SSM](runners.md). The legacy deployment also has a runner policy pack and scope restrictions.
+A runtime permissions boundary caps a role's grants; it does not grant access by itself.
+Runner updates use [SSM](runners.md).
 
 The native deploy role can read and conditionally update Runner rollout records under its app, stage and region in the versioned state bucket. Runner instance roles need no access to these records.
+
+Workload secret ARNs must belong to the stage account and region. Secrets Manager names start with `boxlite/workloads/<app>/<stage>/`; SSM parameter names use the same path with a leading slash. Each stage has a separate registry credential prefix.
+
+The deployer can write images to its declared ECR repository. A configured `promoteFrom` source grants read access to its ECR repository and Runner artifacts under `runner/` in its S3 bucket.
 
 Registry task identities can read pinned credential versions but cannot write credentials.
 The API can create/write/revoke those credentials without reading their values or changing resource policies.
@@ -48,7 +48,7 @@ The API can create/write/revoke those credentials without reading their values o
 Checkpoint grants target the dedicated bucket and checkpoint prefix.
 EBS modifications require matching app, stage and Runner-data tags; application checks also bind each volume to its trusted Runner name.
 
-Sources: [bootstrap policies](../../bootstrap/aws/), [runtime defaults](../../mdeploy/pulumi/aws-defaults.ts), [legacy wrapper](../../deployment/sst.ts).
+Sources: [bootstrap policies](../../bootstrap/aws/), [runtime defaults](../../mdeploy/pulumi/aws-defaults.ts).
 
 The API emits `runner.unreachable` after a failed Runner health check is recorded. Continued v2 heartbeat loss supplies samples for alarms that require multiple breached periods.
 Disk expansion and pressure filters consume the existing structured events.

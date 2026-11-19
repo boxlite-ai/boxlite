@@ -310,9 +310,7 @@ Run them with `make test:apps:mdeploy`; workflow lint alone does not exercise lo
 
 `setup-infra` saves an exact dependency-cache miss immediately after `npm ci`,
 using the key recorded by its restore step. Callers may then change their checkout.
-The deployment action saves a generated SST platform after use, before returning to its caller.
-
-Both caches use `v2` namespaces and exact keys; stage state and configuration stay outside their paths.
+The dependency cache uses an exact `v2` key and contains only installed packages.
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
 `build-guest` and `run-in-manylinux` run after both. They are separate actions rather than one
@@ -444,12 +442,8 @@ Stage declarations travel through `BOXLITE_MSTAGE_BOXLITE_APP_CONFIG` on the mat
 | --- | --- |
 | GCP | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOYER`, `GCP_IMAGE_PUBLISHER` Environment variables |
 | AWS | `AWS_PULUMI_DEPLOY_ROLE_ARN`, `AWS_ACCOUNT_ID`, `AWS_REGION` Environment variables |
-| Legacy AWS wrapper | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID` Environment secrets |
 
-mdeploy reads application values from the encrypted stage store through mstage. The retained legacy
-AWS wrapper uses its SST manifest and bootstrap credential copies. Native AWS bootstrap follows the declared app and prepares a distinct Pulumi role.
-
-Existing SST stages require the [adoption runbook](../../apps/infra/docs/aws/migration.md) before switching.
+mdeploy reads application values from the encrypted stage store through mstage. AWS bootstrap prepares the stage's native Pulumi role, state bucket and immutable release repository.
 
 [Configuration](../../apps/infra/docs/configuration.md) explains groups, digests and secret handling;
 [security](../../apps/infra/docs/security.md) distinguishes workflow gates from live IAM and Environment settings.

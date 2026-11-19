@@ -1,10 +1,10 @@
 import type { RegistryCredentialStore } from '../../registry-credentials.ts'
-import { instanceFor } from 'naming'
 
 export const awsRegistryCredentialStoreProvider =
   ({ accountId, region }: { accountId: string; region: string }) =>
   (): RegistryCredentialStore => {
-    const prefix = 'registry-credential-' + instanceFor({ app: $app.name, stage: $app.stage }) + '-'
+    // Registry consumers require a flat name ending in a hyphen. Stage names cannot contain underscores.
+    const prefix = `registry-credential-${$app.name}_${$app.stage}_-`
     const arn = `arn:aws:secretsmanager:${region}:${accountId}:secret:${prefix}*`
     return {
       active: true,

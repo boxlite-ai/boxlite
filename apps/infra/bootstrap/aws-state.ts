@@ -12,7 +12,7 @@ import { setValues, type Clients } from 'mstage/env'
 const missing = (error: any) =>
   ['ParameterNotFound', 'NotFound', 'NoSuchBucket'].includes(error?.name) || error?.$metadata?.httpStatusCode === 404
 
-/** Bootstrap the established environment envelope without installing or invoking SST. */
+/** Create the regional state bucket and initialize an encrypted configuration for this stage. */
 export const bootstrapAwsState = async ({
   clients,
   app,
@@ -43,11 +43,11 @@ export const bootstrapAwsState = async ({
       throw error
     }
   }
-  let stored = await parameter('/sst/bootstrap')
-  let bucket = `boxlite-state-${region}-${accountId}`
+  let stored = await parameter('/boxlite/pulumi/bootstrap')
+  let bucket = `boxlite-pulumi-state-${region}-${accountId}`
   if (stored) {
     const bootstrap = JSON.parse(stored)
-    if (typeof bootstrap.state !== 'string') throw new Error('/sst/bootstrap names no state bucket')
+    if (typeof bootstrap.state !== 'string') throw new Error('/boxlite/pulumi/bootstrap names no state bucket')
     bucket = bootstrap.state
   }
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new Error('Invalid AWS state bucket')
@@ -55,6 +55,10 @@ export const bootstrapAwsState = async ({
     await clients.s3.send(new HeadBucketCommand({ Bucket: bucket }))
   } catch (error) {
     if (!missing(error)) throw error
+    if (stored)
+      throw new Error(`Recorded state bucket ${bucket} is missing; restore the state bucket before bootstrap`, {
+        cause: error,
+      })
     try {
       await clients.s3.send(
         new CreateBucketCommand({
@@ -92,7 +96,7 @@ export const bootstrapAwsState = async ({
     try {
       await clients.ssm.send(
         new PutParameterCommand({
-          Name: '/sst/bootstrap',
+          Name: '/boxlite/pulumi/bootstrap',
           Type: 'String',
           Value: JSON.stringify({ state: bucket }),
           Overwrite: false,
@@ -101,11 +105,11 @@ export const bootstrapAwsState = async ({
     } catch (error: any) {
       if (error?.name !== 'ParameterAlreadyExists') throw error
     }
-    stored = await parameter('/sst/bootstrap')
+    stored = await parameter('/boxlite/pulumi/bootstrap')
     if (!stored || JSON.parse(stored).state !== bucket)
       throw new Error('Concurrent bootstrap selected another state bucket; inspect before retrying')
   }
-  const name = `/sst/passphrase/${app}/${stage}`
+  const name = `/boxlite/pulumi/passphrase/${app}/${stage}`
   if (!(await parameter(name))) {
     try {
       await clients.ssm.send(

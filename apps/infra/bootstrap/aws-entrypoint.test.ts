@@ -12,8 +12,8 @@ test('native AWS bootstrap rejects protected stages and legacy-only provisioning
   t.after(() => rmSync(emptyPath, { recursive: true, force: true }))
   for (const [args, expected] of [
     [['--stage', 'prod'], /protected.*--confirm/],
-    [['--stage', 'dev', '--provision-auth0'], /only with --legacy-sst/],
-    [['--stage', 'dev', '--provision-ses'], /only with --legacy-sst/],
+    [['--stage', 'dev', '--provision-auth0'], /separately provisioned services/],
+    [['--stage', 'dev', '--provision-ses'], /separately provisioned services/],
   ] as const) {
     const child = spawnSync(
       process.execPath,

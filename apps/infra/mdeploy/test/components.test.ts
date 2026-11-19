@@ -240,25 +240,17 @@ for (const components of ['api', 'runner', 'api+runner'] as const) {
           }),
       })
       assert.equal(result, 0)
-      const scopedApply = components !== 'api+runner' && intent === 'deploy'
-      assert.equal(calls.length, scopedApply ? 2 : 1)
-      assert.equal(calls.at(-1)!.method, intent)
-      const actual = calls.at(-1)!.options
-      if (components === 'api+runner') assert.equal(actual.target, undefined)
-      else if (intent === 'deploy') {
-        assert.equal(calls[0]!.options.refresh, true)
-        assert.equal(calls[0]!.options.target, undefined)
+      assert.equal(calls.length, 1)
+      assert.equal(calls[0]!.method, intent)
+      const actual = calls[0]!.options
+      if (components === 'api+runner') {
+        assert.equal(actual.target, undefined)
+      } else {
+        assert.equal(actual.refresh, true)
         assert.deepEqual(actual.target, componentTargets({ components, app, stage, resources, environment: {} }))
         assert.equal(actual.targetDependents, false)
         if (components === 'api')
-          assert.ok(
-            actual.target.some((urn: string) => urn.endsWith('::ApiSecretAccess-*')),
-            'new API secret grants need not exist in old state',
-          )
-      }
-      if (components !== 'api+runner' && intent === 'diff') {
-        assert.equal(actual.refresh, true)
-        assert.equal(actual.target, undefined)
+          assert.ok(actual.target.some((urn: string) => urn.endsWith('::ApiSecretAccess-*')))
       }
       assert.ok(logs.every((line) => !line.includes('synthetic-passphrase')))
     })
@@ -327,78 +319,3 @@ test('invalid CLI selections stop before login and stage-store access', async ()
       /--components/,
     )
 })
-
-for (const home of ['aws', 'gcp'] as const) {
-  test(`${home} reads scoped releases from the active project's checkpoint and preserves build grants`, async () => {
-    const { deployedReleases } = await import('../src/deployed-releases.ts')
-    const resource = (type: string, name: string, inputs: any): DeployedResource => ({
-      type,
-      urn: prefix + type + '::' + name,
-      inputs,
-    })
-    const build = 'b'.repeat(40)
-    const secret = (value: unknown) => ({
-      '4dabf18193072939515e22adb298388d': '1b47061264138c4ac30d75fd1eb44270',
-      plaintext: JSON.stringify(value),
-    })
-    const resources = Object.entries({
-      Api: 'api',
-      Proxy: 'proxy',
-      OtelCollector: 'otel',
-      RegistryProxy: 'registry',
-    }).map(([name, id]) => {
-      const containers = [
-        {
-          name,
-          image: 'images/' + id + ':deployed',
-          [home === 'aws' ? 'environment' : 'envs']: [{ name: 'CI_SCHEDULER_GENERATION', value: '12345' }],
-        },
-      ]
-      if (home === 'aws')
-        return resource('aws:ecs/taskDefinition:TaskDefinition', name + 'Task', {
-          containerDefinitions: secret(JSON.stringify(containers)),
-        })
-      return name === 'Proxy'
-        ? resource('kubernetes:apps/v1:Deployment', 'ProxyDeployment', { spec: { template: { spec: { containers } } } })
-        : resource('gcp:cloudrunv2/service:Service', name, { template: { containers } })
-    })
-    const runner = (id: string) =>
-      home === 'aws'
-        ? resource('command:local:Command', 'UpgradeRunnerBinary', { environment: { RUNNER_UPGRADE_IDENTITY: id } })
-        : resource('gcp:osconfig/osPolicyAssignment:OsPolicyAssignment', 'RunnerBinary', {
-            description: 'BoxLite runner binary ' + id,
-          })
-    const scoped = (components: 'api' | 'runner', items: DeployedResource[]) =>
-      deployedReleases({ app, stage, home, components, resources: items })
-    const pinned = scoped('api', [...resources, runner('1.2.3+' + build)])
-    assert.deepEqual(pinned.retainedImages, {
-      proxy: 'images/proxy:deployed',
-      'otel-collector': 'images/otel:deployed',
-      'registry-proxy': 'images/registry:deployed',
-    })
-    assert.deepEqual(pinned.releaseEnvironment, {
-      VERSION: '1.2.3',
-      RUNNER_ARTIFACT_SOURCE: 'build',
-      RUNNER_ARTIFACT_REF: build,
-    })
-    assert.deepEqual(scoped('api', [...resources, runner('2.0.1')]).releaseEnvironment, {
-      VERSION: '2.0.1',
-      RUNNER_ARTIFACT_SOURCE: 'release',
-    })
-    assert.deepEqual(scoped('runner', resources), {
-      retainedImages: { api: 'images/api:deployed', ...pinned.retainedImages },
-      releaseEnvironment: { CI_SCHEDULER_GENERATION: '12345', GITHUB_RUN_ID: undefined },
-    })
-    assert.throws(() => scoped('api', resources), /deployed Runner release/)
-    assert.throws(() => scoped('api', [...resources, runner('1.2.3'), runner('2.0.0')]), /deployed Runner release/)
-    assert.throws(
-      () => scoped('runner', [...resources.slice(1), { ...resources[0]!, delete: true }]),
-      /deployed image for Api/,
-    )
-    assert.throws(() => scoped('runner', [...resources, resources[0]!]), /deployed image for Api/)
-    assert.throws(
-      () => scoped('runner', [{ ...resources[0]!, inputs: {} }, ...resources.slice(1)]),
-      /deployed image for Api/,
-    )
-  })
-}

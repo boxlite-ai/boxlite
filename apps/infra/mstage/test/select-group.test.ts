@@ -31,7 +31,7 @@ const clients = (versions: Record<string, Record<string, string>>, key = 'secret
     },
     ssm: {
       send: async (command: any) =>
-        command.input.Name === '/sst/bootstrap'
+        command.input.Name === '/boxlite/pulumi/bootstrap'
           ? { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
           : { Parameter: { Value: KEY.toString('base64') } },
     },

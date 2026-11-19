@@ -457,67 +457,6 @@ test('SST deploy verifies the selected API image before invoking SST', () => {
   assertLiveLine(source, /if \(apiSource && \(apiSource\.kind === 'release' \|\| apiSource\.ref\)\) \{/)
 })
 
-test('a failed sst call names its log rather than quoting it', () => {
-  /*
-   * sst writes provider diagnostics to .sst/log/sst.log, in most detail exactly when a call fails —
-   * request bodies included. bootstrap hands sst an app secret (`secret set`) and a stage's entire
-   * configuration (`secret load`), so quoting that file into an error message would put those values
-   * in the operator's terminal and whatever collects it.
-   *
-   * Asserted as "nothing reads the log" rather than "the calls that carry secrets do not": the log
-   * persists across calls, so a later install failure would quote what an earlier secret load wrote,
-   * and a per-call rule cannot see that. Removing the reader is what makes the property hold.
-   */
-  const source = liveText('script', readFileSync(join(REPO_ROOT, 'apps/infra/bootstrap/bootstrap.ts'), 'utf8'))
-
-  /*
-   * No read of any kind inside runSst, rather than "no read whose argument mentions sst.log" — a path
-   * held in a variable, or a helper called from the catch, would satisfy the narrower rule while
-   * quoting the same file. What has to hold is that the failure path reads nothing at all.
-   */
-  const start = source.indexOf('function runSst(')
-  assert.notEqual(start, -1, 'runSst is missing')
-  const body = source.slice(start, source.indexOf('\n}\n', start))
-  assert.doesNotMatch(body, /readFile|createReadStream|execFileSync\(\s*['"]cat/, 'the failure path must read nothing')
-
-  assert.doesNotMatch(source, /sstLogTail/, 'the log-quoting helper must stay gone')
-  // The log is named exactly once, as a path. A second mention is a second thing doing something
-  // with it, which is what this is here to notice.
-  assert.equal(source.match(/sst\.log/g)?.length, 1, 'the sst log may be named once, as a path')
-  assertLiveLine(source, /see \$\{join\(INFRA_ROOT, '\.sst', 'log', 'sst\.log'\)\}/)
-})
-
-test('what bootstrap stores is the .env it validated, read once', () => {
-  // Over live source: nothing executes bootstrap in a test. main() validates a snapshot before any
-  // external mutation, then ensureStageConfig runs after the OIDC provider, the GitHub Environment and
-  // possibly an Auth0 app exist — minutes later. A second read there would store whatever the file says
-  // by then, which is not what was checked.
-  const source = liveText('script', readFileSync(join(REPO_ROOT, 'apps/infra/bootstrap/bootstrap.ts'), 'utf8'))
-  const start = source.indexOf('function ensureStageConfig(')
-  assert.notEqual(start, -1, 'ensureStageConfig is missing')
-  const body = source.slice(start, source.indexOf('\n}\n', start))
-
-  assert.doesNotMatch(body, /readFileSync|requireStageEnvFile/, 'the payload must be handed in, not re-read')
-  assert.doesNotMatch(body, /prepareStageConfigLoad/, 'preparing it here would be the second read again')
-
-  /*
-   * The same value everywhere, not just read once. Auth0 provisioning builds callback URLs from
-   * STACK_DOMAIN and is not idempotent; taking it from process.env would let an exported override beat
-   * the file, so Auth0 would be configured for one domain and every deploy would use another.
-   */
-  assert.doesNotMatch(
-    source,
-    /process\.env\.STACK_DOMAIN/,
-    'STACK_DOMAIN must come from the validated snapshot, so Auth0 and the store cannot disagree',
-  )
-  // Exactly one read in the whole script, and it is the one main() validates.
-  assert.equal(
-    source.match(/readFileSync\(requireStageEnvFile\(\)/g)?.length,
-    1,
-    'the stage .env must be read in exactly one place',
-  )
-})
-
 test('the deploy role cannot rewrite its own permissions', () => {
   /*
    * The role is named boxlite-<stage>-github-deploy, so it matches the `role/boxlite-<stage>-*` resource of
@@ -687,7 +626,6 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
   // The three whose reach across stages is a property of this change's story, so security.md has to
   // keep saying so — a limit recorded only in a test is a limit the next reader will not find.
   const DOCUMENTED_IN_SECURITY_MD: Array<[string, string]> = [
-    ['sst-asset-', 'deployment assets are content-addressed; the key is the content hash'],
     ['boxlite-volume-', 'the bucket name carries no stage — scoping it is a rename'],
     [':instance/*', 'an EC2 instance ARN carries no stage; narrowing needs a tag Condition'],
     ['identity/*', 'an SES identity ARN carries the sender domain, not the stage'],
@@ -707,6 +645,7 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * account-wide form pass in silence, which is how they lasted this long.
    */
   const ACCOUNTED_HERE: Array<[string, string]> = [
+    ['sst-asset-', 'deployment assets are content-addressed; the key is the content hash'],
     ['document/AWS-RunShellScript', 'an AWS-owned SSM document, not a stage resource'],
     ['role/aws-service-role/', 'service-linked roles are account-global by AWS design'],
   ]
@@ -1308,6 +1247,7 @@ test('the checked-in deploy role satisfies the CI IAM boundary preflight', () =>
     repo: 'boxlite-ai/boxlite',
     stage,
     accountId,
+    native: { app: 'boxlite', repository: 'fixture', stateBucket: 'fixture-state', volumePrefix: 'boxlite-volume' },
     region: 'ap-southeast-1',
   })
 
@@ -2427,7 +2367,7 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
   assert.doesNotMatch(policy, /AdministratorAccess/)
   assert.match(policy, /policy\/boxlite-<STAGE>-runtime-boundary/)
   assert.match(policy, /iam:PermissionsBoundary/)
-  assert.match(awsSource, /'boxlite-sst-deploy'/)
+  assert.match(awsSource, /'boxlite-pulumi-deploy'/)
 
   assert.deepEqual(findStatement(statements, 'BoxLiteStageSecrets'), {
     Sid: 'BoxLiteStageSecrets',
@@ -2483,17 +2423,8 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
   })
 })
 
-test('the stage bootstrap owns artifact stores needed before an SST deploy can start', () => {
-  // No declarative resource tree to deepEqual any more — aws.ts creates these imperatively. This
-  // reads its source for the specific flags a CloudFormation Properties block used to carry
-  // declaratively, the same way other tests in this file pin a stack/*.ts source rather than
-  // executing it. bootstrap/aws.test.ts exercises the actual reconcile behavior end to end.
+test('the stage bootstrap retains encrypted artifact stores', () => {
   const awsSource = readFileSync(join(REPO_ROOT, 'apps/infra/bootstrap/aws.ts'), 'utf8')
-
-  // One spelling: aws.ts calls the same composers artifacts/api.ts and artifacts/runner.ts read
-  // the names back with, rather than restating boxlite-app-<stage>-api/-artifacts-<account> here.
-  assert.match(awsSource, /apiImageRepository\(\{ app: 'boxlite', stage \}\)/)
-  assert.match(awsSource, /runnerArtifactsBucketName\(\{ app: 'boxlite', stage, accountId \}\)/)
 
   assert.match(awsSource, /'--encryption-configuration',\s*\n\s*'encryptionType=AES256'/)
   // Never deleted or replaced — a stronger guarantee than CloudFormation's DeletionPolicy: Retain

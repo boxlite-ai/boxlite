@@ -14,7 +14,6 @@ Keep stage declarations in the ignored config file and application values in the
 | `.mstage.config.json` | Stage cloud, region/project/zone, login requirements, registry, scan policy, resource sizing and protection | No |
 | Encrypted stage store | Domains, feature settings, API keys and application secrets | No |
 | GitHub Environment variable | One stage declaration for CI, named `BOXLITE_MSTAGE_BOXLITE_APP_CONFIG` | No |
-| Bootstrap `.env` | Input to the retained AWS bootstrap/deployment path | No |
 
 There is no separate `mbuild.config.json` or `mdeploy.config.json`. Both tools read the two mstage files.
 The loader walks up from the working directory; `MSTAGE_ENV_CONFIG` and `MSTAGE_CONFIG` can name explicit paths.
@@ -72,9 +71,6 @@ its secret channel; Cloud Run uses `secretKeyRef`. The credential must not be a 
 environment value. Confirm runtime access to the referenced secret before rolling out the API.
 
 With no sitekey, mdeploy omits all widget settings and does not inject an unused secret reference.
-For the legacy SST path, enabling protection requires the stage-scoped `TURNSTILE_SECRET_KEY` via `sst secret set`, using
-stdin for the value. Its ordinary settings belong in the bootstrap `.env`/stage configuration;
-the secret does not. Use `.env.example` for the names and defaults.
 
 ## Runner sizing
 
@@ -220,8 +216,7 @@ npm run mstage env versions -- --stage dev
 npm run mstage env list -- --stage dev --version '<stored-version-id>'
 ```
 
-Version availability depends on object retention. A missing requested version is an error; it does
-not silently fall back to the latest object. `mstage` does not merge SST `_fallback` values.
+Version availability depends on object retention. Requesting an unavailable version returns an error.
 
 ## Secret references
 
@@ -241,8 +236,6 @@ npm run --silent mstage config get -- --stage dev
 variable first, then the local file, and emits `{ "dev": { ... } }`. The setup action restores the
 ignored file for a job; promotion restores both source and destination declarations.
 
-Native AWS bootstrap follows the declared app; its retained `--legacy-sst` path uses the legacy `boxlite` conventions.
-Existing stages need [AWS adoption](aws/migration.md).
 
 Updating an ignored
 local file does not update the encrypted stage store or a GitHub Environment until its corresponding

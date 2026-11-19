@@ -7,7 +7,6 @@ AWS runs the API, proxy and collector on ECS Fargate, with EC2 runners and manag
 [Cloud guide](README.md) · [Infrastructure index](../../README.md)
 
 This diagram describes source configuration, not a live account inventory.
-Existing SST stages require [reviewed adoption](migration.md) before native Pulumi updates.
 
 [Networking](networking.md) · [Cost inventory](costs.md)
 

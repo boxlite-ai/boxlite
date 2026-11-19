@@ -36,7 +36,7 @@ const capture = () => {
           },
           ssm: {
             send: async (command: any) =>
-              command.input.Name === '/sst/bootstrap'
+              command.input.Name === '/boxlite/pulumi/bootstrap'
                 ? { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
                 : { Parameter: { Value: randomBytes(32).toString('base64') } },
           },

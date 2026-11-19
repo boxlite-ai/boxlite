@@ -143,7 +143,6 @@ export type ProgramInput = {
    * the store is the one place a stage's configuration comes from.
    */
   environment: NodeJS.ProcessEnv
-  retainedImages?: Record<string, string>
   /** Where `mdeploy.config.json` is found. Defaults to the process's own directory. */
   cwd?: string
   loadModules?: ModuleLoader
@@ -170,7 +169,6 @@ export const gcpProgram =
     project,
     zone = null,
     environment,
-    retainedImages,
     cwd,
     loadModules: load = loadModules,
     deployStackWith,
@@ -254,7 +252,6 @@ export const gcpProgram =
         clickHouseRetentionHours: stackEnvironment.clickHouseRetentionHours,
         stage,
         tag: stackEnvironment.tag,
-        retainedImages,
         domain: stackEnvironment.domain,
         proxyDomain: stackEnvironment.proxyDomain,
         proxyProtocol: stackEnvironment.proxyProtocol,

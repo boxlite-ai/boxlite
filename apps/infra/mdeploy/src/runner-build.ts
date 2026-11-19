@@ -260,6 +260,7 @@ const gcpListing = ({ run, bucket, prefix }: { run: RunCommand; bucket: string; 
  * proved to exist, how it is listed, and what makes a write refuse to overwrite.
  */
 export type Destination = {
+  region: string | null
   /** How the prefix reads in a message and in the line printed at the end. */
   address: string
   /** Proved before the build, because compiling libkrun takes minutes. */
@@ -281,7 +282,7 @@ export type Destination = {
    * version+commit identity — gzip alone stamps an mtime — and everything
    * downstream compares that identity and never the content.
    */
-  copyFrom: (sourceAddress: string, name: string) => void
+  copyFrom: (source: Pick<Destination, 'address' | 'region'>, name: string) => void
 }
 
 export const awsDestination = ({
@@ -310,17 +311,30 @@ export const awsDestination = ({
   }
   const bucket = runnerArtifactsBucket({ app, stage, accountId })
   return {
+    region,
     address: `s3://${bucket}/${prefix}`,
     assertReachable: () => {
       must(run, 'aws', ['s3api', 'head-bucket', '--region', region, '--bucket', bucket], `finding the bucket ${bucket}`)
     },
     publishedAlready: () => classifyStaged({ staged: awsListing({ run, region, bucket, prefix }), names, prefix }),
     staged: () => [...awsListing({ run, region, bucket, prefix })].map((key) => key.slice(key.lastIndexOf('/') + 1)),
-    copyFrom: (sourceAddress, name) => {
+    copyFrom: ({ address: sourceAddress, region: sourceRegion }, name) => {
+      if (!sourceRegion) throw new RunnerBuildError('AWS artifact promotion requires a source bucket region')
       must(
         run,
         'aws',
-        ['s3', 'cp', '--region', region, `${sourceAddress}/${name}`, `s3://${bucket}/${prefix}/${name}`],
+        [
+          's3',
+          'cp',
+          '--region',
+          region,
+          '--source-region',
+          sourceRegion,
+          '--copy-props',
+          'none',
+          `${sourceAddress}/${name}`,
+          `s3://${bucket}/${prefix}/${name}`,
+        ],
         `copying ${name} from ${sourceAddress}`,
       )
     },
@@ -367,13 +381,14 @@ export const gcpDestination = ({
 }): Destination => {
   const bucket = gcpRunnerArtifactsBucket({ app, stage, project })
   return {
+    region: null,
     address: `gs://${bucket}/${prefix}`,
     assertReachable: () => {
       must(run, 'gcloud', ['storage', 'buckets', 'describe', `gs://${bucket}`], `finding the bucket ${bucket}`)
     },
     publishedAlready: () => classifyStaged({ staged: gcpListing({ run, bucket, prefix }), names, prefix }),
     staged: () => [...gcpListing({ run, bucket, prefix })].map((key) => key.slice(key.lastIndexOf('/') + 1)),
-    copyFrom: (sourceAddress, name) => {
+    copyFrom: ({ address: sourceAddress }, name) => {
       must(
         run,
         'gcloud',

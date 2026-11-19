@@ -186,9 +186,7 @@
       "Action": "iam:CreateRole",
       "Resource": "arn:aws:iam::<ACCOUNT>:role/boxlite-<STAGE>-*",
       "Condition": {
-        "StringEquals": {
-          "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT>:policy/boxlite-<STAGE>-runtime-boundary"
-        }
+        "StringEquals": { "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT>:policy/boxlite-<STAGE>-runtime-boundary" }
       }
     },
     {
@@ -248,9 +246,7 @@
       "Action": "iam:PutRolePermissionsBoundary",
       "Resource": "arn:aws:iam::<ACCOUNT>:role/boxlite-<STAGE>-*",
       "Condition": {
-        "StringEquals": {
-          "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT>:policy/boxlite-<STAGE>-runtime-boundary"
-        }
+        "StringEquals": { "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT>:policy/boxlite-<STAGE>-runtime-boundary" }
       }
     },
     {
@@ -282,12 +278,6 @@
           ]
         }
       }
-    },
-    {
-      "Sid": "SharedDeploymentOwnership",
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::sst-state-*/migration/aws/<STAGE>/*"
     }
   ]
 }

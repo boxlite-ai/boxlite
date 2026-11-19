@@ -13,7 +13,7 @@
  * stage and keeps its checkpoint and locks in this bucket, so those keys are
  * read exactly as Pulumi writes them, using the same paths as the AWS backend.
  *
- * The bucket is discovered rather than passed, as AWS reads `/sst/bootstrap`,
+ * The bucket is discovered rather than passed, as AWS reads `/boxlite/pulumi/bootstrap`,
  * so moving the store is one edit to one record. The record has the same shape
  * on both clouds, `{"state": "<bucket>"}`.
  *
@@ -88,7 +88,7 @@ const secretValue = async (clients: GcpClients, name: string): Promise<string> =
 
 /**
  * Which bucket holds the store, for this project — the GCP counterpart of
- * `/sst/bootstrap`. One record, so repointing the store is one edit.
+ * `/boxlite/pulumi/bootstrap`. One record, so repointing the store is one edit.
  */
 export const readStateBucket = async (clients: GcpClients, project: string): Promise<string> => {
   const name = `projects/${project}/secrets/${BOOTSTRAP_SECRET}/versions/latest`

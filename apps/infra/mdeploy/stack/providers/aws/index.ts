@@ -52,9 +52,6 @@ export const awsStackProviders = ({
   zoneId,
   managedClickHouse,
   otelOpenapiEnabled = false,
-  existingDatabasePasswordRef,
-  existingCachePasswordRef,
-  existingVolumeRoleName,
 }: {
   stage: string
   region: string
@@ -75,21 +72,18 @@ export const awsStackProviders = ({
    */
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
   otelOpenapiEnabled?: boolean
-  existingDatabasePasswordRef?: string
-  existingCachePasswordRef?: string
-  existingVolumeRoleName?: string
 }): StackProviders => {
   return {
     // mbuild keys the registry by stage, so the addresses come from there
     // rather than from anything this file composes.
     images: awsImages({ stage, region }),
     network: awsNetworkProvider({ region }),
-    storage: awsStorageProvider({ accountId, existingVolumeRoleName }),
+    storage: awsStorageProvider({ accountId }),
     cluster: ({ network }) => awsClusterProvider({ network }),
     database: ({ network }) =>
-      awsDatabaseProvider({ network: binding(network), existingPasswordRef: existingDatabasePasswordRef }),
+      awsDatabaseProvider({ network: binding(network) }),
     cache: ({ network }) =>
-      awsCacheProvider({ network: binding(network), existingPasswordRef: existingCachePasswordRef }),
+      awsCacheProvider({ network: binding(network) }),
     clickhouse: ({ network }) =>
       awsClickHouseProvider({ network: binding(network), region, managed: managedClickHouse, otelOpenapiEnabled }),
     mail: awsMailProvider({ region, zoneId }),

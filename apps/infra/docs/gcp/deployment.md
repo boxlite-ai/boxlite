@@ -34,7 +34,9 @@ npm run mstage config put -- --stage dev
 The historical `mstage aws whoami` command reports the selected cloud's identity, including GCP.
 Use `login ... --force` when sign-in is needed; both gcloud CLI and ADC sessions are required.
 Bootstrap needs broader privileges than the deployer it creates. A protected stage requires `--confirm`.
-Use `--repo owner/name` to select GitHub explicitly; `--reviewers` accepts numeric GitHub user IDs.
+Use `--repo owner/name` to select the GitHub repository.
+
+When bootstrap creates a GitHub Environment, `--reviewers` accepts numeric GitHub user IDs. Edit an existing Environment’s reviewer rules in GitHub.
 
 | Bootstrap owns | Result |
 | --- | --- |

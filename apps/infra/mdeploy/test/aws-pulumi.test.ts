@@ -1,88 +1,44 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import test from 'node:test'
-import { assertAwsMigrationReady } from '../src/aws-migration.ts'
 import { awsTarget, pulumiDeploy, type StackFactory } from '../src/pulumi.ts'
 import { awsResourceDefaults } from '../pulumi/aws-defaults.ts'
 import type { StoreBackend } from 'mstage/env'
 
-const legacy = Buffer.from('{"version":3,"checkpoint":{"latest":{"resources":[{"id":"db-existing"}]}}}')
-const digest = createHash('sha256').update(legacy).digest('hex')
-const native = Buffer.from(
-  JSON.stringify({
-    version: 3,
-    checkpoint: { latest: { resources: [{ type: 'aws:rds/instance:Instance', custom: true, id: 'db-existing' }] } },
-  }),
-)
-const environment = {
-  AWS_VOLUME_ACCESS_ROLE_NAME: 'boxlite-dev-s3-access',
-  AWS_PULUMI_MIGRATION: JSON.stringify({ boxlite: digest }),
-  AWS_DATABASE_PASSWORD_SECRET_ARN: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:database',
-  AWS_CACHE_PASSWORD_SECRET_ARN: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:cache',
-}
-const backend = (old: Buffer | null = legacy, imported: Buffer | null = native) =>
-  ({
-    home: 'aws',
-    read: async () => null,
-    write: async () => {},
-    currentVersion: async () => null,
-    versions: async () => [],
-    passphrase: async () => Buffer.alloc(32),
-    state: {
-      writeCheckpoint: async () => {},
-      readLock: async () => null,
-      removeLock: async () => {},
-      readLegacyCheckpoint: async ({ app }: { app: string }) => (app === 'boxlite' ? old : null),
-      readCheckpoint: async () => imported,
-    },
-  }) as StoreBackend
-const check = (
-  store: StoreBackend,
-  values = environment,
-  intent: 'deploy' | 'diff' | 'refresh' | 'remove' = 'deploy',
-) => assertAwsMigrationReady({ backend: store, app: 'boxlite-app', stage: 'dev', intent, environment: values })
-
-test('fresh AWS stages need no migration acknowledgement', async () => {
-  await check(backend(null, null), {} as any)
-})
-test('SST stages refuse mutations before import and frozen-source acknowledgement', async () => {
-  for (const intent of ['deploy', 'refresh', 'remove'] as const) {
-    await assert.rejects(check(backend(), {} as any, intent), /reviewed native import/)
-  }
-  await assert.rejects(check(backend(), { ...environment, AWS_PULUMI_MIGRATION: '{' }), /JSON map/)
-  await assert.rejects(check(backend(Buffer.concat([legacy, Buffer.from(' ')]))), /reviewed native import/)
-  await assert.rejects(check(backend(legacy, null)), /must be imported/)
-  await assert.rejects(
-    check(backend(legacy, Buffer.from('{"checkpoint":{"latest":{"resources":[]}}}'))),
-    /must be imported/,
-  )
-  await assert.rejects(check(backend(), { ...environment, AWS_CACHE_PASSWORD_SECRET_ARN: '' }), /adopt the existing/)
-})
-test('reviewed imports preserve credentials and allow a preview before acknowledgement', async () => {
-  await check(backend())
-  await check(backend(legacy, null), {} as any, 'diff')
-})
-
-test('AWS roles and buckets receive bounded physical prefixes without renaming imported identities', () => {
+test('AWS roles and buckets receive bounded physical prefixes and preserve explicitly declared names', () => {
   const defaults = awsResourceDefaults({
     app: 'boxlite-app',
     stage: 'dev',
     accountId: '123456789012',
     protectedStage: true,
   })
+  const longScope = awsResourceDefaults({
+    app: 'boxlite-app',
+    stage: 'integration-aws',
+    accountId: '123456789012',
+    protectedStage: false,
+  })
+  for (const [type, property, limit] of [
+    ['aws:iam/role:Role', 'namePrefix', 38],
+    ['aws:s3/bucketV2:BucketV2', 'bucketPrefix', 37],
+  ] as const) {
+    const prefix = (name: string) => longScope({ type, name, props: {}, opts: {} } as any).props[property] as string
+    assert.ok(prefix('ApiExecutionRole').startsWith('boxlite-app-integration-aws-'))
+    assert.ok(prefix('ApiExecutionRole').length <= limit)
+    assert.notEqual(prefix('ApiExecutionRole'), prefix('ApiExecutionPolicy'))
+  }
   const role = defaults({ type: 'aws:iam/role:Role', name: 'ApiExecutionRole', props: {}, opts: {} } as any)
   assert.equal(role.props.namePrefix, 'boxlite-app-dev-apiexecutionrole-')
   assert.equal(role.props.permissionsBoundary, 'arn:aws:iam::123456789012:policy/boxlite-app-dev-runtime-boundary')
   assert.equal(role.opts.protect, true)
   assert.equal(role.opts.retainOnDelete, true)
-  const imported = defaults({
+  const named = defaults({
     type: 'aws:iam/role:Role',
     name: 'ApiTaskRole',
     props: { name: 'existing-role' },
     opts: {},
   } as any)
-  assert.equal(imported.props.name, 'existing-role')
-  assert.equal(imported.props.namePrefix, undefined)
+  assert.equal(named.props.name, 'existing-role')
+  assert.equal(named.props.namePrefix, undefined)
   const bucket = defaults({
     type: 'aws:s3/bucketV2:BucketV2',
     name: 'AnExtremelyLongPhysicalStorageBucketResource',
@@ -92,13 +48,6 @@ test('AWS roles and buckets receive bounded physical prefixes without renaming i
   assert.ok(bucket.props.bucketPrefix.startsWith('boxlite-app-dev-'))
   assert.ok(bucket.props.bucketPrefix.length <= 37)
   assert.match(bucket.props.bucketPrefix, /^[a-z0-9-]+$/)
-  for (const [type, property] of [
-    ['aws:servicediscovery/privateDnsNamespace:PrivateDnsNamespace', 'name'],
-    ['aws:sesv2/configurationSet:ConfigurationSet', 'configurationSetName'],
-  ]) {
-    const resource = defaults({ type, name: 'ImportedIdentity', props: {}, opts: {} } as any)
-    assert.ok(resource.opts.ignoreChanges?.includes(property), `${type} must preserve its imported physical name`)
-  }
   assert.deepEqual(defaults({ type: 'cloudflare:index/record:Record', name: 'Dns', props: {}, opts: {} } as any), {
     props: {},
     opts: {},
@@ -170,14 +119,29 @@ test('AWS uses its S3 backend, region and provider configuration through Automat
   assert.equal(configured?.['gcp:project'], undefined)
   assert.deepEqual(calls, ['preview'])
 })
-test('the AWS target refuses an unacknowledged SST migration before starting Pulumi', async () => {
+
+test('a fresh AWS target starts Pulumi directly with its native backend', async () => {
+  const calls: string[] = []
   const target = awsTarget({
-    config: { root: '/repo' },
+    config: { root: '/fixture' },
     scope,
     identity,
-    backend: backend(),
-    stateBucket: async () => assert.fail('state bucket resolved'),
-    createStackWith: async () => assert.fail('Pulumi started'),
+    backend: {} as StoreBackend,
+    stateBucket: async () => 'native-state',
+    createStackWith: async ({ backendUrl }) => {
+      assert.equal(backendUrl, 's3://native-state')
+      return {
+        setAllConfig: async () => {},
+        exportStack: async () => assert.fail('full create does not require an existing checkpoint'),
+        up: async () => {
+          calls.push('up')
+        },
+        preview: async () => {},
+        refresh: async () => {},
+        destroy: async () => {},
+      }
+    },
   })
-  await assert.rejects(target.run({ log: () => {} }), /reviewed native import/)
+  assert.equal(await target.run({ stageEnvironment: { PULUMI_CONFIG_PASSPHRASE: 'fixture' }, log: () => {} }), 0)
+  assert.deepEqual(calls, ['up'])
 })

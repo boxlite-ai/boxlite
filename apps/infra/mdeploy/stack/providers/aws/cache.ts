@@ -5,16 +5,10 @@ import { awsPassword } from './password.ts'
 const INSTANCE = { small: 'cache.t4g.micro', medium: 'cache.m7g.large' } as const
 
 export const awsCacheProvider =
-  ({
-    network,
-    existingPasswordRef,
-  }: {
-    network: Extract<NetworkBinding, { cloud: 'aws' }>
-    existingPasswordRef?: string
-  }): CacheProvider =>
+  ({ network }: { network: Extract<NetworkBinding, { cloud: 'aws' }> }): CacheProvider =>
   (request: CacheRequest): Cache => {
     if (!request.encryptInTransit) throw new Error('AWS Redis AUTH requires encryptInTransit=true')
-    const password = awsPassword('CachePassword', existingPasswordRef, 'authToken')
+    const password = awsPassword('CachePassword')
     const clients = new aws.ec2.SecurityGroup('CacheClientSecurityGroup', {
       vpcId: network.vpcId,
       egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],
@@ -29,7 +23,7 @@ export const awsCacheProvider =
     const subnet = new aws.elasticache.SubnetGroup('CacheSubnetGroup', { subnetIds: network.privateSubnets })
     const parameters = new aws.elasticache.ParameterGroup('CacheParameterGroup', {
       family: 'redis7',
-      parameters: [{ name: 'cluster-enabled', value: request.clustered ? 'yes' : 'no' }],
+      parameters: [{ name: 'cluster-enabled', value: 'no' }],
     })
     const cluster = new aws.elasticache.ReplicationGroup('CacheCluster', {
       description: 'BoxLite cache',
@@ -46,13 +40,13 @@ export const awsCacheProvider =
       authToken: password.value,
       authTokenUpdateStrategy: 'ROTATE',
       autoMinorVersionUpgrade: false,
-      ...(request.clustered
-        ? { numNodeGroups: 1, replicasPerNodeGroup: 0, automaticFailoverEnabled: true }
-        : { numCacheClusters: 1, automaticFailoverEnabled: false }),
+      numCacheClusters: request.clustered ? 2 : 1,
+      automaticFailoverEnabled: request.clustered,
+      multiAzEnabled: request.clustered,
     })
     return {
       connection: {
-        host: request.clustered ? cluster.configurationEndpointAddress : cluster.primaryEndpointAddress,
+        host: cluster.primaryEndpointAddress,
         port: cluster.port.apply(String),
       },
       binding: { cloud: 'aws', passwordRef: password.passwordRef, clientGrant: clients.id },

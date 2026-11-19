@@ -1,9 +1,4 @@
-/**
- * AWS environment values retain the existing SSM bootstrap/passphrase and S3 secret keys.
- * Deployment checkpoints and locks use Pulumi DIY paths in the same bucket.
- * SST checkpoints are read only as migration evidence; this backend never rewrites them.
- */
-
+/** AWS stores stage configuration and native Pulumi checkpoints in the regional state bucket. */
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -13,24 +8,21 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
-import { IAMClient } from '@aws-sdk/client-iam'
-import { awsOwnership } from './aws-ownership.ts'
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm'
 import { EnvError, objectKey, type StoreBackend, type StoredVersion } from './backend.ts'
 import type { AwsIdentity } from '../aws/identity.ts'
 import { pulumiCheckpointKey as checkpointKey, pulumiLockPrefix } from './pulumi-state.ts'
 
-const BOOTSTRAP_PARAMETER = '/sst/bootstrap'
+const BOOTSTRAP_PARAMETER = '/boxlite/pulumi/bootstrap'
 
 export type AwsClients = {
-  iam?: { send: (command: any) => Promise<any> }
   s3: { send: (command: any) => Promise<any> }
   ssm: { send: (command: any) => Promise<any> }
 }
 
 export const clientsFor = (identity: Pick<AwsIdentity, 'credentials' | 'region'>): AwsClients => {
   const config = { region: identity.region, credentials: identity.credentials }
-  return { s3: new S3Client(config), ssm: new SSMClient(config), iam: new IAMClient(config) }
+  return { s3: new S3Client(config), ssm: new SSMClient(config) }
 }
 
 /**
@@ -38,7 +30,6 @@ export const clientsFor = (identity: Pick<AwsIdentity, 'credentials' | 'region'>
  * holding a task role, where the SDK's own chain is already the right answer.
  */
 export const ambientClients = (region: string): AwsClients => ({
-  iam: new IAMClient({ region }),
   s3: new S3Client({ region }),
   ssm: new SSMClient({ region }),
 })
@@ -152,16 +143,6 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
     }
     throw new EnvError(`${Key} kept changing; retry after concurrent writes finish`)
   },
-  ownership: awsOwnership({
-    s3: clients.s3,
-    stateBucket: () => readStateBucket(clients),
-    iam: clients.iam ?? {
-      send: async () => {
-        throw new EnvError('AWS ownership requires an IAM client')
-      },
-    },
-  }),
-
   async read({ app, stage, versionId }) {
     const bucket = await readStateBucket(clients)
     const key = objectKey(app, stage)
@@ -170,9 +151,7 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
       answer = await clients.s3.send(new GetObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId }))
     } catch (error) {
       if (!isNotFound(error)) throw error
-      // An unwritten stage is empty rather than an error, as SST reports it. A
-      // *pinned* version that has gone is not: answering empty there starts a
-      // caller with nothing at the moment it asked for something specific.
+      // A missing pinned revision is an error even when the current stage is empty.
       if (versionId) throw new EnvError(`${key} has no version ${versionId}; it was deleted or expired`)
       return null
     }
@@ -246,7 +225,7 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
   },
 
   async passphrase({ app, stage }) {
-    const name = `/sst/passphrase/${app}/${stage}`
+    const name = `/boxlite/pulumi/passphrase/${app}/${stage}`
     let answer
     try {
       answer = await clients.ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }))
@@ -258,7 +237,6 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
   },
 
   state: {
-    readLegacyCheckpoint: ({ app, stage }) => readObject(clients, `app/${app}/${stage}.json`),
     readCheckpoint: ({ app, stage }) => readObject(clients, checkpointKey(app, stage)),
 
     async writeCheckpoint({ app, stage, checkpoint }) {

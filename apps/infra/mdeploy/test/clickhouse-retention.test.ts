@@ -188,10 +188,10 @@ case "$4 $8" in
     }
     invoke(true)
     const readiness = resources.get('ClickHouseDatabaseReady')!.args
-    assert.equal(resources.get('ClickHouseOpenapiReaderSecret')!.args.namePrefix, 'boxlite-dev-clickhouse-openapi-reader-')
+    assert.equal(resources.get('ClickHouseOpenapiReaderSecret')!.args.namePrefix, 'boxlite/workloads/boxlite/dev/clickhouse-openapi-reader-')
     assert.equal(resources.get('ClickHouseOpenapiReaderSecret')!.args.name, undefined)
     assert.equal(resources.get('ClickHouseOpenapiReaderSecret')!.args.recoveryWindowInDays, 7)
-    assert.equal(resources.get('ClickHouseReaderSecret')!.args.namePrefix, 'boxlite-dev-clickhouse-reader-')
+    assert.equal(resources.get('ClickHouseReaderSecret')!.args.namePrefix, 'boxlite/workloads/boxlite/dev/clickhouse-reader-')
     assert.equal(readiness.environment.CLICKHOUSE_OPENAPI_READER_SECRET_ARN.value, 'ClickHouseOpenapiReaderSecret-arn')
     const sql = Buffer.from(readiness.environment.CLICKHOUSE_OPENAPI_READER_SQL_BASE64, 'base64').toString()
     assert.match(sql, /REVOKE ALL FROM "otel_openapi_reader"/)
