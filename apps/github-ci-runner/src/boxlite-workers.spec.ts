@@ -129,12 +129,10 @@ describe('Standalone BoxLite execution boundary', () => {
       },
     }
     key = await journal.define(lease, scope)
-    const row = (await journal.reserve(
-      lease,
-      key,
-      { repository: 21, run: 33, job: 55 },
-      testCapacity({ account: 1, tenant: 1 }),
-    ))!
+    const row = (await journal.reserve(lease, key, null, testCapacity({ account: 1, tenant: 1 }), {
+      labels: ['boxlite'],
+      scaleSet: 9,
+    }))!
     name = row.value.name
     worker = service.bind(scope, lease, async () => {
       if (!allowed) throw new Error('Admission revoked')
@@ -223,7 +221,9 @@ describe('Standalone BoxLite execution boundary', () => {
           { image: 'runner', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
         )
         try {
-          await expect(pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))).rejects.toThrow('boot is pending')
+          await expect(
+            pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal),
+          ).rejects.toThrow('boot is pending')
         } finally {
           await pool.close()
         }
@@ -506,7 +506,9 @@ describe('Standalone BoxLite execution boundary', () => {
         )
       try {
         for (let attempt = 0; attempt < 2; attempt++)
-          await expect(pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))).rejects.toThrow()
+          await expect(
+            pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal),
+          ).rejects.toThrow()
       } finally {
         await pool.close()
       }
@@ -821,12 +823,10 @@ describe('Standalone BoxLite execution boundary', () => {
       ledger = new ExecutionJournal(local),
       definition = { ...scope, actor }
     const target = await ledger.define(owner, definition),
-      reserved = (await ledger.reserve(
-        owner,
-        target,
-        { repository: 21, run: 33, job: 55 },
-        testCapacity({ account: 1, tenant: 1 }),
-      ))!
+      reserved = (await ledger.reserve(owner, target, null, testCapacity({ account: 1, tenant: 1 }), {
+        labels: ['boxlite'],
+        scaleSet: 9,
+      }))!
     await ledger.advance(owner, reserved.record.key, reserved.record.version, {
       box: { phase: 'requested', id: null },
       effect: { id: randomUUID(), kind: 'box-create' },

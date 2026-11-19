@@ -245,10 +245,14 @@ export class ActionsScaleSets {
       return invalid()
     return { id: found.id, name, group }
   }
-  async currentAssigned(id: number, signal: AbortSignal) {
+  async currentStatistics(id: number, signal: AbortSignal) {
     const raw = await this.service(sets + '/' + id, { signal })
-    if (!object(raw) || raw.id !== id) return invalid()
-    return assigned(raw.statistics)
+    if (!object(raw) || raw.id !== id || !object(raw.statistics)) return invalid()
+    const acquired = raw.statistics.totalAcquiredJobs
+    const count = assigned(raw.statistics)
+    if (acquired === undefined) return { assigned: count, acquired: undefined }
+    if (!natural(acquired)) return invalid()
+    return { assigned: count, acquired }
   }
   async open(id: number, owner: string, signal?: AbortSignal): Promise<ScaleSetSession> {
     if (!positive(id) || !owner || owner.length > 128) return invalid()

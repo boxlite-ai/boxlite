@@ -5,31 +5,10 @@ import { CapacityPolicy } from './capacity'
 import { ExecutionJournal } from './execution/journal'
 import { ExecutionScope, object, positive, scopeKey } from './execution/model'
 import { GitHubRequestError } from './github'
-import { parseResourceLabels, selectRunnerLabels } from './resource-labels'
+import { DEFAULT_RESOURCE_LABEL, selectRunnerLabels } from './resource-labels'
 import { ActionsScaleSets, ScaleSetRemoved, ScaleSetSession } from './scale-set-client'
 import { LeaseLost, StateCorrupt, StateRecord } from './state/database'
 import { ExecutionLease, ListenerState, StateCheck } from './state/store'
-
-export type ScaleSetBindings = ReadonlyMap<string, readonly string[]>
-export function scaleSetBindings(raw?: string): ScaleSetBindings {
-  const bindings = new Map<string, string[]>()
-  if (!raw) return bindings
-  const values: unknown = JSON.parse(raw)
-  if (!object(values)) throw new Error('CI_SCALE_SET_BINDINGS must map binding IDs to resource labels')
-  for (const [binding, labels] of Object.entries(values)) {
-    if (
-      !/^(?:\*|[a-zA-Z0-9:._/-]{1,128})$/.test(binding) ||
-      !Array.isArray(labels) ||
-      !labels.length ||
-      labels.length > 64 ||
-      !labels.every((label) => typeof label === 'string' && parseResourceLabels([label])?.label === label) ||
-      new Set(labels).size !== labels.length
-    )
-      throw new Error('Invalid CI scale set binding or resource labels')
-    bindings.set(binding, labels)
-  }
-  return bindings
-}
 
 /** One owner-wide limit for account setup and message processing. Network waits release their permit. */
 export class ScaleSetWork {
@@ -62,14 +41,22 @@ interface Lane {
   target?: ScaleTarget
   task: Promise<void>
 }
+type AcquisitionPhase = 'requested' | 'accepted' | 'verify'
+type PendingRequest = {
+  id: string
+  phase: AcquisitionPhase
+}
 interface SetRecord {
   name: string
   set: number | null
   assigned: number
   held: number
+  pending: PendingRequest[]
   message: number | null
   session: string | null
 }
+// Limit outstanding acquisitions awaiting assignment, independently of running workers.
+const acquisitionWindow = 1024
 function readRecord(row: StateRecord): SetRecord {
   const v = row.payload
   if (
@@ -80,7 +67,19 @@ function readRecord(row: StateRecord): SetRecord {
     !(v.set === null || positive(v.set)) ||
     !Number.isSafeInteger(v.assigned) ||
     (v.assigned as number) < 0 ||
-    !(v.held === undefined || (Number.isSafeInteger(v.held) && (v.held as number) >= 0)) ||
+    !(Number.isSafeInteger(v.held) && (v.held as number) >= 0) ||
+    !(
+      Array.isArray(v.pending) &&
+      v.pending.length <= acquisitionWindow &&
+      v.pending.every(
+        (job): job is PendingRequest =>
+          object(job) &&
+          typeof job.id === 'string' &&
+          /^[1-9]\d{0,18}$/.test(job.id) &&
+          (job.phase === 'requested' || job.phase === 'accepted' || job.phase === 'verify'),
+      ) &&
+      new Set(v.pending.map((job) => job.id)).size === v.pending.length
+    ) ||
     !(v.session == null || (typeof v.session === 'string' && /^[a-f\d-]{36}$/i.test(v.session))) ||
     !(v.message === null || (Number.isSafeInteger(v.message) && (v.message as number) >= 0))
   )
@@ -89,7 +88,8 @@ function readRecord(row: StateRecord): SetRecord {
     name: v.name,
     set: positive(v.set) ? v.set : null,
     assigned: v.assigned as number,
-    held: (v.held as number | undefined) ?? 0,
+    held: v.held as number,
+    pending: v.pending as SetRecord['pending'],
     message: v.message as number | null,
     session: typeof v.session === 'string' ? v.session : null,
   }
@@ -106,6 +106,8 @@ interface SetHost {
 export class ScaleSetController {
   private readonly stop = new AbortController()
   private readonly lanes = new Map<string, Lane>()
+  private readonly persisted = new Set<string>()
+  private readonly waiting = new Set<string>()
   private readonly prefix: string
   private readonly signal: AbortSignal
   constructor(
@@ -124,20 +126,50 @@ export class ScaleSetController {
   targets(): ScaleTarget[] {
     return [...this.lanes.values()].flatMap((lane) => (lane.target ? [lane.target] : []))
   }
-  async restore(configured: readonly string[]): Promise<void> {
-    const saved = await this.state.scan(this.lease, { prefix: this.prefix, after: '', limit: 65 })
-    if (saved.length > 64) throw new StateCorrupt()
-    for (const label of [...configured, ...saved.map((row) => row.key.slice(this.prefix.length))]) this.watch(label)
+  async restore(): Promise<void> {
+    const occupied: string[] = [],
+      idle: string[] = []
+    let after = ''
+    for (;;) {
+      const page = await this.state.scan(this.lease, { prefix: this.prefix, after, limit: 100 })
+      for (const row of page) {
+        const record = readRecord(row)
+        const list = record.held || record.assigned ? occupied : idle
+        const label = row.key.slice(this.prefix.length)
+        list.push(label)
+        this.persisted.add(label)
+      }
+      if (page.length < 100) break
+      after = page[page.length - 1].key
+    }
+    for (const label of [...occupied, DEFAULT_RESOURCE_LABEL, ...idle]) this.watch(label)
   }
   watch(label: string) {
-    if (this.lanes.has(label) || this.lanes.size >= 64 || this.signal.aborted) return
+    if (this.lanes.has(label) || this.waiting.has(label) || this.signal.aborted) return
+    this.waiting.add(label)
+    this.openNext()
+  }
+  private openNext() {
+    if (this.signal.aborted || this.lanes.size >= 64) return
+    const next = this.waiting.values().next()
+    if (next.done) return
+    const label = next.value
+    this.waiting.delete(label)
     const selection = selectRunnerLabels([label], this.labels)
     if (!selection) throw new StateCorrupt()
     const lane: Lane = { label, task: Promise.resolve() }
     this.lanes.set(label, lane)
-    lane.task = this.listen(lane, [...selection.labels]).catch((error) => {
-      if (!this.signal.aborted) this.host.report(error)
-    })
+    lane.task = this.listen(lane, [...selection.labels])
+      .then((rotate) => {
+        if (rotate) {
+          this.lanes.delete(label)
+          this.waiting.add(label)
+          this.openNext()
+        }
+      })
+      .catch((error) => {
+        if (!this.signal.aborted) this.host.report(error)
+      })
   }
   async close() {
     this.stop.abort()
@@ -219,17 +251,35 @@ export class ScaleSetController {
       })),
     }
   }
-  private async start(key: string, labels: string[], signal: AbortSignal) {
-    await this.host.authority(signal)
+  private async registration(key: string): Promise<StateRecord> {
     let [row] = await this.state.read([key], this.lease)
     if (!row)
       [row] = await this.state.commit(this.lease, [
         {
           key,
           expected: null,
-          payload: { name: 'boxlite-' + randomUUID().replaceAll('-', ''), set: null, assigned: 0, message: null },
+          payload: {
+            name: 'boxlite-' + randomUUID().replaceAll('-', ''),
+            set: null,
+            assigned: 0,
+            held: 0,
+            pending: [],
+            message: null,
+          },
         },
       ])
+    return row
+  }
+  async observe(label: string): Promise<void> {
+    if (!this.persisted.has(label)) {
+      await this.registration(this.prefix + label)
+      this.persisted.add(label)
+    }
+    this.watch(label)
+  }
+  private async start(key: string, labels: string[], signal: AbortSignal) {
+    await this.host.authority(signal)
+    let row = await this.registration(key)
     const previous = readRecord(row)
     const group = this.scope.runners.kind === 'repository' ? 1 : this.scope.runners.group
     let set
@@ -245,6 +295,8 @@ export class ScaleSetController {
               name: 'boxlite-' + randomUUID().replaceAll('-', ''),
               set: null,
               assigned: 0,
+              held: 0,
+              pending: [],
               message: null,
               session: null,
             },
@@ -273,19 +325,58 @@ export class ScaleSetController {
         const start = await this.work.run(signal, () => this.start(key, labels, signal))
         session = start.session
         let row = start.row
-        const save = async (assigned: number, message: number | null, origin: string | null, held = 0) => {
+        const previous = readRecord(row)
+        const pendingRequests = new Map(previous.pending.map(({ id, phase }) => [id, phase]))
+        const save = async (assigned: number, message: number | null, origin: string | null, held: number) => {
           const old = readRecord(row)
-          if (old.held !== held || old.assigned !== assigned || old.message !== message || old.session !== origin) {
+          const pending = Array.from(pendingRequests, ([id, phase]) => ({ id, phase }))
+          if (
+            old.pending.length !== pending.length ||
+            old.pending.some(({ id, phase }) => pendingRequests.get(id) !== phase) ||
+            old.held !== held ||
+            old.assigned !== assigned ||
+            old.message !== message ||
+            old.session !== origin
+          ) {
             ;[row] = await this.state.commit(this.lease, [
-              { key, expected: row.version, payload: { ...old, assigned, held, message, session: origin } },
+              { key, expected: row.version, payload: { ...old, assigned, held, pending, message, session: origin } },
             ])
           } else await this.journal.check(this.lease)
           lane.target = { id: start.id, labels, assigned, held, check: { key, version: row.version } }
           this.host.wake()
         }
-        const previous = readRecord(row)
-        await this.work.run(signal, () => save(start.session.initial, previous.message, previous.session))
-        const pendingRequests = new Set<string>()
+        let verifyAfter = 0
+        const verifyAcquisitions = async (assigned: number, held: number) => {
+          const uncertain = [...pendingRequests].filter(([, phase]) => phase === 'verify')
+          if (!uncertain.length) return { assigned, held }
+          const current = await this.host.service.currentStatistics(start.id, signal)
+          verifyAfter = Date.now() + 50_000
+          // Confirmed requests already account for part of the service total. An
+          // assigned job may be one of them, so only deduct the guaranteed overlap.
+          const confirmed = [...pendingRequests.values()].filter((phase) => phase === 'accepted').length
+          const knownWaiting = Math.max(0, confirmed - current.assigned)
+          const possible =
+            current.acquired === undefined
+              ? uncertain.length
+              : Math.min(uncertain.length, Math.max(0, current.acquired - knownWaiting))
+          const candidates = pendingRequests.size - uncertain.length + possible
+          // Keep ambiguous IDs while any could be owned. Their shared reservation
+          // follows the count without guessing which individual request succeeded.
+          if (current.acquired === 0 && current.assigned === 0) for (const [id] of uncertain) pendingRequests.delete(id)
+          const increase = Math.max(0, current.assigned - assigned)
+          const retained = Math.min(candidates, Math.max(0, held - increase))
+          const released = held - retained - increase
+          if (released > 0)
+            await this.withdrawCanceled(start.id, released, current.assigned + retained, lane.target!.check)
+          if (!retained) pendingRequests.clear()
+          return { assigned: current.assigned, held: retained }
+        }
+        const carried = Math.max(
+          0,
+          Math.min(previous.held, pendingRequests.size) - Math.max(0, start.session.initial - previous.assigned),
+        )
+        if (!carried) pendingRequests.clear()
+        await this.work.run(signal, () => save(start.session.initial, previous.message, previous.session, carried))
         let last: number | undefined
         while (!signal.aborted) {
           const capacity = await this.work.run(signal, async () => {
@@ -296,24 +387,38 @@ export class ScaleSetController {
           })
           const message = await session.poll(capacity, last, signal)
           failures = 0
+          // On reconnect a lost acquire may never be redelivered. Compare any
+          // missing request with service statistics, keeping explicit reoffers charged.
+          const offered = new Set(message?.available.map((job) => String(job.id)))
+          let missing = false
+          for (const [id, phase] of pendingRequests) {
+            if (phase !== 'requested' || offered.has(id)) continue
+            pendingRequests.set(id, 'verify')
+            missing = true
+          }
+          let refreshedAssigned: number | undefined
+          if ([...pendingRequests.values()].includes('verify') && (missing || !message || Date.now() >= verifyAfter)) {
+            await this.work.run(signal, async () => {
+              const target = lane.target!
+              const next = await verifyAcquisitions(target.assigned, target.held)
+              refreshedAssigned = next.assigned
+              const prior = readRecord(row)
+              await save(next.assigned, prior.message, prior.session, next.held)
+            })
+          }
           if (!message) {
-            if (lane.target!.held) {
-              const previous = readRecord(row)
-              pendingRequests.clear()
-              await this.work.run(signal, async () =>
-                save(await this.host.service.currentAssigned(start.id, signal), previous.message, previous.session),
-              )
-            }
+            if (this.waiting.size && !lane.target!.held && !lane.target!.assigned && !this.host.charged(start.id))
+              return true
             continue
           }
           await this.work.run(signal, async () => {
             // A crash after acquisition can leave a message with pre-acquisition statistics.
             // Resolve a conflicting first delivery against the current set before acquiring again.
-            let assigned = message.assigned ?? lane.target!.assigned
+            let assigned = refreshedAssigned ?? message.assigned ?? lane.target!.assigned
             if (last === undefined && assigned !== lane.target!.assigned)
-              assigned = await this.host.service.currentAssigned(start.id, signal)
-            // Assignment and cancellation can occur between two equal statistics samples.
-            // Count an explicitly settled request once even when multiple events name it.
+              assigned = (await this.host.service.currentStatistics(start.id, signal)).assigned
+            // Statistics can account for an assignment before its ID arrives. Removing
+            // that ID narrows the pending candidates without consuming a second hold.
             for (const id of message.settledRequests) pendingRequests.delete(String(id))
             let held = Math.min(
               pendingRequests.size,
@@ -322,19 +427,37 @@ export class ScaleSetController {
             if (!held) pendingRequests.clear()
             const canceled = lane.target!.held - held - Math.max(0, assigned - lane.target!.assigned)
             if (canceled > 0) await this.withdrawCanceled(start.id, canceled, assigned + held, lane.target!.check)
-            const free = Math.max(0, capacity - assigned - held)
-            if (message.available.length && free && this.host.creationReady(lane.label)) {
+            if (message.available.length && (capacity > assigned || held) && this.host.creationReady(lane.label)) {
               const authorized = await this.host.authority(signal)
-              const ids = message.available
-                .filter(
-                  (job) =>
-                    !pendingRequests.has(String(job.id)) &&
-                    job.owner.toLowerCase() === this.scope.installation.account.login &&
-                    authorized.has(job.repository.toLowerCase()) &&
-                    selectRunnerLabels(job.labels, this.labels)?.label === lane.label,
-                )
-                .slice(0, free)
-                .map((job) => job.id)
+              const eligible = message.available.filter(
+                (job) =>
+                  job.owner.toLowerCase() === this.scope.installation.account.login &&
+                  authorized.has(job.repository.toLowerCase()) &&
+                  selectRunnerLabels(job.labels, this.labels)?.label === lane.label,
+              )
+              const offers = [...new Map(eligible.map((job) => [String(job.id), job.id])).values()]
+              const existing = new Set(pendingRequests.keys())
+              const unresolved = offers.filter(
+                (id) => existing.has(String(id)) && pendingRequests.get(String(id)) !== 'accepted',
+              )
+              const novel = offers.filter((id) => !existing.has(String(id))).slice(0, acquisitionWindow - existing.size)
+              // When several candidates share fewer holds, none can spend another
+              // candidate's slot. A redelivery needs a fresh quota CAS in that case.
+              const covered = held === existing.size
+              const needReservation = covered ? novel : [...unresolved, ...novel]
+              if (covered && unresolved.length) {
+                const requests = unresolved
+                const accepted = await start.session.acquire(requests, signal)
+                for (const id of requests) pendingRequests.set(String(id), 'verify')
+                for (const id of accepted) pendingRequests.set(String(id), 'accepted')
+                if (accepted.length !== requests.length) {
+                  const next = await verifyAcquisitions(assigned, held)
+                  assigned = next.assigned
+                  held = next.held
+                }
+              }
+              const free = Math.max(0, capacity - assigned - held)
+              const ids = needReservation.slice(0, free)
               if (ids.length) {
                 const policy = await this.offerPolicy(start.id, assigned + held, signal)
                 const prior = readRecord(row)
@@ -358,9 +481,26 @@ export class ScaleSetController {
                   reserved++
                 }
                 if (reserved && this.host.creationReady(lane.label)) {
-                  const accepted = await start.session.acquire(ids.slice(0, reserved), signal)
-                  for (const id of accepted) pendingRequests.add(String(id))
-                  held += accepted.length
+                  const offered = ids.slice(0, reserved)
+                  for (const id of offered) pendingRequests.set(String(id), 'requested')
+                  await save(assigned, prior.message, prior.session, held + reserved)
+                  const accepted = await start.session.acquire(offered, signal)
+                  let reconcile = false
+                  const confirmed = new Set(accepted.map(String))
+                  for (const request of offered) {
+                    const id = String(request)
+                    if (confirmed.has(id)) pendingRequests.set(id, 'accepted')
+                    else if (existing.has(id)) {
+                      pendingRequests.set(id, 'verify')
+                      reconcile = true
+                    } else pendingRequests.delete(id)
+                  }
+                  held = Math.min(pendingRequests.size, held + accepted.length)
+                  if (reconcile) {
+                    const next = await verifyAcquisitions(assigned, held)
+                    assigned = next.assigned
+                    held = next.held
+                  }
                 }
               }
             }
@@ -387,9 +527,9 @@ export class ScaleSetController {
         }
       } catch (error) {
         lane.target = undefined
-        if (signal.aborted) return
+        if (signal.aborted) return false
         this.host.report(error)
-        if (error instanceof LeaseLost || error instanceof StateCorrupt) return
+        if (error instanceof LeaseLost || error instanceof StateCorrupt) return false
         failures++
         const deadline = error instanceof GitHubRequestError ? (error.retryAt ?? 0) : 0
         const backoff = Math.min(60_000, 1000 * 2 ** Math.min(6, failures - 1))
@@ -404,5 +544,6 @@ export class ScaleSetController {
       }
       if (retry) await delay(Math.min(retry, 2_147_483_647), undefined, { signal })
     }
+    return false
   }
 }

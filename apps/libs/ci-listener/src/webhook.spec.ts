@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -162,13 +162,10 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       }
     })
     const records = async () => state.recover((await state.acquire(randomUUID(), 10000))!)
-    it('preserves compatibility for internal job hints without an observation', async () => {
+    it('requires labels from a verified observation before publishing job demand', async () => {
       const { observation: _observation, ...notification } = verifyWebhook(signed(), secret)!
-      expect(await inbox.receive(notification)).toBe('stored')
-      expect((await state.read(['notice/9/55']))[0].payload).toEqual(notification.hint)
-      expect((await records()).map((row) => row.key).sort()).toEqual(
-        ['notice/9/55', `receipt/${notification.delivery}`, 'wake/9/21'].sort(),
-      )
+      await expect(inbox.receive(notification)).rejects.toMatchObject({ status: 400 })
+      expect(await records()).toEqual([])
     })
     it('stores installation inventory without job facts, demand or executable notices', async () => {
       const notification = verifyWebhook(
@@ -193,23 +190,11 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await inbox.receive(notification)).toBe('stored')
       const rows = await records()
       expect(rows.map((row) => row.key).sort()).toEqual(
-        [
-          `receipt/${notification.delivery}`,
-          'wake/9/21',
-          'notice/9/55',
-          'job-fact/9/55',
-          'queue-revision/9/21',
-          'demand/9/21/' +
-            createHash('sha256')
-              .update(JSON.stringify(['boxlite']))
-              .digest('hex'),
-        ].sort(),
+        [`receipt/${notification.delivery}`, 'wake/9/21', 'notice/9/55', 'job-fact/9/55'].sort(),
       )
-      expect(rows.find((row) => row.key === 'notice/9/55')!.payload).toEqual({ ...notification.hint, counted: true })
-      expect(rows.find((row) => row.key.startsWith('demand/'))!.payload).toMatchObject({
-        queued: 1,
+      expect(rows.find((row) => row.key === 'notice/9/55')!.payload).toEqual({
+        ...notification.hint,
         labels: ['boxlite'],
-        dirty: false,
       })
       expect(JSON.stringify(rows)).not.toContain(secret.toString('hex'))
     })
@@ -232,7 +217,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const stored = await records()
       expect(stored.filter((row) => row.key.startsWith('notice/'))).toHaveLength(8)
       expect(stored.filter((row) => row.key.startsWith('receipt/'))).toHaveLength(8)
-      expect(stored.find((row) => row.key.startsWith('demand/'))!.payload).toMatchObject({ queued: 8, dirty: false })
+      expect(stored.filter((row) => row.key.startsWith('job-fact/'))).toHaveLength(8)
     })
     it('counts duplicate and out-of-order job transitions once', async () => {
       const send = (status: 'queued' | 'in_progress' | 'completed') =>
@@ -248,15 +233,14 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         )
       await send('queued')
       await send('queued')
-      const stored = await records()
-      const key = stored.find((row) => row.key.startsWith('demand/'))!.key
-      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 1 })
+      expect(await state.read(['notice/9/55'])).toHaveLength(1)
       await send('in_progress')
-      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 0, dirty: false })
+      expect(await state.read(['notice/9/55'])).toHaveLength(0)
       await send('queued')
+      expect(await state.read(['notice/9/55'])).toHaveLength(0)
       await send('completed')
       await send('in_progress')
-      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 0, dirty: false })
+      expect((await state.read(['job-fact/9/55']))[0].payload).toMatchObject({ status: 'completed' })
     })
     it('deduplicates concurrent receiver instances and rejects a reused delivery with another body', async () => {
       const input = signed(),

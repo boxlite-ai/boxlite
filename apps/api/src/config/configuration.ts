@@ -962,7 +962,6 @@ const configuration = {
   },
   ci: {
     schedulerGeneration: process.env.CI_SCHEDULER_GENERATION,
-    scaleSetBindings: process.env.CI_SCALE_SET_BINDINGS || '',
     workerGroup: process.env.CI_WORKER_GROUP_NAME || 'boxlite-ci-runner',
     workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
     ...ciWorkerResources(),

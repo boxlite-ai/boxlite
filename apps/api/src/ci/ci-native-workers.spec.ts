@@ -207,14 +207,12 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     journal = new ExecutionJournal(store.state)
     lease = (await store.state.acquire(randomUUID(), 30000))!
   })
-  async function prepared(job?: number) {
+  async function prepared() {
     await store.applications().define(lease, scope(), app)
-    const allocation = await journal.reserve(
-      lease,
-      scopeKey(scope()),
-      { repository: 30, run: 40, job: job ?? 50 + (await db.getRepository(Box).count()) },
-      testCapacity({ account: 4, tenant: 4 }),
-    )
+    const allocation = await journal.reserve(lease, scopeKey(scope()), null, testCapacity({ account: 4, tenant: 4 }), {
+      labels: ['boxlite'],
+      scaleSet: 9,
+    })
     if (!allocation) throw Error('Expected reserved allocation')
     const row = await journal.advance(lease, allocation.record.key, allocation.record.version, {
       box: { phase: 'requested', id: null },
@@ -244,7 +242,6 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       async () => ({
         workers: host,
         admit: jest.fn(),
-        job: async (notice) => ({ ...notice, status: 'queued' as const, labels: ['boxlite'], runner: null }),
         runners: jest.fn(),
       }),
       { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
@@ -308,7 +305,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }),
       { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
-    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+    await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
     expect(admit).not.toHaveBeenCalled()
     expect(platform.stop).not.toHaveBeenCalled()
     expect(platform.destroy).not.toHaveBeenCalled()
@@ -492,8 +489,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     const now = Date.now(),
       clock = jest.spyOn(Date, 'now').mockReturnValue(now)
     try {
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
       expect(await journal.used(org)).toBe(0)
       expect((await inspectJournal(store.state, lease)).allocations.has(row.record.key)).toBe(false)
       started = 0
@@ -504,10 +501,36 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         await db.getRepository(Box).update(box.id, { state: BoxState.STARTING })
         return box
       })
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }), { repository: 30, run: 40, job: 50 })
+      await pool.balanceScaleSets(
+        lease,
+        [
+          {
+            id: 9,
+            labels: ['boxlite'],
+            assigned: 1,
+            held: 0,
+            check: (await store.state.read(['journal/format'], lease))[0],
+          },
+        ],
+        testCapacity({ account: 1, tenant: 1 }),
+        new AbortController().signal,
+      )
       expect(await db.getRepository(Box).count()).toBe(0)
       clock.mockReturnValue(now + 1000)
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }), { repository: 30, run: 40, job: 50 })
+      await pool.balanceScaleSets(
+        lease,
+        [
+          {
+            id: 9,
+            labels: ['boxlite'],
+            assigned: 1,
+            held: 0,
+            check: (await store.state.read(['journal/format'], lease))[0],
+          },
+        ],
+        testCapacity({ account: 1, tenant: 1 }),
+        new AbortController().signal,
+      )
       expect(await db.getRepository(Box).count()).toBe(1)
       expect(await journal.used(org)).toBe(1)
     } finally {
@@ -528,7 +551,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       expect(await db.getRepository(Box).count()).toBe(0)
       const pool = recoveringPool(host)
       try {
-        await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+        await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
         expect(await journal.used(org)).toBe(0)
       } finally {
         await pool.close()
@@ -549,8 +572,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await db.query('DELETE FROM ci_installation_binding; DELETE FROM organization_user')
     const pool = recoveringPool(restarted)
     try {
-      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
-      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
       expect(await journal.used(org)).toBe(0)
       expect((await inspectJournal(store.state, lease)).allocations.size).toBe(0)
       expect(await db.getRepository(Box).count()).toBe(0)
@@ -573,7 +596,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         admission.assert({ id: org, imageCountLimit: 1 } as any, 'quay.io/example/runner:latest'),
       )
       await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
-      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
       expect(await journal.used(org)).toBe(0)
       expect(await db.getRepository(Box).count()).toBe(0)
     } finally {
@@ -597,8 +620,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(results.some((error) => error instanceof ConfirmedWorkerCreationRejected)).toBe(true)
     const pool = recoveringPool(host)
     try {
-      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
-      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
       expect(await journal.used(org)).toBe(0)
       expect(await db.getRepository(Box).findOneByOrFail({ id: foreign.id })).toMatchObject({ state: BoxState.STARTED })
       expect(platform.stop).not.toHaveBeenCalled()
@@ -684,8 +707,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(await db.getRepository(Box).count()).toBe(0)
     const pool = recoveringPool(host)
     try {
-      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
-      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
       expect(await journal.used(org)).toBe(0)
     } finally {
       await pool.close()
@@ -748,8 +771,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }),
       { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
-    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
-    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+    await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+    await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
     expect((await inspectJournal(store.state, lease)).workers).toHaveLength(0)
     expect(jest.mocked(platform.create).mock.calls.length).toBe(createCalls)
   })
@@ -925,11 +948,11 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await db.query('DELETE FROM organization_user')
     await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     await db.query('UPDATE "user" SET role=\'admin\'')
-    const promoted = await prepared(51)
+    const promoted = await prepared()
     const box = await promoted.host.create(promoted.config)
     expect(box.box_id).toBeTruthy()
     await db.query('DELETE FROM "user"')
-    const next = await prepared(52)
+    const next = await prepared()
     await expect(next.host.create(next.config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
   })
   it('keeps original-resource cleanup after binding removal without admitting a new Box', async () => {
@@ -1034,7 +1057,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       for (let attempt = 0; attempt < 2; attempt++) {
         const pool = recoveringPool(workers.open(scope(), lease))
         try {
-          await pool.tick(lease, capacity)
+          await pool.balanceScaleSets(lease, [], capacity, new AbortController().signal)
         } finally {
           await pool.close()
         }
@@ -1052,7 +1075,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(await boxes.existsBy({ id: box.box_id })).toBe(true)
     const pool = recoveringPool(host)
     try {
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
       expect(await journal.used(org)).toBe(0)
       await platform.cleanupDestroyedBoxes()
       expect(await boxes.existsBy({ id: box.box_id })).toBe(false)
@@ -1098,7 +1121,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYED })
     const pool = recoveringPool(host)
     try {
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
       expect(await journal.used(org)).toBe(0)
     } finally {
       await pool.close()
@@ -1136,7 +1159,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       const capacity = testCapacity({ account: 1, tenant: 1 })
       const pool = recoveringPool(host)
       try {
-        const result = await pool.tick(lease, capacity).catch((error: unknown) => error)
+        const result = await pool
+          .balanceScaleSets(lease, [], capacity, new AbortController().signal)
+          .catch((error: unknown) => error)
         expect(await journal.used(org)).toBe(1)
         expect(result).toBeInstanceOf(ConflictException)
       } finally {
@@ -1254,7 +1279,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
       )
       try {
-        await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+        await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
         expect(await journal.used(org)).toBe(0)
         expect(await journal.allocation(lease, row.record.key)).toBeUndefined()
       } finally {
@@ -1285,7 +1310,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
     try {
-      await pool.tick(lease, capacity)
+      await pool.balanceScaleSets(lease, [], capacity, new AbortController().signal)
       expect((await inspectJournal(store.state, lease)).allocations.has(row.record.key)).toBe(false)
       const next = await journal.reserve(lease, scopeKey(scope()), nextJob, capacity)
       expect(next?.value.job).toEqual(nextJob)
@@ -1439,8 +1464,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   })
   it('enforces the actual Box repository quota across concurrent shared allocations', async () => {
     limits.resolveMaxCreatedBoxes.mockResolvedValue(1)
-    const first = await prepared(51),
-      second = await prepared(52)
+    const first = await prepared(),
+      second = await prepared()
     const outcomes = await Promise.allSettled([first.host.create(first.config), second.host.create(second.config)])
     expect(outcomes.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
     expect(outcomes.filter((r) => r.status === 'rejected')).toHaveLength(1)

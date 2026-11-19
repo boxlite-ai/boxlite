@@ -13,7 +13,6 @@ import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ExecutionJournal } from './journal'
 import { ScopeApplications } from '../app-scopes'
 import { ExecutionScope } from './model'
-import { observeDemand, rebuildDemand } from '../demand'
 
 const definition: ExecutionScope = {
   binding: 'binding-a',
@@ -89,10 +88,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       }
     })
     it('rejects a queued allocation mutation after an authoritative queue revision changes', async () => {
-      const target = { installationId: 1, accountId: 7, repositoryId: 21 }
-      const jobs = [{ repository: 21, run: 33, job: 55, status: 'queued' as const, runner: null, labels: ['boxlite'] }]
-      const counters = await rebuildDemand(state, lease, target, [], jobs)
-      const [revision] = await state.read(['queue-revision/1/21'])
+      const [revision] = await state.commit(lease, [{ key: 'set/9', expected: null, payload: { assigned: 1 } }])
       const row = (await journal.reserve(
         lease,
         key,
@@ -100,9 +96,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         testCapacity({ account: 2, tenant: 2 }),
         { labels: ['boxlite'] },
       ))!
-      await rebuildDemand(state, lease, target, counters, [
-        { ...jobs[0], job: 56, labels: ['boxlite-4vcpu-8gbmem-20gbdisk'] },
-      ])
+      await state.commit(lease, [{ key: revision.key, expected: revision.version, payload: { assigned: 0 } }])
       await expect(
         journal.advance(lease, row.record.key, row.record.version, { closing: true }, [
           { key: revision.key, version: revision.version },
@@ -168,74 +162,6 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await journal.used(definition.organization)).toBe(2)
       expect(await reserve()).toBeUndefined()
     })
-    const recordClaim = (installationId: number, repositoryId: number, runner: number) =>
-      state.ingress(`${installationId}/${repositoryId}`, async (tx) => {
-        await tx.write(
-          await observeDemand(
-            tx,
-            { installationId, accountId: 7, repositoryId, job: { id: demand.job, runId: demand.run } },
-            { status: 'in_progress', labels: ['boxlite'], runner },
-          ),
-        )
-      })
-    it('reads claims only from the original installation and requested runners', async () => {
-      await recordClaim(1, 21, 91)
-      await recordClaim(2, 21, 92)
-      expect(await journal.claimedRunners(lease, definition, [91, 92, 93])).toEqual(new Set([91]))
-      expect(await journal.claimedRunners(lease, definition, [])).toEqual(new Set())
-      expect(await journal.claimedRunners(lease, definition, [93])).toEqual(new Set())
-    })
-    it('withholds runner claim certainty when running observations overlap', async () => {
-      await recordClaim(1, 21, 91)
-      await state.ingress('1/21', async (tx) =>
-        tx.write(
-          await observeDemand(
-            tx,
-            { installationId: 1, accountId: 7, repositoryId: 21, job: { id: 56, runId: 33 } },
-            { status: 'in_progress', labels: ['boxlite'], runner: 91 },
-          ),
-        ),
-      )
-      expect(await journal.claimedRunners(lease, definition, [91])).toEqual(new Set())
-    })
-    it.each(['repository', 'organization'] as const)('rejects a claim outside the %s scope', async (kind) => {
-      await recordClaim(1, 22, 91)
-      const scope: ExecutionScope =
-        kind === 'repository'
-          ? definition
-          : {
-              ...definition,
-              installation: { id: 1, account: { id: 7, login: 'owner', type: 'Organization' } },
-              runners: {
-                kind: 'organization',
-                account: { id: 7, login: 'owner' },
-                group: 5,
-                repositories: [21],
-                allowPrivate: true,
-                allowPublic: false,
-              },
-            }
-      await expect(journal.claimedRunners(lease, scope, [91])).rejects.toBeInstanceOf(StateCorrupt)
-      if (scope.runners.kind === 'organization') {
-        scope.runners.repositories.push(22)
-        expect(await journal.claimedRunners(lease, scope, [91])).toEqual(new Set([91]))
-      }
-    })
-    it.each([{ repository: 0 }, { run: null }, { job: '55' }, { status: 'queued' }, { ambiguous: 'true' }])(
-      'rejects malformed persisted runner claims: %j',
-      async (change) => {
-        await recordClaim(1, 21, 91)
-        const [row] = await state.read(['runner-claim/1/91'])
-        await state.commit(lease, [
-          {
-            key: row.key,
-            expected: row.version,
-            payload: JSON.parse(JSON.stringify({ ...(row.payload as object), ...change })),
-          },
-        ])
-        await expect(journal.claimedRunners(lease, definition, [91])).rejects.toBeInstanceOf(StateCorrupt)
-      },
-    )
     it.each([
       null,
       { labels: null },
