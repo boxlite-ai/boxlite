@@ -1044,6 +1044,95 @@ fn a_raw_grow_extends_the_file() {
     assert_eq!(fixture.capacity(), 4 * IMAGE_BYTES / SECTOR_SIZE);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn grow_checks_the_process_file_size_limit() {
+    const CHILD: &str = "BOXLITE_GROW_FILE_SIZE_LIMIT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let thread = thread::current();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", thread.name().unwrap(), "--nocapture"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated file-size test failed: {status}");
+        return;
+    }
+
+    // SAFETY: Only the isolated child changes its signal disposition. Ignore
+    // SIGXFSZ so a missing preflight surfaces as a kernel I/O error.
+    assert_ne!(
+        unsafe { libc::signal(libc::SIGXFSZ, libc::SIG_IGN) },
+        libc::SIG_ERR
+    );
+    let mut fixture = Fixture::raw(false);
+    let limit = 2 * IMAGE_BYTES;
+    set_soft_file_size_limit(limit);
+
+    let target = limit + SECTOR_SIZE;
+    let error = fixture.grow(target).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error:?}");
+    let message = error.to_string();
+    assert!(message.contains("RLIMIT_FSIZE"), "got {error:?}");
+    assert!(message.contains(&target.to_string()), "{message}");
+    assert!(message.contains(&limit.to_string()), "{message}");
+    assert_eq!(std::fs::metadata(&fixture.path).unwrap().len(), IMAGE_BYTES);
+    assert_eq!(fixture.capacity(), IMAGE_BYTES / SECTOR_SIZE);
+    assert_eq!(fixture.config_raised(), 0);
+
+    assert_eq!(fixture.grow(limit).unwrap(), limit);
+    assert_eq!(std::fs::metadata(&fixture.path).unwrap().len(), limit);
+    assert_eq!(fixture.capacity(), limit / SECTOR_SIZE);
+    assert_eq!(fixture.config_raised(), 1);
+
+    let mut overlay = Fixture::qcow2();
+    let overlay_file_size = std::fs::metadata(&overlay.path).unwrap().len();
+    let target = (1 << 30) + SECTOR_SIZE;
+    let one_mib = 1 << 20;
+    let required = target + 2 * one_mib;
+    let short_limit = target + one_mib;
+    set_soft_file_size_limit(short_limit);
+
+    let error = overlay.grow(target).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error:?}");
+    let message = error.to_string();
+    assert!(message.contains("RLIMIT_FSIZE"), "{message}");
+    for value in [target, required, 2 * one_mib, short_limit] {
+        assert!(message.contains(&value.to_string()), "{message}");
+    }
+    assert_eq!(
+        std::fs::metadata(&overlay.path).unwrap().len(),
+        overlay_file_size
+    );
+    assert_eq!(overlay.capacity(), IMAGE_BYTES / SECTOR_SIZE);
+    assert_eq!(overlay.config_raised(), 0);
+
+    set_soft_file_size_limit(required);
+    assert_eq!(overlay.grow(target).unwrap(), target);
+    assert_eq!(overlay.capacity(), target / SECTOR_SIZE);
+    assert_eq!(overlay.config_raised(), 1);
+
+    set_soft_file_size_limit(IMAGE_BYTES);
+    assert_eq!(fixture.grow(limit).unwrap(), limit);
+    assert_eq!(fixture.config_raised(), 1);
+}
+
+#[cfg(target_os = "linux")]
+fn set_soft_file_size_limit(bytes: u64) {
+    let mut limit = libc::rlimit64 {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit64 writes to a valid rlimit64 in this isolated process.
+    assert_eq!(
+        unsafe { libc::getrlimit64(libc::RLIMIT_FSIZE, &mut limit) },
+        0
+    );
+    limit.rlim_cur = bytes;
+    // SAFETY: The isolated child updates its own soft limit.
+    assert_eq!(unsafe { libc::setrlimit64(libc::RLIMIT_FSIZE, &limit) }, 0);
+}
+
 #[test]
 fn invalid_grows_fail_without_a_change_or_an_interrupt() {
     let mut fixture = Fixture::qcow2();

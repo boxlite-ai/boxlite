@@ -800,6 +800,18 @@ took, and then announces that slot on the kernel command line.
   (`PermissionDenied`) and a smaller or unaligned size (`InvalidInput`),
   succeeds unchanged at the current size, and otherwise calls `resize_grow`,
   re-encodes the configuration space and raises the configuration interrupt.
+  On Linux, the Raw preflight rejects a target above the shim's current
+  `RLIMIT_FSIZE` soft limit before attempting the grow.
+  For qcow2, the preflight adds a temporary allowance of 1 MiB for every
+  started GiB of target virtual capacity and compares the estimate to that
+  limit.
+
+  With QEMU 8.2.2, fresh standalone qcow2 images created with
+  `preallocation=metadata`, 64 KiB clusters, and 16-bit refcounts used 384 KiB
+  of extra host file length at 1 GiB and 10.25 MiB at 64 GiB. Existing images
+  can require more depending on cluster layout. The kernel enforces the limit
+  on actual host file growth.
+
   A target sent while the device is inactive waits for the next activation;
   the caller times out with `TimedOut` and may retry. A timeout does not cancel
   the queued operation. A dropped device returns `BrokenPipe`.
