@@ -80,7 +80,7 @@ export function EnvironmentSwitcher({
                     </span>
                   </span>
                   <span className="truncate text-meta text-muted-foreground">
-                    {env.url.replace(/^https?:\/\//, '')}
+                    {env.url ? env.url.replace(/^https?:\/\//, '') : 'URL unavailable'}
                   </span>
                 </span>
               </DropdownMenuItem>

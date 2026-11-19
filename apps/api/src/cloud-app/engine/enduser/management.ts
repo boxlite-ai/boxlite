@@ -16,7 +16,9 @@ export interface AuthStatus {
   users: number
 }
 
-export async function authStatus(ctx: Ctx, app: AppRow, env: EnvRow): Promise<AuthStatus> {
+export const loginUrl = (origin: string): string => `${origin}/.boxlite/auth/login`
+
+export async function signInStatus(ctx: Ctx, app: AppRow, env: EnvRow): Promise<Omit<AuthStatus, 'login_url'>> {
   const auth = (await ctx.resources.currentSpec(env))?.auth ?? null
   const ready = await appProviders(ctx, app)
   return {
@@ -26,8 +28,14 @@ export async function authStatus(ctx: Ctx, app: AppRow, env: EnvRow): Promise<Au
       status: ready.includes(name) ? 'ready' : 'not_configured',
     })),
     protect: auth?.protect ?? [],
-    login_url: `${await ctx.resources.appUrl(app.name, env.name)}/.boxlite/auth/login`,
     users: (await ctx.store.get<{ n: number }>('SELECT COUNT(*) AS n FROM app_users WHERE env_id = ?', env.id))?.n ?? 0,
+  }
+}
+
+export async function authStatus(ctx: Ctx, app: AppRow, env: EnvRow): Promise<AuthStatus> {
+  return {
+    ...(await signInStatus(ctx, app, env)),
+    login_url: loginUrl(await ctx.resources.appUrl(app.name, env.name)),
   }
 }
 

@@ -18,8 +18,8 @@ export interface AppSummaryView {
   id: string
   name: string
   slug: string
-  /** The env's own origin, as the CP serves it (resources.appUrl); exists from creation. */
-  url: string
+  /** The environment's assigned public URL, or null while it has no default domain. */
+  url: string | null
   visibility: Access
   status: ConsoleStatus
   lastDeploy: LastDeployView | null
@@ -38,7 +38,7 @@ export interface AppSummaryView {
 export interface EnvironmentSummaryView {
   name: string
   status: ConsoleStatus
-  url: string
+  url: string | null
   box: string | null
   lastDeploy: LastDeployView | null
   from: string | null

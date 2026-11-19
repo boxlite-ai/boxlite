@@ -30,6 +30,7 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
     const v = viewer(c)
     const app = await createApp(ctx, b.name, actorOf(v), orgIdFor(v))
     const env = (await store.envByName(app.id, 'main'))!
+    await ctx.origins.envUrl(env)
     return c.json({ app: await detail(app, env), prompt: handoffPrompt(ctx, app.name) }, 201)
   })
 

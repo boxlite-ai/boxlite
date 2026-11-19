@@ -193,7 +193,10 @@ fails partway through, retry the same request or let the App worker retry on its
 next maintenance pass. The App name stays reserved until cleanup succeeds.
 
 Environment domains are platform Domain resources. Both the default hostname and aliases resolve
-to an environment, which routes through the API to a private Box tunnel. Box creation and volume
+to an environment, which routes through the API to a private Box tunnel. The Dashboard App list,
+App detail and environment list read the assigned default URL. For an environment without a
+default domain, `url` and its sign-in link (`auth.loginUrl` in App detail) are `null`.
+Box creation and volume
 allocation use the platform services and organization limits. App metadata, deployment state,
 logs and callback status live in the platform PostgreSQL schema `cloud_app`; source content lives
 in the configured GCS/S3 bucket. Neon remains the application database provider, through its official API.

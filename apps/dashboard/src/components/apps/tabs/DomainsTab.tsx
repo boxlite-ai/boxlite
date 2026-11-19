@@ -21,11 +21,11 @@ import { CopyIconButton, DIALOG_FRAME, FlatButton, HoverActions, SectionTitle } 
 import { ToolButton } from '../SubNav'
 import { Tag } from '../viz'
 
-// Each environment keeps its default URL; additional platform domains reuse organization ownership.
+// Show the assigned default URL; additional platform domains reuse organization ownership.
 
 export function DomainsTab({ app }: { app: AppDetail }) {
   const openApp = useOpenApp()
-  const host = app.url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const host = app.url?.replace(/^https?:\/\//, '').replace(/\/$/, '')
   const open = () => void openApp(app.id, app.environment)
   return (
     <div className="flex flex-col gap-10">
@@ -33,15 +33,15 @@ export function DomainsTab({ app }: { app: AppDetail }) {
         <SectionTitle title="BoxLite domain" />
         <div className="flex min-h-[48px] items-center gap-3 border-b border-border/60 px-2 font-mono text-body">
           <span className="inline-flex min-w-0 items-center gap-2">
-            {app.activeRelease ? (
+            {app.url && app.activeRelease ? (
               <button type="button" onClick={open} className="truncate font-semibold text-foreground hover:underline">
                 {host}
               </button>
             ) : (
-              <span className="truncate font-semibold text-foreground">{host}</span>
+              <span className="truncate font-semibold text-foreground">{host ?? 'URL unavailable'}</span>
             )}
-            <CopyIconButton text={app.url} title="Copy URL" />
-            {app.activeRelease && (
+            {app.url && <CopyIconButton text={app.url} title="Copy URL" />}
+            {app.url && app.activeRelease && (
               <button
                 type="button"
                 onClick={open}
@@ -52,7 +52,7 @@ export function DomainsTab({ app }: { app: AppDetail }) {
               </button>
             )}
           </span>
-          <Tag>Primary</Tag>
+          {app.url && <Tag>Primary</Tag>}
           <span className="ml-auto text-meta text-muted-foreground" title="Change it from Access in the header">
             Access: <span className="text-foreground">{capitalize(VISIBILITY_LABEL[app.visibility])}</span>
           </span>

@@ -43,6 +43,23 @@ export function LiveCard({
   const preview = app.preview && !failing ? app.preview : null
   const asleep = app.status === 'sleeping'
   const [loadedPreview, setLoadedPreview] = useState<string | null>(null)
+  const picture = preview ? (
+    <span className="relative block aspect-[16/10] w-full overflow-hidden">
+      <AppHostingIllustration compact className="absolute inset-0 size-full" />
+      <AppImage
+        path={preview.src}
+        alt={`${app.name} at ${preview.releaseId}`}
+        onLoad={() => setLoadedPreview(preview.src)}
+        onError={() => setLoadedPreview(null)}
+        className={cn(
+          'absolute inset-0 size-full object-cover object-top',
+          loadedPreview !== preview.src && 'opacity-0',
+          asleep && 'grayscale',
+        )}
+        loading="lazy"
+      />
+    </span>
+  ) : null
   return (
     // One card: the app as visitors see it on the left, what is live and its facts on the right.
     <section className="grid border border-border bg-card lg:grid-cols-[minmax(0,500px)_minmax(0,1fr)]">
@@ -51,13 +68,13 @@ export function LiveCard({
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <span className="flex min-w-0 flex-1 items-center gap-2 py-1 font-mono text-meta">
             <span className="size-[6px] shrink-0" style={{ background: asleep ? STATUS.stopped : STATUS.running }} />
-            <span className="min-w-0 truncate text-muted-foreground" title={app.url}>
-              {host(app.url)}
+            <span className="min-w-0 truncate text-muted-foreground" title={app.url ?? undefined}>
+              {app.url ? host(app.url) : 'URL unavailable'}
             </span>
           </span>
-          <CopyIconButton text={app.url} title="Copy URL" />
-          {app.activeRelease && <RetakeButton app={app} />}
-          {app.activeRelease && (
+          {app.url && <CopyIconButton text={app.url} title="Copy URL" />}
+          {app.url && app.activeRelease && <RetakeButton app={app} />}
+          {app.url && app.activeRelease && (
             <button
               type="button"
               onClick={open}
@@ -68,27 +85,19 @@ export function LiveCard({
             </button>
           )}
         </div>
-        {preview ? (
-          <button
-            type="button"
-            onClick={open}
-            title={`Open ${app.name}`}
-            className="relative block aspect-[16/10] w-full overflow-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            <AppHostingIllustration compact className="absolute inset-0 size-full" />
-            <AppImage
-              path={preview.src}
-              alt={`${app.name} at ${preview.releaseId}`}
-              onLoad={() => setLoadedPreview(preview.src)}
-              onError={() => setLoadedPreview(null)}
-              className={cn(
-                'absolute inset-0 size-full object-cover object-top',
-                loadedPreview !== preview.src && 'opacity-0',
-                asleep && 'grayscale',
-              )}
-              loading="lazy"
-            />
-          </button>
+        {picture ? (
+          app.url ? (
+            <button
+              type="button"
+              onClick={open}
+              title={`Open ${app.name}`}
+              className="block w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              {picture}
+            </button>
+          ) : (
+            picture
+          )
         ) : (
           <div className="relative flex aspect-[16/10] w-full flex-col items-center justify-end overflow-hidden bg-muted/20 pb-5">
             <AppHostingIllustration compact className="absolute inset-0 size-full" />
