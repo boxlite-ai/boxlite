@@ -15,7 +15,7 @@ import { Listener, ListenerHost } from './listener'
 import { ScaleSetController, ScaleSetWork } from './scale-set-controller'
 import { ActionsScaleSets } from './scale-set-client'
 import { SqliteStateDatabase } from './state/sqlite'
-import { ListenerState } from './state/store'
+import { ExecutionLease, ListenerState, StateCheck } from './state/store'
 import { ListenerInbox, verifyWebhook } from './webhook'
 import { ConfirmedWorkerAbsent, WorkerExecutor, WorkerState } from './worker'
 
@@ -38,6 +38,7 @@ class ActionsFixture {
   defaultSet?: { id: number; name: string; labels: unknown[]; runnerGroupId: number }
   labels = ['boxlite']
   rejectAcquisition = new Set<number>()
+  loseRetirementReply = false
   loseBeforeAcquire = false
   interruptAcquisition?: () => void
   acquiredCount: number | undefined = 0
@@ -104,7 +105,15 @@ class ActionsFixture {
       return Response.json({ total_count: 1, repositories: [this.repository] })
     if (method === 'GET' && /\/actions\/runners\/\d+$/.test(path)) {
       const runner = [...this.runners.values()].find((runner) => path.endsWith('/' + runner.id))
-      return runner ? Response.json({ ...runner, status: 'online', busy: true }) : new Response(null, { status: 404 })
+      return runner
+        ? Response.json({ ...runner, status: 'online', busy: !this.loseRetirementReply })
+        : new Response(null, { status: 404 })
+    }
+    if (method === 'DELETE' && this.loseRetirementReply && /\/actions\/runners\/\d+$/.test(path)) {
+      const original = [...this.runners.values()].find((runner) => path.endsWith('/' + runner.id))
+      if (!original) throw Error('Missing original runner')
+      this.runners.delete(original.name)
+      throw Error('Lost DELETE reply after retirement')
     }
     if (path === '/repositories/21') return Response.json(this.repository)
     if (path.endsWith('/registration-token')) return Response.json({ token: 'registration' })
@@ -248,6 +257,13 @@ const scenarios = [
   'preserves a confirmed acquisition reported by the new session',
   'recovers one confirmed hold after two accepted requests settle partially offline',
   'releases remaining ambiguous holds after a second reconnect reports zero',
+  'releases an accepted hold after a missed lifecycle event on the same session',
+  'honors a quota pause before retrying an unknown acquisition',
+  'recovers idle retirement after a lost DELETE reply',
+  'replaces the retired runner when demand returns after a lost DELETE reply',
+  'rejects a charged retry against a stale quota record',
+  'requires an original set reservation when a drained request is reoffered',
+  'retries a charged slot with 98 policy checks',
   'rechecks shrinking quota after a long poll',
   'leaves the remaining quota for already assigned demand',
   'starts an organization worker with the custom resource label',
@@ -364,13 +380,20 @@ for (const storage of ['sqlite', 'postgres'])
         }
         let listener: Listener
         let maximum = 2
+        let policyOwner: ExecutionLease | undefined
+        let policyChecks: StateCheck[] | undefined
         const start = () => {
           const controller = new AbortController()
           listener = new Listener({
             state,
             host,
             worker: { image: 'jitbox', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
-            capacity: { resolve: async () => ({ limits: [{ maximum, domain: 'organization' }] }) },
+            capacity: {
+              resolve: async ({ lease }) => {
+                policyOwner = lease
+                return { limits: [{ maximum, domain: 'organization' }], checks: policyChecks }
+              },
+            },
             timing: { tickMs: 5, leaseMs: 450 },
           })
           const task = listener.run(controller.signal)
@@ -568,6 +591,121 @@ for (const storage of ['sqlite', 'postgres'])
             expect(fixture.acquired).toEqual([[123], [124]])
             return
           }
+          if (scenario === 'releases an accepted hold after a missed lifecycle event on the same session') {
+            maximum = 1
+            fixture.acquiredCount = 1
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.acknowledged.includes(1))
+            expect(await journal.used('tenant')).toBe(1)
+            fixture.acquiredCount = 0
+            fixture.idle()
+            await until(async () => (await journal.used('tenant')) === 0)
+            expect(fixture.sessions).toHaveLength(1)
+            return
+          }
+          if (scenario === 'honors a quota pause before retrying an unknown acquisition') {
+            maximum = 1
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.sessions.length === 2)
+            maximum = 0
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.acknowledged.includes(1))
+            expect(fixture.acquired).toEqual([])
+            return
+          }
+          if (
+            scenario === 'requires an original set reservation when a drained request is reoffered' ||
+            scenario === 'retries a charged slot with 98 policy checks'
+          ) {
+            maximum = 1
+            await until(() => fixture.requests.includes('GET /messages'))
+            const budget = scenario === 'retries a charged slot with 98 policy checks'
+            if (budget) {
+              const records = await state.commit(
+                policyOwner!,
+                Array.from({ length: 98 }, (_, i) => ({
+                  key: 'test/quota/' + i,
+                  expected: null,
+                  payload: { maximum: 1 },
+                })),
+              )
+              policyChecks = records.map(({ key, version }) => ({ key, version }))
+            }
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.sessions.length === 2)
+            if (!budget) {
+              const key = await journal.define(policyOwner!, scope)
+              const [original] = (await journal.workers(policyOwner!, key)).rows
+              const absent = await journal.advance(policyOwner!, original.record.key, original.record.version, {
+                closing: true,
+                box: { phase: 'absent', id: null },
+                runner: { phase: 'absent', id: null },
+              })
+              await journal.release(policyOwner!, absent.record.key, absent.record.version)
+              const other = await journal.reserve(
+                policyOwner!,
+                key,
+                null,
+                { limits: [{ domain: 'organization', maximum: 1 }] },
+                { labels: ['boxlite-1vcpu-1gbmem-10gbdisk'], scaleSet: 8 },
+              )
+              expect(other).toBeDefined()
+            }
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.acknowledged.includes(1) || fixture.sessions.length > 2)
+            expect(fixture.acquired).toEqual(budget ? [[123]] : [])
+            expect(await journal.used('tenant')).toBe(1)
+            return
+          }
+          if (scenario === 'rejects a charged retry against a stale quota record') {
+            maximum = 1
+            fixture.loseBeforeAcquire = true
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.sessions.length === 2)
+            const [open] = await state.commit(policyOwner!, [
+              { key: 'test/quota', expected: null, payload: { maximum: 1 } },
+            ])
+            policyChecks = [{ key: open.key, version: open.version }]
+            await state.commit(policyOwner!, [{ key: open.key, expected: open.version, payload: { maximum: 0 } }])
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.acknowledged.includes(1) || fixture.sessions.length > 2)
+            expect(fixture.acquired).toEqual([])
+            return
+          }
+          if (
+            scenario === 'recovers idle retirement after a lost DELETE reply' ||
+            scenario === 'replaces the retired runner when demand returns after a lost DELETE reply'
+          ) {
+            maximum = 1
+            fixture.loseRetirementReply = true
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.acknowledged.includes(1))
+            fixture.publish(2, 1)
+            await until(() => (workers.deliverJit as jest.Mock).mock.calls.length === 1)
+            fixture.publish(3, 0)
+            await until(() =>
+              fixture.requests.some((path) => path.startsWith('DELETE /repos/owner/repo/actions/runners/')),
+            )
+            expect(fixture.runners.size).toBe(0)
+            await stop()
+            const renewed = scenario === 'replaces the retired runner when demand returns after a lost DELETE reply'
+            if (renewed) fixture.target = 1
+            stop = start()
+            if (renewed) {
+              await until(() => fixture.runners.size === 1)
+              expect(workers.create).toHaveBeenCalledTimes(2)
+              expect(boxes.size).toBe(1)
+              expect(
+                fixture.requests.filter((path) => path.startsWith('DELETE /repos/owner/repo/actions/runners/')),
+              ).toHaveLength(1)
+              return
+            }
+            await until(async () => (await journal.used('tenant')) === 0)
+            expect(boxes.size).toBe(0)
+            return
+          }
           if (scenario === 'keeps the second hold after a delayed start confirms the first assignment') {
             maximum = 2
             fixture.publish(1, 0, [11, 12])
@@ -731,6 +869,7 @@ for (const storage of ['sqlite', 'postgres'])
             return
           }
           if (scenario === 'holds accepted quota through idle polls and an owner restart') {
+            fixture.acquiredCount = undefined
             maximum = 1
             fixture.publish(1, 0, [123])
             await until(() => fixture.acknowledged.includes(1))

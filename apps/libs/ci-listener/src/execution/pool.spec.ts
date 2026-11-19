@@ -159,6 +159,19 @@ describe('CI shared worker lifecycle', () => {
     )
   }
   const reconcile = () => pool.balanceScaleSets(lease, [], limits, new AbortController().signal)
+  it('recovers a stopped worker while new admission is denied', async () => {
+    await tick()
+    const [box] = boxes.values()
+    box.status = 'stopped'
+    jest.mocked(backend.admit).mockRejectedValue(new Error('Admission revoked'))
+    const [proof] = await state.read(['journal/format'], lease)
+    const targets = [{ id: 9, labels: ['boxlite'], held: 0, assigned: 2, check: proof }]
+    for (let i = 0; i < 2; i++) {
+      await pool.balanceScaleSets(lease, targets, limits, new AbortController().signal).catch(() => {})
+    }
+    expect(boxes.size).toBe(0)
+    expect(await journal.used(definition.organization)).toBe(0)
+  })
   const finishBox = async () => {
     for (const box of boxes.values()) box.status = 'stopped'
     await reconcile()

@@ -15,6 +15,7 @@ export interface StateChange {
   /** Undefined deletes an existing version; null is a persistable JSON value. */
   payload?: Json
 }
+export const MAX_STATE_CHECKS = 100
 export interface StateCheck {
   key: string
   version: string
@@ -248,7 +249,7 @@ export class ListenerState {
   ): Promise<StateRecord[]> {
     lease = { ...lease }
     const prepared = this.prepare(changes)
-    if (!Array.isArray(checks) || checks.length > 100) throw new Error('Invalid Listener state checks')
+    if (!Array.isArray(checks) || checks.length > MAX_STATE_CHECKS) throw new Error('Invalid Listener state checks')
     const fences = checks.map(({ key, version, expiresAt }) => ({ key, version, expiresAt }))
     if (
       new Set(fences.map((check) => check.key)).size !== fences.length ||

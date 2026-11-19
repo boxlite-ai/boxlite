@@ -221,6 +221,70 @@ describe('CI shared Listener orchestration', () => {
     await runUntil(available.promise)
     expect(host.report).toHaveBeenCalledWith(expect.any(Error), 'scope-backend')
   })
+  it('releases a closing allocation while repository discovery fails', async () => {
+    const journal = new ExecutionJournal(state)
+    const released = deferred()
+    let seeded = false
+    jest.mocked(host.discover).mockImplementation(async (owner) => {
+      if (!seeded) {
+        const key = await journal.define(owner, scope)
+        const row = (await journal.reserve(owner, key, null, testCapacity({ account: 1, tenant: 1 }), {
+          labels: ['boxlite'],
+          scaleSet: 9,
+        }))!
+        await journal.advance(owner, row.record.key, row.record.version, { closing: true })
+        seeded = true
+      }
+      throw new Error('Repository discovery unavailable')
+    })
+    host.observe = (event) => {
+      if (event.event === 'ci-worker-released') released.resolve()
+    }
+    await runUntil(Promise.race([released.promise, new Promise<void>((done) => setTimeout(done, 800))]))
+    expect(seeded).toBe(true)
+    expect(await journal.used(scope.organization)).toBe(0)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('retains an undispatched worker when discovery restores its scope during a drain', async () => {
+    const journal = new ExecutionJournal(state)
+    const restored = deferred()
+    const resume = deferred()
+    let allocationKey = ''
+    let paused = false
+    const scan = state.scan.bind(state)
+    jest.spyOn(state, 'scan').mockImplementation(async (owner, range) => {
+      if (allocationKey && !paused && range.prefix.startsWith('active-worker/')) {
+        paused = true
+        await resume.promise
+      }
+      return scan(owner, range)
+    })
+    jest.mocked(host.discover).mockImplementation(async (owner) => {
+      lease = owner
+      if (!allocationKey) {
+        const key = await journal.define(owner, scope)
+        const row = (await journal.reserve(owner, key, null, testCapacity({ account: 1, tenant: 1 }), {
+          labels: ['boxlite'],
+          scaleSet: 9,
+        }))!
+        allocationKey = row.record.key
+      }
+      return { scopes: paused ? [scope] : [], completed: [], pending: true, ready: true }
+    })
+    backend.scaleSetAuthority = async () => {
+      restored.resolve()
+      resume.resolve()
+      return new Set(['repo'])
+    }
+    try {
+      await runUntil(restored.promise.then(() => new Promise<void>((done) => setTimeout(done, 200))))
+    } finally {
+      resume.resolve()
+    }
+    expect(paused).toBe(true)
+    expect((await journal.allocation(lease, allocationKey))?.value.closing).toBe(false)
+    expect(await journal.used(scope.organization)).toBe(1)
+  })
   it('keeps notices pending after an incomplete directory refresh', async () => {
     await listener.receive(notification())
     const failed = deferred()

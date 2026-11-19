@@ -232,15 +232,22 @@ export class ExecutionJournal {
     return (await this.remainingCapacity(lease, scope, policy)) > 0
   }
   async remainingCapacity(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<number> {
-    lease = { ...lease }
+    return Math.max(0, await this.capacityMargin(lease, scope, captureCapacity(policy)))
+  }
+  /** A retry reuses its original charge. A lowered limit still applies to acquiring new work. */
+  async permitsChargedRetry(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<boolean> {
     policy = captureCapacity(policy)
+    return !policy.limits.some((limit) => limit.maximum === 0) && (await this.capacityMargin(lease, scope, policy)) >= 0
+  }
+  private async capacityMargin(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<number> {
+    lease = { ...lease }
     const ids = domains((await this.scope(lease, scope)).scope)
     const usage = await this.usage(Object.values(ids), lease)
     let free = 2_147_483_647
     for (const { maximum, domain } of policy.limits) {
       if (maximum !== null) free = Math.min(free, maximum - usage.find((row) => row.id === ids[domain])!.used)
     }
-    return Math.max(0, free)
+    return free
   }
   /** Dashboard aggregate: an entirely new domain has no usage; a broken pair is corruption. */
   async used(organization: string): Promise<number> {
