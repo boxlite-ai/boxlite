@@ -11,6 +11,7 @@ use boxlite_hypervisor::Vm as HostVm;
 use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
+    control::{Requests, VcpuControl},
     devices::console::ConsoleWorker,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
@@ -77,8 +78,13 @@ pub struct Vm<H: HostVm> {
     console: Mutex<Option<ConsoleWorker>>,
     events: Mutex<EventLoop>,
     sender: EventSender,
+    /// vCPU control requests, which `run` serves.
+    requests: Requests,
     boot_regs: BootRegisters,
+    /// vCPUs online at boot.
     vcpu_count: u8,
+    /// vCPUs the guest's topology lists; the rest of `vcpu_count` start parked.
+    max_vcpus: u8,
     state: VmState,
     host_vm: Arc<H>,
     ram: GuestRam,
@@ -86,9 +92,10 @@ pub struct Vm<H: HostVm> {
 
 impl<H: HostVm> std::fmt::Debug for Vm<H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (vcpus, state) = (self.vcpu_count, self.state);
+        let (vcpus, max_vcpus, state) = (self.vcpu_count, self.max_vcpus, self.state);
         f.debug_struct("Vm")
             .field("vcpus", &vcpus)
+            .field("max_vcpus", &max_vcpus)
             .field("state", &state)
             .finish_non_exhaustive()
     }
@@ -190,8 +197,10 @@ impl<H: HostVm> Vm<H> {
             console: Mutex::new(None),
             events: Mutex::new(events),
             sender,
+            requests: Requests::new(),
             boot_regs: BootRegisters::default(),
             vcpu_count: config.vcpu_count,
+            max_vcpus: config.max_vcpus,
             state: VmState::Created,
             host_vm,
             ram,
@@ -205,6 +214,12 @@ impl<H: HostVm> Vm<H> {
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.sender.clone())
     }
+
+    /// A handle that changes how many vCPUs may run while
+    /// [`run`](Self::run) runs.
+    pub fn vcpu_control(&self) -> VcpuControl {
+        VcpuControl::new(&self.requests, self.sender.clone(), self.max_vcpus)
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -217,31 +232,33 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
     pub fn run(&mut self) -> Result<VmExit> {
         use std::{sync::PoisonError, thread};
 
-        use boxlite_hypervisor::VcpuHandle as _;
-
-        use crate::vcpu::{StartGate, Workers};
+        use crate::vcpu::{Slots, StartGate, Workers};
 
         if self.state != VmState::Created {
             return Err(Error::AlreadyRan);
         }
         self.state = VmState::Exited;
         let gate = StartGate::default();
-        let kicks = Mutex::new(Vec::new());
+        let slots = Slots::new(self.max_vcpus);
         let vcpus = Workers {
             host_vm: &*self.host_vm,
-            vcpu_count: self.vcpu_count,
+            max_vcpus: self.max_vcpus,
+            online_count: self.vcpu_count,
             boot_regs: &self.boot_regs,
             chipset: &self.chipset,
             sender: &self.sender,
-            kicks: &kicks,
+            slots: &slots,
             gate: &gate,
         };
+        let requests = &self.requests;
         let events = self
             .events
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
         let event = thread::scope(|scope| {
-            for id in 0..vcpus.vcpu_count {
+            // Every possible vCPU is created and configured at boot; the ones
+            // past `online_count` park and their threads exit.
+            for id in 0..vcpus.max_vcpus {
                 let vcpus = &vcpus;
                 let spawned = thread::Builder::new()
                     .name(format!("vcpu{id}"))
@@ -255,19 +272,28 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     break;
                 }
             }
-            let event = events.wait(None);
+            let event = loop {
+                match events.wait_once(crate::events::RECHECK) {
+                    Ok(Some(event)) => break Ok(Some(event)),
+                    Ok(None) => {
+                        while let Some(request) = requests.try_next() {
+                            let answer = set_online(&vcpus, scope, request.count);
+                            // A caller that gave up has dropped its receiver.
+                            let _ = request.reply.send(answer);
+                        }
+                    }
+                    Err(error) => break Err(error),
+                }
+            };
             if event.is_err() {
                 // Without an event the stop latch is still open; close it so
                 // the vCPUs stop and the scope can join them.
                 vcpus.sender.send(Event::StopRequested);
             }
+            requests.close();
             // Wake every vCPU still in the guest; a vCPU still being
             // configured sees the latch before its first entry.
-            for kick in kicks.lock().unwrap_or_else(PoisonError::into_inner).iter() {
-                if let Err(error) = kick.kick() {
-                    tracing::warn!(%error, "failed to kick a vCPU");
-                }
-            }
+            slots.kick_running();
             event
         });
         // No vCPU notifies a queue any more. Stop the virtio devices before the
@@ -305,6 +331,67 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             }
         }
     }
+}
+
+/// Grants parked vCPUs, lowest IDs first, or revokes running ones, highest
+/// first, until `count` run; returns how many run.
+#[cfg(target_arch = "x86_64")]
+fn set_online<'scope, H: boxlite_hypervisor::X86Vm>(
+    vcpus: &'scope crate::vcpu::Workers<'scope, H>,
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    count: u8,
+) -> Result<u8> {
+    vcpus.slots.wait_settled(vcpus.sender);
+    let running = vcpus.slots.running();
+    if usize::from(count) > running.len() {
+        let wanted = usize::from(count) - running.len();
+        let mut granted = Vec::with_capacity(wanted);
+        for id in vcpus.slots.parked().into_iter().take(wanted) {
+            if let Err(error) = grant(vcpus, scope, id) {
+                // The guest onlines a CPU only after its grant is answered,
+                // so the vCPUs this request started can park again.
+                for &id in granted.iter().rev() {
+                    if let Err(error) = vcpus.slots.revoke(id) {
+                        tracing::warn!(vcpu = id, %error, "failed to park a vCPU after a failed grant");
+                    }
+                }
+                return Err(error);
+            }
+            granted.push(id);
+        }
+    } else {
+        for &id in running
+            .iter()
+            .rev()
+            .take(running.len() - usize::from(count))
+        {
+            vcpus.slots.revoke(id)?;
+        }
+    }
+    Ok(u8::try_from(vcpus.slots.running().len()).expect("at most MAX_VCPUS run"))
+}
+
+#[cfg(target_arch = "x86_64")]
+/// Starts a thread for parked vCPU `id` and waits until it owns the vCPU. A
+/// failed reset or spawn drops the vCPU, so it is never granted again.
+fn grant<'scope, H: boxlite_hypervisor::X86Vm>(
+    vcpus: &'scope crate::vcpu::Workers<'scope, H>,
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    id: u8,
+) -> Result<()> {
+    let parked = vcpus.slots.take_for_grant(id)?;
+    std::thread::Builder::new()
+        .name(format!("vcpu{id}"))
+        .spawn_scoped(scope, move || vcpus.resume(parked, id))
+        .map_err(|source| {
+            vcpus.slots.lose(id);
+            Error::SpawnVcpu {
+                vcpu: id.into(),
+                source,
+            }
+        })?;
+    vcpus.slots.wait_started(id);
+    Ok(())
 }
 
 impl<H: HostVm> Drop for Vm<H> {

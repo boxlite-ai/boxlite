@@ -431,9 +431,11 @@ worker slot synchronously.
 ### Threads
 
 - **vCPU threads.**
-  - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
-    vCPU and waits at a start gate until every vCPU is configured; a thread
-    that fails to start aborts the gate.
+  - `run()` spawns one per possible vCPU, named `vcpuN`. Each creates and
+    configures its vCPU and waits at a start gate until every vCPU is
+    configured; a thread that fails to start aborts the gate. On KVM a vCPU
+    the host has not granted then parks and its thread exits; a grant resumes
+    it on a new thread ([vCPU scaling](../../../../src/vmm/README.md#vcpu-scaling)).
   - It then loops: run, dispatch the exit through the chipset, run again.
   - An idle vCPU waits inside the host, never in a VMM thread. KVM's in-kernel
     irqchip waits out `HLT`; with the in-kernel GIC, HVF waits out `WFI` inside
@@ -700,8 +702,10 @@ The kernel then boots itself (Linux v6.12):
   - The jailed shim still needs access to the new host directory, for example
     as a descriptor passed from the runtime.
 - **M7, dynamic resources.**
-  - `vcpu_count` at boot is the maximum. The guest brings CPUs online and
-    offline: PSCI `CPU_ON` and `CPU_OFF` on arm64, INIT and SIPI on x86_64.
+  - `max_vcpus` at boot is the maximum, and the host starts a vCPU thread only
+    for a granted vCPU ([#2885](https://github.com/boxlite-ai/boxlite/issues/2885)).
+    The guest brings CPUs online and offline: PSCI `CPU_ON` and `CPU_OFF` on
+    arm64, INIT and SIPI on x86_64.
   - A hotplug region directly above RAM is reserved at boot. virtio-mem adds
     and removes blocks in it with `map_memory` and `unmap_memory`.
 - **M8, memory snapshots.**

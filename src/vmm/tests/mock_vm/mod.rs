@@ -41,6 +41,15 @@ pub(crate) enum Call {
     DropVcpu {
         id: u32,
     },
+    ParkVcpu {
+        id: u32,
+    },
+    ResetVcpu {
+        id: u32,
+    },
+    ResumeVcpu {
+        id: u32,
+    },
 }
 
 /// One exit of a scripted mock vCPU. A vCPU whose script has run out waits
@@ -94,6 +103,8 @@ pub(crate) struct MockVm {
     scripts: Vec<Vec<Step>>,
     /// The vCPU whose `set_cpu_features` fails.
     fail_setup: Option<u32>,
+    /// The vCPU whose `reset` fails once parked.
+    fail_reset: Option<u32>,
     /// The id of each vCPU entry into the guest, in order.
     entries: Arc<Mutex<Vec<u32>>>,
 }
@@ -129,6 +140,14 @@ impl MockVm {
         Self {
             fail_setup: Some(id),
             ..self
+        }
+    }
+
+    /// Fails the reset of parked vCPU `id`, as a grant runs it.
+    pub(crate) fn failing_reset_of(id: u32) -> Self {
+        Self {
+            fail_reset: Some(id),
+            ..Self::default()
         }
     }
 
@@ -170,7 +189,12 @@ impl MockVm {
                 source,
             },
             Call::SetIrqLine { line, .. } => Error::SetIrqLine { line, source },
-            Call::SetCpuFeatures { .. } | Call::SetBootRegisters { .. } | Call::DropVcpu { .. } => {
+            Call::SetCpuFeatures { .. }
+            | Call::SetBootRegisters { .. }
+            | Call::DropVcpu { .. }
+            | Call::ParkVcpu { .. }
+            | Call::ResetVcpu { .. }
+            | Call::ResumeVcpu { .. } => {
                 unreachable!("only memory and interrupt calls fail by index")
             }
         })
@@ -195,6 +219,7 @@ impl Vm for MockVm {
             steps: steps.into(),
             log: Arc::clone(&self.log),
             fail_setup: self.fail_setup == Some(id),
+            fail_reset: self.fail_reset == Some(id),
             entries: Arc::clone(&self.entries),
             kick: Arc::default(),
             data: [0; 4],
@@ -211,6 +236,7 @@ pub(crate) struct MockVcpu {
     steps: VecDeque<Step>,
     log: Arc<Mutex<Vec<Call>>>,
     fail_setup: bool,
+    fail_reset: bool,
     entries: Arc<Mutex<Vec<u32>>>,
     kick: Arc<Kick>,
     data: [u8; 4],
@@ -326,5 +352,47 @@ impl boxlite_hypervisor::X86Vcpu for MockVcpu {
     fn set_boot_registers(&mut self, _state: &boxlite_hypervisor::X86BootRegisters) -> Result<()> {
         self.record(Call::SetBootRegisters { id: self.id });
         Ok(())
+    }
+}
+
+/// A parked mock vCPU; it keeps its script and kick state for the next resume.
+#[cfg(target_arch = "x86_64")]
+pub(crate) struct ParkedMockVcpu(MockVcpu);
+
+#[cfg(target_arch = "x86_64")]
+impl boxlite_hypervisor::X86ParkVcpu for MockVcpu {
+    type Parked = ParkedMockVcpu;
+
+    fn park(self) -> Result<ParkedMockVcpu> {
+        self.record(Call::ParkVcpu { id: self.id });
+        Ok(ParkedMockVcpu(self))
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl boxlite_hypervisor::X86ParkedVcpu for ParkedMockVcpu {
+    type Vcpu = MockVcpu;
+
+    fn is_halted(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.0.record(Call::ResetVcpu { id: self.0.id });
+        if self.0.fail_reset {
+            let source = io::Error::from(io::ErrorKind::InvalidInput);
+            let (id, operation) = (self.0.id, "reset");
+            return Err(Error::ConfigureVcpu {
+                id,
+                operation,
+                source,
+            });
+        }
+        Ok(())
+    }
+
+    fn resume(self) -> Result<MockVcpu> {
+        self.0.record(Call::ResumeVcpu { id: self.0.id });
+        Ok(self.0)
     }
 }

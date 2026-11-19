@@ -38,6 +38,7 @@ use crate::{
 };
 
 mod balloon;
+mod cpu_scaling;
 #[cfg(target_os = "linux")]
 #[path = "virtio_blk.rs"]
 mod virtio_blk;
@@ -69,6 +70,7 @@ impl Drop for TempFile {
 fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
     VmConfig {
         vcpu_count: 1,
+        max_vcpus: 1,
         memory_mib: MEMORY_MIB,
         kernel,
         cmdline: cmdline.into(),
@@ -203,6 +205,7 @@ fn linux_config(vcpu_count: u8, cmdline: &str, initramfs: Option<PathBuf>) -> Vm
         .expect("set VMM_KERNEL or run make test:integration:vmm:linux");
     let config = VmConfig {
         vcpu_count,
+        max_vcpus: vcpu_count,
         memory_mib: 256,
         kernel: kernel.into(),
         cmdline: cmdline.into(),

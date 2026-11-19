@@ -22,7 +22,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use mio::{Events, Poll, Token, Waker};
@@ -47,7 +47,7 @@ pub(crate) enum Event {
 /// The poller token of the waker.
 const WAKE: Token = Token(0);
 
-/// How often [`EventLoop::wait`] looks at the queue without a wake-up, so an
+/// How often the VM thread's [`EventLoop::wait_once`] looks at the queue without a wake-up, so an
 /// event whose wake-up was lost ends the VM late instead of never. The virtio
 /// workers recheck their kicks as often.
 pub(crate) const RECHECK: Duration = Duration::from_secs(1);
@@ -64,7 +64,7 @@ impl EventSender {
     /// Sets the stop latch, then queues `event` and wakes the loop. An event
     /// sent after the loop is dropped is logged and discarded: the VM has
     /// already ended. Only a broken host fails the wake-up; the failure is
-    /// logged, and [`EventLoop::wait`] still finds the event at its next
+    /// logged, and [`EventLoop::wait_once`] still finds the event at its next
     /// recheck.
     pub(crate) fn send(&self, event: Event) {
         self.stopping.store(true, Ordering::SeqCst);
@@ -72,6 +72,14 @@ impl EventSender {
             tracing::debug!(?event, "event sent after the VM ended; discarded");
         } else if let Err(error) = self.waker.wake() {
             tracing::warn!(%error, "event loop wake-up failed; the event waits for the next recheck");
+        }
+    }
+
+    /// Wakes the loop without sending an event or setting the stop latch, so
+    /// its owner can serve a vCPU control request.
+    pub(crate) fn wake(&self) {
+        if let Err(error) = self.waker.wake() {
+            tracing::warn!(%error, "event loop wake-up failed; the request waits for the next recheck");
         }
     }
 
@@ -112,30 +120,19 @@ impl EventLoop {
         self.sender.clone()
     }
 
-    /// The oldest queued event, waiting up to `timeout`, or forever with
-    /// `None`. Returns `Ok(None)` once the timeout passes; a zero timeout
-    /// never enters the poller. The poller is re-entered every [`RECHECK`],
-    /// so an event whose wake-up failed is still found.
-    pub(crate) fn wait(&mut self, timeout: Option<Duration>) -> io::Result<Option<Event>> {
-        // A timeout too long to add counts as forever.
-        let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
-        loop {
-            if let Ok(event) = self.events.try_recv() {
-                return Ok(Some(event));
-            }
-            let slice = match deadline {
-                Some(deadline) => match deadline.checked_duration_since(Instant::now()) {
-                    Some(remaining) if !remaining.is_zero() => remaining.min(RECHECK),
-                    _ => return Ok(None),
-                },
-                None => RECHECK,
-            };
-            match self.poll.poll(&mut self.readiness, Some(slice)) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(error),
-            }
+    /// The oldest queued event, or `None` once the loop is woken without one
+    /// or `timeout` passes, so the caller can serve other requests. A zero
+    /// timeout never sleeps.
+    pub(crate) fn wait_once(&mut self, timeout: Duration) -> io::Result<Option<Event>> {
+        if let Ok(event) = self.events.try_recv() {
+            return Ok(Some(event));
         }
+        match self.poll.poll(&mut self.readiness, Some(timeout)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+        Ok(self.events.try_recv().ok())
     }
 }
 

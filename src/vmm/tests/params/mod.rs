@@ -147,6 +147,7 @@ fn agrees_with_validate_on_command_line_limits() {
         );
         let config = VmConfig {
             vcpu_count: 1,
+            max_vcpus: 1,
             memory_mib: 1,
             kernel: "vmlinux".into(),
             cmdline,

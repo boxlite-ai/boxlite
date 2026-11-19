@@ -8,9 +8,9 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
-are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
-carries; M2's engine adapter consumes that API and inspects the error's host
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VcpuControl`,
+`Error` and `Result` are public. So are `BusKind` and `Conflict`, which
+`Error::ChipsetConflicts` carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
 `Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
@@ -27,13 +27,14 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event, serving vCPU control requests meanwhile; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `control` | `VcpuControl`: change how many vCPUs may run while the VM runs ([vCPU scaling](#vcpu-scaling)) |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; bounds are 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes and at most 8 disks |
+| `config` | `VmConfig`: online and maximum vCPUs, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; bounds are 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
-| `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
+| `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends, and park or resume a vCPU for a revoke or grant |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
@@ -182,14 +183,15 @@ a `BootSetup` with the boot vCPU registers. A failure names its step,
 
 Without ACPI, Linux learns the vCPUs and the IOAPIC from the MP table, and
 turns off SMP and the IOAPIC without one. `boot::mptable::write_mptable(ram,
-vcpu_count)` writes the floating pointer at `0x9_FC00`, where Linux scans the
+max_vcpus)` writes the floating pointer at `0x9_FC00`, where Linux scans the
 last KiB below 640 KiB, and the configuration table right after it. It lists
 the same entries as Firecracker:
 
-- one processor per vCPU, with APIC ID equal to its index as `vcpu_cpuid`
-  assigns it, and vCPU 0 as the bootstrap processor;
+- one processor per possible vCPU, `max_vcpus` of them. vCPU 0 is the
+  bootstrap processor, and each APIC ID equals its index, as `vcpu_cpuid`
+  assigns it;
 - an ISA bus and KVM's in-kernel IOAPIC at `0xFEC0_0000` with ID
-  `vcpu_count + 1`;
+  `max_vcpus + 1`;
 - ISA IRQ k on IOAPIC pin k for 0 to 23, the GSI routing KVM sets up;
 - ExtINT on the boot vCPU's LINT0 and NMI on every LINT1.
 
@@ -445,12 +447,14 @@ it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
 devices it is given, so a conflict fails with `ChipsetConflicts` and leaves
 nothing mapped.
 
-1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
-   sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
-   registers, then waits at a start gate until every vCPU is configured. A
-   vCPU that fails setup sends `VcpuFailed` before it arrives, so the latch
-   keeps every vCPU out of the guest, and a thread that fails to start aborts
-   the gate, so no worker waits forever.
+1. It starts one scoped thread per possible vCPU, named `vcpuN`:
+   - Each creates its vCPU and sets its CPUID from `vcpu_cpuid` and the boot
+     MSRs, plus the entry registers on vCPU 0.
+   - Each then waits at a start gate until every vCPU is configured, after
+     which vCPUs past `vcpu_count` park and their threads exit.
+   - A vCPU that fails setup sends `VcpuFailed` before it arrives, so the
+     latch keeps every vCPU out of the guest. A thread that fails to start
+     aborts the gate, so no worker waits forever.
 2. Each worker then loops: check the stop latch, run, and hand the exit to
    `Chipset::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
    `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never
@@ -475,6 +479,38 @@ A join timeout turns a clean exit into `Error::VirtioWorker`; a quiesce failure
 becomes `Error::VirtioDevice`, while an error that ended the VM stays the result.
 `Drop` retries an incomplete join and keeps RAM registered while workers still
 run; a quiesce failure after joining still permits RAM unmapping.
+
+## vCPU scaling
+
+`VmConfig::max_vcpus` sets how many vCPUs the guest's MP table lists, and
+`vcpu_count` of them run from boot. The kernel gets `maxcpus=<vcpu_count>`, so
+Linux brings up only those. Design and research:
+[#2885](https://github.com/boxlite-ai/boxlite/issues/2885).
+
+- **Parked.** A parked vCPU keeps its KVM descriptor but has no thread
+  (`X86ParkVcpu::park`), so nothing enters the guest on its behalf. Guest root
+  writing `cpuN/online=1` for it gets `EIO` after about 10 seconds, and the
+  host starts no thread.
+- **Grant.** `VcpuControl::set_online_vcpus(n)` raising the count resets each
+  parked vCPU, lowest ID first, then resumes it on a new `vcpuN` thread. The
+  reset drops INIT and SIPI that KVM latched while the vCPU was parked; without
+  it the vCPU would start at a stale SIPI vector.
+- **Failed grant.** A failed reset or thread start returns the error. The
+  request first parks the vCPUs it already started, so the guest keeps its
+  count. The vCPU that failed is dropped and never granted again;
+  later requests use the vCPUs that are left and return the count reached.
+- **Revoke.** Lowering the count asks each running vCPU, highest ID first, to
+  park at its next exit, kicks it, and waits up to 5 seconds. Offline the CPU
+  in the guest first; a vCPU the guest has not halted is parked anyway and
+  logged, so only the guest stalls.
+- **Order.** Grow the host count before the guest onlines CPUs, and shrink it
+  only after the guest offlined them. The guest agent's `Guest.SetOnlineCpus`
+  does the guest side and gives up after 15 seconds.
+
+`run` serves requests on its own thread between events: `EventSender::wake`
+wakes the loop without setting the stop latch, and `EventLoop::wait_once`
+returns after a wake. A request waits until `run` starts and fails with
+`Error::VmNotRunning` once the VM has ended.
 
 `Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
 thread, even before `run` starts. A VM runs once: a second `run` fails with
@@ -548,11 +584,14 @@ are built from. `Vm` owns the chipset they form.
 - **Events.** A device ends the VM by sending `Event::GuestReset` or
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
-  poller. vCPU workers and `StopHandle` send the other events. An event sent
-  after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
-  the oldest event, or `None` at its timeout, and rechecks the queue every
-  second in case a wake-up was lost. Every event ends the VM; the VMM never
-  restarts a guest.
+  poller. vCPU workers and `StopHandle` send the other events. Every event
+  ends the VM; the VMM never restarts a guest.
+  - An event sent after the loop is gone is logged at debug level and
+    discarded.
+  - `EventLoop::wait_once` returns the oldest event, or `None` once it is
+    woken without one or its timeout passes.
+  - The VM thread waits one second at a time, so a lost wake-up only delays
+    an event. It serves vCPU control requests between waits.
 
 ## Virtio-mmio transport
 

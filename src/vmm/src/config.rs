@@ -47,8 +47,11 @@ pub struct DiskConfig {
 /// runtime's `InstanceSpec`, whose `memory_mib` field shares the name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VmConfig {
-    /// Number of vCPUs, `1..=MAX_VCPUS`.
+    /// Number of vCPUs online at boot, `1..=max_vcpus`.
     pub vcpu_count: u8,
+    /// Number of vCPUs the guest's topology lists, `vcpu_count..=MAX_VCPUS`.
+    /// The rest stay parked, with no thread, until the host grants them.
+    pub max_vcpus: u8,
     /// Guest RAM in MiB, `1..=MAX_MEMORY_MIB`.
     pub memory_mib: u32,
     /// The ELF kernel image to load.
@@ -105,6 +108,26 @@ pub struct NetConfig {
 }
 
 impl VmConfig {
+    /// The command line the kernel gets: `cmdline`, plus `maxcpus=` when
+    /// some listed vCPUs start parked, so Linux brings up only the online ones.
+    #[cfg_attr(
+        not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+        expect(
+            dead_code,
+            reason = "Only the Linux x86_64 boot path writes the command line yet."
+        )
+    )]
+    pub(crate) fn kernel_cmdline(&self) -> Result<std::borrow::Cow<'_, str>> {
+        if self.max_vcpus == self.vcpu_count {
+            return Ok(self.cmdline.as_str().into());
+        }
+        let cmdline = format!("{} maxcpus={}", self.cmdline, self.vcpu_count);
+        if cmdline.len() >= MAX_CMDLINE_BYTES {
+            return Err(Error::InvalidCommandLine("2048 bytes or longer"));
+        }
+        Ok(cmdline.into())
+    }
+
     /// Rejects counts, sizes and command-line text the layout or the kernel
     /// cannot take, before any host call. The budget for the
     /// `virtio_mmio.device=` arguments that `devices::add_all` prepends is
@@ -112,6 +135,12 @@ impl VmConfig {
     pub(crate) fn validate(&self) -> Result<()> {
         if !(1..=MAX_VCPUS).contains(&self.vcpu_count) {
             return Err(Error::InvalidVcpuCount(self.vcpu_count));
+        }
+        if !(self.vcpu_count..=MAX_VCPUS).contains(&self.max_vcpus) {
+            return Err(Error::InvalidMaxVcpus {
+                max: self.max_vcpus,
+                online: self.vcpu_count,
+            });
         }
         if !(1..=MAX_MEMORY_MIB).contains(&self.memory_mib) {
             return Err(Error::InvalidMemorySize(self.memory_mib));
@@ -145,6 +174,7 @@ mod tests {
     fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         VmConfig {
             vcpu_count,
+            max_vcpus: vcpu_count,
             memory_mib,
             kernel: "vmlinux".into(),
             cmdline: "console=ttyS0".into(),
@@ -220,5 +250,46 @@ mod tests {
         }
         config(1, 1).validate().unwrap();
         config(MAX_VCPUS, MAX_MEMORY_MIB).validate().unwrap();
+    }
+
+    #[test]
+    fn the_maximum_spans_the_online_count_to_max_vcpus() {
+        let with = |online, max_vcpus| VmConfig {
+            max_vcpus,
+            ..config(online, 1)
+        };
+        with(2, 2).validate().unwrap();
+        with(1, MAX_VCPUS).validate().unwrap();
+        for (online, max) in [(2, 1), (1, MAX_VCPUS + 1)] {
+            let error = with(online, max).validate().unwrap_err();
+            assert!(
+                matches!(error, Error::InvalidMaxVcpus { max: m, online: o } if m == max && o == online),
+                "{error:?}"
+            );
+            assert!(error.source().is_none());
+        }
+    }
+
+    #[test]
+    fn parked_vcpus_add_maxcpus_to_the_kernel_command_line() {
+        let with = |cmdline: String, max_vcpus| VmConfig {
+            cmdline,
+            max_vcpus,
+            ..config(2, 1)
+        };
+        let all_online = with("console=ttyS0".into(), 2);
+        assert_eq!(all_online.kernel_cmdline().unwrap(), "console=ttyS0");
+        let some_parked = with("console=ttyS0".into(), 4);
+        assert_eq!(
+            some_parked.kernel_cmdline().unwrap(),
+            "console=ttyS0 maxcpus=2"
+        );
+        // " maxcpus=2" is 10 bytes; one byte more no longer fits.
+        let room = MAX_CMDLINE_BYTES - 11;
+        with("a".repeat(room), 4).kernel_cmdline().unwrap();
+        assert!(matches!(
+            with("a".repeat(room + 1), 4).kernel_cmdline(),
+            Err(Error::InvalidCommandLine(_))
+        ));
     }
 }

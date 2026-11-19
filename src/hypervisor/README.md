@@ -73,6 +73,15 @@ which `KvmVm` and `KvmVcpu` implement, so the VMM's vCPU workers and its mock
 backend use one interface. On arm64, `Arm64Vcpu` sets MPIDR_EL1 (`set_mpidr`) and
 the entry PC, X0 and PSTATE (`set_boot_registers`).
 
+`X86ParkVcpu::park` takes a vCPU off its thread and returns an
+`X86ParkedVcpu`, which can move to another thread:
+
+- `reset` drops INIT and SIPI that KVM latched while the vCPU was parked.
+- `is_halted` tells whether the guest offlined it.
+- `resume` binds it to the calling thread with a new kick reservation. A new
+  thread inherits its creator's signal mask, so create it from a thread that
+  holds no kick reservation.
+
 macOS arm64 exports `HvfVm` and thread-bound `HvfVcpu`, which implement `Vm`,
 `Vcpu` and `Arm64Vcpu` on Hypervisor.framework with the in-kernel GICv3 of
 macOS 15. Design and research: [#2103](https://github.com/boxlite-ai/boxlite/issues/2103).

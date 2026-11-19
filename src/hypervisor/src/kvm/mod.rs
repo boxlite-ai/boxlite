@@ -25,6 +25,12 @@ mod vcpu;
 mod vm;
 
 #[cfg(target_arch = "x86_64")]
+mod park;
+
+#[cfg(target_arch = "x86_64")]
+pub use park::ParkedKvmVcpu;
+
+#[cfg(target_arch = "x86_64")]
 pub use vm::KvmVm;
 
 #[cfg(target_arch = "x86_64")]
