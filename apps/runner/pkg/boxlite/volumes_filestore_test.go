@@ -151,7 +151,12 @@ func TestFilestoreMountFailureCarriesBoxAndVolumeContext(t *testing.T) {
 	c := filestoreTestClient(t)
 	useVolumeMountBasePath(t, t.TempDir())
 	c.testProbeRunner = func(context.Context, string) (bool, error) { return false, nil }
-	c.testMountRunner = func(*exec.Cmd) error { return errors.New("exit status 32") }
+	mountErr := exec.Command("/bin/sh", "-c", "exit 32").Run()
+	var wantExit *exec.ExitError
+	if !errors.As(mountErr, &wantExit) {
+		t.Fatalf("test mount command returned %v, want *exec.ExitError", mountErr)
+	}
+	c.testMountRunner = func(*exec.Cmd) error { return mountErr }
 
 	_, err := c.getVolumeMounts(context.Background(), "box1", []dto.VolumeDTO{{
 		VolumeId:  "vol1",
@@ -165,6 +170,10 @@ func TestFilestoreMountFailureCarriesBoxAndVolumeContext(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("mount error %q does not contain %q", err, want)
 		}
+	}
+	var gotExit *exec.ExitError
+	if !errors.As(err, &gotExit) || gotExit.ExitCode() != 32 {
+		t.Errorf("mount error %v does not preserve exit code 32", err)
 	}
 }
 
@@ -727,6 +736,27 @@ func TestCleanupOrphanedVolumeMountsEndToEnd(t *testing.T) {
 // would name the mount root itself, putting every volume of the instance
 // behind one box's bind mount. The control plane mints uuids, but this
 // boundary must not lean on that — same posture as the box id guard.
+func TestCleanupReclaimsRecentOrphanedFilestoreMount(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(getVolumeMountRecordDir(), 0755); err != nil {
+		t.Fatal(err)
+	}
+	c := filestoreTestClient(t)
+	c.volumeCleanup = volumeCleanupConfig{exclusionPeriod: time.Hour}
+	c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
+	umountLogPath := installFakeUmount(t)
+
+	c.CleanupOrphanedVolumeMounts(context.Background())
+
+	if got, want := commandLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("umount log = %v, want %v; instance-lock reclaim must guard the recent mount instead of stating the NFS root", got, want)
+	}
+}
+
 func TestFilestoreVolumeIdIsPathGuarded(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()
@@ -1170,6 +1200,94 @@ func TestFilestoreRejectsReusingDifferentTarget(t *testing.T) {
 	}
 }
 
+func TestCreateRollbackReclaimsAfterCancellation(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(t, c)
+	umountLogPath := installFakeUmount(t)
+	probe := c.testProbeRunner
+	c.testProbeRunner = func(ctx context.Context, path string) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		return probe(ctx, path)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var seam func(context.Context, string, boxVolumeMountRecord) error
+	seam = func(ctx context.Context, boxID string, record boxVolumeMountRecord) error {
+		c.writeRecordSeam = nil
+		err := c.writeBoxVolumeMountRecord(ctx, boxID, record)
+		c.writeRecordSeam = seam
+		cancel()
+		return err
+	}
+	c.writeRecordSeam = seam
+	outbound := true
+
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: "abc123def456", OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+			{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("Create returned %v, want the second volume's guard failure", err)
+	}
+	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
+	if got, want := commandLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("umount log after cancelled rollback = %v, want %v (mounts=%d)", got, want, fake.mounts.Load())
+	}
+}
+
+func TestCreateReclaimsMountAfterLatePreparationCompletes(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	installFakeFilestoreMounts(t, c)
+	umountLogPath := installFakeUmount(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	c.prepareRunner = func(string) error {
+		close(started)
+		<-release
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	outbound := true
+	go func() {
+		_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+			Id: "abc123def456", OutboundEnabled: &outbound,
+			Volumes: []dto.VolumeDTO{{
+				VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+			}},
+		})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("cancelled Create returned %v, want context cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Create did not return after cancellation")
+	}
+
+	close(release)
+	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
+	deadline := time.Now().Add(12 * time.Second)
+	for !reflect.DeepEqual(commandLog(t, umountLogPath), []string{root}) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got, want := commandLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("umount log after late preparation = %v, want %v", got, want)
+	}
+}
+
 func TestCreateReclaimsLateFirstMountAfterCancellation(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
@@ -1260,6 +1378,53 @@ func TestObjectStorageReplayRepairsMalformedRecord(t *testing.T) {
 	root := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"vol-object")
 	if len(repaired.Entries) != 1 || repaired.Entries[0].RootPath != root {
 		t.Fatalf("repaired record = %#v, want only the object-storage root %q", repaired.Entries, root)
+	}
+	persisted, readErr := c.readBoxVolumeMountRecord(boxID)
+	if readErr != nil || len(persisted.Entries) != 1 || persisted.Entries[0].RootPath != root {
+		t.Fatalf("record after ClearPublished failure = %#v, %v; want the repaired object-storage record to survive", persisted.Entries, readErr)
+	}
+}
+
+func TestObjectStorageReplayKeepsRecordWhenNativeIDResolutionFails(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	c.homeDir = t.TempDir()
+	c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
+	boxID := "abc123def456"
+	root := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"vol-object")
+	if err := c.recordBoxVolumeMounts(context.Background(), boxID, []volumeMount{{
+		hostPath: root, mountPath: "/data", rootPath: root, backend: volumeBackendS3,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	journalPath := filepath.Join(c.homeDir, "work", "checkpoint-operations", fmt.Sprintf("%x", sha256.Sum256([]byte(boxID)))+".json")
+	var seam func(context.Context, string, boxVolumeMountRecord) error
+	seam = func(ctx context.Context, id string, record boxVolumeMountRecord) error {
+		c.writeRecordSeam = nil
+		err := c.writeBoxVolumeMountRecord(ctx, id, record)
+		c.writeRecordSeam = seam
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(journalPath, []byte("not-json"), 0600)
+	}
+	c.writeRecordSeam = seam
+	outbound := true
+
+	_, _, err := c.Create(context.Background(), dto.CreateBoxDTO{
+		Id: boxID, OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{{VolumeId: "vol-object", MountPath: "/data"}},
+	})
+	if err == nil {
+		t.Fatal("Create succeeded despite the malformed native-ID journal")
+	}
+	journal, journalErr := os.ReadFile(journalPath)
+	if journalErr != nil || string(journal) != "not-json" {
+		t.Fatalf("native-ID corruption was not injected at %s: %q, %v; Create error = %v", journalPath, journal, journalErr, err)
+	}
+	persisted, readErr := c.readBoxVolumeMountRecord(boxID)
+	if readErr != nil || len(persisted.Entries) != 1 || persisted.Entries[0].RootPath != root {
+		t.Fatalf("record after native-ID failure = %#v, %v; Create error = %v; want the object-storage reference to survive", persisted.Entries, readErr, err)
 	}
 }
 

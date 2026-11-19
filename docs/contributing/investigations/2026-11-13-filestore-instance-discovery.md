@@ -92,7 +92,14 @@ FILESTORE_INSTANCES='[{"instance":"boxlite-dev-shared","project_id":"boxlite-dev
 
 `FILESTORE_INSTANCES` is a JSON list. Each entry carries `instance`, `project_id`, and
 `zone`, so instances can live in different projects or zones without changing the API
-contract again. The instance name satisfies the existing runner path-safety pattern:
+contract again. The runner accepts path-safe instance names matching:
+
+```text
+^[a-z0-9][a-z0-9-]{0,62}$
+```
+
+The API's `FILESTORE_INSTANCES` validation retains the stricter Filestore naming
+rule:
 
 ```text
 ^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$

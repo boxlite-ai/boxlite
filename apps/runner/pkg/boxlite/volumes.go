@@ -288,7 +288,9 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	}
 	prepareCtx, cancelPrepare := context.WithTimeout(ctx, volumeProbeTimeout)
 	defer cancelPrepare()
-	if _, err := c.runBoundedVolumeOperation(prepareCtx, mountKey, func() error { return prepare(dataDir) }, nil); err != nil {
+	if _, err := c.runBoundedVolumeOperation(prepareCtx, mountKey, func() error { return prepare(dataDir) }, func() {
+		c.reclaimFilestoreMount(context.Background(), rootPath)
+	}); err != nil {
 		return volumeMount{}, err
 	}
 
@@ -484,7 +486,7 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 		if !pending {
 			c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
 		}
-		return fmt.Errorf("failed to mount filestore %s to %s: %s", ref.Instance, mountRoot, mountErr)
+		return fmt.Errorf("failed to mount filestore %s to %s: %w", ref.Instance, mountRoot, mountErr)
 	}
 
 	if err = c.waitForMountReady(ctx, mountRoot); err != nil {
@@ -1261,7 +1263,9 @@ func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, vo
 		}
 		seen[instance] = true
 		root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+instance)
-		c.reclaimFilestoreMount(ctx, root)
+		cleanupCtx, cancel := cleanupContext(ctx)
+		c.reclaimFilestoreMount(cleanupCtx, root)
+		cancel()
 	}
 }
 
@@ -1333,17 +1337,24 @@ func (c *Client) CleanupOrphanedVolumeMounts(ctx context.Context) {
 		if inUse[normalizeVolumePath(dir)] {
 			continue
 		}
+
+		// Filestore uses its instance lock, record rescan and pending marker to
+		// guard new mounts. Checking recency first would stat a hard NFS mount,
+		// which can block forever when the server is unreachable.
+		if strings.HasPrefix(filepath.Base(dir), filestoreMountPrefix) {
+			if c.volumeCleanup.dryRun {
+				c.logger.InfoContext(ctx, "[DRY-RUN] would clean orphaned volume mount", "path", dir)
+				continue
+			}
+			c.logger.InfoContext(ctx, "cleaning orphaned filestore mount", "path", dir)
+			c.reclaimFilestoreMount(ctx, dir)
+			continue
+		}
 		if c.isRecentlyCreated(dir, c.volumeCleanup.exclusionPeriod) {
 			continue
 		}
 		if c.volumeCleanup.dryRun {
 			c.logger.InfoContext(ctx, "[DRY-RUN] would clean orphaned volume mount", "path", dir)
-			continue
-		}
-
-		if strings.HasPrefix(filepath.Base(dir), filestoreMountPrefix) {
-			c.logger.InfoContext(ctx, "cleaning orphaned filestore mount", "path", dir)
-			c.reclaimFilestoreMount(ctx, dir)
 			continue
 		}
 

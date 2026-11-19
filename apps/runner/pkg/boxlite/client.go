@@ -643,7 +643,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// now exists locally and the job can proceed, so it is discarded.
 	id, err := c.nativeBoxID(boxDto.Id)
 	if err != nil {
-		if len(volumeMounts) > 0 {
+		if len(volumeMounts) > 0 && hasFilestoreRef(boxDto.Volumes) {
 			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
 		}
 		return "", "", err
@@ -658,7 +658,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 			clearPublished = c.clearPublishedRunner
 		}
 		if err := clearPublished(); err != nil {
-			if len(volumeMounts) > 0 {
+			if len(volumeMounts) > 0 && hasFilestoreRef(boxDto.Volumes) {
 				c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
 			}
 			return "", "", err

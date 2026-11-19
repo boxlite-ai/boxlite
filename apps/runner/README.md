@@ -599,11 +599,14 @@ provisioning and control-plane admission are outside this runner-only slice.
   unreferenced Filestore mounts, independently of scheduled cleanup and its
   dry-run mode. A record rollback failure skips reclaim because references
   cannot be verified. New mounts create the empty record directory before
-  starting the mount command. If Create exits while that command is still
-  running, its completion triggers reference-aware reclaim after the pending
-  marker clears. Existing mounts with no records retain the missing-records
-  guard. Reclaim rechecks references and pending operations under the instance
-  lock; start replay retains existing entries until their replacements are durable.
+  starting the mount command. If Create exits while mounting or directory
+  preparation is still running, completion triggers reference-aware reclaim
+  after the pending marker clears. Rollback reclaim uses a bounded context
+  detached from caller cancellation. Existing mounts with no records retain the
+  missing-records guard. Reclaim rechecks references and pending operations
+  under the instance lock instead of stating a potentially unreachable NFS root
+  for a recency check; start replay retains existing entries until replacements
+  are durable.
 - Prepare failures return `FILESTORE_VOLUME_PREPARE_FAILED` with box, volume,
   and instance IDs plus the mount error. Logs do not include box environment
   variables, secrets, authorization headers, or job payloads.
