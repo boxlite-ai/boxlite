@@ -15,7 +15,7 @@ pub struct ServeChild {
     // Serve's own home. Dropped *after* the child is signalled, so its boxes are
     // already stopped and the leaked-shim assertion in PerTestBoxHome's Drop is
     // satisfied.
-    _home: boxlite_test_utils::home::PerTestBoxHome,
+    _home: Option<boxlite_test_utils::home::PerTestBoxHome>,
 }
 
 impl ServeChild {
@@ -27,7 +27,20 @@ impl ServeChild {
     /// "k"]`; pass the same key as `api_key` when it authenticates clients.
     pub fn start_with(extra: &[&str], api_key: Option<&str>) -> Self {
         let home = boxlite_test_utils::home::PerTestBoxHome::new();
+        let path = home.path.clone();
+        Self::start_at(&path, Some(home), extra, api_key)
+    }
 
+    pub fn start_for_home(home: &std::path::Path) -> Self {
+        Self::start_at(home, None, &[], None)
+    }
+
+    fn start_at(
+        home: &std::path::Path,
+        owned_home: Option<boxlite_test_utils::home::PerTestBoxHome>,
+        extra: &[&str],
+        api_key: Option<&str>,
+    ) -> Self {
         // Ask the OS for a free port, then release it — a small race with
         // whatever binds next, but the standard trick and good enough here.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -37,9 +50,8 @@ impl ServeChild {
             .port();
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_boxlite"));
-        cmd.arg("--home").arg(&home.path);
-        cmd.arg("--config")
-            .arg(super::write_registry_config(&home.path));
+        cmd.arg("--home").arg(home);
+        cmd.arg("--config").arg(super::write_registry_config(home));
         cmd.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
             .args(extra)
             .stdout(Stdio::null())
@@ -51,7 +63,7 @@ impl ServeChild {
             command: cmd,
             port,
             api_key: api_key.map(str::to_string),
-            _home: home,
+            _home: owned_home,
         };
         serve.wait_ready();
         serve
@@ -75,7 +87,8 @@ impl ServeChild {
     /// Run a `boxlite --url` client command against this server.
     pub fn client(&self, args: &[&str]) -> std::process::Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_boxlite"));
-        cmd.args(["--url", &self.url()]).args(args);
+        cmd.args(["--url", &self.url(), "--path-prefix", ""])
+            .args(args);
         if let Some(key) = &self.api_key {
             cmd.env("BOXLITE_API_KEY", key);
         }
@@ -116,7 +129,7 @@ impl ServeChild {
         while Instant::now() < deadline {
             if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
                 let mut probe = Command::new(env!("CARGO_BIN_EXE_boxlite"));
-                probe.args(["--url", &self.url(), "ps"]);
+                probe.args(["--url", &self.url(), "--path-prefix", "", "ps"]);
                 if let Some(key) = &self.api_key {
                     probe.env("BOXLITE_API_KEY", key);
                 }

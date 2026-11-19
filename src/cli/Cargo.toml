@@ -80,6 +80,7 @@ gtmpl_value = "0.5"
 [build-dependencies]
 
 [dev-dependencies]
+tokio = { version = "1.37", features = ["test-util"] }
 boxlite = { workspace = true, features = ["rest", "test-support"] }
 boxlite-test-utils = { path = "../test-utils" }
 assert_cmd = "2.1.1"

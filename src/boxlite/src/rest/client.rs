@@ -23,6 +23,20 @@ const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 /// File transfers cannot outlive the runner's 24-hour box lifetime cap.
 const FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+async fn read_agent_body(response: &mut reqwest::Response) -> BoxliteResult<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+        if chunk.len() > AGENT_RESPONSE_MAX_BYTES.saturating_sub(body.len()) {
+            return Err(BoxliteError::ResourceExhausted(
+                "agent response exceeds 16 MiB".into(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 
 /// The native REST transport is shared by every SDK binding and the CLI.
 fn client_identity_headers() -> reqwest::header::HeaderMap {
@@ -105,6 +119,7 @@ pub(crate) type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake:
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    stream_http: Client,
     tunnel_connector: TunnelConnector,
     base_url: String,
     /// Routing-slot value substituted into the `{prefix}` URL segment
@@ -131,6 +146,13 @@ impl ApiClient {
             .connect_timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
+        let stream_http = Client::builder()
+            .default_headers(client_identity_headers())
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| {
+                BoxliteError::Config(format!("failed to create streaming HTTP client: {e}"))
+            })?;
         let tunnel_connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .map_err(|e| BoxliteError::Config(format!("failed to load TLS roots: {e}")))?
@@ -143,6 +165,7 @@ impl ApiClient {
 
         Ok(Self {
             http,
+            stream_http,
             tunnel_connector,
             base_url,
             path_prefix,
@@ -312,6 +335,106 @@ impl ApiClient {
     ) -> BoxliteResult<T> {
         let builder = self.http.post(self.url(path)).json(body);
         self.send_json(builder).await
+    }
+
+    pub(crate) async fn post_agent<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+        key: Option<&str>,
+    ) -> BoxliteResult<T> {
+        let mut builder = self.http.post(self.url(path)).json(body);
+        if let Some(key) = key {
+            builder = builder.header("Idempotency-Key", key);
+        }
+        self.send_agent_json(builder).await
+    }
+
+    pub(crate) async fn get_agent<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
+        self.send_agent_json(self.http.get(self.url(path))).await
+    }
+
+    async fn send_agent_json<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+    ) -> BoxliteResult<T> {
+        let builder = self.authorize(builder).await?;
+        let mut response = builder.send().await.map_err(transport_error)?;
+        let status = response.status();
+        let body = read_agent_body(&mut response).await?;
+        if !status.is_success() {
+            return Err(map_http_body(status, &String::from_utf8_lossy(&body)));
+        }
+        serde_json::from_slice(&body)
+            .map_err(|error| BoxliteError::Internal(format!("invalid agent response: {error}")))
+    }
+
+    pub(crate) async fn post_agent_no_content(
+        &self,
+        path: &str,
+        key: Option<&str>,
+    ) -> BoxliteResult<()> {
+        let mut builder = self.http.post(self.url(path)).json(&serde_json::json!({}));
+        if let Some(key) = key {
+            builder = builder.header("Idempotency-Key", key);
+        }
+        let builder = self.authorize(builder).await?;
+        let mut response = builder.send().await.map_err(transport_error)?;
+        let status = response.status();
+        if status == StatusCode::NO_CONTENT {
+            return Ok(());
+        }
+        let body = read_agent_body(&mut response).await?;
+        if status.is_success() {
+            return Err(BoxliteError::Internal(format!(
+                "agent control returned unexpected HTTP {status}"
+            )));
+        }
+        Err(map_http_body(status, &String::from_utf8_lossy(&body)))
+    }
+
+    pub(crate) async fn agent_events(
+        &self,
+        path: &str,
+        after: Option<&str>,
+        turn_id: Option<&str>,
+    ) -> BoxliteResult<reqwest::Response> {
+        let mut builder = self
+            .stream_http
+            .get(self.url(path))
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        if let Some(after) = after {
+            builder = builder.query(&[("after", after)]);
+        }
+        if let Some(turn_id) = turn_id {
+            builder = builder.query(&[("turn_id", turn_id)]);
+        }
+        let builder = self.authorize(builder).await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut response = builder.send().await.map_err(transport_error)?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = read_agent_body(&mut response).await?;
+                return Err(map_http_body(status, &String::from_utf8_lossy(&body)));
+            }
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            if !content_type
+                .split(';')
+                .next()
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+            {
+                return Err(BoxliteError::Internal(
+                    "agent event stream has invalid content type".into(),
+                ));
+            }
+            Ok(response)
+        })
+        .await
+        .map_err(|_| BoxliteError::Network("agent event stream opening timed out".into()))?
     }
 
     /// A fractional create must not silently lose its requested CPU allocation.
@@ -831,6 +954,153 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn agent_client_controls_require_204_and_forward_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status, body) in [
+                ("204 No Content", ""),
+                ("200 OK", "{}"),
+                (
+                    "400 Bad Request",
+                    r#"{"error":{"message":"not supported","type":"UnsupportedError","code":"unsupported"}}"#,
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(socket.read_u8().await.unwrap());
+                }
+                let header = String::from_utf8(header).unwrap().to_lowercase();
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("content-length:")
+                            .map(|v| v.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                let mut request_body = vec![0; length];
+                socket.read_exact(&mut request_body).await.unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&request_body).unwrap(),
+                    serde_json::json!({})
+                );
+                requests.push(header);
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        let client = ApiClient::new(
+            &BoxliteRestOptions::new(format!("http://{address}")).with_api_key("test-key"),
+        )
+        .unwrap();
+        client
+            .post_agent_no_content("/agents/a/close", Some("retry-1"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            client.post_agent_no_content("/agents/a/close", None).await,
+            Err(BoxliteError::Internal(_))
+        ));
+        assert!(matches!(
+            client.post_agent_no_content("/agents/a/close", None).await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+        let requests = server.await.unwrap();
+        assert!(requests[0].starts_with("post /v1/agents/a/close http/1.1\r\n"));
+        assert!(requests[0].contains("authorization: bearer test-key\r\n"));
+        assert!(requests[0].contains("idempotency-key: retry-1\r\n"));
+        assert!(!requests[1].contains("idempotency-key:"));
+    }
+
+    #[tokio::test]
+    async fn agent_client_events_validate_handshake_and_forward_query() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status, content_type, body) in [
+                ("200 OK", "text/event-stream; charset=utf-8", ""),
+                ("200 OK", "application/json", "{}"),
+                (
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"error":{"message":"not supported","type":"UnsupportedError","code":"unsupported"}}"#,
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(socket.read_u8().await.unwrap());
+                }
+                requests.push(String::from_utf8(header).unwrap().to_lowercase());
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        let client = ApiClient::new(
+            &BoxliteRestOptions::new(format!("http://{address}")).with_api_key("test-key"),
+        )
+        .unwrap();
+        client
+            .agent_events("/agents/a/events", Some("cursor 1"), Some("turn/1"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            client.agent_events("/agents/a/events", None, None).await,
+            Err(BoxliteError::Internal(_))
+        ));
+        assert!(matches!(
+            client.agent_events("/agents/a/events", None, None).await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+        let requests = server.await.unwrap();
+        assert!(
+            requests[0].starts_with(
+                "get /v1/agents/a/events?after=cursor+1&turn_id=turn%2f1 http/1.1\r\n"
+            )
+        );
+        assert!(requests[0].contains("accept: text/event-stream\r\n"));
+        assert!(requests[0].contains("authorization: bearer test-key\r\n"));
+    }
+
+    #[tokio::test]
+    async fn agent_client_rejects_oversized_and_malformed_json() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for body in [
+                vec![b'x'; AGENT_RESPONSE_MAX_BYTES + 1],
+                b"{invalid".to_vec(),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(socket.read_u8().await.unwrap());
+                }
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                let _ = socket.write_all(&body).await;
+            }
+        });
+        let client = ApiClient::new(&BoxliteRestOptions::new(format!("http://{address}"))).unwrap();
+        let oversize = client.get_agent::<serde_json::Value>("/agents/a").await;
+        assert!(matches!(oversize, Err(BoxliteError::ResourceExhausted(_))));
+        let malformed = client.get_agent::<serde_json::Value>("/agents/a").await;
+        assert!(matches!(malformed, Err(BoxliteError::Internal(_))));
+        server.await.unwrap();
+    }
 
     #[tokio::test]
     async fn activity_client_labels_reach_http_and_file_requests() {

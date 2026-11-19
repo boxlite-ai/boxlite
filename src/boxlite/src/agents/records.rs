@@ -40,10 +40,7 @@ pub fn result(result: &AgentResult) -> Value {
     json!({
         "turn_id": result.turn_id,
         "status": turn_status(result.status),
-        "outcome": result.outcome.map(|outcome| match outcome {
-            AgentOutcome::Answer => "answer",
-            AgentOutcome::Question => "question",
-        }),
+        "outcome": result.outcome.map(outcome_name),
         "text": result.text,
         "data": result.data,
         "artifacts": result.artifacts,
@@ -53,12 +50,7 @@ pub fn result(result: &AgentResult) -> Value {
 }
 
 pub fn receipt(receipt: &AgentSteeringReceipt) -> Value {
-    let status = match receipt.status {
-        AgentSteeringStatus::Accepted => "accepted",
-        AgentSteeringStatus::Applied => "applied",
-        AgentSteeringStatus::Unused => "unused",
-        AgentSteeringStatus::Unknown => "unknown",
-    };
+    let status = steering_status(receipt.status);
     json!({ "id": receipt.id, "turn_id": receipt.turn_id, "status": status })
 }
 
@@ -165,25 +157,472 @@ pub fn parse_response(value: Value) -> BoxliteResult<AgentResponse> {
     })
 }
 
-fn agent_status(status: AgentStatus) -> &'static str {
-    match status {
-        AgentStatus::Ready => "ready",
-        AgentStatus::Busy => "busy",
-        AgentStatus::Closing => "closing",
-        AgentStatus::Closed => "closed",
-        AgentStatus::Unknown => "unknown",
+macro_rules! record_enum {
+    ($encode:ident, $decode:ident, $ty:ty, $field:literal, { $($variant:path => $wire:literal),+ $(,)? }) => {
+        fn $encode(value: $ty) -> &'static str {
+            match value { $($variant => $wire),+ }
+        }
+        #[cfg(feature = "rest")]
+        fn $decode(value: &str) -> BoxliteResult<$ty> {
+            match value { $($wire => Ok($variant),)+ other => Err(invalid($field, other)) }
+        }
+    };
+}
+
+record_enum!(agent_status, parse_agent_status, AgentStatus, "status", {
+    AgentStatus::Ready => "ready", AgentStatus::Busy => "busy", AgentStatus::Closing => "closing",
+    AgentStatus::Closed => "closed", AgentStatus::Unknown => "unknown",
+});
+record_enum!(turn_status, parse_turn_status, AgentTurnStatus, "turn status", {
+    AgentTurnStatus::Queued => "queued", AgentTurnStatus::Running => "running",
+    AgentTurnStatus::WaitingInput => "waiting_input", AgentTurnStatus::Interrupting => "interrupting",
+    AgentTurnStatus::Completed => "completed", AgentTurnStatus::Cancelled => "cancelled",
+    AgentTurnStatus::Failed => "failed", AgentTurnStatus::Unknown => "unknown",
+});
+record_enum!(steering_status, parse_steering_status, AgentSteeringStatus, "steering status", {
+    AgentSteeringStatus::Accepted => "accepted", AgentSteeringStatus::Applied => "applied",
+    AgentSteeringStatus::Unused => "unused", AgentSteeringStatus::Unknown => "unknown",
+});
+record_enum!(outcome_name, parse_outcome, AgentOutcome, "outcome", {
+    AgentOutcome::Answer => "answer", AgentOutcome::Question => "question",
+});
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct Resource {
+    pub(super) id: String,
+    pub(super) agent: String,
+    pub(super) state: Option<State>,
+    pub(super) config: Config,
+    pub(super) capabilities: Capabilities,
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct Config {
+    model: Option<String>,
+    reasoning: Option<String>,
+    instructions: Option<String>,
+    tools: Vec<String>,
+    mcp: Vec<String>,
+    permissions: Option<Value>,
+    limits: Option<Value>,
+    output_schema: Option<Value>,
+}
+
+#[cfg(feature = "rest")]
+impl From<Config> for AgentConfig {
+    fn from(value: Config) -> Self {
+        Self {
+            model: value.model,
+            reasoning: value.reasoning,
+            instructions: value.instructions,
+            tools: value.tools,
+            mcp: value.mcp,
+            permissions: value.permissions,
+            limits: value.limits,
+            output_schema: value.output_schema,
+        }
     }
 }
 
-fn turn_status(status: AgentTurnStatus) -> &'static str {
-    match status {
-        AgentTurnStatus::Queued => "queued",
-        AgentTurnStatus::Running => "running",
-        AgentTurnStatus::WaitingInput => "waiting_input",
-        AgentTurnStatus::Interrupting => "interrupting",
-        AgentTurnStatus::Completed => "completed",
-        AgentTurnStatus::Cancelled => "cancelled",
-        AgentTurnStatus::Failed => "failed",
-        AgentTurnStatus::Unknown => "unknown",
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct Capabilities {
+    pub(super) operations: Vec<String>,
+    pub(super) input_kinds: Vec<String>,
+    pub(super) max_queued_turns: Option<usize>,
+    pub(super) max_pending_steering: Option<usize>,
+    pub(super) idempotency_retention_seconds: Option<f64>,
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct State {
+    pub(super) id: String,
+    pub(super) status: String,
+    pub(super) cursor: Option<String>,
+    pub(super) active_turn_id: Option<String>,
+    pub(super) queued_turn_ids: Vec<String>,
+    pub(super) requests: Vec<Request>,
+    pub(super) steering: Vec<Receipt>,
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct Request {
+    pub(super) id: String,
+    pub(super) turn_id: String,
+    pub(super) kind: RequestKind,
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum RequestKind {
+    Question { text: String, schema: Option<Value> },
+    Permission { tool: String, arguments: Value },
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct Receipt {
+    pub(super) id: String,
+    pub(super) turn_id: String,
+    pub(super) status: String,
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct Turn {
+    pub(super) id: String,
+    pub(super) agent_id: String,
+    pub(super) status: String,
+    pub(super) cursor: Option<String>,
+    pub(super) result: Option<ResultRecord>,
+    pub(super) requests: Vec<Request>,
+    pub(super) steering: Vec<Receipt>,
+}
+
+#[cfg(feature = "rest")]
+#[derive(Deserialize)]
+pub(super) struct ResultRecord {
+    pub(super) turn_id: String,
+    pub(super) status: String,
+    pub(super) outcome: Option<String>,
+    pub(super) text: Option<String>,
+    pub(super) data: Option<Value>,
+    pub(super) artifacts: Vec<String>,
+    pub(super) usage: Option<Value>,
+    pub(super) error: Option<String>,
+}
+
+#[cfg(feature = "rest")]
+pub(super) fn invalid(field: &str, value: &str) -> BoxliteError {
+    BoxliteError::Internal(format!("invalid REST agent {field}: {value}"))
+}
+
+#[cfg(feature = "rest")]
+impl TryFrom<ResultRecord> for AgentResult {
+    type Error = BoxliteError;
+    fn try_from(value: ResultRecord) -> BoxliteResult<Self> {
+        let outcome = value.outcome.as_deref().map(parse_outcome).transpose()?;
+        Ok(Self {
+            turn_id: value.turn_id,
+            status: parse_turn_status(&value.status)?,
+            outcome,
+            text: value.text,
+            data: value.data,
+            artifacts: value.artifacts,
+            usage: value.usage,
+            error: value.error,
+        })
+    }
+}
+
+#[cfg(feature = "rest")]
+impl TryFrom<Turn> for AgentTurnState {
+    type Error = BoxliteError;
+    fn try_from(value: Turn) -> BoxliteResult<Self> {
+        if value
+            .result
+            .as_ref()
+            .is_some_and(|result| result.turn_id != value.id)
+            || value
+                .requests
+                .iter()
+                .any(|request| request.turn_id != value.id)
+            || value
+                .steering
+                .iter()
+                .any(|receipt| receipt.turn_id != value.id)
+        {
+            return Err(invalid("turn child identity", &value.id));
+        }
+        Ok(Self {
+            id: value.id,
+            agent_id: value.agent_id,
+            status: parse_turn_status(&value.status)?,
+            cursor: value.cursor,
+            result: value.result.map(TryInto::try_into).transpose()?,
+            requests: value.requests.into_iter().map(Into::into).collect(),
+            steering: value
+                .steering
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<BoxliteResult<_>>()?,
+        })
+    }
+}
+
+#[cfg(feature = "rest")]
+impl TryFrom<Receipt> for AgentSteeringReceipt {
+    type Error = BoxliteError;
+
+    fn try_from(value: Receipt) -> BoxliteResult<Self> {
+        let status = parse_steering_status(&value.status)?;
+        Ok(Self {
+            id: value.id,
+            turn_id: value.turn_id,
+            status,
+        })
+    }
+}
+
+#[cfg(feature = "rest")]
+impl From<Request> for AgentRequest {
+    fn from(value: Request) -> Self {
+        let kind = match value.kind {
+            RequestKind::Question { text, schema } => AgentRequestKind::Question { text, schema },
+            RequestKind::Permission { tool, arguments } => {
+                AgentRequestKind::Permission { tool, arguments }
+            }
+        };
+        Self {
+            id: value.id,
+            turn_id: value.turn_id,
+            kind,
+        }
+    }
+}
+
+#[cfg(feature = "rest")]
+impl TryFrom<State> for AgentState {
+    type Error = BoxliteError;
+
+    fn try_from(value: State) -> BoxliteResult<Self> {
+        let status = parse_agent_status(&value.status)?;
+        Ok(Self {
+            id: value.id,
+            status,
+            cursor: value.cursor,
+            active_turn_id: value.active_turn_id,
+            queued_turn_ids: value.queued_turn_ids,
+            requests: value.requests.into_iter().map(Into::into).collect(),
+            steering: value
+                .steering
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<BoxliteResult<_>>()?,
+        })
+    }
+}
+
+#[cfg(all(test, feature = "rest"))]
+mod rest {
+    use super::*;
+
+    fn sample_turn(status: AgentTurnStatus) -> AgentTurnState {
+        AgentTurnState {
+            id: "turn-1".into(),
+            agent_id: "agent-1".into(),
+            status,
+            cursor: Some("cursor".into()),
+            result: Some(AgentResult {
+                turn_id: "turn-1".into(),
+                status,
+                outcome: Some(AgentOutcome::Question),
+                text: Some("answer".into()),
+                data: Some(json!({"nested": null})),
+                artifacts: vec!["file".into()],
+                usage: Some(json!({"tokens": 1})),
+                error: None,
+            }),
+            requests: vec![AgentRequest {
+                id: "request-1".into(),
+                turn_id: "turn-1".into(),
+                kind: AgentRequestKind::Permission {
+                    tool: "shell".into(),
+                    arguments: json!({"x": 1}),
+                },
+            }],
+            steering: vec![AgentSteeringReceipt {
+                id: "steer-1".into(),
+                turn_id: "turn-1".into(),
+                status: AgentSteeringStatus::Applied,
+            }],
+        }
+    }
+
+    #[test]
+    fn shared_enum_mappings_are_bidirectional_and_reject_unknown_values() {
+        for value in [
+            AgentSteeringStatus::Accepted,
+            AgentSteeringStatus::Applied,
+            AgentSteeringStatus::Unused,
+            AgentSteeringStatus::Unknown,
+        ] {
+            assert_eq!(
+                parse_steering_status(steering_status(value)).unwrap(),
+                value
+            );
+        }
+        for value in [AgentOutcome::Answer, AgentOutcome::Question] {
+            assert_eq!(parse_outcome(outcome_name(value)).unwrap(), value);
+        }
+        assert!(parse_agent_status("invalid").is_err());
+        assert!(parse_turn_status("invalid").is_err());
+        assert!(parse_steering_status("invalid").is_err());
+        assert!(parse_outcome("invalid").is_err());
+    }
+
+    #[test]
+    fn shared_records_round_trip_turns_and_nested_values() {
+        for status in [
+            AgentTurnStatus::Queued,
+            AgentTurnStatus::Running,
+            AgentTurnStatus::WaitingInput,
+            AgentTurnStatus::Interrupting,
+            AgentTurnStatus::Completed,
+            AgentTurnStatus::Cancelled,
+            AgentTurnStatus::Failed,
+            AgentTurnStatus::Unknown,
+        ] {
+            let original = sample_turn(status);
+            let encoded = turn_state(&original);
+            let decoded: AgentTurnState = serde_json::from_value::<Turn>(encoded.clone())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert_eq!(turn_state(&decoded), encoded);
+        }
+    }
+
+    #[test]
+    fn shared_records_round_trip_agent_states() {
+        for status in [
+            AgentStatus::Ready,
+            AgentStatus::Busy,
+            AgentStatus::Closing,
+            AgentStatus::Closed,
+            AgentStatus::Unknown,
+        ] {
+            let original = AgentState {
+                id: "agent-1".into(),
+                status,
+                cursor: None,
+                active_turn_id: Some("turn-1".into()),
+                queued_turn_ids: vec!["turn-2".into()],
+                requests: vec![AgentRequest {
+                    id: "request-1".into(),
+                    turn_id: "turn-1".into(),
+                    kind: AgentRequestKind::Question {
+                        text: "Continue?".into(),
+                        schema: Some(json!({"type":"string"})),
+                    },
+                }],
+                steering: vec![AgentSteeringReceipt {
+                    id: "steer-1".into(),
+                    turn_id: "turn-1".into(),
+                    status: AgentSteeringStatus::Unused,
+                }],
+            };
+            let encoded = agent_state(&original);
+            let decoded: AgentState = serde_json::from_value::<State>(encoded.clone())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert_eq!(agent_state(&decoded), encoded);
+        }
+    }
+
+    #[test]
+    fn turn_decoders_reject_invalid_enum_values() {
+        for (path, field) in [
+            ("/status", "turn status"),
+            ("/result/status", "turn status"),
+            ("/result/outcome", "outcome"),
+            ("/steering/0/status", "steering status"),
+        ] {
+            let mut wire = turn_state(&sample_turn(AgentTurnStatus::Running));
+            *wire.pointer_mut(path).unwrap() = json!("not-an-enum-value");
+            let decoded: BoxliteResult<AgentTurnState> =
+                serde_json::from_value::<Turn>(wire).unwrap().try_into();
+            assert!(decoded.unwrap_err().to_string().contains(field), "{path}");
+        }
+    }
+
+    #[test]
+    fn turn_decoders_reject_mismatched_child_ids() {
+        for path in [
+            "/result/turn_id",
+            "/requests/0/turn_id",
+            "/steering/0/turn_id",
+        ] {
+            let mut wire = turn_state(&sample_turn(AgentTurnStatus::Running));
+            *wire.pointer_mut(path).unwrap() = json!("another-turn");
+            let decoded: BoxliteResult<AgentTurnState> =
+                serde_json::from_value::<Turn>(wire).unwrap().try_into();
+            assert!(
+                decoded
+                    .unwrap_err()
+                    .to_string()
+                    .contains("turn child identity"),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn turn_decoders_accept_absent_result_and_empty_children() {
+        let mut original = sample_turn(AgentTurnStatus::Queued);
+        original.result = None;
+        original.requests.clear();
+        original.steering.clear();
+        let wire = turn_state(&original);
+        let decoded: AgentTurnState = serde_json::from_value::<Turn>(wire.clone())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(turn_state(&decoded), wire);
+    }
+
+    #[test]
+    fn state_decoders_reject_invalid_status_and_nested_receipts() {
+        let original = AgentState {
+            id: "agent-1".into(),
+            status: AgentStatus::Ready,
+            cursor: None,
+            active_turn_id: None,
+            queued_turn_ids: Vec::new(),
+            requests: Vec::new(),
+            steering: sample_turn(AgentTurnStatus::Running).steering,
+        };
+        for (path, field) in [
+            ("/status", "status"),
+            ("/steering/0/status", "steering status"),
+        ] {
+            let mut wire = agent_state(&original);
+            *wire.pointer_mut(path).unwrap() = json!("not-an-enum-value");
+            let decoded: BoxliteResult<AgentState> =
+                serde_json::from_value::<State>(wire).unwrap().try_into();
+            assert!(decoded.unwrap_err().to_string().contains(field), "{path}");
+        }
+    }
+
+    #[test]
+    fn config_responses_round_trip_known_fields_and_ignore_extensions() {
+        let original = AgentConfig {
+            model: Some("provider/model".into()),
+            reasoning: Some("high".into()),
+            instructions: Some("be concise".into()),
+            tools: vec!["shell".into()],
+            mcp: vec!["docs".into()],
+            permissions: Some(json!({"shell": false})),
+            limits: Some(json!({"tokens": 100})),
+            output_schema: Some(json!({"type": "object"})),
+        };
+        let expected = config(&original);
+        assert_eq!(config(&parse_config(expected.clone()).unwrap()), expected);
+        let mut wire = expected.clone();
+        wire["provider_metadata"] = json!({"version": 2});
+        assert!(parse_config(wire.clone()).is_err());
+        let decoded: AgentConfig = serde_json::from_value::<Config>(wire).unwrap().into();
+        assert_eq!(config(&decoded), expected);
+        for path in ["/model", "/reasoning", "/tools", "/mcp"] {
+            let mut wire = expected.clone();
+            *wire.pointer_mut(path).unwrap() = json!(123);
+            assert!(serde_json::from_value::<Config>(wire).is_err(), "{path}");
+        }
     }
 }
