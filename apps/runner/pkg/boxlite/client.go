@@ -582,7 +582,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 
 	var priorVolumeRecord *boxVolumeMountRecord
-	if len(boxDto.Volumes) > 0 {
+	if hasFilestoreRef(boxDto.Volumes) {
 		priorVolumeRecord, err = c.readBoxVolumeMountRecord(boxDto.Id)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to read existing volume mount record: %w", err)

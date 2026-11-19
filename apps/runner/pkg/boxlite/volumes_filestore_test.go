@@ -66,6 +66,18 @@ func installFakeMountpoint(t *testing.T, exitCode int) string {
 	return logPath
 }
 
+func installFakeFindmnt(t *testing.T, source string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' \"$FAKE_FILESTORE_SOURCE\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "findmnt"), []byte(script), 0755); err != nil {
+		t.Fatalf("failed to write fake findmnt: %v", err)
+	}
+	t.Setenv("FAKE_FILESTORE_SOURCE", source)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func installFakeUmount(t *testing.T) string {
 	t.Helper()
 
@@ -311,7 +323,9 @@ type fakeFilestoreMounts struct {
 	mounted map[string]bool
 }
 
-func installFakeFilestoreMounts(c *Client) *fakeFilestoreMounts {
+func installFakeFilestoreMounts(t *testing.T, c *Client) *fakeFilestoreMounts {
+	t.Helper()
+	installFakeFindmnt(t, "10.0.0.7:/vol1")
 	f := &fakeFilestoreMounts{mounted: make(map[string]bool)}
 	c.testMountRunner = func(cmd *exec.Cmd) error {
 		f.mounts.Add(1)
@@ -342,7 +356,7 @@ func TestConcurrentGetVolumeMountsRunsFilestoreMountOnce(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 
 	volumes := []dto.VolumeDTO{{VolumeId: "vol-concurrent", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}}}
 
@@ -385,7 +399,7 @@ func TestGetVolumeMountsPreparesFilestoreVolumes(t *testing.T) {
 	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
 
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 
 	mounts, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
 		{VolumeId: "vol-a", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
@@ -488,7 +502,7 @@ func TestFilestoreVolumesShareTheDirectoryByVolumeId(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 
 	box1, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
 		{VolumeId: "vol-shared", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
@@ -537,7 +551,7 @@ func TestRecordWriteHappensUnderTheInstanceLock(t *testing.T) {
 	probeLogPath := installFakeMountpoint(t, 0)
 	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
 	c := filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 
 	recordStarted := make(chan struct{})
 	allowRecord := make(chan struct{})
@@ -718,7 +732,7 @@ func TestFilestoreVolumeIdIsPathGuarded(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 
 	for _, id := range []string{"", ".", "../escape", "a/b", "a\\b", ".."} {
 		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
@@ -744,7 +758,7 @@ func TestFilestoreInstanceIsPathGuarded(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 
 	for _, instance := range []string{"", "../escape", "a/b", "a\\b", "ML", "-ml", strings.Repeat("a", 64)} {
 		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
@@ -769,7 +783,7 @@ func TestFilestoreVolumeRejectsSubpath(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 	subpath := "nested"
 
 	_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
@@ -791,7 +805,7 @@ func TestCreateReclaimsNewMountWhenPreparationFailsBeforeFirstRecord(t *testing.
 	base := t.TempDir()
 	useVolumeMountBasePath(t, base)
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 	umountLogPath := installFakeUmount(t)
 	c.prepareRunner = func(string) error { return errors.New("injected prepare failure") }
 	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
@@ -830,7 +844,7 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 	umountLogPath := installFakeUmount(t)
 	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
 	boxID := "abc123def456"
@@ -864,7 +878,7 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 	}
 
 	c = filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 	umountLogPath = installFakeUmount(t)
 	if _, err := c.getVolumeMounts(ctx, "box-other", volumes[:1]); err != nil {
 		t.Fatalf("failed to establish another box's mount reference: %v", err)
@@ -905,7 +919,7 @@ func TestStartReplayFailureKeepsExistingRecordEntries(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 	// The filestore root probes mounted (its work is done); the object-storage
 	// mount root's probe is the injected failure, so getVolumeMounts dies on
 	// the second volume of the list.
@@ -977,7 +991,7 @@ func TestStartReplayRewritesTheFullRecord(t *testing.T) {
 
 	c := filestoreTestClient(t)
 	c.volumeBackend = volumeBackendS3
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 	// Every probe answers mounted. The object-storage FUSE mount exec runs
 	// through cmd.Run, not the testMountRunner seam, so the fake mount marking can
 	// never close the loop with the fake probe for it — "already mounted" is
@@ -1041,7 +1055,7 @@ func TestCreateRollsBackTheRecordWhenTheFinalWriteFails(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 
 	// The seam fails exactly the full-list write (Create's second record
 	// write); the in-lock merge write before it must land through the real
@@ -1098,10 +1112,140 @@ func TestFilestoreTargetRequiredWhenAlreadyMounted(t *testing.T) {
 	}
 }
 
+func TestFilestoreValidatesTargetForEveryReference(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(t, c)
+
+	_, err := c.getVolumeMounts(context.Background(), "box1", []dto.VolumeDTO{
+		{VolumeId: "vol-a", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		{VolumeId: "vol-b", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Export: "/vol1"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires both server and export") {
+		t.Fatalf("second reference returned %v, want missing-target error", err)
+	}
+	if got := fake.mounts.Load(); got != 1 {
+		t.Fatalf("mount command ran %d times, want only the first valid reference to mount", got)
+	}
+}
+
+func TestFilestoreRejectsReusingDifferentTarget(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(t, c)
+
+	first := dto.VolumeDTO{VolumeId: "vol-a", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}}
+	if _, err := c.getVolumeMounts(context.Background(), "box1", []dto.VolumeDTO{first}); err != nil {
+		t.Fatalf("first mount failed: %v", err)
+	}
+
+	second := dto.VolumeDTO{VolumeId: "vol-b", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.8", Export: "/vol1"}}
+	_, err := c.getVolumeMounts(context.Background(), "box2", []dto.VolumeDTO{second})
+	if err == nil || !strings.Contains(err.Error(), "mount target mismatch") {
+		t.Fatalf("changed target returned %v, want mount target mismatch", err)
+	}
+	if got := fake.mounts.Load(); got != 1 {
+		t.Fatalf("changed target ran %d mount commands, want reuse without remounting", got)
+	}
+}
+
+func TestCreateReclaimsLateFirstMountAfterCancellation(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(t, c)
+	umountLogPath := installFakeUmount(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	c.testMountRunner = func(cmd *exec.Cmd) error {
+		fake.mounts.Add(1)
+		close(started)
+		<-release
+		fake.mu.Lock()
+		fake.mounted[cmd.Args[len(cmd.Args)-1]] = true
+		fake.mu.Unlock()
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	outbound := true
+	go func() {
+		_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+			Id: "abc123def456", OutboundEnabled: &outbound,
+			Volumes: []dto.VolumeDTO{{
+				VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+			}},
+		})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("cancelled Create returned %v, want context cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Create did not return after cancellation")
+	}
+
+	close(release)
+	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
+	deadline := time.Now().Add(12 * time.Second)
+	for !reflect.DeepEqual(commandLog(t, umountLogPath), []string{root}) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got, want := commandLog(t, umountLogPath), []string{root}; !reflect.DeepEqual(got, want) {
+		entries, recordErr := os.ReadDir(getVolumeMountRecordDir())
+		mounted, probeErr := c.probeMounted(context.Background(), root)
+		t.Fatalf("umount log after late mount completion = %v, want %v (pending=%v, records=%v, recordErr=%v, mounted=%v, probeErr=%v, PATH=%s)", got, want, c.checkVolumeOperation(filestoreMountPrefix+"ml-scratch"), entries, recordErr, mounted, probeErr, os.Getenv("PATH"))
+	}
+}
+
+func TestObjectStorageReplayRepairsMalformedRecord(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	boxID := "abc123def456"
+	if err := os.MkdirAll(getVolumeMountRecordDir(), 0755); err != nil {
+		t.Fatalf("create record directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(getVolumeMountRecordDir(), boxID+".json"), []byte("not-json"), 0600); err != nil {
+		t.Fatalf("write malformed record: %v", err)
+	}
+	c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
+	c.clearPublishedRunner = func() error { return errors.New("injected stop after record write") }
+	var repaired *boxVolumeMountRecord
+	var seam func(context.Context, string, boxVolumeMountRecord) error
+	seam = func(ctx context.Context, id string, record boxVolumeMountRecord) error {
+		repaired = &record
+		c.writeRecordSeam = nil
+		err := c.writeBoxVolumeMountRecord(ctx, id, record)
+		c.writeRecordSeam = seam
+		return err
+	}
+	c.writeRecordSeam = seam
+
+	outbound := true
+	_, _, err := c.Create(context.Background(), dto.CreateBoxDTO{
+		Id: boxID, OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{{VolumeId: "vol-object", MountPath: "/data"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected stop after record write") {
+		t.Fatalf("object-storage replay returned %v, want the post-record-write error", err)
+	}
+	if repaired == nil {
+		t.Fatal("object-storage replay did not replace the malformed record")
+	}
+	root := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"vol-object")
+	if len(repaired.Entries) != 1 || repaired.Entries[0].RootPath != root {
+		t.Fatalf("repaired record = %#v, want only the object-storage root %q", repaired.Entries, root)
+	}
+}
+
 func TestFilestoreMountTimeoutBlocksRetryUntilCompletion(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	c.testMountRunner = func(cmd *exec.Cmd) error {
@@ -1161,6 +1305,7 @@ func TestFilestoreMountTimeoutBlocksRetryUntilCompletion(t *testing.T) {
 func TestFilestorePreparationTimeoutBlocksRetryUntilCompletion(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
+	installFakeFindmnt(t, "10.0.0.7:/vol1")
 	c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -1207,7 +1352,7 @@ func TestCreateReplayRestoresPriorRecordOnFailure(t *testing.T) {
 	ctx := context.Background()
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 	boxID := "abc123def456"
 	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
 	dataDir := filestoreDataDir(root, "vol-ok")
@@ -1253,7 +1398,7 @@ func TestCreateReplayDoesNotReclaimWhenRecordRollbackFails(t *testing.T) {
 	ctx := context.Background()
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 	umountLogPath := installFakeUmount(t)
 	boxID := "abc123def456"
 	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
@@ -1310,7 +1455,7 @@ func TestCreateRollsBackRecordWhenNativeIDResolutionFails(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
 	c.homeDir = t.TempDir()
-	fake := installFakeFilestoreMounts(c)
+	fake := installFakeFilestoreMounts(t, c)
 	boxID := "abc123def456"
 	journalPath := filepath.Join(c.homeDir, "work", "checkpoint-operations", fmt.Sprintf("%x", sha256.Sum256([]byte(boxID)))+".json")
 	c.testMountRunner = func(cmd *exec.Cmd) error {
@@ -1341,7 +1486,7 @@ func TestCreateRollsBackRecordWhenClearPublishedFails(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
 	c.homeDir = t.TempDir()
-	installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(t, c)
 	c.clearPublishedRunner = func() error { return errors.New("injected clear-published failure") }
 	boxID := "abc123def456"
 	outbound := true

@@ -240,6 +240,9 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	if !filestoreInstanceNamePattern.MatchString(ref.Instance) {
 		return volumeMount{}, fmt.Errorf("invalid filestore instance %q: must match %s", ref.Instance, filestoreInstanceNamePattern)
 	}
+	if err := validateFilestoreTarget(ref); err != nil {
+		return volumeMount{}, err
+	}
 	if vol.Subpath != nil && *vol.Subpath != "" {
 		return volumeMount{}, fmt.Errorf("subpath is not supported for filestore volumes")
 	}
@@ -281,7 +284,7 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	}
 	prepareCtx, cancelPrepare := context.WithTimeout(ctx, volumeProbeTimeout)
 	defer cancelPrepare()
-	if _, err := c.runBoundedVolumeOperation(prepareCtx, mountKey, func() error { return prepare(dataDir) }); err != nil {
+	if _, err := c.runBoundedVolumeOperation(prepareCtx, mountKey, func() error { return prepare(dataDir) }, nil); err != nil {
 		return volumeMount{}, err
 	}
 
@@ -386,6 +389,13 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 	return nil
 }
 
+func validateFilestoreTarget(ref *dto.FilestoreRef) error {
+	if ref.Server == "" || ref.Export == "" {
+		return fmt.Errorf("filestore %s requires both server and export", ref.Instance)
+	}
+	return nil
+}
+
 // ensureFilestoreMounted is the NFS twin of ensureVolumeFuseMounted, with two
 // deliberate differences. No systemd-run scope: NFS is a kernel mount with no
 // daemon, so there is nothing that dies with the runner service's cgroup. And
@@ -399,8 +409,8 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 // data directory and writing the referencing record form ONE critical section
 // against reclaim (design §4.5).
 func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreRef, mountRoot string, mountKey string) error {
-	if ref.Server == "" || ref.Export == "" {
-		return fmt.Errorf("filestore %s requires both server and export", ref.Instance)
+	if err := validateFilestoreTarget(ref); err != nil {
+		return err
 	}
 
 	mounted, err := c.probeMounted(ctx, mountRoot)
@@ -410,6 +420,9 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 		return fmt.Errorf("cannot determine whether filestore %s is already mounted: %w", ref.Instance, err)
 	}
 	if mounted {
+		if err := verifyFilestoreMountTarget(ctx, ref, mountRoot); err != nil {
+			return err
+		}
 		c.logger.DebugContext(ctx, "filestore already mounted", "instance", ref.Instance, "mountRoot", mountRoot)
 		return nil
 	}
@@ -421,13 +434,22 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 		return fmt.Errorf("failed to create filestore mount root %s: %s", mountRoot, err)
 	}
 
+	// Establish the ownership boundary before the mount starts. If the caller
+	// times out, late completion can prove this mount unreferenced and reclaim it;
+	// existing mounts return above without weakening the missing-records guard.
+	recordDir := getVolumeMountRecordDir()
+	if err = os.MkdirAll(recordDir, 0755); err != nil {
+		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
+		return fmt.Errorf("failed to create volume mount record directory %s: %w", recordDir, err)
+	}
+
 	c.logger.InfoContext(ctx, "mounting filestore instance", "instance", ref.Instance, "server", ref.Server, "export", ref.Export, "mountRoot", mountRoot)
 
 	mountCtx, cancelMount := context.WithTimeout(ctx, volumeMountTimeout)
 	defer cancelMount()
 
 	cmd := c.getNfsMountCmd(mountCtx, ref, mountRoot)
-	pending, mountErr := c.runMount(mountCtx, mountKey, cmd)
+	pending, mountErr := c.runMount(mountCtx, mountKey, cmd, mountRoot)
 	if mountErr != nil {
 		if !pending {
 			c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
@@ -440,16 +462,32 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 		return fmt.Errorf("mount %s not ready after mounting: %s", mountRoot, err)
 	}
 
-	// This attempt owns the new mount before its first record exists. An empty
-	// record directory lets rollback prove it unreferenced; existing mounts
-	// return above without weakening the missing-records safety guard.
-	recordDir := getVolumeMountRecordDir()
-	if err = os.MkdirAll(recordDir, 0755); err != nil {
-		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
-		return fmt.Errorf("failed to create volume mount record directory %s: %w", recordDir, err)
-	}
-
 	c.logger.InfoContext(ctx, "mounted filestore instance", "instance", ref.Instance, "mountRoot", mountRoot)
+	return nil
+}
+
+func verifyFilestoreMountTarget(ctx context.Context, ref *dto.FilestoreRef, mountRoot string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, volumeProbeTimeout)
+	defer cancel()
+
+	expected := ref.Server + ":" + ref.Export
+	output, err := exec.CommandContext(
+		probeCtx,
+		"findmnt",
+		"--noheadings",
+		"--nofsroot",
+		"--raw",
+		"--mountpoint", mountRoot,
+		"--types", "nfs4",
+		"--output", "SOURCE",
+	).Output()
+	if err != nil {
+		return fmt.Errorf("cannot verify existing filestore %s mount at %s as NFSv4 with source %s: %w", ref.Instance, mountRoot, expected, err)
+	}
+	actual := strings.TrimSpace(string(output))
+	if actual != expected {
+		return fmt.Errorf("filestore %s mount target mismatch at %s: mounted source %q, requested source %q", ref.Instance, mountRoot, actual, expected)
+	}
 	return nil
 }
 
@@ -477,13 +515,16 @@ func (c *Client) getNfsMountCmd(ctx context.Context, ref *dto.FilestoreRef, path
 
 // runMount supervises the command so an unkillable process cannot park the
 // caller after the deadline. The pending marker prevents a retry or reclaim
-// from treating that process as finished before Wait returns.
-func (c *Client) runMount(ctx context.Context, mountKey string, cmd *exec.Cmd) (bool, error) {
+// from treating that process as finished before Wait returns. Once an abandoned
+// mount finishes, reference-aware reclaim runs with that marker cleared.
+func (c *Client) runMount(ctx context.Context, mountKey string, cmd *exec.Cmd, mountRoot string) (bool, error) {
 	return c.runBoundedVolumeOperation(ctx, mountKey, func() error {
 		if c.testMountRunner != nil {
 			return c.testMountRunner(cmd)
 		}
 		return cmd.Run()
+	}, func() {
+		c.reclaimFilestoreMount(context.Background(), mountRoot)
 	})
 }
 
@@ -621,7 +662,7 @@ func (c *Client) checkVolumeOperation(key string) error {
 
 // trackLateVolumeOperation keeps an instance marked busy until the underlying
 // syscall or process has actually finished, even after its caller timed out.
-func (c *Client) trackLateVolumeOperation(key string, done <-chan error) {
+func (c *Client) trackLateVolumeOperation(key string, done <-chan error, onComplete func()) {
 	c.volumeMutexesMutex.Lock()
 	if c.volumePending == nil {
 		c.volumePending = make(map[string]int)
@@ -640,12 +681,15 @@ func (c *Client) trackLateVolumeOperation(key string, done <-chan error) {
 		if err != nil {
 			c.logger.WarnContext(context.Background(), "late volume operation failed", "key", key, "error", err)
 		}
+		if onComplete != nil {
+			onComplete()
+		}
 	}()
 }
 
 // runBoundedVolumeOperation returns on context completion while retaining an
 // instance-level pending marker until the operation itself finishes.
-func (c *Client) runBoundedVolumeOperation(ctx context.Context, key string, operation func() error) (bool, error) {
+func (c *Client) runBoundedVolumeOperation(ctx context.Context, key string, operation func() error, onLateCompletion func()) (bool, error) {
 	done := make(chan error, 1)
 	go func() {
 		done <- operation()
@@ -655,7 +699,7 @@ func (c *Client) runBoundedVolumeOperation(ctx context.Context, key string, oper
 	case err := <-done:
 		return false, err
 	case <-ctx.Done():
-		c.trackLateVolumeOperation(key, done)
+		c.trackLateVolumeOperation(key, done, onLateCompletion)
 		return true, ctx.Err()
 	}
 }
