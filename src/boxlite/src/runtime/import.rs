@@ -4,6 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde_json::Value;
 
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
@@ -162,6 +164,68 @@ fn rejected_upload(subject: &str) -> BoxliteError {
     ))
 }
 
+/// Inspect archive fields before configuration deserializers can collapse them.
+struct ArchiveJson(Value);
+
+impl<'de> serde::Deserialize<'de> for ArchiveJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ArchiveVisitor;
+
+        impl<'de> Visitor<'de> for ArchiveVisitor {
+            type Value = Value;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("JSON with unique object fields")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut input: A) -> Result<Value, A::Error> {
+                let mut fields = serde_json::Map::new();
+                while let Some(key) = input.next_key::<String>()? {
+                    if fields.contains_key(&key) {
+                        return Err(de::Error::custom(format!("duplicate field `{key}`")));
+                    }
+                    fields.insert(key, input.next_value::<ArchiveJson>()?.0);
+                }
+                Ok(Value::Object(fields))
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut input: A) -> Result<Value, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(ArchiveJson(value)) = input.next_element()? {
+                    entries.push(value);
+                }
+                Ok(Value::Array(entries))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_unit<E>(self) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+        }
+
+        deserializer.deserialize_any(ArchiveVisitor).map(Self)
+    }
+}
+
 /// Extract archive, parse manifest, verify checksums.
 fn extract_and_validate(
     archive_path: &Path,
@@ -180,7 +244,7 @@ fn extract_and_validate(
     }
 
     let manifest_json = std::fs::read_to_string(&manifest_path)?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
+    let ArchiveJson(raw_manifest) = serde_json::from_str(&manifest_json)
         .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {e}")))?;
     if [
         "/outbound_policy",
@@ -192,13 +256,13 @@ fn extract_and_validate(
         "/box_options/network/outbound/deny_net",
     ]
     .iter()
-    .any(|path| manifest.pointer(path).is_some())
+    .any(|path| raw_manifest.pointer(path).is_some())
     {
         return Err(BoxliteError::Unsupported(
             "archive contains complete outbound policy".into(),
         ));
     }
-    let manifest: ArchiveManifest = serde_json::from_value(manifest)
+    let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
         .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
 
     if manifest.version > MAX_SUPPORTED_VERSION {
@@ -763,7 +827,44 @@ mod required_import_safety_tests {
             0
         );
 
-        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let original = serde_json::to_string(&manifest).unwrap();
+        let network =
+            serde_json::to_string(&manifest.box_options.as_ref().unwrap().network).unwrap();
+        let network_member = format!(r#""network":{network}"#);
+        assert!(original.contains(&network_member));
+        let nested_duplicate = original.replacen(
+            &network_member,
+            &format!("{network_member},{network_member}"),
+            1,
+        );
+        let root_duplicate = format!(r#"{{"version":2,{}"#, original.strip_prefix('{').unwrap());
+        for (field, duplicate) in [("version", root_duplicate), ("network", nested_duplicate)] {
+            std::fs::write(&manifest_path, duplicate).unwrap();
+            crate::litebox::archive::build_zstd_tar_archive(
+                &archive_path,
+                &manifest_path,
+                &disk,
+                1,
+            )
+            .unwrap();
+            let rejected = runtime
+                .import_box(BoxArchive::new(&archive_path), Some("duplicate".into()))
+                .await
+                .err();
+            assert!(
+                matches!(&rejected, Some(BoxliteError::Storage(reason)) if reason.contains(&format!("duplicate field `{field}`"))),
+                "unexpected result for repeated {field}: {rejected:?}"
+            );
+            assert!(runtime.list_info().await.unwrap().is_empty());
+            assert_eq!(
+                std::fs::read_dir(runtime.layout.boxes_dir())
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+
+        std::fs::write(&manifest_path, original).unwrap();
         crate::litebox::archive::build_zstd_tar_archive(&archive_path, &manifest_path, &disk, 1)
             .unwrap();
         let imported = import_box(
