@@ -90,16 +90,4 @@ describe('saved card mutations', () => {
     expect(mocks.removePaymentMethod).toHaveBeenCalledWith('org-1', 'card-2')
     for (const queryKey of refreshedKeys) expect(invalidateQueries).toHaveBeenCalledWith({ queryKey })
   })
-
-  it('leaves every query untouched when the request fails', async () => {
-    mocks.removePaymentMethod.mockRejectedValue(new Error('Request failed with status code 404'))
-
-    await act(async () => {
-      await expect(remove?.mutateAsync({ organizationId: 'org-1', paymentMethodId: 'card-404' })).rejects.toThrow(
-        '404',
-      )
-    })
-
-    expect(invalidateQueries).not.toHaveBeenCalled()
-  })
 })

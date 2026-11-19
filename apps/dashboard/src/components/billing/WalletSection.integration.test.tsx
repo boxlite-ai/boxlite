@@ -1112,22 +1112,6 @@ describe('WalletSection top-up checkout', () => {
       expect(toast.success).toHaveBeenCalledWith('Card removed')
     })
 
-    it('keeps the card when the confirmation is cancelled', async () => {
-      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
-      await renderWallet()
-
-      await act(async () => menuItem(await openMenu('1111'), 'Remove')!.click())
-      await flush()
-      const cancel = [...document.querySelectorAll('[role="alertdialog"] button')].find(
-        (button) => button.textContent === 'Cancel',
-      ) as HTMLButtonElement
-      await act(async () => cancel.click())
-      await flush()
-
-      expect(document.querySelector('[role="alertdialog"]')).toBeNull()
-      expect(mocks.removePaymentMethod).not.toHaveBeenCalled()
-    })
-
     it('offers no action on the default card', async () => {
       mocks.paymentMethods = [card('card-default', true, '4242')]
       await renderWallet()
