@@ -321,9 +321,8 @@ func egressName(e tcpEgress) string {
 	return "by-address"
 }
 
-// bufferedConn wraps a net.Conn with a bufio.Reader for Read operations.
-// This ensures peeked bytes (from SNI/Host inspection) are replayed to the
-// upstream server during the relay phase.
+// bufferedConn replays buffered inspection or tunnel bytes before reading
+// from the underlying connection. The relay owns the resulting stream.
 type bufferedConn struct {
 	net.Conn
 	reader io.Reader

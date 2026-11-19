@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -149,11 +150,9 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 	}
 	var lastErr error
 	for i, ip := range ips {
-		// The one stop condition, as net.dialSerial checks before each
-		// address: the caller is gone, or the budget is spent — the derived
-		// context reports both. Without it a canceled MITM request walks the
-		// whole candidate list, every attempt failing on a context already
-		// done.
+		if errors.Is(lastErr, errProxyCandidate) && proxySetupError(ctx, nil) != nil {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			if lastErr == nil {
 				lastErr = err
@@ -169,6 +168,13 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 			return conn, nil
 		}
 		lastErr = err
+		var failure proxyFailure
+		if !errors.Is(err, errProxyCandidate) && errors.As(err, &failure) {
+			break
+		}
+	}
+	if errors.Is(lastErr, errProxyCandidate) {
+		lastErr = proxySetupError(ctx, lastErr)
 	}
 	return nil, fmt.Errorf("dial %s:%d: %w", target.Hostname, target.Port, lastErr)
 }

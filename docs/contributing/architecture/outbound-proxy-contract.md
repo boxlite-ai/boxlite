@@ -102,6 +102,63 @@ QUIC, before acknowledgement, closes existing external UDP endpoints, and drops 
 
 Gateway DNS and DHCP remain available. Unbind restores ordinary policy for new direct endpoints.
 
+### Bridge proxy connector
+
+The bridge connector accepts one approved proxy socket address and a checked IPv4 TCP target.
+It verifies both business addresses and the proxy address before opening a socket.
+HTTPS verifies the endpoint certificate chain and registered name before sending CONNECT.
+
+The connector caps all HTTP response headers for a tunnel at 32 KiB, including interim replies.
+A final 2xx starts raw tunnel data at the end of the headers, regardless of HTTP body framing.
+SOCKS5 offers exactly one authentication method and validates the complete reply before returning.
+
+One deadline covers dial, TLS and proxy negotiation, and the connector releases the socket on failure.
+The by-name dialer can advance past a refused connection IP or a well-formed SOCKS5 host-unreachable or
+connection-refused reply. Proxy failures stop the operation, and combined setup remains bounded
+by the original deadline.
+
+```mermaid
+sequenceDiagram
+    participant D as TCP dialer
+    participant C as Proxy connector
+    participant P as Selected proxy
+    D->>C: Approved target and setup deadline
+    C->>C: Check proxy and business addresses
+    opt Addresses pass the checks
+        C->>P: Dial and negotiate within the deadline
+        P-->>C: Proxy reply
+    end
+    alt Successful setup
+        C->>C: Clear deadline and finish cancellation handoff
+        C-->>D: Tunnel with buffered bytes
+    else Candidate-specific refusal
+        C->>C: Close any setup socket
+        C-->>D: Refusal allows another candidate
+        opt Budget remains
+            D->>C: Try the next approved address
+        end
+    else Proxy failure or budget expiry
+        C->>C: Close any setup socket
+        C-->>D: End setup with a redacted error
+    end
+```
+
+The bridge pins its public address tables in [proxy_address_ranges.csv](../../../src/deps/libgvproxy-sys/gvproxy-bridge/proxy_address_ranges.csv).
+Deployment deny prefixes override registry results.
+
+The longest special-purpose match must be globally reachable. Native IPv6 proxy addresses
+also require an allocated unicast range.
+
+| IANA XML snapshot | Updated | SHA-256 |
+| --- | --- | --- |
+| [IPv4 special-purpose](https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xml) | 2025-10-09 | `37f334466c842387a8aee8d1ae7a6d5b2208ef27eb8964072538b73ee2f5b21d` |
+| [IPv6 special-purpose](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xml) | 2025-10-09 | `660acf0201b462b8d820605ba1cb20c4ed216acd883ee4a55a17453d73d4c3aa` |
+| [IPv6 unicast allocations](https://www.iana.org/assignments/ipv6-unicast-address-assignments/ipv6-unicast-address-assignments.xml) | 2025-10-10 | `22f9a545e020ea6b9adea9ea0276f3157e32c838682459a45bfe7760de0aefc3` |
+
+On refresh, split each special-purpose address list into one row per prefix and keep only
+`True` as `allow`. Keep `ALLOCATED` as `allow` for the IPv6 allocation rows and `deny` for
+every other value in either table. Review the diff and run `make test:unit:gvproxy`.
+
 ## Revisions and failure behavior
 
 The [shared revision contract](outbound-contract.md#revisions-and-acknowledgements) owns
