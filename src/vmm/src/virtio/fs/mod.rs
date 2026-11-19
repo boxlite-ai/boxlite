@@ -37,9 +37,8 @@ use std::collections::BTreeMap;
 /// Live aggregate filesystems keyed by device tag. The shim process hosts
 /// one VM; the mount-control server reaches the device through this registry
 /// instead of threading device internals through the transport. The entry
-/// appears when the device is built and is removed when the device drops, so
-/// a torn-down VM releases its exports instead of pinning them to process
-/// exit; lookups after teardown answer `ENODEV`.
+/// appears when the device is built and is removed when the device stops or
+/// drops. Lookups after teardown answer `ENODEV`.
 static MOUNT_DEVICES: LazyLock<Mutex<BTreeMap<String, Arc<AggregateFs>>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
@@ -47,8 +46,7 @@ fn mount_devices() -> &'static Mutex<BTreeMap<String, Arc<AggregateFs>>> {
     &MOUNT_DEVICES
 }
 
-/// The live aggregate filesystem for `tag`, or `ENODEV` when no device with
-/// that tag has been built in this process.
+/// The live aggregate filesystem for `tag`, or `ENODEV` if the tag is absent.
 pub fn lookup_aggregate(tag: &str) -> std::io::Result<Arc<AggregateFs>> {
     mount_devices()
         .lock()

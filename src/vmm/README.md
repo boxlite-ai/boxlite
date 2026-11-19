@@ -50,11 +50,12 @@ are omitted when not requested.
 
 The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
 publishes a live device by tag when it enters the transport, and
-`lookup_aggregate` returns its filesystem to host-side consumers. Dropping the
-device removes the registration, rejects mutations through previously obtained
-handles, and clears its guest session. Retained filesystem handles keep export
-roots alive until their final reference drops. `AggregateFs::register_fd`
-registers directory descriptors and `remove` retires per-directory exports.
+`lookup_aggregate` returns its filesystem to host-side consumers. VM shutdown
+removes the registration, rejects mutations through cached handles, and clears
+the guest session. Device drop performs the same cleanup if shutdown did not run.
+Retained filesystem handles pin export roots until their final reference drops.
+`AggregateFs::register_fd` registers directory descriptors, and `remove` retires
+per-directory exports.
 A retired export's name stops resolving while its in-use nodes, handles and
 in-flight requests retain their backend; a re-registered name has a new identity
 and independent read-only policy.

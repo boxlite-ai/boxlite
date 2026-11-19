@@ -32,6 +32,7 @@ pub(crate) struct Fs {
     features: u64,
     server: Server<AggregateFs>,
     activation: Option<ActivationContext>,
+    closed: bool,
 }
 
 impl Fs {
@@ -50,6 +51,7 @@ impl Fs {
             features: 0,
             server: Server::new(AggregateFs::new(shares)?),
             activation: None,
+            closed: false,
         })
     }
 
@@ -58,10 +60,11 @@ impl Fs {
     pub(crate) fn filesystem(&self) -> Arc<AggregateFs> {
         self.server.filesystem()
     }
-}
 
-impl Drop for Fs {
-    fn drop(&mut self) {
+    fn close(&mut self) {
+        if self.closed {
+            return;
+        }
         // Unpublish only this device's registration, then close its session
         // even when a control operation still holds a filesystem reference.
         let bytes = &self.config[..TAG_LEN];
@@ -70,6 +73,13 @@ impl Drop for Fs {
             super::remove_aggregate(tag, &self.server.filesystem());
         }
         self.server.reset();
+        self.closed = true;
+    }
+}
+
+impl Drop for Fs {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -125,6 +135,11 @@ impl VirtioDevice for Fs {
         self.server.reset();
         self.activation = None;
         self.features = 0;
+        Ok(())
+    }
+
+    fn quiesce(&mut self) -> Result<(), DeviceError> {
+        self.close();
         Ok(())
     }
 
