@@ -1,8 +1,7 @@
 //! Native clock alignment owned by the shim, including detached Boxes.
 //!
-//! Check host wall time every two seconds: a six-second gap catches suspend
-//! or scheduling stalls, and sixty seconds since success catches normal drift.
-//! Only the guest decides whether its clock needs a correction.
+//! Compare wall time with suspend-aware elapsed time every two seconds.
+//! A gap or clock step stays due until the guest accepts a fresh sample.
 
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,6 +15,8 @@ use boxlite_shared::BoxTransport;
 const CHECK_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const GAP_THRESHOLD: Duration = Duration::from_secs(6);
+#[cfg(target_os = "linux")]
+const CLOCK_STEP_THRESHOLD: Duration = Duration::from_millis(100);
 #[cfg(target_os = "linux")]
 const UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 #[cfg(target_os = "linux")]
@@ -51,56 +52,95 @@ fn run(transport: BoxTransport) {
             return;
         }
     };
-    runtime.block_on(sync_loop(transport));
+    if let Err(error) = runtime.block_on(sync_loop(transport)) {
+        tracing::warn!(%error, "clock sync could not read host boottime");
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
 fn run(_transport: BoxTransport) {}
 
 #[cfg(target_os = "linux")]
-struct Schedule {
-    previous_check: SystemTime,
-    last_successful_push: Option<SystemTime>,
+#[derive(Debug)]
+struct HostTime {
+    wall: SystemTime,
+    boottime: Duration,
 }
 
 #[cfg(target_os = "linux")]
-impl Schedule {
-    fn check(&mut self, now: SystemTime) -> Option<&'static str> {
-        // Save the check time before any RPC; a suspend during the RPC must
-        // still be visible as a gap at the next check.
-        let gap = now.duration_since(self.previous_check);
-        self.previous_check = now;
-        let Some(last_success) = self.last_successful_push else {
-            return Some("no_successful_push");
+impl HostTime {
+    fn now() -> std::io::Result<Self> {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
         };
-        let since_success = now.duration_since(last_success);
-        if gap.is_err() || since_success.is_err() {
-            Some("host_clock_rollback")
-        } else if gap.is_ok_and(|elapsed| elapsed >= GAP_THRESHOLD) {
-            Some("check_gap")
-        } else if since_success.is_ok_and(|elapsed| elapsed >= UPDATE_INTERVAL) {
-            Some("periodic")
-        } else {
-            None
+        // SAFETY: time is a valid writable timespec for clock_gettime.
+        if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut time) } != 0 {
+            return Err(std::io::Error::last_os_error());
         }
+        Ok(Self {
+            wall: SystemTime::now(),
+            boottime: Duration::new(time.tv_sec as u64, time.tv_nsec as u32),
+        })
     }
 }
 
 #[cfg(target_os = "linux")]
-async fn sync_loop(transport: BoxTransport) {
+struct Schedule {
+    previous_check: HostTime,
+    last_successful_push: Option<Duration>,
+    pending: Option<&'static str>,
+}
+
+#[cfg(target_os = "linux")]
+impl Schedule {
+    fn check(&mut self, now: HostTime) -> Option<&'static str> {
+        // Record the check before the RPC so a suspend during it stays visible.
+        let previous = std::mem::replace(&mut self.previous_check, now);
+        if self.pending.is_some() {
+            return self.pending;
+        }
+        let now = &self.previous_check;
+        let elapsed = now.boottime.saturating_sub(previous.boottime);
+        self.pending = match self.last_successful_push {
+            None => Some("no_successful_push"),
+            Some(_) if elapsed >= GAP_THRESHOLD => Some("check_gap"),
+            Some(_)
+                if now.wall.duration_since(previous.wall).map_or_else(
+                    |_| true,
+                    |wall_elapsed| elapsed.abs_diff(wall_elapsed) > CLOCK_STEP_THRESHOLD,
+                ) =>
+            {
+                Some("host_clock_step")
+            }
+            Some(last) if now.boottime.saturating_sub(last) >= UPDATE_INTERVAL => Some("periodic"),
+            Some(_) => None,
+        };
+        self.pending
+    }
+
+    fn pushed(&mut self, boottime: Duration) {
+        self.last_successful_push = Some(boottime);
+        self.pending = None;
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn sync_loop(transport: BoxTransport) -> std::io::Result<()> {
     let mut schedule = Schedule {
-        previous_check: SystemTime::now(),
+        previous_check: HostTime::now()?,
         last_successful_push: None,
+        pending: None,
     };
     let mut checks = tokio::time::interval(CHECK_INTERVAL);
     // The first tick is immediate; missed checks never become a burst of RPCs.
     checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         checks.tick().await;
-        if let Some(reason) = schedule.check(SystemTime::now())
+        if let Some(reason) = schedule.check(HostTime::now()?)
             && let Ok(sampled_at) = sync_once(&transport, SYNC_TIMEOUT, reason).await
         {
-            schedule.last_successful_push = Some(sampled_at);
+            schedule.pushed(sampled_at.boottime);
         }
     }
 }
@@ -111,15 +151,16 @@ async fn sync_once(
     transport: &BoxTransport,
     timeout: Duration,
     reason: &str,
-) -> Result<SystemTime, String> {
+) -> Result<HostTime, String> {
     let started = Instant::now();
     let mut sampled_at = None;
     let result = tokio::time::timeout(timeout, async {
         let session = GuestSession::new(transport.clone());
         let mut guest = session.guest().await.map_err(|error| error.to_string())?;
-        let now = SystemTime::now();
-        sampled_at = Some(now);
+        let now = HostTime::now().map_err(|error| error.to_string())?;
+        sampled_at = Some(now.wall);
         let utc = now
+            .wall
             .duration_since(UNIX_EPOCH)
             .map_err(|error| error.to_string())?;
         guest
@@ -293,7 +334,8 @@ mod tests {
         let sampled_at = attempt
             .await
             .expect("attempt task")
-            .expect("delayed channel recovered");
+            .expect("delayed channel recovered")
+            .wall;
         assert!(
             sampled_at >= ready_at,
             "timestamp predates the available channel"
@@ -310,30 +352,35 @@ mod tests {
 
     #[test]
     fn schedule_checks_thresholds_and_keeps_failures_due() {
-        let at = |seconds| UNIX_EPOCH + Duration::from_secs(seconds);
-        let mut schedule = Schedule {
-            previous_check: at(100),
-            last_successful_push: None,
+        let after = Duration::from_secs;
+        let at = |wall, boottime| HostTime {
+            wall: UNIX_EPOCH + after(wall),
+            boottime: after(boottime),
         };
-        assert_eq!(schedule.check(at(100)), Some("no_successful_push"));
-        assert_eq!(schedule.check(at(102)), Some("no_successful_push"));
-        schedule.last_successful_push = Some(at(102));
-        assert_eq!(schedule.check(at(107)), None);
-        assert_eq!(schedule.check(at(113)), Some("check_gap"));
-        // A failed gap push leaves the success baseline, but isn't itself retried.
-        assert_eq!(schedule.check(at(115)), None);
-        schedule.previous_check = at(159);
-        assert_eq!(schedule.check(at(161)), None);
-        assert_eq!(schedule.check(at(162)), Some("periodic"));
-        assert_eq!(schedule.check(at(164)), Some("periodic"));
-        schedule.last_successful_push = Some(at(164));
-        assert_eq!(schedule.check(at(166)), None);
-        assert_eq!(schedule.check(at(90)), Some("host_clock_rollback"));
-        schedule.last_successful_push = Some(at(90));
-        assert_eq!(schedule.check(at(92)), None);
+        let mut schedule = Schedule {
+            previous_check: at(100, 100),
+            last_successful_push: None,
+            pending: None,
+        };
+        assert_eq!(schedule.check(at(100, 100)), Some("no_successful_push"));
+        assert_eq!(schedule.check(at(102, 102)), Some("no_successful_push"));
+        schedule.pushed(after(102));
+        assert_eq!(schedule.check(at(107, 107)), None);
+        assert_eq!(schedule.check(at(113, 113)), Some("check_gap"));
+        assert_eq!(schedule.check(at(115, 115)), Some("check_gap"));
+        schedule.pushed(after(115));
+        schedule.previous_check = at(172, 172);
+        assert_eq!(schedule.check(at(174, 174)), None);
+        assert_eq!(schedule.check(at(175, 175)), Some("periodic"));
+        assert_eq!(schedule.check(at(177, 177)), Some("periodic"));
+        schedule.pushed(after(177));
+        assert_eq!(schedule.check(at(179, 179)), None);
+        assert_eq!(schedule.check(at(180, 181)), Some("host_clock_step"));
+        schedule.pushed(after(181));
+        assert_eq!(schedule.check(at(182, 183)), None);
         // Even a successful RPC must not erase a suspend during that RPC.
-        schedule.last_successful_push = Some(at(100));
-        assert_eq!(schedule.check(at(100)), Some("check_gap"));
+        schedule.pushed(after(191));
+        assert_eq!(schedule.check(at(190, 191)), Some("check_gap"));
     }
 
     #[tokio::test]
@@ -359,7 +406,7 @@ mod tests {
             let sent_at = UNIX_EPOCH + Duration::new(sent.unix_sec as u64, sent.nanos as u32);
             assert!((before..=after).contains(&sent_at));
             match index {
-                0 => assert_eq!(result.expect("RPC succeeded"), sent_at),
+                0 => assert_eq!(result.expect("RPC succeeded").wall, sent_at),
                 1 => assert!(
                     result
                         .expect_err("guest rejected")

@@ -6,7 +6,9 @@ The same guest agent bootstraps itself as native PID 1 or as a child of libkrun'
 
 ## Clock recovery
 
-On Linux/native Boxes, the shim attempts `Guest.SyncClock` at startup, then checks host wall time every 2 seconds. It pushes when consecutive checks are at least 6 seconds apart, at least 60 seconds have passed since the last successful push, no push has succeeded, or the host clock moves backward. The task lives with the shim, including after a detached Box's creator exits, and requires no D-Bus/logind or power notifications. libkrun retains its existing clock synchronization mechanism.
+On Linux/native Boxes, the shim attempts `Guest.SyncClock` at startup and checks host time every 2 seconds. It uses `CLOCK_BOOTTIME` for the 6-second gap and 60-second periodic triggers, and pushes when the wall clock's change differs from elapsed time by more than 100ms. A failed push stays due until the guest responds successfully. The shim owns the task, including after a detached Box's creator exits. libkrun retains its existing clock synchronization mechanism.
+
+TCP and Unix listeners return `PermissionDenied` for `Guest.SyncClock`.
 
 The host samples current UTC after connecting and immediately before sending. The agent accepts the call only from the host control plane (the vsock listener rejects non-host peers before tonic sees them), validates a post-epoch timestamp with a valid subsecond part, then reads `CLOCK_REALTIME`. Only an absolute difference greater than 100ms calls `clock_settime`, in either direction; a difference of exactly 100ms or less returns success without adjusting the clock. The host is the clock authority, so legitimate timestamps after long sleeps have no ahead-of-guest bound. Invalid timestamps, clock-read failures, and clock-setting failures propagate as gRPC errors; only successful responses update the shim's successful-push baseline. The 100ms threshold is a decision to adjust, not a precision guarantee: transport and scheduling delay remain uncompensated. The correction never touches the RTC or `CLOCK_MONOTONIC`, so the guest's own RTC offset and alarms survive it, and user containers need no additional `CAP_SYS_TIME`.
 

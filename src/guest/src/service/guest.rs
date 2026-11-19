@@ -225,6 +225,9 @@ impl GuestService for GuestServer {
         &self,
         request: Request<SyncClockRequest>,
     ) -> Result<Response<SyncClockResponse>, Status> {
+        if !self.allow_clock_sync {
+            return Err(Status::permission_denied("clock sync requires host vsock"));
+        }
         let ts = match sync_clock_timespec(request.into_inner()) {
             Ok(ts) => ts,
             Err(reject) => return Err(Status::invalid_argument(reject.reason())),
@@ -439,7 +442,8 @@ mod tests {
     async fn sync_clock_within_tolerance_succeeds_without_clock_permission() {
         crate::test_syscalls::deny(nix::libc::SYS_clock_settime);
         let root = tempfile::tempdir().expect("tempdir");
-        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        let mut server = GuestServer::new(GuestLayout::with_base(root.path()));
+        server.allow_clock_sync = true;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch");
@@ -456,7 +460,8 @@ mod tests {
     async fn sync_clock_rejects_invalid_requests_before_setting_clock() {
         crate::test_syscalls::deny(nix::libc::SYS_clock_settime);
         let root = tempfile::tempdir().expect("tempdir");
-        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        let mut server = GuestServer::new(GuestLayout::with_base(root.path()));
+        server.allow_clock_sync = true;
         for (unix_sec, nanos) in [(1, -1), (1, 1_000_000_000), (0, 0), (-1, 0)] {
             let status = server
                 .sync_clock(Request::new(SyncClockRequest { unix_sec, nanos }))
@@ -478,7 +483,8 @@ mod tests {
             .as_secs() as i64;
 
         let root = tempfile::tempdir().expect("tempdir");
-        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        let mut server = GuestServer::new(GuestLayout::with_base(root.path()));
+        server.allow_clock_sync = true;
         let status = server
             .sync_clock(Request::new(SyncClockRequest {
                 unix_sec: now + 90_000,
