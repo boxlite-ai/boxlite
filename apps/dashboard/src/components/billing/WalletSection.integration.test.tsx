@@ -1134,5 +1134,26 @@ describe('WalletSection top-up checkout', () => {
       expect(rows.map((row) => row.textContent?.includes('Default'))).toEqual([true, false])
       expect(rows[0].textContent).toContain('•••• 4242')
     })
+
+    it('reports a failed removal and keeps the card listed', async () => {
+      mocks.paymentMethods = [card('card-default', true, '4242'), card('card-other', false, '1111')]
+      mocks.removePaymentMethod.mockRejectedValue(new Error('Request failed with status code 404'))
+      await renderWallet()
+
+      await act(async () => menuItem(await openMenu('1111'), 'Remove')!.click())
+      await flush()
+      const confirm = [...document.querySelectorAll('[role="alertdialog"] button')].find(
+        (button) => button.textContent === 'Remove',
+      ) as HTMLButtonElement
+      await act(async () => confirm.click())
+      await flush()
+
+      expect(toast.error).toHaveBeenCalledWith('Failed to remove the card', {
+        description: 'Error: Request failed with status code 404',
+      })
+      const rows = [...document.querySelectorAll('ul[aria-label="Saved payment methods"] li')]
+      expect(rows).toHaveLength(2)
+      expect(rows[1].textContent).toContain('•••• 1111')
+    })
   })
 })
