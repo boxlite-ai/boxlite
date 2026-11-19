@@ -18,7 +18,8 @@ use crate::runtime::options::{BoxOptions, NetworkSpec};
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::ContainerID;
 use crate::util::find_binary;
-use crate::vmm::controller::{ShimController, VmmController, VmmHandler};
+use crate::vmm::controller::{ProtectedSpawnEvent, ShimController, VmmController, VmmHandler};
+use crate::vmm::shim_launch::ProtectedNetworkLaunch;
 use crate::vmm::{Entrypoint, InstanceSpec, PreparedKernel, VmmKind};
 use crate::volumes::{
     ContainerMount, ContainerVolumeManager, GuestVolumeManager, stage_single_file,
@@ -90,9 +91,12 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         let box_id = task_start(&ctx, task_name).await;
 
         // Gather all inputs from previous tasks
-        let inputs = {
-            let ctx = ctx.lock().await;
-            VmmSpawnInputs::from_context(&ctx)?
+        let (inputs, protected) = {
+            let mut ctx = ctx.lock().await;
+            (
+                VmmSpawnInputs::from_context(&ctx)?,
+                ctx.protected_launch.take(),
+            )
         };
 
         // Build config and get outputs
@@ -102,7 +106,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
-        let handler = spawn_vm(&box_id, &instance_spec, &inputs)
+        let handler = spawn_vm(&box_id, &instance_spec, &inputs, protected)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
@@ -432,6 +436,7 @@ async fn spawn_vm(
     box_id: &BoxID,
     config: &InstanceSpec,
     inputs: &VmmSpawnInputs,
+    protected: Option<ProtectedNetworkLaunch>,
 ) -> BoxliteResult<Box<dyn VmmHandler>> {
     let mut controller = ShimController::new(
         find_binary("boxlite-shim")?,
@@ -441,7 +446,52 @@ async fn spawn_vm(
         inputs.layout.clone(),
     )?;
 
-    controller = controller.with_outbound_revision(inputs.outbound_revision.clone());
+    if let Some(network) = protected {
+        let box_id = box_id.clone();
+        let runtime = inputs.runtime.clone();
+        let epoch = network.route.binding.epoch.clone();
+        controller = controller.with_protected_network(network, move |event| {
+            let mut stored = runtime
+                .box_manager
+                .protected_boot(&box_id)?
+                .unwrap_or_default();
+            let attempt = stored
+                .active
+                .as_mut()
+                .filter(|attempt| attempt.epoch == epoch && attempt.owner.is_none())
+                .ok_or_else(|| {
+                    BoxliteError::InvalidState("Protected shim admission changed".into())
+                })?;
+            match event {
+                ProtectedSpawnEvent::PreparingChild if !attempt.spawning => attempt.spawning = true,
+                ProtectedSpawnEvent::NoChild if attempt.spawning => attempt.spawning = false,
+                ProtectedSpawnEvent::ChildStarted(pid) if attempt.spawning => {
+                    if !crate::jailer::protected_owner_is_contained(&box_id, pid) {
+                        return Err(BoxliteError::InvalidState(
+                            "Protected shim process containment is unavailable".into(),
+                        ));
+                    }
+                    let start_time = crate::util::process_start_time(pid).ok_or_else(|| {
+                        BoxliteError::InvalidState(
+                            "Could not verify protected shim identity".into(),
+                        )
+                    })?;
+                    attempt.owner = Some(crate::util::PidRecord {
+                        pid,
+                        start_time: Some(start_time),
+                    });
+                }
+                _ => {
+                    return Err(BoxliteError::InvalidState(
+                        "Unexpected protected shim spawn state".into(),
+                    ));
+                }
+            }
+            runtime.box_manager.save_protected_boot(&box_id, &stored)
+        });
+    } else {
+        controller = controller.with_outbound_revision(inputs.outbound_revision.clone());
+    }
     controller.start(config).await
 }
 

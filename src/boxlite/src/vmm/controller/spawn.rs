@@ -1,8 +1,11 @@
 //! Subprocess spawning for boxlite-shim binary.
 
 use std::{
+    io::{self, Write},
+    os::fd::{AsRawFd, RawFd},
     path::{Path, PathBuf},
-    process::{Child, Stdio},
+    process::{Child, ChildStdin, Stdio},
+    time::{Duration, Instant},
 };
 
 use crate::jailer::{Jail, JailerBuilder, PathAccess};
@@ -19,6 +22,14 @@ const NESTED_VIRT_PROBE_PATHS: [&str; 2] = [
     "/sys/module/kvm_intel/parameters/nested",
     "/sys/module/kvm_amd/parameters/nested",
 ];
+
+const PROTECTED_LAUNCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) enum ProtectedSpawnEvent {
+    PreparingChild,
+    NoChild,
+    ChildStarted(u32),
+}
 
 /// A shim that was spawned, with its child process handle and optional keepalive.
 ///
@@ -128,6 +139,24 @@ impl<'a> ShimSpawner<'a> {
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
     pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
+        self.spawn_inner(config_json, detach, None)
+    }
+
+    pub(super) fn spawn_protected(
+        &self,
+        config_json: &str,
+        detach: bool,
+        record_spawn: &dyn Fn(ProtectedSpawnEvent) -> BoxliteResult<()>,
+    ) -> BoxliteResult<SpawnedShim> {
+        self.spawn_inner(config_json, detach, Some(record_spawn))
+    }
+
+    fn spawn_inner(
+        &self,
+        config_json: &str,
+        detach: bool,
+        record_spawn: Option<&dyn Fn(ProtectedSpawnEvent) -> BoxliteResult<()>>,
+    ) -> BoxliteResult<SpawnedShim> {
         // 1. Create watchdog pipe (non-detached only)
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
@@ -179,15 +208,24 @@ impl<'a> ShimSpawner<'a> {
         cmd.stderr(Stdio::from(stderr_file));
 
         // 7. Spawn
-        let mut child = cmd.spawn().map_err(|e| {
-            let err_msg = format!(
-                "Failed to spawn VM subprocess at {}: {}",
-                self.binary_path.display(),
-                e
-            );
-            tracing::error!("{}", err_msg);
-            BoxliteError::Engine(err_msg)
-        })?;
+        if let Some(record_spawn) = record_spawn {
+            record_spawn(ProtectedSpawnEvent::PreparingChild)?;
+        }
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                // On Unix, Command::spawn waits for the failed child before returning an exec error.
+                if let Some(record_spawn) = record_spawn {
+                    record_spawn(ProtectedSpawnEvent::NoChild)?;
+                }
+                let message = format!(
+                    "Failed to spawn VM subprocess at {}: {error}",
+                    self.binary_path.display()
+                );
+                tracing::error!("{message}");
+                return Err(BoxliteError::Engine(message));
+            }
+        };
 
         // 8. Write config to stdin, then close (shim reads until EOF).
         // The child is already spawned and will read from stdin, so this is a
@@ -195,8 +233,33 @@ impl<'a> ShimSpawner<'a> {
         // configs (~2-5KB), write_all completes immediately. For large configs
         // (>16KB on macOS, >64KB on Linux), write_all blocks until the child
         // drains the buffer — which it does as its first action in main().
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
+        if let Some(record_spawn) = record_spawn {
+            let stdin = child.stdin.take();
+            let result =
+                record_spawn(ProtectedSpawnEvent::ChildStarted(child.id())).and_then(|()| {
+                    let stdin = stdin.ok_or_else(|| {
+                        BoxliteError::Engine("Missing protected shim launch pipe".into())
+                    })?;
+                    write_protected_config(stdin, config_json.as_bytes(), PROTECTED_LAUNCH_TIMEOUT)
+                        .map_err(|e| {
+                            BoxliteError::Engine(format!(
+                                "Failed to write protected shim config: {e}"
+                            ))
+                        })
+                });
+            if let Err(error) = result {
+                // The writer is closed before terminating the exact child. The durable
+                // reservation stays in place until the lifecycle code proves retirement.
+                let _ = child.kill();
+                if let Some(id) = crate::BoxID::parse(self.box_id) {
+                    crate::jailer::reap_box(&id);
+                }
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Err(error);
+            }
+        } else if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(config_json.as_bytes()).map_err(|e| {
                 BoxliteError::Engine(format!("Failed to write config to shim stdin: {e}"))
             })?;
@@ -254,6 +317,56 @@ impl<'a> ShimSpawner<'a> {
     }
 }
 
+fn write_protected_config(
+    mut stdin: ChildStdin,
+    mut config: &[u8],
+    timeout: Duration,
+) -> io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let fd = stdin.as_raw_fd();
+    set_nonblocking(fd)?;
+    while !config.is_empty() {
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        match stdin.write(config) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(written) => config = &config[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => wait_writable(fd, deadline)?,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+    // SAFETY: fd is borrowed from the live ChildStdin for the duration of both calls.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn wait_writable(fd: RawFd, deadline: Instant) -> io::Result<()> {
+    let mut poll = libc::pollfd {
+        fd,
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let millis = remaining.as_millis().max(1).min(i32::MAX as u128) as i32;
+    // SAFETY: poll points to one initialized descriptor, borrowed from a live pipe.
+    if unsafe { libc::poll(&mut poll, 1, millis) } < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(all(test, target_os = "linux"))]
 #[path = "tests/fractional_cpus_membership.rs"]
 mod fractional_cpus_membership_tests;
@@ -263,6 +376,29 @@ mod tests {
     use super::*;
     use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
     use std::ffi::OsStr;
+
+    #[test]
+    fn outbound_bootstrap_pipe_times_out_with_partial_reader() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "head -c 1; exec sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let result = write_protected_config(
+            child.stdin.take().unwrap(),
+            &vec![b'x'; 2 << 20],
+            Duration::from_secs(1),
+        );
+        let _ = child.kill();
+        child.wait().unwrap();
+        let mut observed = Vec::new();
+        std::io::Read::read_to_end(&mut child.stdout.take().unwrap(), &mut observed).unwrap();
+        assert_eq!(observed, b"x");
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     fn test_layout() -> BoxFilesystemLayout {
         BoxFilesystemLayout::new(

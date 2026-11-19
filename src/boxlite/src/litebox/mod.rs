@@ -16,6 +16,8 @@ pub(crate) mod local_snapshot;
 mod manager;
 mod network;
 pub(crate) mod ports;
+#[doc(hidden)]
+pub mod protected_boot;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod ssh;
@@ -112,6 +114,49 @@ impl LiteBox {
     /// Also called implicitly by exec() if the box is not running.
     pub async fn start(&self) -> BoxliteResult<()> {
         self.box_backend.start().await
+    }
+
+    /// Launch through the local, trusted Runner's protected bootstrap path.
+    #[doc(hidden)]
+    pub async fn bootstrap_protected(
+        &self,
+        request: protected_boot::ProtectedBootRequest,
+    ) -> BoxliteResult<protected_boot::ProtectedBootReceipt> {
+        self.protected_backend()?.bootstrap_protected(request).await
+    }
+
+    /// Observe exact durable and live bootstrap evidence without starting a Guest.
+    #[doc(hidden)]
+    pub async fn protected_boot_receipt(
+        &self,
+        key: &protected_boot::ProtectedBootKey,
+    ) -> BoxliteResult<protected_boot::ProtectedBootReceipt> {
+        self.protected_backend()?.protected_boot_receipt(key).await
+    }
+
+    /// Persist replay protection for an attempt whose child has terminated.
+    #[doc(hidden)]
+    pub async fn retire_protected_boot(
+        &self,
+        key: protected_boot::ProtectedBootKey,
+    ) -> BoxliteResult<protected_boot::ProtectedBootReceipt> {
+        self.protected_backend()?.retire_protected_boot(key).await
+    }
+
+    /// Check whether legacy destructive entry points must defer to the coordinator.
+    #[doc(hidden)]
+    pub async fn has_protected_boot(&self) -> BoxliteResult<bool> {
+        self.protected_backend()?.has_protected_boot().await
+    }
+
+    fn protected_backend(&self) -> BoxliteResult<Arc<box_impl::BoxImpl>> {
+        self.box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>()
+            .map_err(|_| {
+                BoxliteError::Unsupported("Protected bootstrap requires the local backend".into())
+            })
     }
 
     pub async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {

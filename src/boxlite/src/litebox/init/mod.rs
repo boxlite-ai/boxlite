@@ -174,6 +174,7 @@ pub(crate) struct BoxBuilder {
     runtime: SharedRuntimeImpl,
     config: BoxConfig,
     state: BoxState,
+    protected: Option<crate::vmm::shim_launch::ProtectedNetworkLaunch>,
 }
 
 fn validate_persisted_options(
@@ -211,7 +212,22 @@ impl BoxBuilder {
             runtime,
             config,
             state,
+            protected: None,
         })
+    }
+
+    pub(crate) fn with_protected_launch(
+        mut self,
+        protected_box: bool,
+        protected: Option<crate::vmm::shim_launch::ProtectedNetworkLaunch>,
+    ) -> Self {
+        if protected_box {
+            // Persisted options specify no NIC. Only an admitted protected boot
+            // or verified reattach builds a temporary managed NIC configuration.
+            self.config.options.network = crate::runtime::options::NetworkSpec::default();
+        }
+        self.protected = protected;
+        self
     }
 
     /// Build and initialize LiveState.
@@ -234,6 +250,7 @@ impl BoxBuilder {
             runtime,
             config,
             state,
+            protected,
         } = self;
 
         let status = state.status;
@@ -253,6 +270,7 @@ impl BoxBuilder {
             ctx.guard.disarm();
         }
         ctx.outbound_policy = state.outbound_policy.clone();
+        ctx.protected_launch = protected;
         if status != BoxStatus::Running {
             ctx.outbound_revision = Some(
                 runtime

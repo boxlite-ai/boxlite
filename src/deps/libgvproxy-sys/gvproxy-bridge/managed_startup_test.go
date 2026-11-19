@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -31,9 +32,15 @@ func managedSocketConfig(t *testing.T) GvproxyConfig {
 
 func TestManagedStartupBindsAndUpdatesThroughHostSocket(t *testing.T) {
 	cfg := managedSocketConfig(t)
+	cfg.AllowNet = []string{"93.184.216.34"}
 	managed := &managedNetworkStartup{route: &managedRouteConfig{
 		Scheme: "https", Host: "8.8.8.8", Port: 443,
 		DoHURL: "https://cloudflare-dns.com/dns-query", DoHAddress: netip.MustParseAddrPort("1.1.1.1:443"),
+		Binding: &managedProxyBinding{"registration-a", "registration-revision-a", "epoch-a"},
+		Credential: &struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}{"test-auth-user", "test-auth-secret"},
 	}}
 	id, err := startGvproxy(cfg, managed)
 	if err != nil {
@@ -68,7 +75,29 @@ func TestManagedStartupBindsAndUpdatesThroughHostSocket(t *testing.T) {
 		}
 		return string(data)
 	}
+	readStatus := func() string { return request(http.MethodGet, outboundStatusPath, "", "", http.StatusOK) }
+	installed := readStatus()
+	var startup struct {
+		Policy   outboundPolicy      `json:"policy"`
+		Revision string              `json:"revision"`
+		Phase    string              `json:"application_state"`
+		Binding  managedProxyBinding `json:"binding"`
+	}
+	if err := json.Unmarshal([]byte(installed), &startup); err != nil {
+		t.Fatal(err)
+	}
+	if startup.Binding != *managed.route.Binding || startup.Revision != cfg.OutboundRevision || startup.Phase != "confirmed" ||
+		startup.Policy.Mode != "enabled" || len(startup.Policy.AllowNet) != 1 || startup.Policy.AllowNet[0] != cfg.AllowNet[0] {
+		t.Fatalf("unexpected startup snapshot: %+v", startup)
+	}
+	if strings.Contains(installed, "test-auth-") {
+		t.Fatal("readback exposed proxy credentials")
+	}
 	request(http.MethodPut, "/network/outbound", `{"mode":"enabled"}`, "", http.StatusConflict)
+	request(http.MethodPut, outboundSnapshotPath, `{"mode":"disabled"}`, "policy-only", http.StatusConflict)
+	if readStatus() != installed {
+		t.Fatal("policy-only update changed the installed snapshot")
+	}
 	request(http.MethodPost, "/services/dns/add", `{"name":"tenant.test."}`, "", http.StatusOK)
 	if all := request(http.MethodGet, "/services/dns/all", "", "", http.StatusOK); !strings.Contains(all, "tenant.test.") {
 		t.Fatal("DNS control did not use the managed zone store")

@@ -244,6 +244,78 @@ It reports redacted diagnostics such as `proxy_unreachable`, `proxy_auth_failed`
 Ineligible placements report `runner_proxy_unsupported` or `runner_proxy_tls_unsupported`.
 Guest applications receive native network failures.
 
+## Protected Runner bootstrap
+
+An operator enrolls a fresh, non-default mdeploy Runner slot with an admin-registered V0 UUID and HTTPS API URL. Set `STACK_RUNNER_PROTECTED_PROXY_SLOTS` to a JSON object keyed by the slot's resource name, such as `Runner-runner-2`. The registered URL must use the enrolled DNS name and the Runner service port.
+
+Each entry contains `runnerId`, `url`, `caPem`, `caFile`, `certFile`, `keyFile`, `dohUrl`, and `dohAddress`. Provision the certificate, key, and CA files at those absolute host paths. The CA stays scoped to that Runner in Cloud, and both upgrade probes verify the DNS name and CA over loopback HTTPS.
+
+For `Runner-runner-2`, provide the pre-registered slot token through the deployment secret `STACK_RUNNER_PROTECTED_PROXY_TOKEN_RUNNER_RUNNER_2`. Cloud uses the same token saved by the admin registration, and the deployment renders it only for that Runner slot.
+
+For example, an enrolled slot can listen at `https://runner-2.example.com:3003/` with a deployment CA and use a pinned DoH endpoint at `1.1.1.1:443`. Ordinary extra slots use automatic V2 registration and loopback HTTP readiness. Cloud checks the enrolled Runner's authenticated bootstrap capability before scoring and truncating candidates for a protected placement.
+
+```mermaid
+flowchart LR
+    operator[Operator]
+    deployment[mdeploy slot enrollment]
+    cloud[Cloud Runner adapter]
+    subgraph host[Enrolled Runner host]
+        readiness[Upgrade readiness probe]
+        runner[V0 Runner HTTPS listener]
+    end
+    operator -->|Register UUID, endpoint and CA| cloud
+    operator -->|Provide slot identity, token and TLS files| deployment
+    deployment -->|Render service environment| runner
+    deployment -->|Render CA and DNS name checks| readiness
+    readiness -->|Verified loopback HTTPS| runner
+    cloud -->|Enrolled TLS and capability before ranking| runner
+```
+
+Cloud prepares the selected Box with ordinary startup skipped and no network interface configured. The enrolled Runner checks TLS, bearer authorization, and the assigned UUID before decoding the host-only request. Runtime stores the attempt and its epoch, then sends the route and effective policy to the shim on a versioned, single-use stdin record.
+
+On Linux, the Runner needs a cgroup v2 that can contain the shim and its namespace descendants. Runtime checks membership before sending credentials and keeps the attempt unresolved until it can establish that the exact child and its process tree have exited. A delayed request for a retired attempt is refused even after the Runner reopens the Box.
+
+The protected receipt requires Guest readiness and exact installed policy, registration, and epoch evidence from gvproxy. Until an authorized bootstrap settles, policy-only changes and legacy recovery cannot replace the protected route. Cloud registry transactions and live rotation use their respective [registry and runtime-update slices](#acceptance-and-ownership).
+
+```mermaid
+sequenceDiagram
+    participant Cloud
+    participant Runner as Enrolled Runner
+    participant Runtime
+    participant Shim as Shim and gvproxy
+    Cloud->>Runner: Prepare Box with startup and network disabled
+    Cloud->>Runner: Send exact attempt over enrolled HTTPS
+    Runner->>Runtime: Admit attempt under Box lock
+    Runtime->>Runtime: Store attempt and epoch
+    opt Preparation succeeds
+        Runtime->>Runtime: Record potential child before spawn
+        Runtime->>Shim: Spawn and verify child identity and containment
+        Runtime->>Shim: Write one launch record and close stdin
+    end
+    alt Guest ready and installed route matches
+        Shim-->>Runtime: Confirm policy, registration and epoch
+        Runtime-->>Runner: Exact confirmed receipt
+        Runner-->>Cloud: Authenticated confirmed receipt
+    else Uncertain or failed launch
+        Cloud->>Runner: Request exact attempt retirement
+        Runner->>Runtime: Serialize retirement with startup
+        alt No child was created or exact termination is proved
+            Runtime-->>Runner: Persist and return retired receipt
+            Runner-->>Cloud: Authenticated retired receipt
+        else Child termination is unconfirmed
+            Runtime-->>Runner: Leave attempt unresolved
+        end
+    end
+```
+
+The Registry integration pins the exact registration revision to the Box, assigned Runner, and attempt before dispatch. The pending reference can omit the epoch until Runtime allocates it. An exact successful receipt promotes the reference and records that epoch atomically.
+
+Once known, the epoch also has to match readback or retirement evidence. An exact retirement receipt can omit the epoch when Runtime retired the attempt before allocation. Any uncertain result keeps the pending reference in place.
+
+On a disposable Linux KVM host, add loopback aliases `11.23.0.1` through `11.23.0.5` as `/32` addresses. Set `BOXLITE_TEST_PROTECTED_BOOT_TLS` to the directory containing `host.pem` and `host.key`. Trust the certificate issuer on the host and include `resolver.test` and `protected.test` in the certificate.
+
+Run `make test:integration:runner FILTER=TestIntegrationProtectedBootTCPPaths`. The test runs `curl --noproxy '*'` in the Guest and checks the CONNECT requests and application traffic received by the fixtures.
+
 ## Acceptance and ownership
 
 [Fixture scenarios](../../../tests/fixtures/outbound/proxy-contract-v1.json) record proposed

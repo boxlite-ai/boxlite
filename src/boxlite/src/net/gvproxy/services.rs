@@ -105,6 +105,21 @@ impl GvproxyBackend {
         }
     }
 
+    pub(crate) async fn managed_proxy_status(
+        &self,
+    ) -> BoxliteResult<super::managed::ManagedProxyStatus> {
+        let (status, body) = self
+            .request(Method::GET, "/network/outbound/status", None)
+            .await?;
+        if status != 200 {
+            return Err(BoxliteError::Network(format!(
+                "Read managed proxy status returned {status}"
+            )));
+        }
+        serde_json::from_str(&body)
+            .map_err(|_| BoxliteError::Network("Invalid managed proxy status".into()))
+    }
+
     /// One-shot HTTP/1.1 request to the services socket. Returns `(status, body)`.
     async fn request(
         &self,

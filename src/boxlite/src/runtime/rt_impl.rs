@@ -1119,6 +1119,11 @@ impl RuntimeImpl {
 
         // Try to get box from database first
         if let Some((config, state)) = self.box_manager.box_by_id(id)? {
+            if self.box_manager.protected_boot(id)?.is_some() {
+                return Err(BoxliteError::InvalidState(
+                    "Protected bootstrap records require coordinated removal".into(),
+                ));
+            }
             // Lifecycle is already held: never wait for disk admission here.
             let lock_id = state
                 .lock_id

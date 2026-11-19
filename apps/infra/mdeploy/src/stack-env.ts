@@ -21,6 +21,7 @@
  */
 
 import { renderRunnerEnvironment } from '../stack/runner-environment.ts'
+import { enrollProtectedRunnerSlots } from '../stack/runner-protected-proxy.ts'
 import { apiEnvironmentFrom } from './api-environment.ts'
 import { clickHouseRetentionHours } from '../stack/clickhouse-retention.ts'
 import {
@@ -221,6 +222,7 @@ export type StackEnvironment = {
   /** Where users' named apps are served, or null for a stage that offers none. See `userDomainFrom`. */
   userDomain: UserDomain | null
   runnerFleet: RunnerSlot[]
+  protectedRunnerTokens: Record<string, string>
   /** A ClickHouse someone else operates, for a stage that runs none of its own. */
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
   /** Hours the stage asked for, or null for none; the stack resolves the default once it knows the mode. */
@@ -361,6 +363,21 @@ export const readStackEnvironment = ({
   if (openapi !== null && !['true', 'false'].includes(openapi)) {
     throw new StackEnvError('OTEL_OPENAPI_ENABLED must be true or false')
   }
+  const runnerFleet = enrollProtectedRunnerSlots(
+    fleetFrom({ environment, app, stage }),
+    optional(environment, 'STACK_RUNNER_PROTECTED_PROXY_SLOTS'),
+  )
+  const protectedRunnerTokens = Object.fromEntries(
+    runnerFleet
+      .filter((slot) => slot.protectedProxy)
+      .map((slot) => {
+        const name = `STACK_RUNNER_PROTECTED_PROXY_TOKEN_${slot.resourceName.replaceAll('-', '_').toUpperCase()}`
+        const token = required(environment, name, 'an enrolled Runner uses the token from its admin registration')
+        if (!/^[A-Za-z0-9_-]{32,128}$/.test(token))
+          throw new StackEnvError(`${name} is not a valid enrolled Runner token`)
+        return [slot.resourceName, token]
+      }),
+  )
   return {
     tag,
     domain: required(environment, 'STACK_DOMAIN', "the stage's own domain; the control plane answers at api.<domain>"),
@@ -378,7 +395,8 @@ export const readStackEnvironment = ({
     // that holds the key with nothing in it.
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
     userDomain: userDomainFrom(environment),
-    runnerFleet: fleetFrom({ environment, app, stage }),
+    runnerFleet,
+    protectedRunnerTokens,
     managedClickHouse: managedClickHouseFrom(environment),
     clickHouseRetentionHours:
       optional(environment, 'CLICKHOUSE_RETENTION_HOURS') === null ? null : clickHouseRetentionHours(environment),

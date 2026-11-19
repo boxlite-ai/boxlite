@@ -440,6 +440,7 @@ udevadm trigger --name-match=kvm || true`,
           // resource, so there is nothing here to resolve.
           binary: request.binary,
           port: RUNNER_PORT,
+          protectedProxy: slot.protectedProxy,
           environment: {
             ...Object.fromEntries(
               Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),

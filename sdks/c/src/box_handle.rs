@@ -5,6 +5,8 @@
 //! and pushes a typed `RuntimeEvent` to the runtime's queue. Callbacks fire
 //! later from `boxlite_runtime_drain` on the user's thread.
 
+mod protected_boot;
+
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;

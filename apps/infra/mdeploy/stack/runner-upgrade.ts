@@ -33,6 +33,7 @@
 
 import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
 import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
+import { runnerHealthProbe } from './runner-health-probe.ts'
 import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -379,15 +380,15 @@ const preamble = (target: UpgradeTarget): string => `set -euo pipefail
 echo "${ON_HOST}"
 
 TARGET="${target.identity}"
-HEALTH="http://127.0.0.1:${target.port}/"
 ALLOW_DOWNGRADE="${target.allowDowngrade ? '1' : ''}"
+${runnerHealthProbe}
 
 # The binary parses no CLI arguments, so there is no --version to ask. Of the
 # places that do report one, this health route is the only one reachable here
 # without a token: /info is auth-gated and the healthcheck service only pushes
 # to the control plane. Empty output means the runner is not serving.
 probe_identity() {
-  curl -fsS --max-time 3 "$HEALTH" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
+  runner_http_health ${target.port} -fsS --max-time 3 | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
 }
 
 `

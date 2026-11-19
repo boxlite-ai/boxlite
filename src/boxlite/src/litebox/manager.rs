@@ -203,6 +203,21 @@ impl BoxManager {
             .save_outbound_control(id.as_str(), control, policy)
     }
 
+    pub(crate) fn protected_boot(
+        &self,
+        id: &BoxID,
+    ) -> BoxliteResult<Option<super::protected_boot::ProtectedBootState>> {
+        self.store.protected_boot(id.as_str())
+    }
+
+    pub(crate) fn save_protected_boot(
+        &self,
+        id: &BoxID,
+        boot: &super::protected_boot::ProtectedBootState,
+    ) -> BoxliteResult<()> {
+        self.store.save_protected_boot(id.as_str(), boot)
+    }
+
     /// Load box state from the database.
     ///
     /// Returns the latest state from DB.

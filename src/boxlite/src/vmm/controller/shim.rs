@@ -15,6 +15,7 @@ use super::{
     VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics,
     spawn::{ShimSpawner, SpawnedShim},
 };
+use crate::vmm::shim_launch::{ProtectedNetworkLaunch, encode_protected_launch};
 
 // ============================================================================
 // SHIM HANDLER - Runtime operations on running VM
@@ -259,6 +260,12 @@ pub struct ShimController {
     /// Box filesystem layout (provides paths for stderr, sockets, etc.)
     layout: BoxFilesystemLayout,
     outbound_revision: Option<crate::net::OutboundRevision>,
+    protected: Option<ProtectedStart>,
+}
+
+struct ProtectedStart {
+    network: ProtectedNetworkLaunch,
+    record_spawn: Box<dyn Fn(super::ProtectedSpawnEvent) -> BoxliteResult<()> + Send>,
 }
 
 impl ShimController {
@@ -296,6 +303,7 @@ impl ShimController {
             options,
             layout,
             outbound_revision: None,
+            protected: None,
         })
     }
 
@@ -304,6 +312,18 @@ impl ShimController {
         revision: Option<crate::net::OutboundRevision>,
     ) -> Self {
         self.outbound_revision = revision;
+        self
+    }
+
+    pub(crate) fn with_protected_network(
+        mut self,
+        network: ProtectedNetworkLaunch,
+        record_spawn: impl Fn(super::ProtectedSpawnEvent) -> BoxliteResult<()> + Send + 'static,
+    ) -> Self {
+        self.protected = Some(ProtectedStart {
+            network,
+            record_spawn: Box::new(record_spawn),
+        });
         self
     }
 }
@@ -373,8 +393,11 @@ impl VmmController for ShimController {
         };
 
         // Serialize the config for passing to subprocess
-        let config_json =
-            serialize_shim_config(&serializable_config, self.outbound_revision.as_ref())?;
+        let protected = self.protected.take();
+        let config_json = match &protected {
+            Some(start) => encode_protected_launch(&serializable_config, &start.network)?,
+            None => serialize_shim_config(&serializable_config, self.outbound_revision.as_ref())?,
+        };
 
         // Clean up stale socket file if it exists (defense in depth)
         // Only relevant for Unix sockets
@@ -392,7 +415,9 @@ impl VmmController for ShimController {
             "Starting Box subprocess"
         );
         tracing::debug!(binary = %self.binary_path.display(), "Box runner binary");
-        emit_redacted_box_config_trace(self.engine_type, self.box_id.as_str(), &config_json);
+        if protected.is_none() {
+            emit_redacted_box_config_trace(self.engine_type, self.box_id.as_str(), &config_json);
+        }
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
@@ -403,7 +428,12 @@ impl VmmController for ShimController {
             &self.options,
         )
         .with_nested_virtualization(config.nested_virtualization);
-        let spawned = spawner.spawn(&config_json, config.detach)?;
+        let spawned = match protected {
+            Some(start) => {
+                spawner.spawn_protected(&config_json, config.detach, &*start.record_spawn)?
+            }
+            None => spawner.spawn(&config_json, config.detach)?,
+        };
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
 
