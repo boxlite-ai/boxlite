@@ -22,7 +22,7 @@ pages with existing mock fixtures; real payment processing is not exercised.
 
 ## Resume card setup at explicit plan confirmation
 
-Save a tab-scoped pending selection before leaving for checkout only when the fresh wallet read says no card is connected. Scope it to authenticated subject and organization, expire after 30 minutes, and store only the plan ID and timestamp. Session storage is navigation context, never payment evidence. Storage failures retain checkout access without claiming resume will work.
+Save a tab-scoped pending selection before leaving for checkout only when the fresh wallet read says no card is connected. Scope it to authenticated subject and organization, expire after 30 minutes, and store the plan ID, timestamp and a random document identifier. Session storage is navigation context, never payment evidence. Storage failures retain checkout access without claiming resume will work.
 
 Billing consumes the matching pending selection once and navigates to the existing confirmation route with a setup-return marker. It never calls a mutation. Confirmation rereads wallet, plan and catalog before offering an explicit button; a connected card shows Card added, otherwise show setup unconfirmed and offer refresh. Eligibility and prices remain server-owned; do not promise a free trial or automatically resubmit. Unknown reads block confirmation. Existing plan match redirects to Billing normally. Cancel discards pending context. Late callbacks after organization/account changes cannot redirect the new context.
 
@@ -47,3 +47,5 @@ The resume mechanism introduces a new navigation contract; full-revert defect pr
 Review follow-up: membership lookup failure now exposes a retry rather than an indefinite skeleton. A lifecycle generation rejects late mutation responses even after switching away and back to the same organization. The membership regression test failed against the prior PR revision and passes with the recovery branch. Coverage includes interrupted checkout, unavailable storage, explicit exit, and late success/error responses.
 
 Checkout resume preserves explicit Billing tabs and coupon links and ignores internal route navigation. The backend return has no transaction marker; a matching tab-local intent on the bare full-page Billing landing restores only confirmation, not payment authorization. Plan-setup mocks share the card flag for wallet and payment-method reads.
+
+Return eligibility compares the saved document identifier to the current document; router history keys are not evidence of a checkout return. Browser Back within the same document cannot resume its newly saved intent. A new tab with an opener may inherit storage and restore confirmation, still without submitting a subscription.

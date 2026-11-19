@@ -49,8 +49,15 @@ function render(path = '/dashboard/billing', key = 'default') {
     ),
   )
 }
+// A checkout return is a new document, so its intent was written by another document.
+function seedReturn(subject: string, org: string, planId: string) {
+  sessionStorage.setItem(
+    'boxlite:plan-card-setup:' + JSON.stringify([subject, org]),
+    JSON.stringify({ planId, at: Date.now(), documentId: 'previous-document' }),
+  )
+}
 it('restores the selected plan to explicit confirmation and consumes navigation once', () => {
-  savePlanSetup('user', 'org', 'pro')
+  seedReturn('user', 'org', 'pro')
   render()
   expect(host.textContent).toBe('/dashboard/billing/plan/pro?setup=return')
   expect(consumePlanSetup('user', 'org')).toBeNull()
@@ -64,7 +71,7 @@ it('does not consume another account or organization selection', () => {
   expect(consumePlanSetup('user', 'other')).toBe('max')
 })
 it('waits for owner membership before consuming', () => {
-  savePlanSetup('user', 'org', 'pro')
+  seedReturn('user', 'org', 'pro')
   identity.role = 'member'
   render()
   expect(host.textContent).toBe('/dashboard/billing')
@@ -91,7 +98,7 @@ it('ignores malformed data and future timestamps', () => {
 })
 
 it('does not consume intent using membership left over from a previous organization', () => {
-  savePlanSetup('user', 'org', 'pro')
+  seedReturn('user', 'org', 'pro')
   identity.status = 'loading'
   render()
   expect(host.textContent).toBe('/dashboard/billing')
@@ -101,15 +108,28 @@ it('does not consume intent using membership left over from a previous organizat
 it.each(['?tab=wallet&code=ACME50', '?tab=plans', '?code=ACME50'])(
   'preserves an explicit Billing destination %s',
   (query) => {
-    savePlanSetup('user', 'org', 'pro')
+    seedReturn('user', 'org', 'pro')
     render('/dashboard/billing' + query)
     expect(host.textContent).toBe('/dashboard/billing' + query)
     expect(consumePlanSetup('user', 'org')).toBe('pro')
   },
 )
-it('does not resume checkout during an internal Billing navigation', () => {
-  savePlanSetup('user', 'org', 'pro')
-  render('/dashboard/billing', 'internal-navigation')
+it.each(['internal-navigation', 'default'])(
+  'does not resume a selection created in this document on %s history entries',
+  (key) => {
+    savePlanSetup('user', 'org', 'pro')
+    render('/dashboard/billing', key)
+    expect(host.textContent).toBe('/dashboard/billing')
+    expect(consumePlanSetup('user', 'org')).toBe('pro')
+  },
+)
+
+it('waits for membership on a returned document without losing eligibility', () => {
+  seedReturn('user', 'org', 'pro')
+  identity.status = 'loading'
+  render('/dashboard/billing', 'preserved-entry')
   expect(host.textContent).toBe('/dashboard/billing')
-  expect(consumePlanSetup('user', 'org')).toBe('pro')
+  identity.status = 'ready'
+  render('/dashboard/billing', 'preserved-entry')
+  expect(host.textContent).toBe('/dashboard/billing/plan/pro?setup=return')
 })

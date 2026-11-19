@@ -1480,8 +1480,10 @@ card setup and returns to that plan's confirmation page. It does not contact Str
 **Confirm subscription** is an explicit second action; returning never sends it automatically.
 For incomplete verification, open `/dashboard/billing/plan/pro?setup=return&preview=plan-setup&mockCard=reset`.
 
-The real frontend stores only the selected plan ID and timestamp in tab-scoped session storage,
+The real frontend stores the selected plan ID, timestamp and document identifier in tab-scoped session storage,
 keyed by authenticated subject and organization, for 30 minutes. Current organization ownership,
 wallet, catalog and subscription must resolve before confirmation. No signup, login, or onboarding
-flow is changed. Cross-tab or expired sessions fall back to selecting a plan again. Restoration only runs on
-the full-page Billing landing; internal navigation and explicit tab/coupon destinations retain their URL.
+flow is changed. Expired or missing selections fall back to choosing a plan again. A tab opened with an opener
+may inherit a copy of session storage and restore confirmation; it still requires an explicit click.
+A document identifier prevents selections created in the current document from being restored
+by internal navigation or browser Back. Explicit tab/coupon destinations retain their URL.

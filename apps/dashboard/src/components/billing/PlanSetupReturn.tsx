@@ -16,7 +16,7 @@ export function PlanSetupReturn() {
   const location = useLocation()
   const search = new URLSearchParams(location.search)
   // Commerce returns to the bare Billing entry. Explicit destinations take priority.
-  const returnLanding = location.key === 'default' && !search.has('tab') && !search.has('code')
+  const returnLanding = !search.has('tab') && !search.has('code')
   const subject = user?.profile.sub
   const organizationId = selectedOrganization?.id
   const owner =
@@ -24,7 +24,7 @@ export function PlanSetupReturn() {
     authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
   useEffect(() => {
     if (!returnLanding || !subject || !organizationId || !owner) return
-    const planId = consumePlanSetup(subject, organizationId)
+    const planId = consumePlanSetup(subject, organizationId, true)
     if (planId) navigate(`${RoutePath.BILLING_PLAN}/${encodeURIComponent(planId)}?setup=return`, { replace: true })
   }, [subject, organizationId, owner, navigate, returnLanding])
   return null
