@@ -2,7 +2,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { PlanSetupReturn } from './PlanSetupReturn'
 import { consumePlanSetup, savePlanSetup } from './planSetupIntent'
@@ -31,7 +31,9 @@ afterEach(() => {
   sessionStorage.clear()
   vi.restoreAllMocks()
 })
+let navigateWithinBilling: ReturnType<typeof useNavigate>
 function Location() {
+  navigateWithinBilling = useNavigate()
   const l = useLocation()
   return <output>{l.pathname + l.search}</output>
 }
@@ -111,7 +113,9 @@ it.each(['?tab=wallet&code=ACME50', '?tab=plans', '?code=ACME50'])(
     seedReturn('user', 'org', 'pro')
     render('/dashboard/billing' + query)
     expect(host.textContent).toBe('/dashboard/billing' + query)
-    expect(consumePlanSetup('user', 'org')).toBe('pro')
+    act(() => navigateWithinBilling('/dashboard/billing'))
+    expect(host.textContent).toBe('/dashboard/billing')
+    expect(consumePlanSetup('user', 'org')).toBeNull()
   },
 )
 it.each(['internal-navigation', 'default'])(
@@ -132,4 +136,17 @@ it('waits for membership on a returned document without losing eligibility', () 
   identity.status = 'ready'
   render('/dashboard/billing', 'preserved-entry')
   expect(host.textContent).toBe('/dashboard/billing/plan/pro?setup=return')
+})
+
+it('clears a same-document selection on explicit navigation before permissions resolve', () => {
+  savePlanSetup('user', 'org', 'pro')
+  savePlanSetup('user', 'other', 'max')
+  identity.status = 'loading'
+  render('/dashboard/billing?tab=wallet')
+  expect(consumePlanSetup('user', 'org')).toBeNull()
+  expect(consumePlanSetup('user', 'other')).toBe('max')
+  act(() => navigateWithinBilling('/dashboard/billing'))
+  identity.status = 'ready'
+  render()
+  expect(host.textContent).toBe('/dashboard/billing')
 })

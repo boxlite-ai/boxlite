@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { RoutePath } from '@/enums/RoutePath'
-import { consumePlanSetup } from './planSetupIntent'
+import { consumePlanSetup, discardPlanSetup } from './planSetupIntent'
 
 /** Restore navigation only. The confirmation page owns fresh reads and explicit submission. */
 export function PlanSetupReturn() {
@@ -23,7 +23,12 @@ export function PlanSetupReturn() {
     organizationMembersStatus === 'ready' &&
     authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
   useEffect(() => {
-    if (!returnLanding || !subject || !organizationId || !owner) return
+    if (!subject || !organizationId) return
+    if (!returnLanding) {
+      discardPlanSetup(subject, organizationId)
+      return
+    }
+    if (!owner) return
     const planId = consumePlanSetup(subject, organizationId, true)
     if (planId) navigate(`${RoutePath.BILLING_PLAN}/${encodeURIComponent(planId)}?setup=return`, { replace: true })
   }, [subject, organizationId, owner, navigate, returnLanding])

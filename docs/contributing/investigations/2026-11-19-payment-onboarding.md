@@ -49,3 +49,5 @@ Review follow-up: membership lookup failure now exposes a retry rather than an i
 Checkout resume preserves explicit Billing tabs and coupon links and ignores internal route navigation. The backend return has no transaction marker; a matching tab-local intent on the bare full-page Billing landing restores only confirmation, not payment authorization. Plan-setup mocks share the card flag for wallet and payment-method reads.
 
 Return eligibility compares the saved document identifier to the current document; router history keys are not evidence of a checkout return. Browser Back within the same document cannot resume its newly saved intent. A new tab with an opener may inherit storage and restore confirmation, still without submitting a subscription.
+
+显式 tab/code 导航清理当前用户和组织的待恢复套餐选择，无需等待 Owner 查询；因此后续内部导航到 Billing 不会恢复已放弃的选择。此操作只清理本地导航意图，不修改账户或订阅。

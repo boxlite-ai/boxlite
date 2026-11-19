@@ -1486,4 +1486,4 @@ wallet, catalog and subscription must resolve before confirmation. No signup, lo
 flow is changed. Expired or missing selections fall back to choosing a plan again. A tab opened with an opener
 may inherit a copy of session storage and restore confirmation; it still requires an explicit click.
 A document identifier prevents selections created in the current document from being restored
-by internal navigation or browser Back. Explicit tab/coupon destinations retain their URL.
+by internal navigation or browser Back. Explicit tab/coupon destinations retain their URL and clear the scoped pending selection, so later internal navigation cannot resume it.
