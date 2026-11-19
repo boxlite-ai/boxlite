@@ -334,19 +334,41 @@ export class Listener {
       }),
       refresh = Date.now() >= session.discoveryAt
     if (refresh || session.discoveryPending || inventory.length) {
-      const discovery = await this.options.host.discover({ ...lease }, signal, {
-          refresh,
-          wakes: inventory.map((row) => {
-            const hint = row.payload as { installationId: number; accountId: number; repositoryId: number }
-            return {
-              key: row.key,
-              version: row.version,
-              installationId: hint.installationId,
-              accountId: hint.accountId,
-              repositoryId: hint.repositoryId,
+      const discovery = await this.options.host
+          .discover({ ...lease }, signal, {
+            refresh,
+            wakes: inventory.map((row) => {
+              const hint = row.payload as { installationId: number; accountId: number; repositoryId: number }
+              return {
+                key: row.key,
+                version: row.version,
+                installationId: hint.installationId,
+                accountId: hint.accountId,
+                repositoryId: hint.repositoryId,
+              }
+            }),
+          })
+          .catch(async (error) => {
+            signal.throwIfAborted()
+            if (error instanceof LeaseLost || error instanceof StateConflict || error instanceof StateCorrupt)
+              throw error
+            for (const { record, scope } of recovery.rows) {
+              let runtime: Runtime
+              try {
+                runtime = await this.runtime(session, record.key, scope)
+              } catch (failure) {
+                signal.throwIfAborted()
+                if (failure instanceof LeaseLost || failure instanceof StateCorrupt) throw failure
+                this.options.host.report(failure, 'scope-backend')
+                continue
+              }
+              // Discovery can fail while an original Box is ready for cleanup.
+              session.planning.enqueue(record.key, 'recovery/' + record.version, () =>
+                runtime.pool.balanceScaleSets(lease, [], closedCapacity, signal),
+              )
             }
+            throw error
           }),
-        }),
         scopes: ExecutionScope[] = [],
         rejected = new Set<string>(),
         targets = new Map<string, string>(),
@@ -378,7 +400,14 @@ export class Listener {
         if (rejected.has(scope.binding)) continue
         const key = scopeKey(scope)
         try {
-          if (!session.current.has(key)) await this.journal.define(lease, scope)
+          if (!session.current.has(key)) {
+            await this.journal.define(lease, scope)
+            if (session.runtimes.has(key)) {
+              // Reopening a scope invalidates drain effects queued against its earlier version.
+              const { record } = await this.journal.scope(lease, key)
+              await this.options.state.commit(lease, [{ key, expected: record.version, payload: record.payload }])
+            }
+          }
           next.set(key, scope)
         } catch (error) {
           if (error instanceof LeaseLost || error instanceof StateCorrupt || error instanceof StateConflict) throw error
@@ -501,7 +530,8 @@ export class Listener {
     if (!activity.active && !demand) return
     session.planning.enqueue(
       key,
-      JSON.stringify(targets.map((target) => target.check.version)) + activity.activity.version,
+      JSON.stringify([current, activity.record.version, ...targets.map((target) => target.check.version)]) +
+        activity.activity.version,
       async () => {
         let capacity = closedCapacity
         if (demand) {
@@ -513,7 +543,13 @@ export class Listener {
             this.options.host.report(error, 'scale-set-capacity')
           }
         }
-        await runtime.pool.balanceScaleSets(session.lease, targets, capacity, signal, !current)
+        await runtime.pool.balanceScaleSets(
+          session.lease,
+          targets,
+          capacity,
+          signal,
+          current ? undefined : { key: activity.record.key, version: activity.record.version },
+        )
       },
     )
   }

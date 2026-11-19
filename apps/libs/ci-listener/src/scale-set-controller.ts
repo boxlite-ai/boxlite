@@ -7,7 +7,7 @@ import { GitHubRequestError } from './github'
 import { DEFAULT_RESOURCE_LABEL, selectRunnerLabels } from './resource-labels'
 import { ActionsScaleSets, ScaleSetRemoved, ScaleSetSession } from './scale-set-client'
 import { LeaseLost, StateCorrupt, StateRecord } from './state/database'
-import { ExecutionLease, ListenerState, StateCheck } from './state/store'
+import { ExecutionLease, ListenerState, MAX_STATE_CHECKS, StateCheck } from './state/store'
 
 /** One owner-wide limit for account setup and message processing. Network waits release their permit. */
 export class ScaleSetWork {
@@ -246,6 +246,22 @@ export class ScaleSetController {
       await this.journal.release(this.lease, candidate.key, absent.record.version)
     }
   }
+  /** An unconfirmed request can reuse only an original, still-undispatched worker. */
+  private async retrySlots(id: number, assigned: number, held: number): Promise<StateCheck[]> {
+    let after = '',
+      allocated = 0
+    const slots: StateCheck[] = []
+    do {
+      const page = await this.journal.workers(this.lease, scopeKey(this.scope), after)
+      for (const { record, value } of page.rows) {
+        if (value.supply?.scaleSet !== id || value.closing || value.box.phase === 'absent') continue
+        allocated++
+        if (value.box.phase === 'none' && slots.length < held) slots.push({ key: record.key, version: record.version })
+      }
+      after = page.after
+    } while (after && (allocated < assigned + held || slots.length < held))
+    return slots.slice(0, Math.max(0, allocated - assigned))
+  }
   private async offerPolicy(id: number, outstanding: number, signal: AbortSignal): Promise<CapacityPolicy> {
     const policy = await this.host.policy(signal)
     // Already assigned work has first claim on shared quota even if its Box
@@ -343,10 +359,17 @@ export class ScaleSetController {
       let row = start.row
       const previous = readRecord(row)
       const pendingRequests = new Map(previous.pending.map(({ id, phase }) => [id, phase]))
-      const save = async (assigned: number, message: number | null, origin: string | null, held: number) => {
+      const save = async (
+        assigned: number,
+        message: number | null,
+        origin: string | null,
+        held: number,
+        checks?: StateCheck[],
+      ) => {
         const old = readRecord(row)
         const pending = Array.from(pendingRequests, ([id, phase]) => ({ id, phase }))
         if (
+          checks ||
           old.pending.length !== pending.length ||
           old.pending.some(({ id, phase }) => pendingRequests.get(id) !== phase) ||
           old.held !== held ||
@@ -354,17 +377,19 @@ export class ScaleSetController {
           old.message !== message ||
           old.session !== origin
         ) {
-          ;[row] = await this.state.commit(this.lease, [
-            { key, expected: row.version, payload: { ...old, assigned, held, pending, message, session: origin } },
-          ])
+          ;[row] = await this.state.commit(
+            this.lease,
+            [{ key, expected: row.version, payload: { ...old, assigned, held, pending, message, session: origin } }],
+            checks,
+          )
         } else await this.journal.check(this.lease)
         lane.target = { id: start.id, labels, assigned, held, check: { key, version: row.version } }
         this.host.wake()
       }
       let verifyAfter = 0
-      const verifyAcquisitions = async (assigned: number, held: number) => {
+      const verifyAcquisitions = async (assigned: number, held: number, idle = false) => {
         const uncertain = [...pendingRequests].filter(([, phase]) => phase === 'verify')
-        if (!uncertain.length) return { assigned, held }
+        if (!uncertain.length && !idle) return { assigned, held }
         const current = await this.host.service.currentStatistics(start.id, signal)
         verifyAfter = Date.now() + 50_000
         // Confirmed requests already account for part of the service total. An
@@ -380,7 +405,14 @@ export class ScaleSetController {
         // follows the count without guessing which individual request succeeded.
         if (current.acquired === 0 && current.assigned === 0) for (const [id] of uncertain) pendingRequests.delete(id)
         const increase = Math.max(0, current.assigned - assigned)
-        const retained = Math.min(candidates, Math.max(0, held - increase))
+        const retained = Math.min(
+          candidates,
+          Math.max(0, held - increase),
+          idle ? (current.acquired ?? Infinity) : Infinity,
+        )
+        if (idle && retained > 0 && retained < pendingRequests.size && current.acquired !== undefined) {
+          for (const id of pendingRequests.keys()) pendingRequests.set(id, 'verify')
+        }
         const released = held - retained - increase
         if (released > 0)
           await this.withdrawCanceled(start.id, released, current.assigned + retained, lane.target!.check)
@@ -426,10 +458,14 @@ export class ScaleSetController {
           missing = true
         }
         let refreshedAssigned: number | undefined
-        if ([...pendingRequests.values()].includes('verify') && (missing || !message || Date.now() >= verifyAfter)) {
+        const idleWithHolds = !message && lane.target!.held > 0
+        if (
+          idleWithHolds ||
+          ([...pendingRequests.values()].includes('verify') && (missing || Date.now() >= verifyAfter))
+        ) {
           await this.work.run(signal, async () => {
             const target = lane.target!
-            const next = await verifyAcquisitions(target.assigned, target.held)
+            const next = await verifyAcquisitions(target.assigned, target.held, idleWithHolds)
             refreshedAssigned = next.assigned
             const prior = readRecord(row)
             await save(next.assigned, prior.message, prior.session, next.held)
@@ -472,19 +508,38 @@ export class ScaleSetController {
             const novel = offers.filter((id) => !existing.has(String(id))).slice(0, acquisitionWindow - existing.size)
             // When several candidates share fewer holds, none can spend another
             // candidate's slot. A redelivery needs a fresh quota CAS in that case.
-            const covered = held === existing.size
-            const needReservation = covered ? novel : [...unresolved, ...novel]
+            let covered = held === existing.size
             if (covered && unresolved.length) {
-              const requests = unresolved
-              const accepted = await start.session.acquire(requests, signal)
-              for (const id of requests) pendingRequests.set(String(id), 'verify')
-              for (const id of accepted) pendingRequests.set(String(id), 'accepted')
-              if (accepted.length !== requests.length) {
-                const next = await verifyAcquisitions(assigned, held)
-                assigned = next.assigned
-                held = next.held
+              const slots = await this.retrySlots(start.id, assigned, held)
+              held = Math.min(held, slots.length)
+              covered = held === existing.size
+              if (covered) {
+                const policy = await this.host.policy(signal)
+                const policyChecks = policy.checks ?? []
+                const batchSize = MAX_STATE_CHECKS - policyChecks.length
+                if (
+                  batchSize > 0 &&
+                  (await this.journal.permitsChargedRetry(this.lease, scopeKey(this.scope), policy))
+                ) {
+                  for (let offset = 0; offset < unresolved.length; offset += batchSize) {
+                    const requests = unresolved.slice(offset, offset + batchSize)
+                    const proofs = slots.slice(offset, offset + requests.length)
+                    const prior = readRecord(row)
+                    await save(assigned, prior.message, prior.session, held, [...policyChecks, ...proofs])
+                    const accepted = await start.session.acquire(requests, signal)
+                    for (const id of requests) pendingRequests.set(String(id), 'verify')
+                    for (const id of accepted) pendingRequests.set(String(id), 'accepted')
+                    if (accepted.length !== requests.length) {
+                      const next = await verifyAcquisitions(assigned, held)
+                      assigned = next.assigned
+                      held = next.held
+                      if (held < pendingRequests.size) break
+                    }
+                  }
+                }
               }
             }
+            const needReservation = covered ? novel : [...unresolved, ...novel]
             const free = Math.max(0, capacity - assigned - held)
             const ids = needReservation.slice(0, free)
             if (ids.length) {

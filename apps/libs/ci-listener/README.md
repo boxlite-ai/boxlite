@@ -425,7 +425,13 @@ A durable target precedes message acknowledgment. A dedicated JIT configuration 
 
 The default polling deadline is two minutes. Network waits occur outside SQL transactions and the listener bounds concurrent setup and message handling across scopes. GitHub can still throttle credentials and management requests. [Reference protocol](https://github.com/actions/scaleset/tree/v0.5.0)
 
-A completed long poll can carry an older capacity estimate. The listener rechecks the current policy and charges shared quota before acquiring offers. Held reservations start a Box only when GitHub confirms assigned demand.
+A failed admission or repository discovery leaves original allocations eligible for cleanup. Rediscovering a scope invalidates pending drain decisions before they can close an undispatched worker.
+
+An idle poll with pending acquisitions reconciles them against statistics for that set. An explicit zero acquired and zero assigned releases the hold. A missing acquired count preserves it.
+
+A completed long poll can carry an older capacity estimate. The listener rechecks the current policy and charges shared quota before acquiring offers.
+
+A retry checks the current policy and the original undispatched reservations before acquiring again. If a scope drain released those reservations, the set must obtain new quota. Held reservations start a Box only when GitHub confirms assigned demand.
 
 ```mermaid
 sequenceDiagram
