@@ -81,6 +81,7 @@ async fn download_emits_data_before_upstream_eof() {
             Path(BOX_ID.to_string()),
             Query(FileQuery {
                 path: "/payload".into(),
+                overwrite: None,
             }),
         )
         .await;
@@ -217,6 +218,7 @@ async fn download_propagates_an_error_after_the_tar_end_marker() {
             Path(BOX_ID.to_string()),
             Query(FileQuery {
                 path: "/payload".into(),
+                overwrite: None,
             }),
         ),
     )
@@ -260,6 +262,7 @@ async fn dropping_a_download_releases_the_rest_source() {
             Path(BOX_ID.to_string()),
             Query(FileQuery {
                 path: "/payload".into(),
+                overwrite: None,
             }),
         ),
     )

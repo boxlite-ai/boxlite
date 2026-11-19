@@ -1056,7 +1056,7 @@ unchanged:
 | Permissions | The token's `scope` limited to [`MCP_OAUTH_SCOPES`](../../../../apps/api/src/mcp/mcp-oauth-policy.ts) (box, volume, image and template permissions), then to what the user's role holds; an owner holds all |
 
 [`McpScopeGuard`](../../../../apps/api/src/mcp/mcp-scope.guard.ts) checks every `tools/call` from
-an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike:
+an OAuth caller before it runs, for direct tools and both catalog invocation tools alike:
 
 - An operation off `MCP_OAUTH_OPERATIONS` answers `403`: SSH keys, tunnels, network
   rules, domains, export and import, registries, members and invitations stay API-key
@@ -1075,14 +1075,15 @@ still covers a client or user that grants fewer. Whether a client completes step
 checked per client on the dev tenant. API-key callers skip both checks; the key's own
 permissions apply in REST.
 
-**Tools.** `tools/list` returns 13 tools:
+**Tools.** `tools/list` returns 14 tools, each with a display title and complete behavior hints:
 
 | Tools | What they do |
 | --- | --- |
 | `createBox`, `listBoxes`, `getBox`, `startBox`, `stopBox`, `removeBox` | The box operations of the same `operationId` |
 | `startExecution`, `getExecution` | Run a command; with `wait` (default) the result carries `stdout`, `stderr`, `exit_code` and `complete` |
 | `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/mcp` accepts JSON bodies up to 12 MiB for this, read only after the caller is authenticated, so an unauthenticated call gets its `401` (or `403` if it carries an `Origin` header) before any of the body is buffered; every other route keeps the default limit |
-| `list_api_endpoints`, `get_api_endpoint_schema`, `invoke_api_endpoint` | Find, describe and call any other catalog operation by `operationId` |
+| `list_api_endpoints`, `get_api_endpoint_schema` | Find and describe catalog operations, including the `invocationTool` for each operation |
+| `read_api_endpoint`, `write_api_endpoint` | Call safe HTTP operations or modifying operations respectively, by `operationId` |
 
 Each box tool sets all four MCP tool annotations in
 [`DIRECT_TOOLS`](../../../../apps/api/src/mcp/mcp-tools.ts), so hosts can prompt before destructive
@@ -1100,8 +1101,14 @@ calls and keep the read-only ones in a read-only mode:
 The schema ignores the destructive and idempotent hints on read-only tools. Idempotent
 describes the effect on the box, so a repeated `removeBox` counts even though it answers
 `404`. `list_api_endpoints` and `get_api_endpoint_schema` are read-only;
-`invoke_api_endpoint` carries no annotations because it reaches reads and deletes alike,
-so hosts treat it as destructive.
+`read_api_endpoint` accepts only GET, HEAD and OPTIONS; `write_api_endpoint` refuses those methods.
+
+Both handlers reject an operation in the wrong class before dispatch, and the existing OAuth and REST permission checks still apply.
+Generic writes advertise destructive, non-idempotent behavior because their actual effect depends on the selected operation.
+Reading execution output may mint a short-lived attach ticket inside the existing transport; it does not start a command or change guest data.
+
+The former mixed `invoke_api_endpoint` tool is removed. Clients must rediscover tools and use the catalog's `invocationTool` value;
+keeping a mixed compatibility alias would defeat the read/write boundary. REST operations and schemas are unchanged.
 
 The catalog is built at startup from [`openapi/box.openapi.yaml`](../../../../openapi/box.openapi.yaml),
 [`openapi/admin.openapi.yaml`](../../../../openapi/admin.openapi.yaml) and the product Swagger

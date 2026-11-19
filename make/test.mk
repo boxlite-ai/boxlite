@@ -726,6 +726,11 @@ test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
+PHONY_TARGETS += test\:apps\:infra\:auth0
+test\:apps\:infra\:auth0: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:tooling
+	@cd apps/infra && node --import tsx --test bootstrap/auth0*.test.ts bootstrap/configure-auth0-login.test.ts
+
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy

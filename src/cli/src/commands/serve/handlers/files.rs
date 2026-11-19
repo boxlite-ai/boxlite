@@ -27,13 +27,22 @@ pub(in crate::commands::serve) async fn upload_files(
         Err(resp) => return resp,
     };
 
+    // Preserve entry order and duplicates so the guest enforces the policy
+    // against each original entry, including earlier writes in this upload.
     let stream = body.into_data_stream().map(|chunk| {
         chunk
             .map(|bytes| bytes.to_vec())
             .map_err(std::io::Error::other)
     });
     if let Err(e) = litebox
-        .copy_in_stream(stream, &query.path, CopyOptions::default())
+        .copy_in_stream(
+            stream,
+            &query.path,
+            CopyOptions {
+                overwrite: query.overwrite.unwrap_or(true),
+                ..CopyOptions::default()
+            },
+        )
         .await
     {
         return error_from_boxlite(&e);
@@ -192,6 +201,7 @@ mod tests {
             Path(BOX_ID.to_string()),
             Query(FileQuery {
                 path: "/probe".to_string(),
+                overwrite: None,
             }),
         )
         .await;

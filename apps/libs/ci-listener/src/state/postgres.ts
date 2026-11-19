@@ -72,6 +72,13 @@ class PostgresTransaction implements StateTransaction {
       ])
     ).map(decode)
   }
+  async getShared(key: string): Promise<StateRecord | undefined> {
+    const rows = await this.rows('SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key=$2 FOR SHARE', [
+      this.namespace,
+      key,
+    ])
+    return rows[0] ? decode(rows[0]) : undefined
+  }
   async insertMany(records: readonly StateRecord[]): Promise<boolean> {
     if (!records.length || records.length > 100 || records.some((row) => row.key.startsWith('@')))
       throw new Error('Invalid ordinary state insert batch')

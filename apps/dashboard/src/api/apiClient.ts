@@ -39,6 +39,7 @@ import {
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
+import { couponClaimReceipt, CouponClaimUnconfirmedError, type CouponClaimReceipt } from './coupon-claim'
 import type { DomainList, HeldDomain, CustomDomain, CustomDomainList } from './domain-types'
 import type { Checkpoint, CheckpointPage } from './checkpoint-types'
 import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
@@ -99,7 +100,29 @@ export interface PromptDraft {
 
 const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
 
+class ReauthenticationStartError extends BoxliteError {}
+
 export class ApiClient {
+  public async claimCoupon(
+    organizationId: string,
+    claim: { eventId: string; couponCode: string },
+  ): Promise<CouponClaimReceipt> {
+    const response = await this.http
+      .post<unknown>(`/organizations/${encodeURIComponent(organizationId)}/coupon-claims`, claim, {
+        ...this.v1Config(),
+        timeout: 10_000,
+      })
+      .catch((error: BoxliteError) => {
+        if (error instanceof ReauthenticationStartError) throw error
+        const { cause } = error
+        if (axios.isAxiosError(cause) && cause.response && cause.response.status < 500) throw error
+        throw new CouponClaimUnconfirmedError()
+      })
+    const receipt = couponClaimReceipt.safeParse(response.data)
+    if (response.status !== 202 || !receipt.success) throw new CouponClaimUnconfirmedError()
+    return receipt.data
+  }
+
   public async register(turnstileToken: string): Promise<User> {
     return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
       .data
@@ -472,8 +495,8 @@ export class ApiClient {
     } catch (handlerError) {
       isHandlingUnauthorized = false
       clearReauthAttempted()
-      throw BoxliteError.fromString('Failed to start re-authentication.', {
-        cause: handlerError instanceof Error ? handlerError : undefined,
+      throw new ReauthenticationStartError('Failed to start re-authentication. Please sign in again.', {
+        cause: handlerError,
       })
     }
 

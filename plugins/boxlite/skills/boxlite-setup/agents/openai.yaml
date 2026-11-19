@@ -1,4 +1,4 @@
 interface:
   display_name: "Set up BoxLite"
-  short_description: "Connect the BoxLite CLI to your cloud account"
-  default_prompt: "Use $boxlite-setup to check the CLI and sign in to BoxLite."
+  short_description: "Choose Cloud OAuth, Cloud API key, or Local"
+  default_prompt: "Use $boxlite-setup to choose a mode and verify its connection."
