@@ -25,6 +25,7 @@ import {
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
+import { PLAN_PRESENTATION } from '@/components/billing/planBenefits'
 import {
   BoxProgressPhase,
   BoxState,
@@ -57,6 +58,11 @@ const BILLING_API_URL = `${window.location.origin}/api/billing`
 const API_URL = import.meta.env.VITE_API_URL
 // Keep the selected billing fixture through client-side onboarding/navigation.
 const billingPreview = new URLSearchParams(window.location.search).get('preview')
+const setupPreview = billingPreview === 'plan-setup'
+if (setupPreview && new URLSearchParams(window.location.search).get('mockCard') === 'reset')
+  sessionStorage.removeItem('mock:billing-card-added')
+if (setupPreview && new URLSearchParams(window.location.search).get('mockCard') === 'added')
+  sessionStorage.setItem('mock:billing-card-added', 'true')
 const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-user-unfunded'
 
 // Quickstart's agent handoff waits for a box created after it handed the key
@@ -529,72 +535,19 @@ export const handlers = [
       ],
     })
   }),
+  // Use the same current tiers as the Console presentation, for every preview.
+  // Stable mock IDs preserve existing plan-change links.
   http.get(`${BILLING_API_URL}/plan`, async () => {
-    if (billingPreview === 'subscription-cards') {
-      return HttpResponse.json<Plan[]>([
-        {
-          id: 'starter',
-          name: 'NoSubscription',
-          priceMonthlyCents: 0,
-          includedQuotaCents: 0,
-          concurrencyLimit: 20,
-          selfServe: true,
-        },
-        {
-          id: 'pro',
-          name: 'Go',
-          priceMonthlyCents: 500,
-          includedQuotaCents: 2000,
-          concurrencyLimit: 40,
-          selfServe: true,
-        },
-        {
-          id: 'max',
-          name: 'Team',
-          priceMonthlyCents: 10000,
-          includedQuotaCents: 40000,
-          concurrencyLimit: 1000,
-          selfServe: true,
-        },
-      ])
-    }
-    // Mirrors the billing service's own standard-plan catalog (Subscription.md
-    // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
-    // data — and is not self-serve.
-    return HttpResponse.json<Plan[]>([
-      {
-        id: 'starter',
-        name: 'Starter',
-        priceMonthlyCents: 1_900,
-        includedQuotaCents: 3_000,
-        concurrencyLimit: 20,
+    return HttpResponse.json<Plan[]>(
+      PLAN_PRESENTATION.map((tier, index) => ({
+        id: ['starter', 'pro', 'max'][index],
+        name: tier.name,
+        priceMonthlyCents: tier.priceCents,
+        includedQuotaCents: tier.bonusCents ?? 0,
+        concurrencyLimit: [2, 4, 1000][index],
         selfServe: true,
-      },
-      {
-        id: 'pro',
-        name: 'Pro',
-        priceMonthlyCents: 14_900,
-        includedQuotaCents: 25_000,
-        concurrencyLimit: 100,
-        selfServe: true,
-      },
-      {
-        id: 'max',
-        name: 'Max',
-        priceMonthlyCents: 49_900,
-        includedQuotaCents: 90_000,
-        concurrencyLimit: 1_000,
-        selfServe: true,
-      },
-      {
-        id: 'enterprise',
-        name: 'Enterprise',
-        priceMonthlyCents: null,
-        includedQuotaCents: null,
-        concurrencyLimit: null,
-        selfServe: false,
-      },
-    ])
+      })),
+    )
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/wallet`, async () => {
     const preview = billingPreview
@@ -604,7 +557,9 @@ export const handlers = [
       ongoingBalanceCents:
         newUserPreview || ['balance-empty', 'balance-subscription'].includes(preview ?? '') ? 0 : 1000,
       name: 'Wallet',
-      creditCardConnected: !newUserPreview,
+      creditCardConnected: setupPreview
+        ? sessionStorage.getItem('mock:billing-card-added') === 'true'
+        : !newUserPreview,
       automaticTopUp: undefined,
       usageChargeMultiplier: '1.0000',
     })
@@ -659,26 +614,28 @@ export const handlers = [
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
     const preview = billingPreview
-    if (newUserPreview || preview === 'balance-wallet') return HttpResponse.json({})
+    if (setupPreview || newUserPreview || preview === 'balance-wallet') return HttpResponse.json({})
     const empty = preview === 'balance-empty' || preview === 'balance-wallet-fallback'
-    // Mirrors the billing service's own mock seed: pro, a quarter used,
-    // pinned mid-cycle so the meter renders deterministically. The real
-    // route wraps this in a `plan` key ({} means no live plan), never a
-    // bare object or null.
+    // Seed the current Starter tier at one-quarter consumed. These are
+    // simulated account values, not a promise about bonus grant cadence.
+    const included = PLAN_PRESENTATION[1].bonusCents
+    const consumed = empty ? included : included / 4
     return HttpResponse.json<{ plan?: OrganizationPlan }>({
       plan: {
         planId: 'pro',
-        planName: preview === 'subscription-cards' ? 'Go' : 'Pro',
+        planName: PLAN_PRESENTATION[1].name,
         status: 'active',
         cycleFrom: new Date(Date.UTC(2026, 7, 5)),
         cycleTo: new Date(Date.UTC(2026, 8, 5)),
-        includedQuotaCents: 25000,
-        quotaConsumedCents: empty ? 25000 : 6250,
-        quotaRemainingCents: empty ? 0 : 18750,
+        includedQuotaCents: included,
+        quotaConsumedCents: consumed,
+        quotaRemainingCents: included - consumed,
       },
     })
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/plan/upgrade`, async () => {
+    if (setupPreview && sessionStorage.getItem('mock:billing-card-added') !== 'true')
+      return HttpResponse.json({ url: `${window.location.origin}/dashboard/billing?preview=plan-setup&mockCard=added` })
     return new HttpResponse(null, { status: 204 })
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/plan/downgrade`, async () => {
@@ -696,7 +653,10 @@ export const handlers = [
     const to = Date.parse(url.searchParams.get('to') ?? '') || Date.now()
     const from = Date.parse(url.searchParams.get('from') ?? '') || to - 30 * 86_400_000
 
-    let quotaLeft = 18750
+    let quotaLeft =
+      newUserPreview || ['balance-empty', 'balance-wallet', 'balance-wallet-fallback'].includes(billingPreview ?? '')
+        ? 0
+        : (PLAN_PRESENTATION[1].bonusCents * 3) / 4
     const buckets = []
     for (let start = from; start + stepMs <= to; start += stepMs) {
       const index = Math.floor(start / stepMs)
@@ -909,8 +869,8 @@ export const handlers = [
         kind: 'granted',
         status: 'settled',
         source: 'interval',
-        amountCents: 25_000,
-        name: 'Pro monthly quota',
+        amountCents: PLAN_PRESENTATION[1].bonusCents,
+        name: 'Starter quota',
         subscriptionCreditKind: 'cycle',
         createdAt: '2026-08-27T10:00:00.000Z',
         settledAt,
@@ -933,8 +893,8 @@ export const handlers = [
         kind: 'granted',
         status: 'settled',
         source: 'manual',
-        amountCents: 15_000,
-        name: 'Pro upgrade quota',
+        amountCents: PLAN_PRESENTATION[1].bonusCents,
+        name: 'Starter upgrade quota',
         subscriptionCreditKind: 'upgrade',
         createdAt: '2026-08-25T18:00:00.000Z',
         settledAt,

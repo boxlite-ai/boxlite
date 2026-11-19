@@ -66,7 +66,7 @@ function detail(warning: BalanceWarning): string {
     case 'overdrawn':
       return 'Usage has already drawn past your balance. Top up to settle it.'
     case 'empty':
-      return 'Your included quota is spent, so further usage draws on the wallet. Top up to keep going.'
+      return 'Add funds to run Boxes. No subscription required.'
     case 'below-threshold':
       return `Auto-reload brings the balance to $${warning.targetDollars.toFixed(2)} when it drops below $${warning.thresholdDollars.toFixed(2)}.`
   }

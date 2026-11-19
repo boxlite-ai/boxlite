@@ -240,7 +240,7 @@ describe('WalletSection top-up checkout', () => {
       root = createRoot(host)
       root.render(<WalletSection />)
     })
-    const connect = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Connect')
+    const connect = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Add card')
     expect(connect).toBeDefined()
     await act(async () => connect!.click())
     expect(open).toHaveBeenCalledWith('', '_blank')
@@ -269,7 +269,7 @@ describe('WalletSection top-up checkout', () => {
       (button) => button.textContent?.trim() === 'Top up →',
     )
     const connectButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.trim() === 'Connect',
+      (button) => button.textContent?.trim() === 'Add card',
     )
     expect(connectButton).toBeDefined()
     expect(topUpButton).toBeDefined()
@@ -279,7 +279,7 @@ describe('WalletSection top-up checkout', () => {
     await flush()
 
     expect(open).toHaveBeenCalledWith('', '_blank')
-    expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 10_000 })
+    expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 1_000 })
     expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/pay/cs_top_up')
   })
 
@@ -606,7 +606,7 @@ describe('WalletSection top-up checkout', () => {
     expect(rows[0].textContent).not.toContain('Used for subscription renewal and top-up charges')
     expect(rows[1].textContent).toContain('Used for subscription renewal and top-up charges')
     const updateButtons = [...document.querySelectorAll('button')].filter(
-      (button) => button.textContent?.trim() === 'Update card',
+      (button) => button.textContent?.trim() === 'Change card',
     )
     expect(updateButtons).toHaveLength(1)
     // Keeping the action inside the first full-width row lets that row's
@@ -761,7 +761,10 @@ describe('WalletSection top-up checkout', () => {
       })
     }
     await visit(initialCode)
-    const button = (name: string) => [...host.querySelectorAll('button')].find((el) => el.textContent?.trim() === name)
+    const button = (name: string) =>
+      [...host.querySelectorAll('button')].find(
+        (el) => el.textContent?.trim() === name && (name !== 'Add card' || !el.closest('section')),
+      )
     const input = () => host.querySelector<HTMLInputElement>('input[placeholder="Enter coupon code"]')
     return { host, button, input, visit, onCouponClaimAccepted, client }
   }

@@ -19,8 +19,10 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { format } from 'date-fns'
-import { useState } from 'react'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useAuth } from 'react-oidc-context'
+import { savePlanSetup, discardPlanSetup } from '@/components/billing/planSetupIntent'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/usePageTitle'
 
@@ -34,20 +36,58 @@ function BillingPlanChange() {
   const { planId = '' } = useParams<{ planId: string }>()
   const navigate = useNavigate()
   const config = useConfig()
-  const { selectedOrganization, organizationMembers, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const { selectedOrganization, organizationMembersStatus, authenticatedUserOrganizationMember } =
+    useSelectedOrganization()
 
   const planQuery = useOwnerPlanQuery()
   const walletQuery = useOwnerWalletQuery()
   const plansQuery = usePlansQuery()
   const upgradePlan = useUpgradePlanMutation()
   const downgradePlan = useDowngradePlanMutation()
-  const [leaving, setLeaving] = useState(false)
+  const [checkoutLink, setCheckoutLink] = useState<string | null>(null)
+  const leaving = checkoutLink !== null
+  const { user } = useAuth()
+  const [params] = useSearchParams()
+  const returned = params.get('setup') === 'return'
+  const subject = user?.profile.sub ?? ''
+  const organizationId = selectedOrganization?.id ?? ''
+  const context = JSON.stringify([
+    subject,
+    organizationId,
+    planId,
+    authenticatedUserOrganizationMember?.role,
+    organizationMembersStatus,
+  ])
+  const currentContext = useRef(context)
+  currentContext.current = context
+  const [checkedContext, setCheckedContext] = useState('')
+  const [resumeSaved, setResumeSaved] = useState(true)
+  useEffect(() => {
+    let active = true
+    currentContext.current = context
+    setCheckoutLink(null)
+    if (
+      config.billingApiUrl &&
+      organizationMembersStatus === 'ready' &&
+      subject &&
+      organizationId &&
+      authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
+    ) {
+      void Promise.all([walletQuery.refetch(), planQuery.refetch(), plansQuery.refetch()]).then(() => {
+        if (active) setCheckedContext(context)
+      })
+    }
+    return () => {
+      active = false
+      currentContext.current = ''
+    }
+  }, [context, returned])
 
   // Members load in the background from an empty list
   // (SelectedOrganizationProvider.tsx:97-113), so a missing member means
   // "not resolved yet" just as often as "not an owner". Redirecting on it
   // would bounce a real owner off their own deep link on every refresh.
-  const membersResolved = organizationMembers.length > 0
+  const membersResolved = organizationMembersStatus === 'ready'
   const isOwner = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
 
   if (!config.billingApiUrl) {
@@ -93,7 +133,18 @@ function BillingPlanChange() {
   // A confirmation that briefly states the wrong price is worse than one that
   // states nothing, so nothing renders until both the catalog and the live plan
   // have actually landed — no zero-value fallbacks.
-  if (!plansQuery.isSuccess || !planQuery.isSuccess) {
+  if (
+    !plansQuery.isSuccess ||
+    !planQuery.isSuccess ||
+    !walletQuery.isSuccess ||
+    checkedContext !== context ||
+    walletQuery.isFetching ||
+    planQuery.isFetching ||
+    plansQuery.isFetching ||
+    walletQuery.isPlaceholderData ||
+    planQuery.isPlaceholderData ||
+    plansQuery.isPlaceholderData
+  ) {
     return <PlanChangeShell>{<Skeleton className="h-[320px] w-full" />}</PlanChangeShell>
   }
 
@@ -116,42 +167,102 @@ function BillingPlanChange() {
   const rollDay = planQuery.data ? format(planQuery.data.cycleTo, 'MMM d, yyyy') : 'the next billing cycle'
 
   const handleConfirm = async () => {
+    if (pending || (returned && !walletQuery.data?.creditCardConnected)) return
     try {
       if (summary.action === 'upgrade') {
         const checkoutUrl = await upgradePlan.mutateAsync({ organizationId: selectedOrganization.id, planId })
+        if (currentContext.current !== context) return
         if (checkoutUrl) {
+          if (!walletQuery.data?.creditCardConnected && subject) {
+            setResumeSaved(savePlanSetup(subject, organizationId, planId))
+          }
           // Hold the pending state through the hand-off: the browser takes a
           // moment to leave, and an idle-looking button invites a second click.
-          setLeaving(true)
+          setCheckoutLink(checkoutUrl)
           window.location.href = checkoutUrl
           return
         }
         toast.success('Plan upgraded successfully')
       } else {
         await downgradePlan.mutateAsync({ organizationId: selectedOrganization.id, planId })
+        if (currentContext.current !== context) return
         // Name the plan and the day: "at the next billing cycle" left the user
         // to go looking for when that is.
         toast.success(`${summary.target?.name ?? 'Your new plan'} starts ${rollDay}`)
       }
       // `replace` so Back does not return to a confirmation for a plan the
       // organization now holds.
+      discardPlanSetup(subject, organizationId)
       navigate(RoutePath.BILLING, { replace: true })
     } catch (error) {
+      if (currentContext.current !== context) return
       handleApiError(error, `Failed to ${summary.action} organization plan`)
     }
   }
 
   return (
-    <PlanChangeShell title={summary.title}>
-      <div className="flex flex-col gap-6">
+    <PlanChangeShell title={summary.direction === 'subscribe' ? `Subscribe to ${summary.target?.name}` : summary.title}>
+      <div className="flex max-w-2xl flex-col gap-6">
+        {returned && (
+          <Notice
+            title={
+              walletQuery.data?.creditCardConnected
+                ? 'Card added. Confirm your plan.'
+                : 'Card setup is not confirmed yet.'
+            }
+          >
+            {walletQuery.data?.creditCardConnected
+              ? `Your ${summary.target?.name} selection is ready. Review the details and confirm to continue.`
+              : 'Complete card verification, then check again. Your selected plan is saved on this page.'}
+            {!walletQuery.data?.creditCardConnected && (
+              <AsciiButton
+                className="mt-3"
+                onClick={() => {
+                  void walletQuery.refetch()
+                }}
+              >
+                Check card status
+              </AsciiButton>
+            )}
+          </Notice>
+        )}
+        {returned && (
+          <PanelNote>
+            Trial eligibility is checked when you confirm. If you are not eligible, the plan’s subscription price may be
+            charged.
+          </PanelNote>
+        )}
+
         <section>
           <SectionTitle title={summary.target?.name ?? planId} />
           <Panel className="px-[22px] py-2">
-            {summary.comparisons.map((comparison) => (
-              <ComparisonRow key={comparison.label} comparison={comparison} />
-            ))}
+            {summary.comparisons.map((comparison) =>
+              summary.direction === 'subscribe' ? (
+                <div
+                  key={comparison.label}
+                  className="flex justify-between gap-6 border-b border-border py-4 last:border-0"
+                >
+                  <span className="text-body text-muted-foreground">
+                    {comparison.label === 'Included quota'
+                      ? 'Included usage / month'
+                      : comparison.label === 'Concurrency'
+                        ? 'Concurrent Boxes'
+                        : 'Monthly price'}
+                  </span>
+                  <span className="font-mono text-body">{comparison.to}</span>
+                </div>
+              ) : (
+                <ComparisonRow key={comparison.label} comparison={comparison} />
+              ),
+            )}
           </Panel>
-          <PanelNote>{summary.effect}</PanelNote>
+          {!returned && (
+            <PanelNote>
+              {summary.action === 'upgrade' && !walletQuery.data?.creditCardConnected
+                ? 'Verify your card in Stripe, then return here to confirm your selected plan.'
+                : summary.effect}
+            </PanelNote>
+          )}
         </section>
 
         {(summary.quotaNote || summary.walletNote || summary.caveats.length > 0) && (
@@ -164,23 +275,47 @@ function BillingPlanChange() {
           </section>
         )}
 
+        {!resumeSaved && (
+          <PanelNote>
+            Your browser could not save the selection. Return to Plans after card setup to select this plan again.
+          </PanelNote>
+        )}
+        {checkoutLink && (
+          <p role="status" className="text-body text-muted-foreground">
+            Checkout not opening?{' '}
+            <a href={checkoutLink} className="underline">
+              Continue to Stripe →
+            </a>
+          </p>
+        )}
         {summary.blocked?.kind === 'already-queued' ? (
           <Notice title="Already scheduled">{summary.blocked.text}</Notice>
         ) : (
           <div className="flex items-center gap-3">
             <AsciiButton
               variant="primary"
-              disabled={pending}
+              disabled={pending || (returned && !walletQuery.data?.creditCardConnected)}
               onClick={handleConfirm}
               className="inline-flex items-center gap-2"
             >
               {pending && <Spinner className="size-3.5" />}
-              {leaving ? 'Redirecting to Stripe…' : summary.confirmLabel}
+              {leaving
+                ? 'Redirecting to Stripe…'
+                : returned
+                  ? 'Confirm subscription'
+                  : summary.action === 'upgrade' && !walletQuery.data?.creditCardConnected
+                    ? 'Verify card to continue'
+                    : summary.confirmLabel}
             </AsciiButton>
-            {/* Cancelling mid-request would leave the user unsure whether the
-                change went through, so it waits with the confirm button. */}
-            <AsciiButton disabled={pending} onClick={() => navigate(RoutePath.BILLING)}>
-              Cancel
+            {/* Once checkout exists, leaving this page does not cancel the payment. */}
+            <AsciiButton
+              disabled={upgradePlan.isPending || downgradePlan.isPending}
+              onClick={() => {
+                discardPlanSetup(subject, organizationId)
+                navigate(RoutePath.BILLING)
+              }}
+            >
+              Back to Billing
             </AsciiButton>
           </div>
         )}
@@ -192,6 +327,8 @@ function BillingPlanChange() {
 function PlanChangeShell({ title = 'Change plan', children }: { title?: string; children: React.ReactNode }) {
   usePageTitle(title)
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const { selectedOrganization } = useSelectedOrganization()
 
   return (
     <div className="page-container">
@@ -203,7 +340,10 @@ function PlanChangeShell({ title = 'Change plan', children }: { title?: string; 
             className="shrink-0"
             aria-label="Back to Billing"
             title="Back to Billing"
-            onClick={() => navigate(RoutePath.BILLING)}
+            onClick={() => {
+              if (user?.profile.sub && selectedOrganization) discardPlanSetup(user.profile.sub, selectedOrganization.id)
+              navigate(RoutePath.BILLING)
+            }}
           >
             <ArrowLeft className="size-4" />
           </Button>

@@ -277,7 +277,7 @@ export function WalletSection({
   const [redeemCouponError, setRedeemCouponError] = useState<string | null>(null)
   const [redeemCouponSuccess, setRedeemCouponSuccess] = useState<string | null>(null)
   const [oneTimeTopUpAmount, setOneTimeTopUpAmount] = useState<number | undefined>(undefined)
-  const [selectedPreset, setSelectedPreset] = useState<number | null>(100)
+  const [selectedPreset, setSelectedPreset] = useState<number | null>(10)
   // Both are folded by default: one is a setting you touch once, the other a
   // one-shot action. Neither earns six rows of the panel on every visit.
   const [autoReloadOpen, setAutoReloadOpen] = useState(false)
@@ -465,16 +465,6 @@ export function WalletSection({
 
       {wallet && (
         <div className="flex flex-col gap-8">
-          {/* Card enumeration is its own read model; checkout remains the one action. */}
-          <PaymentMethodsPanel
-            paymentMethods={paymentMethodsQuery.data ?? []}
-            isLoading={paymentMethodsQuery.isLoading}
-            isError={paymentMethodsQuery.isError}
-            hasConnectedCard={cardConnected}
-            isActionLoading={isCheckoutUrlLoading}
-            onAction={connectCard}
-          />
-
           <section>
             <SectionTitle title="Wallet Balance" />
             <Panel className="px-[22px] py-5">
@@ -527,7 +517,7 @@ export function WalletSection({
               <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 <div className="grid grid-cols-2 gap-2 sm:contents">
-                  {[25, 100, 500, 1000].map((amount) => (
+                  {[10, 25, 100, 500].map((amount) => (
                     <AsciiChip
                       key={amount}
                       selected={selectedPreset === amount}
@@ -707,8 +697,7 @@ export function WalletSection({
                     <PanelNote>Target must be at least $10 above the threshold · set both to 0 to disable</PanelNote>
                   ) : (
                     <p className="mt-3 font-sans text-meta leading-relaxed text-warning">
-                      Connect a payment method above to turn auto-reload on. Until it is set, nothing warns you before
-                      the balance runs out.
+                      Add a card in Payment method to enable automatic top-ups.
                     </p>
                   ))}
               </>
@@ -766,6 +755,16 @@ export function WalletSection({
               )}
             </Panel>
           </section>
+
+          {/* Card enumeration is its own read model; checkout remains the one action. */}
+          <PaymentMethodsPanel
+            paymentMethods={paymentMethodsQuery.data ?? []}
+            isLoading={paymentMethodsQuery.isLoading}
+            isError={paymentMethodsQuery.isError}
+            hasConnectedCard={cardConnected}
+            isActionLoading={isCheckoutUrlLoading}
+            onAction={connectCard}
+          />
 
           <MoneyHistorySection key={`history-${selectedOrganization?.id ?? 'no-organization'}`} />
         </div>

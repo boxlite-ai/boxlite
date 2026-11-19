@@ -102,8 +102,13 @@ not display a support email. Custom uses the Book a call label.
 
 ## Screenshots and evidence
 
-All screenshots use mock accounts. The baseline uses the main-branch mock
-catalogue; the final screenshots use the subscription-cards preview catalogue.
+All screenshots use mock accounts. The baseline screenshot records the historical
+catalogue. Default and `subscription-cards` previews now share `PLAN_PRESENTATION`
+from main: Pay as you go, Starter and Team. Prices and bonuses derive from that
+single definition; concurrent running Boxes use 2 / 4 / 1,000, separately from
+the 20 / 40 / 1,000 total Box limits. The simulated Starter account has $20 total,
+$5 consumed and $15 remaining; empty scenarios consume the full allowance.
+These fixture balances do not define a production bonus grant cadence.
 
 | Before | Plans |
 | --- | --- |

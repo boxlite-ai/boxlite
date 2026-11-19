@@ -1460,3 +1460,27 @@ A failed detail refresh retains the last known values with a retry message;
 initial failures continue to offer Retry. The mock preview's `web-api` demonstrates
 15-minute auto-stop and a 75-minute auto-delete threshold; `batch-worker` has all
 three options disabled, and other existing fixtures exercise missing fields.
+
+## Billing purchase and payment wording
+
+Wallet displays funds and top-up controls before payment-method management.
+The default top-up selection is $10, matching the existing minimum; adding or
+changing a card remains a separate operation. First subscriptions show the target
+plan values without comparisons against an absent subscription. Existing plan
+changes retain comparisons. When checkout navigation does not complete, the
+confirmation keeps a link to the returned checkout URL and an exit to Billing.
+These changes are confined to Billing; registration, login, Welcome, Quickstart
+and onboarding guides retain their existing behavior.
+
+### Local plan verification return preview
+
+Open `/dashboard/billing?tab=plans&preview=plan-setup&mockCard=reset` on the mock dashboard.
+Choose Starter or Team, then **Verify card to continue**. The mock simulates a completed
+card setup and returns to that plan's confirmation page. It does not contact Stripe.
+**Confirm subscription** is an explicit second action; returning never sends it automatically.
+For incomplete verification, open `/dashboard/billing/plan/pro?setup=return&preview=plan-setup&mockCard=reset`.
+
+The real frontend stores only the selected plan ID and timestamp in tab-scoped session storage,
+keyed by authenticated subject and organization, for 30 minutes. Current organization ownership,
+wallet, catalog and subscription must resolve before confirmation. No signup, login, or onboarding
+flow is changed. Cross-tab or expired sessions fall back to selecting a plan again.

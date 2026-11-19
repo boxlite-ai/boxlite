@@ -10,6 +10,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import Billing from './Billing'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 
+vi.mock('@/components/billing/PlanSetupReturn', () => ({ PlanSetupReturn: () => null }))
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({ billingApiUrl: 'https://billing.example.test' }),
 }))
