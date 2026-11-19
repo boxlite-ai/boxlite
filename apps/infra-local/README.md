@@ -89,22 +89,35 @@ PostgreSQL database for migrations and an instance of Redis intended for develop
 then omits the PostgreSQL, Redis and pgAdmin VMs. It still provisions the RustFS `boxlite` bucket
 for uploaded source files.
 
-1. From the repository root, run `make -C apps/infra-local up`. Open the Dashboard at
-   `http://localhost:3000`, select your organization, and create an App named `local-hello`.
-2. Set `BOXLITE_API_URL=http://localhost:3001/api/v1/<organization-id>` and export it. Use
-   an organization API key with `read:apps` and `write:apps` for `boxlite-app login`, or
-   supply the key via `BOXLITE_API_KEY`.
-3. From the repository root, run the built CLI in the example directory:
+The `local-hello` App uses two Boxes. Its `main` environment serves HTML. On each page
+request that Box calls `GET /api/version` on the `backend` environment through the
+`local-hello-api.app.localhost` domain. The backend owns the version displayed on the page.
+
+1. Run `make -C apps/infra-local up`. At `http://localhost:3000`, select your organization
+   and create the `local-hello` App. It uses three platform domain slots across both
+   environments: two default domains and one API alias.
+2. Export `BOXLITE_API_URL=http://localhost:3001/api/v1/<organization-id>` and set
+   `BOXLITE_API_KEY` to an organization key with `read:apps` and `write:apps`.
+3. From the repository root, create the backend environment once:
 
    ```sh
-   cd apps/infra-local/examples/hello
-   node ../../../cloud-app-cli/dist/boxlite-app.cjs --app local-hello check
-   node ../../../cloud-app-cli/dist/boxlite-app.cjs --app local-hello deploy
+   cli="$PWD/apps/cloud-app-cli/dist/boxlite-app.cjs"
+   node "$cli" --app local-hello app env create backend
    ```
 
-4. Open the `main` environment URL from the Apps page. A live deployment serves
-   `Hello from a BoxLite App! (v2)` on `/` through the local proxy. This example only needs
-   a Node runtime. Apps that declare `[database]` also need the official Neon API settings.
+4. In Dashboard → Domains, claim `local-hello-api`. Bind it to the backend environment
+   and deploy each component from its own source directory:
+
+   ```sh
+   node "$cli" --app local-hello --env backend app domains add local-hello-api.app.localhost
+   (cd apps/infra-local/examples/hello/backend && node "$cli" --app local-hello --env backend deploy)
+   (cd apps/infra-local/examples/hello/frontend && node "$cli" --app local-hello --env main deploy)
+   ```
+
+5. Open `http://local-hello-api.app.localhost:4000/api/version` to see `{"version":"v3"}`.
+   Open the `main` URL on the Apps page to see **Version: v3**. In the frontend manifest,
+   `BACKEND_URL` selects the API domain and `LOCAL_PROXY_HOST=host.boxlite.internal`
+   directs the Box's connection to the local proxy while preserving the API hostname for routing.
 
 ### Stack commands
 

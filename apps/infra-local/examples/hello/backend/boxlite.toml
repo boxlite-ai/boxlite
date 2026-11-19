@@ -6,7 +6,7 @@ image = "node"
 size = "nano"
 
 [[service]]
-name = "web"
+name = "api"
 command = "node server.mjs"
 port = 3000
-health = "/"
+health = "/api/version"
