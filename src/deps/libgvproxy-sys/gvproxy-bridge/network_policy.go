@@ -13,6 +13,7 @@ import (
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
 type outboundPolicy struct {
@@ -54,6 +55,16 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 		if err := p.apply(initial); err != nil {
 			return nil, err
 		}
+	} else {
+		// Unrestricted TCP still uses the selected transport. Keep upstream's
+		// initial UDP handler until a complete policy replacement requires it.
+		dialer, err := newEgressDialer(nil, config.Subnet)
+		if err != nil {
+			return nil, err
+		}
+		var natLock sync.Mutex
+		forwarder := TCPWithFilter(s, natTable(config), &natLock, config.Ec2MetadataAccess, nil, dialer, ca, secrets)
+		s.SetTransportProtocolHandler(tcp.ProtocolNumber, forwarder.HandlePacket)
 	}
 	return p, nil
 }
