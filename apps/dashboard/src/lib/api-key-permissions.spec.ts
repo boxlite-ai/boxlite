@@ -26,7 +26,7 @@ describe('API key inventory labels', () => {
     expect(apiKeyExpirationLabel('2026-11-17T00:00:01Z')).toBe('In 2 days')
     expect(apiKeyExpirationDate(null)).toBe('No expiration')
     expect(apiKeyExpirationDate('2026-11-17T00:00:01Z')).toBe(
-      new Date('2026-11-17T00:00:01Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'long' }),
+      new Date('2026-11-17T00:00:01Z').toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'long' }),
     )
   })
 })

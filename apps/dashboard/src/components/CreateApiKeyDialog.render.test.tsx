@@ -89,9 +89,9 @@ describe('CreateApiKeyDialog shared button interactions', () => {
     expect(mocks.create).toHaveBeenCalledTimes(1)
 
     await act(async () => finishCreate({ value: 'boxlite_test_key' }))
-    await act(async () => button('Copy').click())
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="Copy API key"]')!.click())
     expect(mocks.writeText).toHaveBeenCalledExactlyOnceWith('boxlite_test_key')
-    expect(button('Copied')).toBeDefined()
+    expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull()
 
     await act(async () => button('Done').click())
     expect(document.querySelector('[role="dialog"]')).toBeNull()
