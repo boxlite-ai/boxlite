@@ -12,10 +12,10 @@ use std::{
         atomic::{AtomicI64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use super::{AlarmFields, Armed, CmosRtc};
+use super::{AlarmFields, CmosRtc};
 use crate::{
     bus::{BusDevice, UNCLAIMED_READ},
     error::Result,
@@ -40,8 +40,7 @@ impl IrqChip for Lines {
 }
 
 /// An RTC on a clock that starts at `seconds` past the epoch, and the levels
-/// it sets on its line 8. The line holds the only sender, so the receiver
-/// disconnects once the alarm worker has dropped it.
+/// it sets on line 8. The alarm state owns the only sender.
 fn rtc_with_line(seconds: i64) -> (CmosRtc, Arc<AtomicI64>, Receiver<(u32, bool)>) {
     let clock = Arc::new(AtomicI64::new(seconds * NANOS));
     let now = Arc::clone(&clock);
@@ -343,16 +342,18 @@ fn the_next_alarm_match_honours_wildcards_and_wraps_the_day() {
 #[test]
 fn an_alarm_raises_line_8_and_reports_itself_once_in_register_c() {
     // 1999-12-31 23:59:59, with the alarm at 00:00:00, a second ahead.
-    let (mut rtc, _, changes) = rtc_with_line(946_684_799);
+    let (mut rtc, clock, changes) = rtc_with_line(946_684_799);
     for index in [0x01, 0x03, 0x05] {
         write(&mut rtc, index, 0x00);
     }
     write(&mut rtc, 0x0b, 0x22); // AIE, 24-hour mode
+    advance(&clock, NANOS);
 
     let wait = Duration::from_secs(5);
     assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
-    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
+    assert_eq!(changes.try_recv(), Err(mpsc::TryRecvError::Empty));
     assert_eq!(read(&mut rtc, 0x0c), 0xa0, "IRQF and AF");
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
     assert_eq!(read(&mut rtc, 0x0c), 0x00, "reading register C clears it");
 }
 
@@ -365,11 +366,13 @@ fn clearing_aie_preserves_af_without_another_edge() {
         write(&mut rtc, index, 0xff);
     }
     write(&mut rtc, 0x0b, 0x22);
+    advance(&clock, NANOS / 2);
     let wait = Duration::from_secs(5);
     assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
-    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
 
     write(&mut rtc, 0x0b, 0x02);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
+    advance(&clock, NANOS);
     // Further matches coalesce while AF remains unacknowledged.
     assert_eq!(
         changes.recv_timeout(Duration::from_millis(1500)),
@@ -394,68 +397,49 @@ fn disabled_alarm() -> (CmosRtc, Arc<AtomicI64>, Receiver<(u32, bool)>) {
 
 #[test]
 fn a_disabled_alarm_latches_af_without_irqf_or_an_edge() {
-    let (mut rtc, _, changes) = disabled_alarm();
-    assert_eq!(
-        changes.recv_timeout(Duration::from_millis(250)),
-        Err(RecvTimeoutError::Timeout)
-    );
+    let (mut rtc, clock, changes) = disabled_alarm();
+    advance(&clock, 100_000_000);
+    assert_eq!(changes.try_recv(), Err(mpsc::TryRecvError::Empty));
     assert_eq!(read(&mut rtc, 0x0c), 0x20, "a disabled match must latch AF");
 }
 
 #[test]
 fn enabling_aie_delivers_a_match_that_occurred_while_disabled() {
-    let (mut rtc, _, changes) = disabled_alarm();
-    assert_eq!(
-        changes.recv_timeout(Duration::from_millis(250)),
-        Err(RecvTimeoutError::Timeout)
-    );
+    let (mut rtc, clock, changes) = rtc_with_line(86_399);
+    advance(&clock, NANOS);
     write(&mut rtc, 0x0b, 0x22);
     assert_eq!(
         changes.recv_timeout(Duration::from_millis(50)),
         Ok((8, true)),
         "pending AF must deliver before the next scheduled match"
     );
-    assert_eq!(changes.recv_timeout(Duration::from_secs(5)), Ok((8, false)));
     assert_eq!(read(&mut rtc, 0x0c), 0xa0);
+    assert_eq!(changes.recv_timeout(Duration::from_secs(5)), Ok((8, false)));
 }
 
 #[test]
 fn reading_c_rearms_disabled_matches_after_coalescing() {
     let (mut rtc, clock, changes) = disabled_alarm();
+    advance(&clock, 100_000_000);
     write(&mut rtc, 0x0b, 0x22);
     let wait = Duration::from_secs(5);
     assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
-    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
     write(&mut rtc, 0x0b, 0x02);
-    assert_eq!(
-        changes.recv_timeout(Duration::from_millis(1250)),
-        Err(RecvTimeoutError::Timeout)
-    );
-    assert_eq!(rtc.alarm.state().flags, 0x20, "disabled matches latch AF");
-    assert!(
-        rtc.alarm
-            .state()
-            .armed
-            .as_ref()
-            .is_none_or(|armed| armed.deadline < Instant::now()),
-        "pending AF must leave the elapsed deadline asleep instead of rescheduling"
-    );
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
     advance(&clock, NANOS);
     assert_eq!(read(&mut rtc, 0x0c), 0x20);
     assert_eq!(read(&mut rtc, 0x0c), 0, "C clears AF immediately");
-    assert_eq!(
-        changes.recv_timeout(Duration::from_millis(250)),
-        Err(RecvTimeoutError::Timeout)
-    );
+    advance(&clock, NANOS);
     assert_eq!(
         read(&mut rtc, 0x0c),
         0x20,
         "the next disabled match relatches AF"
     );
+    assert_eq!(changes.try_recv(), Err(mpsc::TryRecvError::Empty));
 }
 
 #[test]
-fn reading_empty_c_preserves_an_overdue_unprocessed_match() {
+fn reading_c_settles_an_overdue_unprocessed_match() {
     let (mut rtc, clock, changes) = rtc_with_line(0);
     write(&mut rtc, 0x01, 1); // A daily alarm at 00:00:01.
     write(&mut rtc, 0x0b, 0x22);
@@ -465,57 +449,25 @@ fn reading_empty_c_preserves_an_overdue_unprocessed_match() {
     rtc.alarm.changed.notify_one();
     rtc.worker.take().unwrap().join().unwrap();
     rtc.alarm.state().stopping = false;
-    let deadline = rtc.alarm.state().armed.as_ref().unwrap().deadline;
-    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-    clock.store(2 * NANOS, Ordering::SeqCst);
-    assert_eq!(read(&mut rtc, 0x0c), 0);
-    assert_eq!(
-        rtc.alarm.state().armed.as_ref().unwrap().deadline,
-        deadline,
-        "an empty C read must not defer an unprocessed daily match"
-    );
-    let alarm = Arc::clone(&rtc.alarm);
-    let (levels, delivered) = mpsc::channel();
-    let events = EventLoop::new().unwrap();
-    let sender = events.sender();
-    rtc.worker = Some(std::thread::spawn(move || {
-        alarm.run(&IrqLine::new(Arc::new(Lines(levels)), 8), &sender);
-    }));
-    assert_eq!(
-        delivered.recv_timeout(Duration::from_secs(5)),
-        Ok((8, true))
-    );
-    assert_eq!(
-        delivered.recv_timeout(Duration::from_secs(5)),
-        Ok((8, false))
-    );
+    advance(&clock, 2 * NANOS);
     assert_eq!(read(&mut rtc, 0x0c), 0xa0);
-    drop(changes);
+    assert_eq!(read(&mut rtc, 0x0c), 0);
+    assert_eq!(changes.try_recv(), Err(mpsc::TryRecvError::Empty));
 }
 
 #[test]
 fn stopped_clocks_do_not_schedule_disabled_matches() {
     for (register, value) in [(0x0b, 0x82), (0x0a, 0x76)] {
         let (mut rtc, clock, changes) = rtc_with_line(0);
-        // Keep the worker from latching AF if this test is descheduled
-        // between configuring the alarm and stopping the clock.
-        let idle_worker = rtc.idle_worker.take();
         advance(&clock, NANOS - 100_000_000);
         for index in [0x01, 0x03, 0x05] {
             write(&mut rtc, index, 0xff);
         }
         assert!(rtc.alarm.state().armed.is_some());
-        assert!(rtc.worker.is_none());
         write(&mut rtc, register, value);
-        assert!(rtc.next_alarm().is_none());
         assert!(rtc.alarm.state().armed.is_none());
-        rtc.idle_worker = idle_worker;
-        rtc.start_worker();
-        assert!(rtc.worker.is_some());
-        assert_eq!(
-            changes.recv_timeout(Duration::from_millis(250)),
-            Err(RecvTimeoutError::Timeout)
-        );
+        advance(&clock, NANOS);
+        assert_eq!(changes.try_recv(), Err(mpsc::TryRecvError::Empty));
         assert_eq!(read(&mut rtc, 0x0c), 0);
         assert!(rtc.alarm.state().armed.is_none());
     }
@@ -523,21 +475,16 @@ fn stopped_clocks_do_not_schedule_disabled_matches() {
 
 #[test]
 fn a_late_worker_coalesces_missed_matches_into_one() {
-    // An every-second alarm due at second 10 of the day, woken 3.5 s late.
-    let now = Instant::now();
-    let mut armed = Armed {
-        deadline: now - Duration::from_millis(3500),
-        second_of_day: 10,
-        fields: AlarmFields {
-            second: None,
-            minute: None,
-            hour: None,
-        },
-    };
-    armed.advance_past(now);
-    // Matches 11 to 13 are already past; the next one is still ahead.
-    assert_eq!(armed.second_of_day, 14);
-    assert_eq!(armed.deadline, now + Duration::from_millis(500));
+    let (mut rtc, clock, changes) = disabled_alarm();
+    write(&mut rtc, 0x0b, 0x22);
+    advance(&clock, 3 * NANOS);
+    let wait = Duration::from_secs(5);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
+    assert_eq!(read(&mut rtc, 0x0c), 0xa0);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
+    assert_eq!(read(&mut rtc, 0x0c), 0);
+    advance(&clock, 100_000_000);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
 }
 
 #[test]
@@ -547,8 +494,7 @@ fn dropping_the_rtc_stops_and_joins_its_alarm_worker() {
     write(&mut rtc, 0x0b, 0x22);
 
     drop(rtc);
-    // The worker held the line's only sender, so the channel disconnects once
-    // it has returned; a worker still waiting for its alarm keeps it open.
+    // A worker still holding the alarm state keeps the line's sender open.
     assert_eq!(
         changes.recv_timeout(Duration::from_secs(5)),
         Err(RecvTimeoutError::Disconnected)
@@ -557,20 +503,21 @@ fn dropping_the_rtc_stops_and_joins_its_alarm_worker() {
 
 #[test]
 fn enabling_aie_delivers_an_unacknowledged_alarm() {
-    let (mut rtc, _, changes) = rtc_with_line(0);
+    let (mut rtc, clock, changes) = rtc_with_line(0);
     write(&mut rtc, 0x01, 1);
     write(&mut rtc, 0x0b, 0x22);
+    advance(&clock, NANOS);
     let wait = Duration::from_secs(5);
     assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
-    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
     write(&mut rtc, 0x0b, 0x02);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
     write(&mut rtc, 0x0b, 0x22);
     assert_eq!(
         changes.recv_timeout(Duration::from_millis(250)),
         Ok((8, true))
     );
-    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
     assert_eq!(read(&mut rtc, 0x0c), 0xa0);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
     assert_eq!(read(&mut rtc, 0x0c), 0);
 }
 
@@ -587,7 +534,7 @@ fn amd_set_only_write_changes_january_31_to_february_28() {
 }
 
 #[test]
-fn a_failed_alarm_edge_stops_the_vm_and_the_worker() {
+fn a_failed_alarm_irq_stops_the_vm_and_the_worker() {
     struct BrokenLine(std::sync::atomic::AtomicUsize);
     impl IrqChip for BrokenLine {
         fn set_line(&self, line: u32, level: bool) -> Result<()> {
@@ -604,8 +551,10 @@ fn a_failed_alarm_edge_stops_the_vm_and_the_worker() {
     let chip = Arc::new(BrokenLine(std::sync::atomic::AtomicUsize::new(0)));
     let mut events = EventLoop::new().unwrap();
     let sender = events.sender();
+    let clock = Arc::new(AtomicI64::new(NANOS - 1));
+    let now = Arc::clone(&clock);
     let mut rtc = CmosRtc::new(
-        Box::new(|| NANOS - 1),
+        Box::new(move || now.load(Ordering::SeqCst)),
         IrqLine::new(chip.clone(), 8),
         sender.clone(),
     );
@@ -613,6 +562,7 @@ fn a_failed_alarm_edge_stops_the_vm_and_the_worker() {
         write(&mut rtc, index, 0xff);
     }
     write(&mut rtc, 0x0b, 0x22);
+    advance(&clock, 1);
     let event = events.wait(Some(Duration::from_secs(5))).unwrap();
     let Some(crate::events::Event::DeviceFailed(crate::error::Error::Hypervisor(
         boxlite_hypervisor::Error::SetIrqLine { line, source },

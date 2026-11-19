@@ -746,11 +746,10 @@ took, and then announces that slot on the kernel command line.
   `announce` puts one per slot at the front under the command-line budget, so the
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
-  `/dev/vdb`, and so on. Current production composition needs at most 10 slots:
-  8 disks, the balloon and one optional aggregate filesystem. The
-  [M2 device plan](../../docs/contributing/architecture/vmm/README.md#devices-by-milestone)
-  adds net, vsock, console and rng, for 14 slots; the 18-slot budget covers
-  that plan without claiming those devices are wired today. IRQ 8 follows the
+  `/dev/vdb`, and so on. Production uses up to 13 slots with 8 disks, the
+  balloon, and optional aggregate filesystem, vsock, net and console devices.
+  The [M2 device plan](../../docs/contributing/architecture/vmm/README.md#devices-by-milestone)
+  adds rng for 14 devices within the 18-slot budget. IRQ 8 follows the
   pinned Linux [RTC platform declaration](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/kernel/rtc.c#L114-L152),
   and the upper GSI bound follows the 24-pin IOAPIC described in the
   [Linux KVM IOAPIC source](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/include/uapi/asm/kvm.h#L77-L99).
@@ -1119,24 +1118,22 @@ reports whole seconds, never overrides it.
   00–69 means 20xx and 70–99 means 19xx unless the guest writes it.
 - The alarm matches the seconds, minutes and hours registers `0x01`, `0x03`
   and `0x05`; a byte `0xC0`–`0xFF` matches any value, as Linux writes `0xff`
-  for a field it does not care about. While the clock runs, a worker sleeps
-  until the next matching guest second and latches AF in register C, even
-  with AIE off. AIE gates IRQF and the edge on GSI 8, not alarm matching.
-  Further matches coalesce while AF is pending; the worker waits without a
-  timer rather than repeatedly waking. Reading register C returns and clears
-  its flags and, when AF was set, schedules the next match under the worker's
-  lock. Reading C with AF clear preserves any match the worker has yet to
-  process. Clearing AIE clears IRQF but keeps
-  AF; enabling AIE with AF pending delivers that alarm immediately.
-  Writes to time, alarm, register A or register B recompute the deadline;
-  stopping the clock disarms matching until it restarts.
+  for a field it does not care about. An armed alarm compares its target second
+  against the guest RTC time, which the worker resamples at least once per
+  second while waiting. An overdue match latches AF even with AIE off. Writes
+  that change the schedule settle any due match first, then compute the next
+  one. Stopping the clock disarms matching until it restarts.
+  IRQF and the asserted GSI 8 level both follow `AF && AIE`. Reading register C
+  settles any overdue match, returns and clears the flags, and rearms from the
+  current guest RTC second. Clearing AIE lowers IRQ 8 and keeps AF. Further
+  matches coalesce while AF is pending.
 - x86 Linux registers `rtc_cmos` with IRQ 8, so it trusts the alarm and
   serves update interrupts with it; `hwclock` waits up to 10 s for one on
   every read. Periodic and update-ended interrupts, and day and month
   alarms, are not modelled.
-- The worker holds the alarm state and the line, never the device.
-  Dropping the `CmosRtc`, which the `Chipset` owns and drops before the host
-  VM, stops and joins it; a failed edge ends the VM with `DeviceFailed`.
+- The worker and port accesses share the alarm state and IRQ line. Dropping the
+  `CmosRtc` stops and joins the worker before the host VM drops. A failed IRQ
+  update ends the VM with `DeviceFailed`.
 - `boot/kernel.config` enables `RTC_INTF_DEV`, so the guest has
   `/dev/rtc0`.
 

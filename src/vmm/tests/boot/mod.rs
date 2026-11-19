@@ -292,15 +292,15 @@ impl Console {
     }
 }
 
-/// KVM, counting the edges devices raise on GSI 4. With `deliver` off it
-/// drops every interrupt instead of passing it on.
-struct Gsi4Counter {
+/// Counts serial IRQ requests and RTC assertions accepted by KVM.
+struct KvmIrqCounter {
     kvm: boxlite_hypervisor::KvmVm,
     deliver: bool,
     edges: Arc<AtomicUsize>,
+    gsi_8_assertions: Arc<AtomicUsize>,
 }
 
-impl boxlite_hypervisor::Vm for Gsi4Counter {
+impl boxlite_hypervisor::Vm for KvmIrqCounter {
     type Vcpu = boxlite_hypervisor::KvmVcpu;
 
     unsafe fn map_memory(
@@ -327,14 +327,16 @@ impl boxlite_hypervisor::Vm for Gsi4Counter {
             self.edges.fetch_add(1, Ordering::Relaxed);
         }
         if self.deliver {
-            boxlite_hypervisor::Vm::set_irq_line(&self.kvm, line, level)
-        } else {
-            Ok(())
+            self.kvm.set_irq_line(line, level)?;
+            if line == 8 && level {
+                self.gsi_8_assertions.fetch_add(1, Ordering::Relaxed);
+            }
         }
+        Ok(())
     }
 }
 
-impl boxlite_hypervisor::X86Vm for Gsi4Counter {
+impl boxlite_hypervisor::X86Vm for KvmIrqCounter {
     fn supported_cpuid(&self) -> &[boxlite_hypervisor::X86CpuidEntry] {
         boxlite_hypervisor::X86Vm::supported_cpuid(&self.kvm)
     }
@@ -342,7 +344,7 @@ impl boxlite_hypervisor::X86Vm for Gsi4Counter {
 
 /// A KVM VM booting `config` on the legacy devices, before it runs.
 struct LinuxVm {
-    vm: crate::Vm<Gsi4Counter>,
+    vm: crate::Vm<KvmIrqCounter>,
     /// The zero page as `prepare` wrote it.
     zero_page: boot_params,
     /// The console worker behind COM1: a test finishes it once its sink can
@@ -350,6 +352,7 @@ struct LinuxVm {
     console: ConsoleWorker,
     /// The edges the serial port raised on GSI 4.
     gsi_4_edges: Arc<AtomicUsize>,
+    gsi_8_assertions: Arc<AtomicUsize>,
 }
 
 fn probe_boot(config: &VmConfig) -> (boxlite_hypervisor::PreparedKvm, CheckedBootLeaf) {
@@ -382,15 +385,18 @@ fn linux_vm_with_leaf(
     let (prepared, leaf) = probe_boot_with_leaf(config, leaf);
     let (writer, console) = ConsoleWorker::spawn(console.sink, console.capacity).unwrap();
     let gsi_4_edges = Arc::new(AtomicUsize::new(0));
+    let gsi_8_assertions = Arc::new(AtomicUsize::new(0));
     let edges = Arc::clone(&gsi_4_edges);
+    let rtc_assertions = Arc::clone(&gsi_8_assertions);
     let mut zero_page = None;
     let vm = crate::Vm::with_backend(
         config.clone(),
         move || {
-            Ok(Gsi4Counter {
+            Ok(KvmIrqCounter {
                 kvm: boxlite_hypervisor::KvmVm::from_prepared(prepared)?,
                 deliver: deliver_irqs,
                 edges,
+                gsi_8_assertions: rtc_assertions,
             })
         },
         |ram, config| {
@@ -414,6 +420,7 @@ fn linux_vm_with_leaf(
         zero_page: zero_page.unwrap(),
         console,
         gsi_4_edges,
+        gsi_8_assertions,
     }
 }
 
@@ -425,6 +432,8 @@ struct LinuxRun {
     exit: crate::Result<VmExit>,
     /// The edges the serial port raised on GSI 4.
     gsi_4_edges: usize,
+    /// RTC IRQ assertions accepted by KVM.
+    gsi_8_assertions: usize,
     /// The console worker, still running: a test finishes it once its sink
     /// can take the rest.
     console: ConsoleWorker,
@@ -449,12 +458,14 @@ fn run_linux_vm(vm: LinuxVm, timeout: Duration) -> LinuxRun {
         zero_page,
         console,
         gsi_4_edges,
+        gsi_8_assertions,
     } = vm;
     let (exit, elapsed) = run_with_watchdog(&mut vm, timeout);
     LinuxRun {
         zero_page,
         exit,
         gsi_4_edges: gsi_4_edges.load(Ordering::Relaxed),
+        gsi_8_assertions: gsi_8_assertions.load(Ordering::Relaxed),
         console,
         elapsed,
     }
@@ -934,8 +945,8 @@ const RTC_UPDATE_MARKER: &str = "RTC-UPDATE-IRQ-0123456789ABCDEF";
 
 /// Boots the kernel named by `VMM_KERNEL` with an `/init` that turns on
 /// update interrupts on `/dev/rtc0`, as `hwclock` does, and waits up to 2 s
-/// for one. Linux serves them with the CMOS alarm, so the marker shows that
-/// the alarm raised IRQ 8 and register C reported it.
+/// for one. Linux can finish the read in software if alarm setup crosses a
+/// second boundary. The harness also checks that KVM accepted IRQ 8.
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
 fn an_rtc_update_interrupt_reaches_init_through_the_cmos_alarm() {
@@ -961,6 +972,7 @@ fn an_rtc_update_interrupt_reaches_init_through_the_cmos_alarm() {
             "reboot: Restarting system",
         ],
     );
+    assert!(run.gsi_8_assertions > 0, "missing RTC IRQ 8 assertion");
     assert!(!log.contains("Kernel panic"), "{log}");
 }
 
