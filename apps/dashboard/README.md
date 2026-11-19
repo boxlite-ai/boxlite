@@ -569,7 +569,7 @@ includes alias deletion; using an image does not automatically require catalog a
 
 Users can explicitly select **No expiration**, 90 days or one year. Existing keys
 and Quickstart defaults are unchanged. A successful creation displays the returned
-permissions and expiration with a one-time secret. Copy is explicit and does not
+permissions and expiration with a one-time secret. Absolute expiration dates use English formatting while retaining the browser’s local timezone. The secret is a selectable, horizontally scrollable single line with a fixed copy icon on its right; copy success is announced and failure preserves manual selection and retry. Copy is explicit and does not
 close the result. Closing the dialog or switching organization discards the secret
 and ignores late responses. Unavailable selected permissions remain visible until
 removed; permission changes invalidate in-flight results. Background membership refreshes
@@ -587,6 +587,8 @@ assigned member-read permission, but the Console does not offer member-write.
 The mock preview uses synthetic, organization-scoped keys held only in memory.
 Create, list, duplicate-name refusal and revoke are supported; reload resets them.
 Mock results do not verify live authorization or expiration enforcement.
+
+Creation-result layout: [light](../../docs/contributing/investigations/assets/api-key-result/light.png), [dark](../../docs/contributing/investigations/assets/api-key-result/dark.png), [390px viewport](../../docs/contributing/investigations/assets/api-key-result/narrow.png). These captures contain synthetic MSW keys only.
 
 Visual review: [before](../../docs/contributing/investigations/assets/api-key-access/before.png),
 [default form](../../docs/contributing/investigations/assets/api-key-access/after.png), and
