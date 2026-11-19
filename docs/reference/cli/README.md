@@ -1159,6 +1159,10 @@ logging still applies.
 
 Run a long-running REST API server. The server holds a single `BoxliteRuntime` and exposes the full REST surface for `boxlite --url ...` clients and the language SDKs' REST mode.
 
+Open `http://127.0.0.1:8100/` for the web console, which manages boxes, images and volumes through the same API. With `--api-key`, the console asks for the key once and keeps an `HttpOnly` session cookie until `serve` restarts.
+
+A browser guard runs before auth and answers `403` when the `Origin` header differs from `Host`, blocking cross-site pages and their WebSocket upgrades. SDK and CLI clients send no `Origin` and are unaffected; see the [serve README](../../../src/cli/src/commands/serve/README.md#auth--config).
+
 **Options:**
 
 | Flag | Default | Description |
@@ -1168,6 +1172,7 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 | `--home PATH` | `~/.boxlite` | Absolute runtime data directory; env `BOXLITE_HOME` |
 | `--host ADDR` | `127.0.0.1` | Bind address. Any non-loopback address (e.g. `0.0.0.0`) requires `--api-key`; `serve` refuses to start otherwise. |
 | `--api-key KEY` | unset | Require this exact `Authorization: Bearer` value (constant-time match) on every route except `GET /v1/config`; env `BOXLITE_SERVE_API_KEY`. Unset is permissive. |
+| `--allowed-host HOST` | none | Extra `Host` name accepted while bound to loopback; repeatable. A loopback-bound server answers `403` to any other name, so a DNS-rebinding web page cannot reach it. Use this for a reverse proxy that forwards its own name. |
 | `--registry REGISTRY` | none | Image registry; repeatable and prepended to config |
 | `--config PATH` | none | JSON runtime configuration file |
 
