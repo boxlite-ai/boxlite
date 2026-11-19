@@ -101,13 +101,6 @@ export function CycleOverview({
                   {formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo
                 </span>
               )}
-              {mode.kind === 'plan' && mode.plan.trial?.conversionState === 'not_attempted' && (
-                <span className="font-mono text-em text-muted-foreground">
-                  (FREE TRIAL for{' '}
-                  {Math.round((mode.plan.trial.endsAt.getTime() - mode.plan.trial.startedAt.getTime()) / 3_600_000)}{' '}
-                  hours)
-                </span>
-              )}
               {mode.kind === 'plan' && mode.plan.status.toLowerCase() !== 'active' && (
                 <span className="border border-border px-2 py-0.5 font-sans text-label uppercase tracking-[1px] text-muted-foreground">
                   {mode.plan.status}

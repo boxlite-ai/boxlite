@@ -20,10 +20,10 @@ and missing tiers do not change the mapping; unknown names receive no inferred b
 accessible as unspecified, never unsupported. Custom terms are negotiated.
 
 Plans displays the documented names and bonuses with the approved $5 Starter
-price, without adding a monthly cycle or grant cadence. Overview retains real account data. While a subscription
-trial awaits conversion, its monthly price carries a `FREE TRIAL` label with the total hours derived from Commerce's
-trial timestamps. While conversion is `not_attempted`, This Cycle uses that same trial window for its date range and
-`Free trial ends in` countdown. Pending and succeeded conversions use the monthly `cycleFrom`/`cycleTo`. A self-serve action
+price, without adding a monthly cycle or grant cadence. Overview retains real account data. Active Plan shows the
+plan name and monthly price, while This Cycle owns trial presentation. While conversion is `not_attempted`, This Cycle
+uses Commerce's trial timestamps for its date range and `Free trial ends in` countdown. Pending and succeeded conversions
+use the monthly `cycleFrom`/`cycleTo`. A self-serve action
 is available only when its catalogue price matches the displayed price; otherwise
 the user can contact support. A Go or Starter catalogue price of 500 cents matches the $5 display and uses
 the existing confirmation route. Any differing price retains the contact
