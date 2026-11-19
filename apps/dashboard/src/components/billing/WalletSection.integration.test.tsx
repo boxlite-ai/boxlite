@@ -279,7 +279,7 @@ describe('WalletSection top-up checkout', () => {
     await flush()
 
     expect(open).toHaveBeenCalledWith('', '_blank')
-    expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 1_000 })
+    expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 10_000 })
     expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/pay/cs_top_up')
   })
 

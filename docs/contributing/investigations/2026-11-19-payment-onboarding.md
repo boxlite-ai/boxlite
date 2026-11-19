@@ -4,14 +4,13 @@
 
 ## Problem and scope
 Billing uses connection terminology for adding cards and compares first-time
-subscriptions against an absent subscription. Wallet prioritizes cards over funds.
+subscriptions against an absent subscription.
 Registration, login, Welcome, Quickstart and onboarding guides are outside this Billing-only change.
 
 ## Design
-Reuse current Console components and billing endpoints. Wallet puts funds first,
-uses Add card / Change card, and defaults to the existing $10 minimum top-up.
-An empty-wallet message requests funds without claiming a new account spent a
-quota it never received. First subscription confirmation shows only target values;
+Reuse current Console components and billing endpoints. Subscription remains the primary purchase path.
+Wallet keeps payment methods above balance and top-up controls, uses Add card / Change card,
+and retains existing top-up defaults. Empty-balance copy states only the balance, without promoting pay-as-you-go or assuming a consumed quota. First subscription confirmation shows only target values;
 changes to existing subscriptions retain comparisons. A returned checkout link
 stays available if navigation fails, with an exit back to Billing. Neither link
 creation nor browser return is evidence of payment completion.

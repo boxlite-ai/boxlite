@@ -1463,9 +1463,9 @@ three options disabled, and other existing fixtures exercise missing fields.
 
 ## Billing purchase and payment wording
 
-Wallet displays funds and top-up controls before payment-method management.
-The default top-up selection is $10, matching the existing minimum; adding or
-changing a card remains a separate operation. First subscriptions show the target
+Wallet retains payment-method management above balance and top-up controls.
+Subscription remains the primary purchase path; top-up amounts and defaults remain unchanged.
+Adding or changing a card remains a separate operation. First subscriptions show the target
 plan values without comparisons against an absent subscription. Existing plan
 changes retain comparisons. When checkout navigation does not complete, the
 confirmation keeps a link to the returned checkout URL and an exit to Billing.
