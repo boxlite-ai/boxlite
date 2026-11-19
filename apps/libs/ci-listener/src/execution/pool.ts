@@ -286,7 +286,7 @@ export class WorkerPool {
   /** Reconcile the assigned count including charged reservations which have not reached GitHub yet. */
   async balanceScaleSets(
     lease: ExecutionLease,
-    targets: readonly { id: number; labels: string[]; assigned: number; check: StateCheck }[],
+    targets: readonly { id: number; labels: string[]; assigned: number; held: number; check: StateCheck }[],
     policy: CapacityPolicy,
     signal: AbortSignal,
     drain = false,
@@ -316,6 +316,7 @@ export class WorkerPool {
       if (set && row.value.box.phase !== 'absent') this.setCharges.set(set, this.chargedInSet(set) + 1)
     }
     const checks = new Map<number, StateCheck[]>()
+    const waitingForAssignment = new Set<string>()
     const retire = new Set<string>()
     for (const row of rows)
       if ((drain || !row.value.supply?.scaleSet) && row.value.delivery === 'done' && !row.value.closing)
@@ -327,10 +328,18 @@ export class WorkerPool {
       const original = rows.filter(
         (row) => row.value.supply?.scaleSet === target.id && !row.value.closing && row.value.box.phase !== 'absent',
       )
+      // Keep an acquired slot charged while its service assignment is pending.
+      // Count dispatched workers first so a queued reservation cannot start a surplus Box.
+      const undispatched = original.filter((row) => row.value.box.phase === 'none')
+      const ready = this.creationReady(selection.label)
+      const grants = ready ? Math.max(0, target.assigned - (original.length - undispatched.length)) : 0
+      for (const row of undispatched.slice(grants)) waitingForAssignment.add(row.record.key)
       const proof = [...(policy.checks ?? []), target.check]
       checks.set(target.id, proof)
       // Withdraw undispatched reservations first. An in-flight Box keeps its immutable identity.
-      for (const row of [...original].reverse().slice(0, Math.max(0, original.length - target.assigned))) {
+      const surplus = Math.max(0, original.length - target.assigned - target.held)
+      const dispatched = original.filter((row) => row.value.box.phase !== 'none')
+      for (const row of [...dispatched, ...undispatched].reverse().slice(0, surplus)) {
         if (row.value.box.phase === 'none') {
           const changed = await this.journal.advance(
             lease,
@@ -342,7 +351,7 @@ export class WorkerPool {
           Object.assign(row, changed)
         } else if (row.value.delivery === 'done') retire.add(row.record.key)
       }
-      if (!this.creationReady(selection.label)) continue
+      if (!ready) continue
       for (let count = original.length; count < Math.min(target.assigned, original.length + 16); count++) {
         await backend.admit(signal)
         const row = await this.journal.reserve(
@@ -375,6 +384,7 @@ export class WorkerPool {
       true,
       (row, retiring) => {
         const set = row.value.supply?.scaleSet
+        if (waitingForAssignment.has(row.record.key) && !row.value.closing) return undefined
         if ((row.value.box.phase === 'none' && !row.value.closing) || retiring)
           return retiring && (drain || !set) ? [] : set ? checks.get(set) : undefined
         return []
@@ -697,7 +707,7 @@ export class WorkerPool {
       this.busy = false
     }
   }
-  private creationReady(label: string): boolean {
+  creationReady(label: string): boolean {
     return (this.creationFailures.get(label)?.retryAt ?? 0) <= Date.now()
   }
   private creationRejected(label: string): void {
@@ -924,6 +934,7 @@ export class WorkerPool {
         await admit()
         const selected = await select()
         if (selected) {
+          if (row.value.supply?.scaleSet && !this.creationReady(selected.label)) return
           await intent('box-create', { box: { phase: 'requested', id: null } })
           const launch: WorkerLaunch = {
             name: row.value.name,
