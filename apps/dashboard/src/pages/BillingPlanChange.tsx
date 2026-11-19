@@ -36,8 +36,12 @@ function BillingPlanChange() {
   const { planId = '' } = useParams<{ planId: string }>()
   const navigate = useNavigate()
   const config = useConfig()
-  const { selectedOrganization, organizationMembersStatus, authenticatedUserOrganizationMember } =
-    useSelectedOrganization()
+  const {
+    selectedOrganization,
+    organizationMembersStatus,
+    authenticatedUserOrganizationMember,
+    refreshOrganizationMembers,
+  } = useSelectedOrganization()
 
   const planQuery = useOwnerPlanQuery()
   const walletQuery = useOwnerWalletQuery()
@@ -59,6 +63,8 @@ function BillingPlanChange() {
     organizationMembersStatus,
   ])
   const currentContext = useRef(context)
+  const contextGeneration = useRef(0)
+  if (currentContext.current !== context) contextGeneration.current += 1
   currentContext.current = context
   const [checkedContext, setCheckedContext] = useState('')
   const [resumeSaved, setResumeSaved] = useState(true)
@@ -80,6 +86,7 @@ function BillingPlanChange() {
     return () => {
       active = false
       currentContext.current = ''
+      contextGeneration.current += 1
     }
   }, [context, returned])
 
@@ -92,6 +99,18 @@ function BillingPlanChange() {
 
   if (!config.billingApiUrl) {
     return <Navigate to={RoutePath.BILLING} replace />
+  }
+  if (selectedOrganization && organizationMembersStatus === 'error') {
+    return (
+      <PlanChangeShell>
+        <Notice title="Could not verify billing permissions">
+          Try again to check your role in {selectedOrganization.name}.
+          <AsciiButton className="mt-3" onClick={() => void refreshOrganizationMembers().catch(() => undefined)}>
+            Retry permissions
+          </AsciiButton>
+        </Notice>
+      </PlanChangeShell>
+    )
   }
   if (!selectedOrganization || !membersResolved) {
     return <PlanChangeShell>{<Skeleton className="h-[320px] w-full" />}</PlanChangeShell>
@@ -168,10 +187,12 @@ function BillingPlanChange() {
 
   const handleConfirm = async () => {
     if (pending || (returned && !walletQuery.data?.creditCardConnected)) return
+    const generation = contextGeneration.current
+    const isCurrent = () => currentContext.current === context && contextGeneration.current === generation
     try {
       if (summary.action === 'upgrade') {
         const checkoutUrl = await upgradePlan.mutateAsync({ organizationId: selectedOrganization.id, planId })
-        if (currentContext.current !== context) return
+        if (!isCurrent()) return
         if (checkoutUrl) {
           if (!walletQuery.data?.creditCardConnected && subject) {
             setResumeSaved(savePlanSetup(subject, organizationId, planId))
@@ -185,7 +206,7 @@ function BillingPlanChange() {
         toast.success('Plan upgraded successfully')
       } else {
         await downgradePlan.mutateAsync({ organizationId: selectedOrganization.id, planId })
-        if (currentContext.current !== context) return
+        if (!isCurrent()) return
         // Name the plan and the day: "at the next billing cycle" left the user
         // to go looking for when that is.
         toast.success(`${summary.target?.name ?? 'Your new plan'} starts ${rollDay}`)
@@ -195,7 +216,7 @@ function BillingPlanChange() {
       discardPlanSetup(subject, organizationId)
       navigate(RoutePath.BILLING, { replace: true })
     } catch (error) {
-      if (currentContext.current !== context) return
+      if (!isCurrent()) return
       handleApiError(error, `Failed to ${summary.action} organization plan`)
     }
   }
