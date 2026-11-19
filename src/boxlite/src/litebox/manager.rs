@@ -52,6 +52,24 @@ impl BoxManager {
 
     /// Add a new box to the database.
     pub fn add_box(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.add_box_impl(config, state, None)
+    }
+
+    pub(crate) fn add_clone_box(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: &crate::BaseDiskID,
+    ) -> BoxliteResult<()> {
+        self.add_box_impl(config, state, Some(base_disk_id))
+    }
+
+    fn add_box_impl(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: Option<&crate::BaseDiskID>,
+    ) -> BoxliteResult<()> {
         // Check name uniqueness if name is set
         if let Some(ref name) = config.name
             && self.lookup_box_id(name)?.is_some()
@@ -70,7 +88,11 @@ impl BoxManager {
             )));
         }
 
-        self.store.save(config, state)?;
+        if let Some(base_disk_id) = base_disk_id {
+            self.store.save_clone(config, state, base_disk_id)?;
+        } else {
+            self.store.save(config, state)?;
+        }
 
         tracing::debug!(
             box_id = %config.id,

@@ -273,7 +273,17 @@ impl LocalVolumeStore {
         state: &BoxState,
         mode: VolumeReferenceMode,
     ) -> BoxliteResult<()> {
-        self.add_box_impl(config, state, mode, || {})
+        self.add_box_impl(config, state, mode, None, || {})
+    }
+
+    pub(crate) fn add_clone_box_with_resolved_volumes(
+        &self,
+        config: &mut BoxConfig,
+        state: &BoxState,
+        mode: VolumeReferenceMode,
+        base_disk_id: &crate::BaseDiskID,
+    ) -> BoxliteResult<()> {
+        self.add_box_impl(config, state, mode, Some(base_disk_id), || {})
     }
 
     fn add_box_impl(
@@ -281,6 +291,7 @@ impl LocalVolumeStore {
         config: &mut BoxConfig,
         state: &BoxState,
         mode: VolumeReferenceMode,
+        base_disk_id: Option<&crate::BaseDiskID>,
         before_commit: impl FnOnce(),
     ) -> BoxliteResult<()> {
         let has_managed = config
@@ -294,7 +305,7 @@ impl LocalVolumeStore {
                 .iter()
                 .any(|mount| mount.mount_type == MountType::Volume);
         if !has_managed {
-            return self.box_manager.add_box(config, state);
+            return self.persist_box(config, state, base_disk_id);
         }
         // Persist canonical ids, never user selectors: the stored config must
         // stay resolvable regardless of later resolution rules. Selector
@@ -340,8 +351,20 @@ impl LocalVolumeStore {
                 mount.source = Some(volume.id);
             }
             before_commit();
-            self.box_manager.add_box(config, state)
+            self.persist_box(config, state, base_disk_id)
         })
+    }
+
+    fn persist_box(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: Option<&crate::BaseDiskID>,
+    ) -> BoxliteResult<()> {
+        match base_disk_id {
+            Some(id) => self.box_manager.add_clone_box(config, state, id),
+            None => self.box_manager.add_box(config, state),
+        }
     }
 
     /// Resolve every managed-volume reference (legacy and typed formats) to
@@ -1277,6 +1300,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_clone_keeps_source_admission_and_persists_base_dependency() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        let source = runtime
+            .create(
+                BoxOptions {
+                    volumes: vec![VolumeSpec::managed_volume(&volume.id, "/workspace")],
+                    auto_delete: Some(0),
+                    ..Default::default()
+                },
+                Some("source".to_string()),
+            )
+            .await
+            .unwrap();
+        let source_id = source.id().clone();
+        let (source_config, source_state) =
+            runtime.box_manager.box_by_id(&source_id).unwrap().unwrap();
+        let source_disk = source_config.box_home.join("disks").join("disk.qcow2");
+        crate::disk::Qcow2Helper::create_disk(&source_disk, true)
+            .unwrap()
+            .leak();
+        let source_lock_id = source_state.lock_id.unwrap();
+
+        let store = runtime.local_volume_store.clone();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let lock_task = tokio::task::spawn_blocking(move || {
+            store.create_impl(Some("lock-holder"), move |_, _| {
+                ready_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+            })
+        });
+        ready_receiver.recv().unwrap();
+
+        let mut clone = Box::pin(source.clone_box(Default::default(), Some("clone".to_string())));
+        for _ in 0..100 {
+            assert!(futures::poll!(&mut clone).is_pending());
+            if std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count()
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            2,
+            "the clone must reach persistence while the registry lock is held"
+        );
+        drop(clone);
+
+        let source_locker = runtime.disk_lock_manager.retrieve(source_lock_id).unwrap();
+        let admission_released = crate::lock::LockGuard::try_new(source_locker.as_ref()).is_some();
+        release_sender.send(()).unwrap();
+        lock_task.await.unwrap().unwrap();
+
+        let mut created = None;
+        for _ in 0..100 {
+            created = runtime.get("clone").await.unwrap();
+            if created.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let created = created.expect("the cancelled clone eventually commits");
+        let clone_id = created.id().clone();
+        let backing = crate::disk::read_backing_file_path(&source_disk)
+            .unwrap()
+            .unwrap();
+        let base = runtime
+            .base_disk_mgr
+            .store()
+            .find_by_base_path(&backing)
+            .unwrap()
+            .unwrap();
+        let base_id = base.id().clone();
+        let base_path = base.disk_info().as_path().to_path_buf();
+        assert!(
+            runtime
+                .base_disk_mgr
+                .store()
+                .dependent_boxes(&base_id)
+                .unwrap()
+                .contains(&clone_id.to_string()),
+            "a visible clone must have its base dependency"
+        );
+        assert!(
+            !admission_released,
+            "source admission must remain owned by background persistence"
+        );
+
+        drop(created);
+        drop(source);
+        drop(runtime);
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        runtime
+            .get("clone")
+            .await
+            .unwrap()
+            .expect("the clone remains manageable after restart");
+        assert!(
+            runtime
+                .base_disk_mgr
+                .store()
+                .dependent_boxes(&base_id)
+                .unwrap()
+                .contains(&clone_id.to_string())
+        );
+        let error = runtime
+            .remove(source_id.as_str(), false)
+            .expect_err("the clone dependency must protect the source");
+        assert!(matches!(error, BoxliteError::InvalidState(_)));
+        assert!(base_path.exists());
+
+        runtime.remove(clone_id.as_ref(), false).unwrap();
+        runtime.remove(source_id.as_str(), false).unwrap();
+    }
+
+    #[tokio::test]
     async fn user_supplied_uuid_volume_names_are_rejected() {
         let home = tempfile::tempdir().unwrap();
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
@@ -1430,10 +1588,16 @@ mod tests {
         let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
         let (release_sender, release_receiver) = std::sync::mpsc::channel();
         let add_task = tokio::task::spawn_blocking(move || {
-            store.add_box_impl(&mut config, &state, VolumeReferenceMode::Selector, || {
-                ready_sender.send(()).unwrap();
-                release_receiver.recv().unwrap();
-            })
+            store.add_box_impl(
+                &mut config,
+                &state,
+                VolumeReferenceMode::Selector,
+                None,
+                || {
+                    ready_sender.send(()).unwrap();
+                    release_receiver.recv().unwrap();
+                },
+            )
         });
         ready_receiver.recv().unwrap();
         let remove_task = tokio::task::spawn_blocking({

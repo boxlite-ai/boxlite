@@ -220,6 +220,11 @@ pub struct SynchronizedState {
 /// cached image disk.
 const IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 
+pub(crate) struct CloneDependency {
+    pub base_disk_id: crate::BaseDiskID,
+    pub source_admission: Arc<crate::lock::OwnedLockGuard>,
+}
+
 impl RuntimeImpl {
     // ========================================================================
     // CONSTRUCTION
@@ -514,6 +519,7 @@ impl RuntimeImpl {
                 &mut config,
                 &mut state,
                 crate::volumes::VolumeReferenceMode::Selector,
+                None,
             )
             .await
         {
@@ -1392,6 +1398,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         initial_status: BoxStatus,
         resolved_image: Option<crate::images::ResolvedImage>,
+        clone_dependency: Option<CloneDependency>,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
@@ -1431,6 +1438,7 @@ impl RuntimeImpl {
                 &mut config,
                 &mut state,
                 crate::volumes::VolumeReferenceMode::CanonicalId,
+                clone_dependency,
             )
             .await
         {
@@ -1451,6 +1459,7 @@ impl RuntimeImpl {
         config: &mut BoxConfig,
         state: &mut BoxState,
         mode: crate::volumes::VolumeReferenceMode,
+        clone_dependency: Option<CloneDependency>,
     ) -> BoxliteResult<()> {
         let id = self.lock_manager.allocate()?;
         if let Err(e) = self.disk_lock_manager.allocate_and_retrieve(id) {
@@ -1463,12 +1472,29 @@ impl RuntimeImpl {
         let store = self.local_volume_store.clone();
         let mut persisted_config = config.clone();
         let state_for_persist = state.clone();
+        let (base_disk_id, source_admission) = clone_dependency
+            .map(|dependency| {
+                (
+                    Some(dependency.base_disk_id),
+                    Some(dependency.source_admission),
+                )
+            })
+            .unwrap_or((None, None));
         let persist_task = tokio::task::spawn_blocking(move || {
-            let result = store.add_box_with_resolved_volumes(
-                &mut persisted_config,
-                &state_for_persist,
-                mode,
-            );
+            let _source_admission = source_admission;
+            let result = match base_disk_id {
+                Some(ref id) => store.add_clone_box_with_resolved_volumes(
+                    &mut persisted_config,
+                    &state_for_persist,
+                    mode,
+                    id,
+                ),
+                None => store.add_box_with_resolved_volumes(
+                    &mut persisted_config,
+                    &state_for_persist,
+                    mode,
+                ),
+            };
             (persisted_config, result)
         });
         let (persisted_config, persist_result) = match persist_task.await {
@@ -4094,6 +4120,7 @@ mod tests {
                 &mut config_a,
                 &mut state_a,
                 crate::volumes::VolumeReferenceMode::CanonicalId,
+                None,
             )
             .await
             .unwrap();
@@ -4162,6 +4189,7 @@ mod tests {
                 &mut config,
                 &mut state,
                 crate::volumes::VolumeReferenceMode::CanonicalId,
+                None,
             )
             .await
             .unwrap();
@@ -4195,6 +4223,7 @@ mod tests {
                 &mut config_a,
                 &mut state_a,
                 crate::volumes::VolumeReferenceMode::CanonicalId,
+                None,
             )
             .await
             .unwrap();
