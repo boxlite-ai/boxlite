@@ -344,9 +344,30 @@ Wallet and Welcome use the same card setup operation: open a tab, request the
 organization's Checkout URL, and navigate to Stripe. Returning to Welcome or
 choosing Check card status refreshes the wallet and saved payment methods.
 A connected card allows the user to continue without waiting for reward delivery.
-Both entry points tell the user that connecting or updating a card places a
-temporary $0.50 hold that is released automatically: Welcome below
-**Verify card**, Wallet below the Payment Method panel.
+Both entry points tell the user that adding a card places a temporary $0.50
+verification hold: Welcome below **Verify card**, Wallet in the last row of the
+Payment Method panel, next to **Add payment method**.
+
+### Managing saved cards
+
+The Wallet's Payment Method panel lists every saved card. The default card is
+listed first with a **Default** badge and has no actions; the other cards keep
+the API's order. Each other card has a `⋯` menu with **Set as default** and
+**Remove**; removal asks for confirmation first. The last row of the panel holds
+**Add payment method**, which runs the card setup flow above. A newly added
+card becomes the default.
+
+Renewals and top-ups always need a default card, so the panel offers no way to
+remove it; the billing API itself would accept the removal. With one saved
+card, that card is the default, so it cannot be removed either.
+
+Both actions go through `useSetDefaultPaymentMethodMutation` and
+`useRemovePaymentMethodMutation`. Success refreshes the payment methods, wallet
+and plan queries, and the list itself shows the result, so there is no success
+toast. Failure shows an error toast and leaves the list as it was. Both
+endpoints are idempotent, so the menu does not lock while a request runs.
+The mock preview keeps its saved cards in memory, so both actions work there
+until the page reloads.
 
 Codes entered independently on either page redeem through `useRedeemCouponMutation`. Success invalidates
 wallet, transactions, invoices, plan, and usage so the next view reflects the
