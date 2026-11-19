@@ -1,3 +1,4 @@
+import { stageDataBucketName } from './bucket-names.ts'
 /*
  * The control plane's own bucket, and the two grants that bound what it may do
  * to the volume buckets it creates.
@@ -62,9 +63,11 @@ const VOLUME_OBJECT_ACTIONS = [
 export const volumeAccessRoleName = (): string => `${$app.name}-${$app.stage}-s3-access`
 
 export const awsStorageProvider =
-  ({ accountId, existingVolumeRoleName }: { accountId: string; existingVolumeRoleName?: string }): StorageProvider =>
+  ({ accountId }: { accountId: string }): StorageProvider =>
   (request: StorageRequest): Storage => {
-    const bucket = new aws.s3.BucketV2('Storage', {})
+    const bucket = new aws.s3.BucketV2('Storage', {
+      bucket: stageDataBucketName($app.name, $app.stage, accountId, 'storage'),
+    })
     const versioning = new aws.s3.BucketVersioningV2('StorageVersioning', {
       bucket: bucket.id,
       versioningConfiguration: { status: request.versioning ? 'Enabled' : 'Suspended' },
@@ -79,7 +82,11 @@ export const awsStorageProvider =
           restrictPublicBuckets: true,
         }),
     )
-    const checkpoints = new aws.s3.BucketV2('Checkpoints', {}, { protect: true, retainOnDelete: true })
+    const checkpoints = new aws.s3.BucketV2(
+      'Checkpoints',
+      { bucket: stageDataBucketName($app.name, $app.stage, accountId, 'checkpoints') },
+      { protect: true, retainOnDelete: true },
+    )
     const checkpointPrivacy = new aws.s3.BucketPublicAccessBlock('CheckpointsPrivate', {
       bucket: checkpoints.id,
       blockPublicAcls: true,
@@ -91,7 +98,7 @@ export const awsStorageProvider =
       bucket: checkpoints.id,
       rules: [{ applyServerSideEncryptionByDefault: { sseAlgorithm: 'AES256' } }],
     })
-    const roleName = existingVolumeRoleName ?? volumeAccessRoleName()
+    const roleName = volumeAccessRoleName()
     const roleArn = $interpolate`arn:aws:iam::${accountId}:role/${roleName}`
 
     return {

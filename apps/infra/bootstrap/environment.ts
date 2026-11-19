@@ -57,16 +57,14 @@ function requireStageLike(name: any, value: any) {
  * would read as truthy and run the one step in this script that is not idempotent. Strict refuses
  * both, before anything external has been created.
  *
- * `--stage` is declared here only so strict parsing accepts it; its value is read by resolveSstStage,
- * which owns the stage grammar and the "may be specified only once" rule.
  */
 export function parseBootstrapOptions(args: readonly string[]) {
-  const { values } = parseArgs({
+  const { values, tokens } = parseArgs({
+    tokens: true,
     args: [...args],
     strict: true,
     options: {
       confirm: { type: 'boolean' },
-      'legacy-sst': { type: 'boolean' },
       force: { type: 'boolean' },
       'provision-auth0': { type: 'boolean' },
       'provision-ses': { type: 'boolean' },
@@ -75,6 +73,8 @@ export function parseBootstrapOptions(args: readonly string[]) {
       stage: { type: 'string' },
     },
   })
+  if (tokens.filter((token) => token.kind === 'option' && token.name === 'stage').length > 1)
+    throw new Error('--stage may be specified only once')
   // Spread off parseArgs' null-prototype object, so callers get something that behaves like every
   // other options object in this package.
   return { ...values }

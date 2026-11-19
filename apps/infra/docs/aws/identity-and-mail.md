@@ -8,27 +8,23 @@ AWS provisions application SMTP through SES and uses a separate raw send-only cr
 
 ## OIDC setup
 
-For a new Auth0 setup, `npm run bootstrap -- --stage <stage> --provision-auth0` creates the SPA and custom API.
-This operation is not idempotent: rerunning creates duplicates. Review the intended tenant and existing resources first.
+Create a single-page application and a custom API in the stage’s Auth0 tenant.
 Configure callback/logout/web-origin URLs for the dashboard host and store the OIDC values for the selected app.
 
 ## Application mail
 
 Declare `MAIL_DOMAIN` and use SES SMTP on port 465. Without a sender domain, invitations can exist without email delivery.
-`npm run bootstrap -- --stage <stage> --provision-ses` creates a send-only IAM user and
-stores `SMTP_USER` plus its SigV4-derived `SMTP_PASSWORD`. Rerunning rotates the credential.
-The operator performs this privileged step; the ordinary deploy role cannot create the IAM user.
 
-The AWS stack publishes the configured sender's DKIM/DMARC records. If the identity is not yet
-verified on first bootstrap, deploy it and rerun the SES provisioning step. Bootstrap requests SES
-production access only after verification, reports an existing review/case, and does not repeatedly
-resubmit a denied case. Check the account's current regional SES sandbox and quota status.
+Provision a send-only IAM user for the verified sender identity and derive its regional SMTP password. Store the application credentials in the stage configuration before deploying the API.
+
+The AWS stack publishes DKIM and DMARC records and waits for SES to verify the identity.
+Check the regional SES sandbox status and sending quota. Request production access from SES to send to unverified recipients.
 
 An SES identity is unique to its account/region/domain. Give separate stages their intended domains
 or explicitly design shared ownership. Auth0's SES integration needs a separate raw send-only AWS
 credential; the application's derived SMTP password cannot substitute for it.
 
-Use secret stdin for SMTP values and redeploy the API after configuration changes.
+Set `SMTP_USER` and `SMTP_PASSWORD` in the encrypted stage store using the secret stdin procedure. Redeploy the API after rotating these credentials.
 
 ## Auth0 SES provider
 

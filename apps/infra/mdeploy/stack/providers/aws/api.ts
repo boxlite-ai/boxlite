@@ -164,6 +164,7 @@ export const awsApiProvider =
     const region = aws.getRegionOutput({}).name
     const account = aws.getCallerIdentityOutput({}).accountId
     const service = awsService('Api', {
+      autoscaled: true,
       host,
       placement: {
         ...placement,
@@ -243,6 +244,26 @@ export const awsApiProvider =
       },
       { dependsOn: [service.service, record] },
     )
+    const scaling = new aws.appautoscaling.Target('ApiScalingTarget', {
+      serviceNamespace: 'ecs',
+      scalableDimension: 'ecs:service:DesiredCount',
+      resourceId: $interpolate`service/${host.cluster.name}/${service.service.name}`,
+      minCapacity: 1,
+      maxCapacity: 4,
+    })
+    const scalingPolicies = ['CPU', 'Memory'].map(
+      (metric) =>
+        new aws.appautoscaling.Policy(`Api${metric}Scaling`, {
+          serviceNamespace: scaling.serviceNamespace,
+          scalableDimension: scaling.scalableDimension,
+          resourceId: scaling.resourceId,
+          policyType: 'TargetTrackingScaling',
+          targetTrackingScalingPolicyConfiguration: {
+            predefinedMetricSpecification: { predefinedMetricType: `ECSServiceAverage${metric}Utilization` },
+            targetValue: 70,
+          },
+        }),
+    )
     const dashboardRecord = awsDnsName('DashboardRecord', hosts.dashboard, zoneId, cdn.domainName)
     return {
       url: $util.output(`https://${hosts.dashboard}`),
@@ -250,6 +271,6 @@ export const awsApiProvider =
       identity: role.arn,
       metricTarget: balancer.arnSuffix,
       metricLogGroup: service.logGroup,
-      ready: [...service.ready, ...grants, cdn, dashboardRecord],
+      ready: [...service.ready, ...grants, ...scalingPolicies, cdn, dashboardRecord],
     }
   }

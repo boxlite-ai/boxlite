@@ -34,6 +34,7 @@ export const awsService = (
     taskRole?: CloudResource
     targets?: { targetGroupArn: $util.Input<string>; containerPort: number }[]
     dependsOn?: CloudResource[]
+    autoscaled?: boolean
     wait?: boolean
   },
 ) => {
@@ -127,7 +128,10 @@ export const awsService = (
         containerName: name,
       })),
     },
-    { dependsOn: [executionPolicy, secretPolicy, ...(request.dependsOn ?? [])] },
+    {
+      dependsOn: [executionPolicy, secretPolicy, ...(request.dependsOn ?? [])],
+      ignoreChanges: request.autoscaled ? ['desiredCount'] : undefined,
+    },
   )
   return { service, task, role, logGroup: logs.name, ready: [service, executionPolicy, secretPolicy] }
 }

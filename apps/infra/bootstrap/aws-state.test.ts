@@ -51,7 +51,7 @@ test('native bootstrap preserves encryption keys and config across repeated init
   const input = { clients, app: 'community-app', stage: 'dev', accountId: '123456789012', region: 'us-east-1' }
   const bucket = await bootstrapAwsState(input)
   const first = await readEnvironment({ clients, app: input.app, stage: input.stage })
-  assert.equal(bucket, 'boxlite-state-us-east-1-123456789012')
+  assert.equal(bucket, 'boxlite-pulumi-state-us-east-1-123456789012')
   assert.ok(first.PULUMI_CONFIG_PASSPHRASE)
   await setValues({ clients, app: input.app, stage: input.stage, entries: [['STACK_DOMAIN', 'example.test']] })
   await bootstrapAwsState(input)
@@ -66,6 +66,14 @@ test('native bootstrap preserves encryption keys and config across repeated init
   assert.equal(calls.filter((call) => call.name === 'PutParameterCommand').length, 2)
   assert.ok(calls.some((call) => call.name === 'PutPublicAccessBlockCommand'))
   assert.ok(calls.some((call) => call.name === 'PutBucketVersioningCommand'))
+
+  buckets.delete(bucket)
+  const before = calls.length
+  await assert.rejects(bootstrapAwsState(input), /restore.*state bucket|state bucket.*restore/i)
+  assert.deepEqual(
+    calls.slice(before).map((call) => call.name),
+    ['GetParameterCommand', 'HeadBucketCommand'],
+  )
 })
 
 test('native state bootstrap refuses access errors and invalid names before provisioning', async () => {
@@ -103,7 +111,7 @@ for (const competing of ['bootstrap', 'environment edit'] as const) {
         send: async ({ input }) => ({
           Parameter: {
             Value:
-              input.Name === '/sst/bootstrap'
+              input.Name === '/boxlite/pulumi/bootstrap'
                 ? JSON.stringify({ state: 'existing-state' })
                 : Buffer.alloc(32, 1).toString('base64'),
           },

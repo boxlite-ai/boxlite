@@ -128,7 +128,6 @@ runs:
       if: steps.config.outputs.kind == 'ecr'
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        # Native role is isolated from fenced historical SST deployment credentials.
         role-to-assume: ${{ inputs.aws-pulumi-deploy-role-arn }}
         aws-region: ${{ steps.config.outputs.region }}
         role-session-name: mbuild-${{ github.run_id }}

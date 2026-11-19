@@ -21,11 +21,7 @@ mstage: stage declaration + identity + encrypted environment
 ```
 
 The current command is `npm run mdeploy -- --stage <stage>` from `apps/infra`.
-The retained `npm run deploy` command uses `deployment/sst.ts` and the legacy `stack/` tree;
-its flags, state assumptions and post-deploy checks are not interchangeable with mdeploy's.
-AWS bootstrap follows the declared native app and registry.
-
-Existing SST stages require [reviewed adoption](../docs/aws/migration.md) before native mutation.
+AWS bootstrap creates prerequisites for the declared app and registry. Create a new AWS stage with a full deployment.
 
 ## Inputs
 
@@ -204,7 +200,9 @@ AWS `api` targets its existing ECS API task/service and required grants; `runner
 For an interrupted AWS Runner rollout, inspect the per-instance record or use the [emergency replacement procedure](../docs/aws/runners.md#emergency-replacement).
 
 Both clouds require existing workloads for scoped updates.
-A refreshed, unfiltered preview rejects changes outside the selected component before a targeted apply.
+
+Preview and apply refresh the selected targets. An API-only release can update its Cloud Run revision even when an unrelated provider has drifted.
+Use a full preview to inspect the entire stack.
 
 Runner selection refuses changed host counts, labels or policy membership; reconcile those through a full deployment.
 Component routing handles each selection explicitly and checks exhaustiveness at compile time.

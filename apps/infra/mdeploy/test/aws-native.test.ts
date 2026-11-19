@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as pulumi from '@pulumi/pulumi'
 import * as awsSdk from '@pulumi/aws'
+import * as randomSdk from '@pulumi/random'
 import * as cloudflareSdk from '@pulumi/cloudflare'
 import { awsCertificate, proxyCertificateDomains } from '../stack/providers/aws/certificate.ts'
 import { awsService } from '../stack/providers/aws/service.ts'
@@ -15,6 +16,7 @@ import { awsApiProvider } from '../stack/providers/aws/api.ts'
 import { awsRunnerProvider } from '../stack/providers/aws/runners.ts'
 import { runnerFleetFrom } from '../src/stack-env.ts'
 import { componentTargets } from '../src/components.ts'
+import { pulumiDeploy } from '../src/pulumi.ts'
 import type { Network } from '../stack/network.ts'
 import * as commandSdk from '@pulumi/command'
 
@@ -35,6 +37,8 @@ pulumi.runtime.setMocks(
         name: args.inputs.name ?? args.name,
         arn: `arn:aws:fixture:us-east-1:123456789012:${args.name}`,
         dkimSigningAttributes: { tokens: ['fixture1', 'fixture2', 'fixture3'] },
+        primaryEndpointAddress: 'primary.test',
+        configurationEndpointAddress: 'cluster.test',
         primaryNetworkInterfaceId: `eni-${args.name}`,
         domainValidationOptions: [args.inputs.domainName, ...(args.inputs.subjectAlternativeNames ?? [])]
           .filter(Boolean)
@@ -68,6 +72,7 @@ Object.assign(globalThis, {
   $jsonStringify: pulumi.jsonStringify,
   command: commandSdk,
   aws: awsSdk,
+  random: randomSdk,
   cloudflare: cloudflareSdk,
 })
 const resolved = async (value: unknown) => (pulumi.output(value) as any).promise()
@@ -189,9 +194,21 @@ test('native AWS connects checkpoint, credential and disk capabilities at real p
   await Promise.all(
     [...storage.ready, ...api.ready, ...(proxy.active ? proxy.ready : [])].map((resource) => resolved(resource.urn)),
   )
+  const scaling = resources.find(
+    (r) => r.type === 'aws:appautoscaling/target:Target' && r.inputs.scalableDimension === 'ecs:service:DesiredCount',
+  )
+  assert.deepEqual([scaling?.inputs.minCapacity, scaling?.inputs.maxCapacity], [1, 4])
+  const metrics = resources
+    .filter((r) => r.type === 'aws:appautoscaling/policy:Policy')
+    .map((r) => r.inputs.targetTrackingScalingPolicyConfiguration?.predefinedMetricSpecification?.predefinedMetricType)
+  assert.ok(metrics.includes('ECSServiceAverageCPUUtilization'))
+  assert.ok(metrics.includes('ECSServiceAverageMemoryUtilization'))
   assert.equal(storage.checkpoints.active, true)
   if (storage.checkpoints.active)
-    assert.match(await resolved(storage.checkpoints.archivePrefix), /^s3:\/\/checkpoints\/checkpoints\/$/)
+    assert.equal(
+      await resolved(storage.checkpoints.archivePrefix),
+      's3://bl-123456789012-11-boxlite-app-dev-checkpoints/checkpoints/',
+    )
   const task = resources.find((resource) => resource.name === 'ApiTask')!
   const [container] = JSON.parse(task.inputs.containerDefinitions)
   const environment = Object.fromEntries(container.environment.map((item: any) => [item.name, item.value]))
@@ -212,6 +229,8 @@ test('native AWS connects checkpoint, credential and disk capabilities at real p
   assert.equal(ingress.inputs.ingress[0].cidrBlocks, undefined)
   const checkpointBucket = resources.find((resource) => resource.name === 'Checkpoints')!
   assert.equal(checkpointBucket.inputs.forceDestroy, undefined)
+  assert.equal(checkpointBucket.inputs.bucket, 'bl-123456789012-11-boxlite-app-dev-checkpoints')
+  assert.equal(resources.find((r) => r.name === 'Storage')!.inputs.bucket, 'bl-123456789012-11-boxlite-app-dev-storage')
   const read = JSON.parse(resources.find((resource) => resource.name === 'RegistryProxySecretRead')!.inputs.policy)
   assert.ok(
     read.Statement.some(
@@ -288,6 +307,38 @@ test('AWS scoped Runner targets require the emitted host, disk and attachment in
   assert.ok(targets.includes(prefix + 'command:local:Command::CheckRunnerHealth'))
   assert.ok(targets.includes(prefix + 'command:local:Command::UpgradeRunnerBinary'))
   assert.equal(resources.find((resource) => resource.name === 'RunnerDataDisk')!.inputs.size, 200)
+  for (const intent of ['diff', 'deploy'] as const) {
+    const operations: string[] = []
+    const inspect = async (
+      operation: string,
+      options: { target?: string[]; refresh?: boolean; targetDependents?: boolean },
+    ) => {
+      assert.deepEqual(options.target, targets)
+      assert.equal(options.refresh, true)
+      assert.equal(options.targetDependents, false)
+      operations.push(operation)
+    }
+    const result = await pulumiDeploy({
+      intent,
+      components: 'runner',
+      config: { root: '/fixture' },
+      scope: { home: 'aws', app: request.app, stage: request.stage, region: 'us-east-1', protect: false } as any,
+      identity: { assertUsableFor: async () => {}, childEnvironment: async () => ({ env: {}, expiresAt: null }) },
+      state: { bucket: 'fixture-state' },
+      stageEnvironment: { PULUMI_CONFIG_PASSPHRASE: 'fixture' },
+      log: () => {},
+      createStackWith: async () => ({
+        exportStack: async () => ({ deployment: { resources: exported } }),
+        setAllConfig: async () => {},
+        preview: (options) => inspect('diff', options),
+        up: (options) => inspect('deploy', options),
+        destroy: async () => assert.fail('destroy'),
+        refresh: async () => assert.fail('refresh'),
+      }),
+    })
+    assert.equal(result, 0)
+    assert.deepEqual(operations, [intent])
+  }
   assert.throws(() => componentTargets({ ...request, environment: { RUNNERS: '2' } }), /full --components/)
   assert.throws(
     () =>
@@ -300,6 +351,21 @@ test('AWS scoped Runner targets require the emitted host, disk and attachment in
   const disk = exported.find((resource) => resource.name === 'RunnerDataDisk')!
   disk.inputs.tags['boxlite:control-plane-runner-name'] = 'another-runner'
   assert.throws(() => componentTargets(request), /full --components/)
+})
+
+test('multi-node AWS Redis preserves database selection and uses a primary with a replica', async () => {
+  const cache = awsCacheProvider({ network: network.binding as any })({
+    size: 'small',
+    clustered: true,
+    encryptInTransit: true,
+  })
+  await Promise.all(cache.ready.map((resource) => resolved(resource.urn)))
+  const group = resources.find((r) => r.name === 'CacheCluster')!
+  const params = resources.find((r) => r.type === 'aws:elasticache/parameterGroup:ParameterGroup')!
+  assert.deepEqual(params.inputs.parameters, [{ name: 'cluster-enabled', value: 'no' }])
+  assert.equal(group.inputs.numCacheClusters, 2)
+  assert.equal(group.inputs.automaticFailoverEnabled, true)
+  assert.equal(await resolved(cache.connection.host), 'primary.test')
 })
 
 test('AWS Redis refuses AUTH without encrypted transit before creating resources', () => {
@@ -316,10 +382,24 @@ test('AWS Redis refuses AUTH without encrypted transit before creating resources
   assert.equal(resources.length, before)
 })
 
-test('native Pulumi program composes every AWS service and preserves the deployed non-API images', async (t) => {
+test('native Pulumi program composes every AWS service with the requested images', async (t) => {
   const { awsProgram } = await import('../pulumi/aws-program.ts')
   const { fileURLToPath } = await import('node:url')
   const cwd = fileURLToPath(new URL('../../', import.meta.url))
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const declaration = JSON.parse(readFileSync(join(cwd, 'mstage.env.json'), 'utf8'))
+  for (const group of ['runner', 'secret']) declaration.env.selectGroup[group].optional.push('RUNNER_SECRET_FIXTURE')
+  const temp = mkdtempSync(join(cwd, '.test-aws-runner-secrets-'))
+  const declarationPath = join(temp, 'mstage.env.json')
+  writeFileSync(declarationPath, JSON.stringify(declaration))
+  const previousDeclaration = process.env.MSTAGE_ENV_CONFIG
+  process.env.MSTAGE_ENV_CONFIG = declarationPath
+  t.after(() => {
+    if (previousDeclaration === undefined) delete process.env.MSTAGE_ENV_CONFIG
+    else process.env.MSTAGE_ENV_CONFIG = previousDeclaration
+    rmSync(temp, { recursive: true, force: true })
+  })
   const previous = process.env.MSTAGE_CONFIG
   process.env.MSTAGE_CONFIG = fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
   t.after(() => {
@@ -340,11 +420,8 @@ test('native Pulumi program composes every AWS service and preserves the deploye
     PROXY_API_KEY: 'fixture-proxy',
     MAIL_DOMAIN: 'mail.example.test',
   }
-  const retainedImages = {
-    proxy: 'images/proxy:old',
-    'otel-collector': 'images/collector:old',
-    'registry-proxy': 'images/registry:old',
-  }
+  const parameter = 'arn:aws:ssm:us-east-1:123456789012:parameter/boxlite/workloads/boxlite-app/dev/gate'
+  const observedOptions = new Map<string, string[]>()
   const start = resources.length
   const program = awsProgram({
     stateBucket: 'fixture-state',
@@ -352,15 +429,126 @@ test('native Pulumi program composes every AWS service and preserves the deploye
     app: 'boxlite-app',
     stage: 'dev',
     region: 'us-east-1',
-    environment,
-    retainedImages,
+    environment: {
+      ...environment,
+      TURNSTILE_SITEKEY: 'fixture-site',
+      TURNSTILE_EXPECTED_HOSTNAMES: 'example.test',
+      TURNSTILE_SECRET_KEY: JSON.stringify({ address: parameter }),
+    },
   })
   await pulumi.runtime.runInPulumiStack(async () => {
+    pulumi.runtime.registerStackTransformation(({ name, opts }) => {
+      observedOptions.set(name, opts.ignoreChanges ?? [])
+      return undefined
+    })
+    const authorized =
+      'arn:aws:secretsmanager:us-east-1:123456789012:secret:boxlite/workloads/boxlite-app/dev/gate-Abc123'
+    for (const ref of [
+      authorized.replace('boxlite/workloads/boxlite-app/dev/gate', 'identity/gate'),
+      authorized.replace('123456789012', '999999999999'),
+      authorized.replace('us-east-1', 'eu-west-1'),
+      'arn:aws:secretsmanager:us-east-1:123456789012:secret:boxlite-app-dev-blue-gate-Abc123',
+      'arn:aws:secretsmanager:us-east-1:123456789012:secret:boxlite-dev-blue-gate-Abc123',
+      'arn:aws:secretsmanager:us-east-1:123456789012:secret:boxlite/workloads/boxlite-app/dev-blue/gate-Abc123',
+      parameter.replace('/dev/', '/prod/'),
+      parameter.replace('/boxlite-app/', '/another-app/'),
+      parameter.replace('/workloads/boxlite-app/dev/gate', '/pulumi/passphrase/boxlite-app/dev'),
+      parameter.replace('/gate', '/*'),
+    ]) {
+      const candidate = awsProgram({
+        stateBucket: 'fixture-state',
+        cwd,
+        app: 'boxlite-app',
+        stage: 'dev',
+        region: 'us-east-1',
+        environment: {
+          ...environment,
+          TURNSTILE_SITEKEY: 'fixture-site',
+          TURNSTILE_EXPECTED_HOSTNAMES: 'example.test',
+          TURNSTILE_SECRET_KEY: JSON.stringify({ address: ref }),
+        },
+        deployStackWith: () => {
+          throw new Error('graph evaluated')
+        },
+      })
+      await assert.rejects(candidate, /TURNSTILE_SECRET_KEY.*authorized/)
+    }
+    const reachedGraph = new Error('validated workload references reached the resource graph')
+    for (const ref of [parameter, authorized + ':token::']) {
+      const unsupported = awsProgram({
+        stateBucket: 'fixture-state',
+        cwd,
+        app: 'boxlite-app',
+        stage: 'dev',
+        region: 'us-east-1',
+        environment: { ...environment, RUNNER_SECRET_FIXTURE: JSON.stringify({ address: ref }) },
+        deployStackWith: () => {
+          throw reachedGraph
+        },
+      })
+      await t.test(ref === parameter ? 'a Runner refuses a parameter' : 'a Runner refuses a secret selector', () =>
+        assert.rejects(unsupported, /RUNNER_SECRET_FIXTURE.*Secrets Manager/),
+      )
+    }
+    const clickHouseCredentials = {
+      CLICKHOUSE_URL: 'https://example.test',
+      CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN: authorized,
+      CLICKHOUSE_READER_PASSWORD_SECRET_ARN: authorized,
+    }
+    for (const key of ['CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN', 'CLICKHOUSE_READER_PASSWORD_SECRET_ARN']) {
+      const unsupported = awsProgram({
+        stateBucket: 'fixture-state',
+        cwd,
+        app: 'boxlite-app',
+        stage: 'dev',
+        region: 'us-east-1',
+        environment: { ...environment, ...clickHouseCredentials, [key]: authorized + ':password::' },
+        deployStackWith: () => {
+          throw reachedGraph
+        },
+      })
+      await t.test(key + ' refuses a secret selector', () =>
+        assert.rejects(
+          unsupported,
+          (error) => error instanceof Error && error.message.includes(key) && error.message.includes('Secrets Manager'),
+        ),
+      )
+    }
+    const accepted = awsProgram({
+      stateBucket: 'fixture-state',
+      cwd,
+      app: 'boxlite-app',
+      stage: 'dev',
+      region: 'us-east-1',
+      environment: {
+        ...environment,
+        ...clickHouseCredentials,
+        TURNSTILE_SITEKEY: 'fixture-site',
+        TURNSTILE_EXPECTED_HOSTNAMES: 'example.test',
+        TURNSTILE_SECRET_KEY: JSON.stringify({ address: authorized + ':token::' }),
+        RUNNER_SECRET_FIXTURE: JSON.stringify({ address: authorized }),
+      },
+      deployStackWith: ({ inputs }) => {
+        assert.equal(inputs.apiSecrets.TURNSTILE_SECRET_KEY, authorized + ':token::')
+        assert.equal(inputs.runnerSecrets.RUNNER_SECRET_FIXTURE, authorized)
+        throw reachedGraph
+      },
+    })
+    await assert.rejects(accepted, (error) => error === reachedGraph)
     const outputs = await program()
     await Promise.all(Object.values(outputs).map(resolved))
     return outputs
   })
   const graph = resources.slice(start)
+  assert.deepEqual(
+    observedOptions.get('ApiService'),
+    ['desiredCount'],
+    'the autoscaler owns the running ECS service count',
+  )
+  assert.deepEqual(observedOptions.get('ApiTask'), [], 'task definitions do not own a replica count')
+  assert.deepEqual(observedOptions.get('ProxyService'), [], 'fixed-size services retain Pulumi ownership')
+  const apiContainer = JSON.parse(graph.find((r) => r.name === 'ApiTask')!.inputs.containerDefinitions)[0]
+  assert.ok(apiContainer.secrets.some((s: any) => s.name === 'TURNSTILE_SECRET_KEY' && s.valueFrom === parameter))
   const upgradeEnv = graph.find((r) => r.name === 'UpgradeRunnerBinary')!.inputs.environment
   assert.deepEqual(
     [upgradeEnv.RUNNER_UPGRADE_STATE_BUCKET, upgradeEnv.RUNNER_UPGRADE_APP, upgradeEnv.RUNNER_UPGRADE_STAGE],
@@ -373,8 +561,8 @@ test('native Pulumi program composes every AWS service and preserves the deploye
   const taskImage = (name: string) =>
     JSON.parse(graph.find((r) => r.name === name + 'Task')!.inputs.containerDefinitions)[0].image
   assert.match(taskImage('Api'), /b{40}/)
-  assert.equal(taskImage('Proxy'), retainedImages.proxy)
-  assert.equal(taskImage('OtelCollector'), retainedImages['otel-collector'])
-  assert.equal(taskImage('RegistryProxy'), retainedImages['registry-proxy'])
+  assert.match(taskImage('Proxy'), /proxy/)
+  assert.match(taskImage('OtelCollector'), /otel-collector/)
+  assert.match(taskImage('RegistryProxy'), /registry-proxy/)
   assert.equal(graph.find((r) => r.name === 'DatabaseInstance')!.inputs.publiclyAccessible, false)
 })

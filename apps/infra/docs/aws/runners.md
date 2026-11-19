@@ -23,7 +23,6 @@ Bootstrap identifies the assigned volume by its NVMe serial and records the ext4
 Unexpected signatures, root-device selection or an existing unmounted data directory fail closed.
 
 Existing hosts retain instance sizing, boot settings and data-disk performance settings.
-Migrating root-disk state requires an explicit maintenance operation; see [SST adoption](migration.md#move-existing-runner-data).
 
 The API validates account, region, zone, volume type and app/stage/Runner tags before requesting EBS growth.
 AWS allows at most four accepted expansions per rolling 24 hours, subject to a smaller configured budget.
@@ -69,7 +68,7 @@ A bootstrapping host is not proof of the requested version.
 
 #### Emergency replacement
 
-The regional state bucket comes from the `state` field of the SSM parameter `/sst/bootstrap`. The key is `rollouts/aws/<app>/<stage>/<region>/<ec2-instance-id>.json`. A new EC2 instance ID can roll immediately, even when the old instance is offline.
+The regional state bucket comes from the `state` field of the SSM parameter `/boxlite/pulumi/bootstrap`. The key is `rollouts/aws/<app>/<stage>/<region>/<ec2-instance-id>.json`. A new EC2 instance ID can roll immediately, even when the old instance is offline.
 
 From `apps/infra`, inspect the old instance before deciding whether to release its reservation:
 
@@ -82,7 +81,6 @@ Force unlock marks only the exact active operation as superseded and records the
 
 SSM can still deliver an accepted command to the original instance. Before reusing that instance, stop the previous submitters, then reconcile outstanding commands and verify the serving binary. Keep the old host isolated if its submitters or commands cannot be accounted for.
 
-The deployment ownership lease has its own [migration recovery procedure](migration.md).
 
 Sources: [AWS provider](../../mdeploy/stack/providers/aws/runners.ts),
 [SSM transport](../../mdeploy/src/upgrade-runners.ts), [mount contract](../../mdeploy/stack/providers/aws/data-disk.ts).

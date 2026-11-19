@@ -129,11 +129,10 @@ Automation callers may supply the optional string inputs `requested_by` (a publi
 These fields provide display and correlation metadata; they do not grant reviewer authority.
 Keep email addresses and credentials out of both inputs. Existing `apply`, `confirm` and Environment approval requirements still apply.
 
-## Retained legacy AWS deployment
+## First AWS deployment
 
-The [AWS deployment guide](aws/deployment.md#retained-legacy-aws-deployment) owns the retained SST path
-and its compatibility boundary. Its [runner update launcher](../scripts/runner-update-binary.mjs)
-is separate from current mdeploy orchestration.
+Bootstrap the stage, then select both API and Runner to create shared infrastructure.
+Subsequent deployments can select either component. See the [AWS deployment guide](aws/deployment.md#deployment-scope).
 
 ## Deploy an existing stack
 

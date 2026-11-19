@@ -9,13 +9,11 @@ const STORAGE = { small: 20, standard: 20, medium: 100 } as const
 export const awsDatabaseProvider =
   ({
     network,
-    existingPasswordRef,
   }: {
     network: Extract<NetworkBinding, { cloud: 'aws' }>
-    existingPasswordRef?: string
   }): DatabaseProvider =>
   (request: DatabaseRequest): Database => {
-    const password = awsPassword('DatabasePassword', existingPasswordRef, 'password')
+    const password = awsPassword('DatabasePassword')
     const clients = new aws.ec2.SecurityGroup('DatabaseClientSecurityGroup', {
       vpcId: network.vpcId,
       egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],

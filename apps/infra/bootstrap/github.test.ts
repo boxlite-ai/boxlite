@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   environmentApiPath,
+  ensureGithubEnvironment,
   githubEnvironmentPayload,
   isProtectionUnavailableError,
   parseReviewerIds,
@@ -86,4 +87,34 @@ test('every cloud identity is written to one stage, never shared across the repo
     .filter((call) => /stage: null/.test(call))
     .filter((call) => /name: '(GCP|AWS)_[A-Z_]+'/.test(call))
   assert.deepEqual(shared, [], 'a cloud identity written repository-wide belongs to whoever bootstrapped last')
+})
+
+test('existing environments preserve branch protections, reviewers and custom rules', () => {
+  const requests: string[][] = []
+  const run = (_bin: string, args: string[]) => {
+    requests.push(args)
+    return JSON.stringify({
+      deployment_branch_policy: { protected_branches: true },
+      protection_rules: [{ type: 'required_reviewers', reviewers: [{ reviewer: { id: 321 } }] }],
+    })
+  }
+  ensureGithubEnvironment({ repo: 'example/project', stage: 'prod', reviewerIds: [123] }, run as any)
+  assert.deepEqual(requests, [['api', 'repos/example/project/environments/prod']])
+})
+
+test('a denied environment read stops bootstrap and a missing environment permits creation', () => {
+  for (const status of [403, 404]) {
+    const methods: string[] = []
+    const run = (_bin: string, args: string[]) => {
+      methods.push(args.includes('PUT') ? 'PUT' : 'GET')
+      if (!args.includes('PUT'))
+        throw Object.assign(new Error('lookup'), { stderr: Buffer.from(`gh: failure (HTTP ${status})`) })
+      return ''
+    }
+    const ensure = () =>
+      ensureGithubEnvironment({ repo: 'example/project', stage: 'dev', reviewerIds: [123] }, run as any)
+    if (status === 403) assert.throws(ensure, /lookup/)
+    else ensure()
+    assert.deepEqual(methods, status === 403 ? ['GET'] : ['GET', 'PUT'])
+  }
 })

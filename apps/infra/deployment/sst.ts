@@ -52,7 +52,6 @@
  * Commands that need no configuration at all (`install`, `secret`, `unlock`) never read it.
  */
 
-import { withLegacyDeploymentOwnership } from './aws-ownership.js'
 import { execFileSync, spawn } from 'node:child_process'
 import { constants as osConstants } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -65,7 +64,12 @@ import {
   resolvePublicDeploymentConfig,
   resolveSstStage,
 } from './environment.js'
-import { exportDeployScope, resolveDeployScope, requireSstSubcommandFirst, withRequiredRunnerPolicy } from './scope.js'
+import {
+  exportDeployScope,
+  resolveDeployScope,
+  requireSstSubcommandFirst,
+  withRequiredRunnerPolicy,
+} from './scope.js'
 import {
   STAGE_CONFIG_DIGEST_KEY,
   STAGE_CONFIG_MANIFEST_KEY,
@@ -73,7 +77,10 @@ import {
   readStoredStageConfig,
 } from './stage-config.js'
 import { isLocalOnlyDeploymentKey } from './key-policy.js'
-import { verifyProxyDeploymentWithRetry, verifyPublicDeploymentWithRetry } from './verify.js'
+import {
+  verifyProxyDeploymentWithRetry,
+  verifyPublicDeploymentWithRetry,
+} from './verify.js'
 import { verifyApiImage } from '../artifacts/api.js'
 import { requireCheckoutMatchesArtifactRefs, resolveArtifactSource } from '../artifacts/source.js'
 import { resolveAwsAccountId, runnerArtifactsBucketName, verifyRunnerArtifact } from '../artifacts/runner.js'
@@ -209,12 +216,9 @@ function reportProgress(message: string) {
 
 function fetchFromSsm(name: any) {
   try {
-    const out = runAwsText(
-      ['ssm', 'get-parameter', '--name', name, '--with-decryption', '--query', 'Parameter.Value'],
-      {
-        region: REGION,
-      },
-    )
+    const out = runAwsText(['ssm', 'get-parameter', '--name', name, '--with-decryption', '--query', 'Parameter.Value'], {
+      region: REGION,
+    })
     return out && out !== 'None' ? out : null
   } catch (err: any) {
     if (err.code === 'ENOENT') console.warn('sst-with-cloudflare: `aws` CLI not found; skipping SSM lookup')
@@ -293,9 +297,7 @@ function loadStageConfig(stage: string) {
     process.exit(1)
   }
 
-  const { apply, alreadySet, unlisted, unsupported, missing, recordedDigest, actualDigest } = hydrateStageConfig({
-    stored,
-  })
+  const { apply, alreadySet, unlisted, unsupported, missing, recordedDigest, actualDigest } = hydrateStageConfig({ stored })
   // A `secret load` that was interrupted leaves some keys new and some old, with every manifest name
   // still present — undetectable from the manifest alone, and it would deploy a configuration that
   // never existed as a whole.
@@ -351,13 +353,9 @@ function loadStageConfig(stage: string) {
   Object.assign(process.env, apply)
 
   const applied = Object.keys(apply)
-  reportProgress(
-    `sst-with-cloudflare: ${stage} stage configuration ... ${applied.length} keys loaded from the SST secret store`,
-  )
+  reportProgress(`sst-with-cloudflare: ${stage} stage configuration ... ${applied.length} keys loaded from the SST secret store`)
   if (alreadySet.length > 0) {
-    reportProgress(
-      `sst-with-cloudflare: ${stage} stage configuration ... already in the environment, left alone: ${alreadySet.join(', ')}`,
-    )
+    reportProgress(`sst-with-cloudflare: ${stage} stage configuration ... already in the environment, left alone: ${alreadySet.join(', ')}`)
   }
   // Names only — a stored value is never printed. Worth surfacing rather than dropping silently: an
   // unlisted key is either a stale entry from a key since removed from .env, or one written by hand
@@ -370,7 +368,7 @@ function loadStageConfig(stage: string) {
   }
 }
 
-let stage: string
+let stage
 try {
   stage = resolveSstStage(sstArgs)
 } catch (error: any) {
@@ -401,19 +399,6 @@ if (terminationSignal) process.exit(signalExitCode(terminationSignal))
 loadStageConfig(stage)
 
 async function runSstCommand() {
-  if (!STAGE_CONFIG_SUBCOMMANDS.has(sstArgs[0])) return spawnSstCommand()
-  return withLegacyDeploymentOwnership({ stage, region: REGION }, async () => {
-    const result = await spawnSstCommand()
-    if (result !== 0)
-      throw Object.assign(
-        new Error('Legacy deployment failed; reconcile outstanding work before recovering the ownership lease'),
-        { exitCode: result },
-      )
-    return result
-  })
-}
-
-async function spawnSstCommand() {
   if (terminationSignal) return signalExitCode(terminationSignal)
 
   // Run the native binary directly so this process can await SST's graceful
@@ -545,7 +530,7 @@ try {
   exitCode = await withPulumiEventLogCleanup(PULUMI_EVENT_LOG_ROOT, runSstCommand)
 } catch (error: any) {
   console.error(`sst-with-cloudflare: secure event-log cleanup failed: ${error.message}`)
-  exitCode = error.exitCode ?? 1
+  exitCode = 1
 }
 
 if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {

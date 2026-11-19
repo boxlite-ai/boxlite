@@ -13,7 +13,6 @@
  * must return unchanged.
  */
 
-import type { AwsOwnership } from './aws-ownership.ts'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 
 const GCM_NONCE_BYTES = 12
@@ -53,7 +52,6 @@ export type StoredVersion = {
  */
 export type StateObjects = {
   /** Read-only migration evidence from the previous deployment engine, when supported. */
-  readLegacyCheckpoint?: (input: { app: string; stage: string }) => Promise<Buffer | null>
   readCheckpoint: (input: { app: string; stage: string }) => Promise<Buffer | null>
   writeCheckpoint: (input: { app: string; stage: string; checkpoint: Buffer }) => Promise<void>
   readLock: (input: { app: string; stage: string }) => Promise<Buffer | null>
@@ -72,7 +70,6 @@ export type StoreBackend = {
   readonly home: string
   /** Execute a stage map edit against one revision, retrying when a concurrent writer wins. */
   edit?: <T>(scope: { app: string; stage: string }, work: (snapshot: StoreBackend) => Promise<T>) => Promise<T>
-  readonly ownership?: AwsOwnership
   read: (input: { app: string; stage: string; versionId?: string }) => Promise<Buffer | null>
   write: (input: { app: string; stage: string; sealed: Buffer }) => Promise<void>
   /** The revision a deploy should pin, or null when there is nothing to pin. */

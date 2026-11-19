@@ -33,8 +33,8 @@ const clients = ({ stored }: { stored?: Record<string, string> } = {}) => {
     ssm: {
       send: async (command: any) => {
         const name = command.input.Name
-        if (name === '/sst/bootstrap') return { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
-        if (name === '/sst/passphrase/boxlite/dev') return { Parameter: { Value: KEY.toString('base64') } }
+        if (name === '/boxlite/pulumi/bootstrap') return { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
+        if (name === '/boxlite/pulumi/passphrase/boxlite/dev') return { Parameter: { Value: KEY.toString('base64') } }
         throw notFound('ParameterNotFound')
       },
     },

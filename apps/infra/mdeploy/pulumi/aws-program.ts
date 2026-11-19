@@ -1,6 +1,7 @@
 import { readStackEnvironment } from '../src/stack-env.ts'
 import { runnerArtifactsBucket, resolveRunnerBinary } from '../stack/runner-binary.ts'
 import { installGlobals, PulumiProgramError, type PulumiModules, type ProgramOutputs } from './program.ts'
+import { workloadSecretPath } from '../stack/providers/aws/secret-names.ts'
 import { awsResourceDefaults } from './aws-defaults.ts'
 import type { deployStack } from '../stack/index.ts'
 
@@ -32,7 +33,6 @@ export const awsProgram =
     stateBucket,
     protectedStage = false,
     environment,
-    retainedImages,
     cwd,
     loadModules = loadAwsModules,
     deployStackWith,
@@ -43,7 +43,6 @@ export const awsProgram =
     stateBucket: string
     protectedStage?: boolean
     environment: NodeJS.ProcessEnv
-    retainedImages?: Record<string, string>
     cwd: string
     loadModules?: () => Promise<AwsModules>
     deployStackWith?: typeof deployStack
@@ -69,6 +68,37 @@ export const awsProgram =
       region,
       home: 'aws',
     })
+    const path = workloadSecretPath(app, stage)
+    const secretPrefix = `arn:aws:secretsmanager:${region}:${accountId}:secret:${path}`
+    const parameterPrefix = `arn:aws:ssm:${region}:${accountId}:parameter/${path}`
+    const requireStageSecret = (key: string, ref: string, consumer: 'ecs' | 'host') => {
+      if (
+        consumer === 'ecs' &&
+        ref.startsWith(parameterPrefix) &&
+        /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(ref.slice(parameterPrefix.length))
+      )
+        return
+      const [name, ...selectors] = ref.slice(secretPrefix.length).split(':')
+      if (
+        ref.startsWith(secretPrefix) &&
+        name &&
+        /^[A-Za-z0-9_+=.@-]+(?:\/[A-Za-z0-9_+=.@-]+)*$/.test(name) &&
+        (consumer === 'ecs' || selectors.length === 0)
+      )
+        return
+      const kind = consumer === 'host' ? 'a full Secrets Manager secret ARN' : 'a workload secret'
+      throw new PulumiProgramError(
+        `${key} must reference ${kind} authorized for this AWS account, region and stage; see docs/aws/deployment.md`,
+      )
+    }
+    for (const group of [values.apiSecrets, values.proxySecrets, values.collectorSecrets]) {
+      for (const [key, ref] of Object.entries(group)) requireStageSecret(key, ref, 'ecs')
+    }
+    for (const [key, ref] of Object.entries(values.runnerSecrets)) requireStageSecret(key, ref, 'host')
+    if (values.managedClickHouse) {
+      requireStageSecret('CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN', values.managedClickHouse.writerSecretArn, 'host')
+      requireStageSecret('CLICKHOUSE_READER_PASSWORD_SECRET_ARN', values.managedClickHouse.readerSecretArn, 'host')
+    }
     const artifactsBucket = runnerArtifactsBucket({ app, stage, accountId })
     const runnerBinary = resolveRunnerBinary({
       environment,
@@ -89,16 +119,12 @@ export const awsProgram =
           dashboardDomain: values.dashboardDomain,
           managedClickHouse: values.managedClickHouse,
           otelOpenapiEnabled: values.otelOpenapiEnabled,
-          existingDatabasePasswordRef: environment.AWS_DATABASE_PASSWORD_SECRET_ARN,
-          existingCachePasswordRef: environment.AWS_CACHE_PASSWORD_SECRET_ARN,
-          existingVolumeRoleName: environment.AWS_VOLUME_ACCESS_ROLE_NAME,
         }),
         config,
         inputs: {
           clickHouseRetentionHours: values.clickHouseRetentionHours,
           stage,
           tag: values.tag,
-          retainedImages,
           domain: values.domain,
           proxyDomain: values.proxyDomain,
           proxyProtocol: values.proxyProtocol,

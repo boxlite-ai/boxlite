@@ -38,8 +38,7 @@
     "auth0:configure-login": "tsx bootstrap/configure-auth0-login.ts",
     "auth0:configure-mcp": "tsx bootstrap/configure-auth0-mcp.ts",
     "verify-deploy-role": "tsx deployment/verify-role.ts",
-    "runner:build-artifact:legacy": "tsx artifacts/runner-build.ts",
-    "aws:migrate": "tsx --conditions=development mdeploy/bin/migrate-aws.ts"
+    "runner:build-artifact:legacy": "tsx artifacts/runner-build.ts"
   },
   "devDependencies": {
     "@actions/expressions": "0.3.61",

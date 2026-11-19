@@ -1,6 +1,6 @@
 ## TL;DR
 
-AWS uses native Pulumi for new deployments and a guarded adoption process for existing SST stages.
+Create each AWS stage with a full native Pulumi deployment, then release the API and Runner independently.
 
 ## Details
 
@@ -33,10 +33,14 @@ npm run mdeploy -- --stage dev --diff
 ```
 
 Bootstrap prepares the declared app's IAM boundary, distinct deployment role, ECR repository, artifact bucket and state envelope.
-Fill the native mstage groups and AWS secret ARNs before preview; bootstrap does not deploy application resources.
+Fill the native mstage groups with the workload configuration before preview.
 
-Existing SST resources require [migration](migration.md) before native mutation.
-Historical workflows must be fenced through IAM as well as the checked-in ownership guards.
+Parameter Store references must use `/boxlite/workloads/<app>/<stage>/<name>` in the stage account and region.
+Secrets Manager names use `boxlite/workloads/<app>/<stage>/<name>` in the same account and region.
+
+ECS tasks can resolve stage parameters or Secrets Manager references. Runner hosts and managed ClickHouse credentials require a full Secrets Manager ARN without JSON-key or version selectors.
+
+Bootstrap records the regional state bucket in the SSM parameter `/boxlite/pulumi/bootstrap`. The first deployment uses the default `api+runner` selection to create the network, services and Runner fleet.
 
 ### Deployment scope
 
@@ -49,25 +53,26 @@ Historical workflows must be fenced through IAM as well as the checked-in owners
 Scoped deployments require existing workloads and an unchanged fleet identity and attachment inventory.
 An API-only release keeps the deployed proxy, collector, registry proxy and Runner versions. A Runner-only release keeps all four deployed container images.
 
-Both scopes refresh and preview the complete graph before applying selected targets. A missing deployed version or a shared resource change requires a full deployment.
+Scoped previews and updates refresh the selected targets. Run a full `api+runner --diff` to inspect shared infrastructure.
 
 Use shared [CI](../deployment.md#deploy-through-github-actions) or [local commands](../deployment.md#deploy-an-existing-stack).
 Native workflows assume the stage's `AWS_PULUMI_DEPLOY_ROLE_ARN`.
 
-### Retained legacy AWS deployment
+### Retained-data teardown
 
-`deploy-infra.yml`, `deploy-release.yml` and `npm run deploy` operate the retained SST tree.
-`npm run bootstrap -- --stage <stage> --legacy-sst` selects its prerequisite conventions.
+Before removing a stage, drain its Boxes, stop new work, and verify recoverable database backups, Runner data-volume snapshots and required checkpoint objects. Record the physical resource IDs and who will own retained resources after teardown.
 
-Checked-in legacy deploy/refresh/remove commands share the S3 ownership lease with native entrypoints.
-The SST configuration rejects adoption/native ownership; historical revisions require the IAM fence.
+Export the current Pulumi stack using the stage backend. Inspect `protect` and `retainOnDelete` for each resource, including EC2 instances, their volume attachments, EBS data volumes and checkpoint buckets.
 
-Legacy and native app names do not share state or configuration automatically.
-After a native update attempt, recovery uses forward repair rather than switching back to the legacy deployer.
+Change protection for the approved resources in stage configuration and review a full preview. To unprotect an individual resource, approve its exact URN and run `pulumi state unprotect <URN>` on the selected stack.
+Check EC2 attachment and delete-on-termination settings and detach volumes that must survive before terminating their instances.
+
+Run `npm run mdeploy -- --stage <stage> --remove --confirm` after preparing the stack. The command checks for protected resources before starting destruction. Pulumi leaves resources with `retainOnDelete` in the cloud, where they continue to incur charges until their owner deletes them.
 
 ### Verify
 
 Run the shared [service checks](../deployment.md#verify-the-result), then inspect [Runner outcomes](runners.md).
+For a host replacement, inspect the reservation with `npm run runner:update -- --stage <stage> --host <instance-id> --rollout-status`.
 Verify a private registry pull, checkpoint capture/import/delete, and EBS expansion before enabling those capabilities in production.
 
 Checkpoint capture requires explicit application enablement.
@@ -77,4 +82,4 @@ AWS customer-owned domains remain deferred; platform wildcard domains are availa
 CloudWatch extracts disk failure and critical-pressure metrics from API JSON logs into an app/stage namespace.
 The Runner reachability filter consumes API health-check events. See [security](security.md).
 
-Sources: [native entrypoint](../../mdeploy/pulumi/aws-program.ts), [bootstrap](../../bootstrap/aws/README.md), [migration guards](../../mdeploy/src/aws-adoption.ts).
+Sources: [native entrypoint](../../mdeploy/pulumi/aws-program.ts), [bootstrap](../../bootstrap/aws/README.md).

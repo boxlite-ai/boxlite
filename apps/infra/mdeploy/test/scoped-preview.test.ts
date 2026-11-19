@@ -17,9 +17,10 @@ for (const home of ['aws', 'gcp'] as const) {
           },
         ]
       : [api]
-  const invoke = async (events: any[], complete = true) => {
+  const invoke = async (intent: 'diff' | 'deploy') => {
     const calls: { kind: string; options?: any }[] = []
     const result = await pulumiDeploy({
+      intent,
       components: 'api',
       config: { root: '/fixture' },
       scope: {
@@ -32,17 +33,24 @@ for (const home of ['aws', 'gcp'] as const) {
       identity: { assertUsableFor: async () => {}, childEnvironment: async () => ({ env: {}, expiresAt: null }) },
       state: { bucket: 'fixture-state' },
       stageEnvironment: { PULUMI_CONFIG_PASSPHRASE: 'fixture-only' },
-      beforeMutation: async () => {
-        calls.push({ kind: 'mark-native-attempt' })
-      },
       log: () => {},
       createStackWith: async () => ({
         setAllConfig: async () => {},
         exportStack: async () => ({ deployment: { resources } }),
         preview: async (options) => {
           calls.push({ kind: 'preview', options })
-          for (const event of events) options.onEvent!(event)
-          if (complete) options.onEvent!({ summaryEvent: {} } as any)
+          if (!options.target) {
+            options.onEvent?.({
+              resourcePreEvent: {
+                metadata: {
+                  op: 'update',
+                  type: 'pulumi:providers:kubernetes',
+                  urn: prefix + 'pulumi:providers:kubernetes::ProxyKubernetes',
+                },
+              },
+            } as any)
+            options.onEvent?.({ summaryEvent: {} } as any)
+          }
         },
         up: async (options) => {
           calls.push({ kind: 'up', options })
@@ -53,64 +61,53 @@ for (const home of ['aws', 'gcp'] as const) {
     })
     return { result, calls }
   }
-  test(`${home} scoped apply follows a complete unfiltered refreshed preview`, async () => {
-    const { result, calls } = await invoke([
-      { resourcePreEvent: { metadata: { op: 'update', urn: api.urn, type: api.type } } },
-      {
-        resourcePreEvent: {
-          metadata: { op: 'update', urn: prefix + 'pulumi:pulumi:Stack::root', type: 'pulumi:pulumi:Stack' },
-        },
-      },
-    ])
-    assert.equal(result, 0)
-    assert.deepEqual(
-      calls.map((call) => call.kind),
-      ['preview', 'mark-native-attempt', 'up'],
-    )
-    assert.equal(calls[0].options.target, undefined)
-    assert.equal(calls[0].options.refresh, true)
-    assert.ok(calls[2].options.target.includes(api.urn))
-    assert.equal(calls[2].options.targetDependents, false)
-  })
-  test(`${home} scoped apply refuses provider changes, shared drift and incomplete preview evidence`, async () => {
-    const providerType = 'pulumi:providers:' + (home === 'aws' ? 'aws' : 'gcp')
-    const shared = prefix + 'shared:database:Database::database'
-    const cases = [
-      [
-        {
-          resourcePreEvent: {
-            metadata: { op: 'update', type: providerType, urn: prefix + providerType + '::default' },
-          },
-        },
-      ],
-      [{ resourcePreEvent: { metadata: { op: 'replace', type: 'shared:database:Database', urn: shared } } }],
-      [
-        {
-          resOutputsEvent: {
-            metadata: {
-              op: 'refresh',
-              type: 'shared:database:Database',
-              urn: shared,
-              old: { id: 'disk', inputs: {}, outputs: { size: 100 } },
-              new: { id: 'disk', inputs: {}, outputs: { size: 200 } },
-            },
-          },
-        },
-      ],
-    ]
-    for (const events of cases) {
-      const { result, calls } = await invoke(events)
-      assert.equal(result, 1)
+  for (const intent of ['diff', 'deploy'] as const) {
+    test(`${home} API ${intent} keeps its targets when an unrelated provider can update`, async () => {
+      const { result, calls } = await invoke(intent)
+      assert.equal(result, 0)
       assert.deepEqual(
         calls.map((call) => call.kind),
-        ['preview'],
+        intent === 'diff' ? ['preview'] : ['up'],
       )
-    }
-    const { result, calls } = await invoke([], false)
-    assert.equal(result, 1)
-    assert.deepEqual(
-      calls.map((call) => call.kind),
-      ['preview'],
-    )
-  })
+      const { options } = calls.at(-1)!
+      assert.ok(options.target.includes(api.urn))
+      assert.equal(
+        options.target.some((urn: string) => urn.includes('ProxyKubernetes')),
+        false,
+      )
+      assert.equal(options.refresh, true)
+      assert.equal(options.targetDependents, false)
+    })
+  }
 }
+
+test('AWS remove inspects stored protection before calling a mutating engine operation', async () => {
+  for (const protect of [true, false]) {
+    const calls: string[] = []
+    const remove = () =>
+      pulumiDeploy({
+        intent: 'remove',
+        config: { root: '/fixture' },
+        scope: { home: 'aws', app: 'fixture-app', stage: 'dev', region: 'us-east-1', protect: false } as any,
+        identity: { assertUsableFor: async () => {}, childEnvironment: async () => ({ env: {}, expiresAt: null }) },
+        state: { bucket: 'fixture-state' },
+        stageEnvironment: { PULUMI_CONFIG_PASSPHRASE: 'fixture' },
+        log: () => {},
+        createStackWith: async () => ({
+          exportStack: async () => ({
+            deployment: { resources: [{ urn: 'urn:disk', type: 'aws:ebs/volume:Volume', protect }] },
+          }),
+          setAllConfig: async () => {},
+          preview: async () => assert.fail('preview'),
+          up: async () => assert.fail('up'),
+          refresh: async () => assert.fail('refresh'),
+          destroy: async () => {
+            calls.push('destroy')
+          },
+        }),
+      })
+    if (protect) await assert.rejects(remove, /retained-data teardown/)
+    else assert.equal(await remove(), 0)
+    assert.deepEqual(calls, protect ? [] : ['destroy'])
+  }
+})
