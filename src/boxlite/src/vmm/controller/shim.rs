@@ -258,6 +258,7 @@ pub struct ShimController {
     options: crate::runtime::options::BoxOptions,
     /// Box filesystem layout (provides paths for stderr, sockets, etc.)
     layout: BoxFilesystemLayout,
+    outbound_revision: Option<crate::net::OutboundRevision>,
 }
 
 impl ShimController {
@@ -294,8 +295,35 @@ impl ShimController {
             box_id,
             options,
             layout,
+            outbound_revision: None,
         })
     }
+
+    pub(crate) fn with_outbound_revision(
+        mut self,
+        revision: Option<crate::net::OutboundRevision>,
+    ) -> Self {
+        self.outbound_revision = revision;
+        self
+    }
+}
+
+fn serialize_shim_config(
+    config: &InstanceSpec,
+    revision: Option<&crate::net::OutboundRevision>,
+) -> BoxliteResult<String> {
+    #[derive(serde::Serialize)]
+    struct Launch<'a> {
+        #[serde(flatten)]
+        config: &'a InstanceSpec,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outbound_revision: Option<&'a crate::net::OutboundRevision>,
+    }
+    serde_json::to_string(&Launch {
+        config,
+        outbound_revision: revision,
+    })
+    .map_err(|e| BoxliteError::Engine(format!("Failed to serialize shim config: {e}")))
 }
 
 #[async_trait::async_trait]
@@ -345,8 +373,8 @@ impl VmmController for ShimController {
         };
 
         // Serialize the config for passing to subprocess
-        let config_json = serde_json::to_string(&serializable_config)
-            .map_err(|e| BoxliteError::Engine(format!("Failed to serialize config: {}", e)))?;
+        let config_json =
+            serialize_shim_config(&serializable_config, self.outbound_revision.as_ref())?;
 
         // Clean up stale socket file if it exists (defense in depth)
         // Only relevant for Unix sockets
@@ -404,6 +432,10 @@ impl VmmController for ShimController {
         Ok(Box::new(handler))
     }
 }
+
+#[cfg(test)]
+#[path = "tests/outbound_bootstrap.rs"]
+mod outbound_bootstrap_tests;
 
 #[cfg(test)]
 mod tests {

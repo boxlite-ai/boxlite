@@ -10,9 +10,9 @@ package main
 // Traffic that never reaches here: upstream's DNS server (bound to
 // GatewayIP:53, services.go:62) and DHCP (bound to :67, dhcp.go:93) are
 // registered endpoints, and gVisor's demuxer matches those before falling back
-// to this default handler (gvisor stack/nic.go:863-871). Internal services
-// therefore need no allowlist exemption, and the guest's DNS queries are
-// forwarded unfiltered: allow_net is enforced when the gateway dials.
+// to this default handler (gvisor stack/nic.go:863-871). The global mode gate
+// precedes endpoint demultiplexing, so disabled mode also blocks those services.
+// In enabled mode, DNS stays outside allow_net destination matching.
 
 import (
 	"net"
@@ -27,17 +27,22 @@ import (
 
 // UDPWithFilter returns a UDP protocol handler that drops datagrams whose
 // destination is outside the allowlist and forwards the rest through
-// upstream's forwarder. A nil filter forwards everything.
+// upstream's forwarder. Enabled snapshots without an allowlist delegate to
+// that forwarder; disabled snapshots consume the packet without forwarding.
 func UDPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
-	natLock *sync.Mutex, filter *AllowNetFilter) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
+	natLock *sync.Mutex, snapshot snapshotSource) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
 
 	upstream := forwarder.UDP(s, nat, natLock)
-	if filter == nil {
-		return upstream.HandlePacket
-	}
-
 	blocked := newBlockedDestinationLog()
 	return func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+		current := snapshot()
+		if current.policy.Mode == "disabled" {
+			return true
+		}
+		filter := current.filter
+		if filter == nil {
+			return upstream.HandlePacket(id, pkt)
+		}
 		// Policy sees the pre-NAT destination, matching the TCP path
 		// (resolveTCPDestination, forked_tcp.go:83). Upstream applies NAT
 		// itself once the datagram is allowed through.

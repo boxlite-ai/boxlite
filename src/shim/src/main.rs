@@ -15,6 +15,10 @@
 
 mod crash_capture;
 
+#[cfg(test)]
+#[path = "tests/outbound_bootstrap.rs"]
+mod outbound_bootstrap_tests;
+
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -29,7 +33,21 @@ use crash_capture::CrashCapture;
 #[allow(unused_imports)]
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+use boxlite::net::OutboundRevision;
 use boxlite::net::gvproxy::GvproxyInstance;
+
+fn parse_config(json: &str) -> BoxliteResult<(InstanceSpec, Option<OutboundRevision>)> {
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {e}")))?;
+    let revision =
+        serde_json::from_value(value.get("outbound_revision").cloned().unwrap_or_default())
+            .map_err(|e| {
+                BoxliteError::Engine(format!("Invalid outbound bootstrap revision: {e}"))
+            })?;
+    let config = serde_json::from_value(value)
+        .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {e}")))?;
+    Ok((config, revision))
+}
 
 // No CLI args — all config (including engine type) is read from stdin pipe.
 // This avoids /proc/<pid>/cmdline exposure of secrets and CA keys.
@@ -81,8 +99,7 @@ fn main() -> BoxliteResult<()> {
     };
 
     #[allow(unused_mut)]
-    let mut config: InstanceSpec = serde_json::from_str(&config_json)
-        .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {e}")))?;
+    let (mut config, outbound_revision) = parse_config(&config_json)?;
     timing("config parsed");
 
     // Initialize logging using box_dir derived from exit_file path.
@@ -110,7 +127,7 @@ fn main() -> BoxliteResult<()> {
     let exit_file = config.exit_file.clone();
 
     // Run the shim and handle errors
-    run_shim(config, timing).inspect_err(|e| {
+    run_shim(config, outbound_revision.as_ref(), timing).inspect_err(|e| {
         let info = ExitInfo::Error {
             exit_code: 1,
             message: e.to_string(),
@@ -124,7 +141,11 @@ fn main() -> BoxliteResult<()> {
 }
 
 #[allow(unused_mut)]
-fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()> {
+fn run_shim(
+    mut config: InstanceSpec,
+    revision: Option<&OutboundRevision>,
+    timing: impl Fn(&str),
+) -> BoxliteResult<()> {
     tracing::debug!(
         shares = ?config.fs_shares.shares(),
         "Filesystem shares configured"
@@ -143,7 +164,10 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // The gvproxy instance is leaked intentionally - it must live for the entire
     // duration of the VM. When the shim process exits, OS cleans up all resources.
     if let Some(ref spec) = config.network_backend_spec {
-        let (gvproxy, endpoint) = GvproxyInstance::from_config(spec)?;
+        let (gvproxy, endpoint) = match revision {
+            Some(revision) => GvproxyInstance::from_config_with_revision(spec, revision)?,
+            None => GvproxyInstance::from_config(spec)?,
+        };
         config.network_backend_endpoint = Some(endpoint);
         timing("gvproxy created");
 

@@ -4,7 +4,7 @@ package main
 // existing VirtualNetwork.
 //
 // virtualnetwork.New() registers upstream's unfiltered TCP and UDP forwarders
-// (gvisor-tap-vsock services.go:27-30). installAllowNetHandlers replaces both
+// (gvisor-tap-vsock services.go:27-30). installOutboundHandlers replaces both
 // from one place, so a transport cannot be quietly left on the unfiltered
 // default — that gap is what made allow_net a TCP-only control.
 //
@@ -28,38 +28,32 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
 
-// installAllowNetHandlers replaces the default TCP and UDP protocol handlers
-// with BoxLite's filtered versions.
+// installOutboundHandlers installs stable snapshot-aware handlers and the
+// global mode gate before guest traffic starts.
 //
 // A returned error must be fatal to box creation: the handlers left in place
 // are upstream's, which forward every destination.
-func installAllowNetHandlers(
-	vn *virtualnetwork.VirtualNetwork,
+func installOutboundHandlers(
+	s *stack.Stack,
 	config *types.Configuration,
 	ec2MetadataAccess bool,
-	filter *AllowNetFilter,
-	dialer *egressDialer,
+	snapshot snapshotSource,
 	ca *BoxCA,
 	secretMatcher *SecretHostMatcher,
 ) error {
-	s, err := stackOf(vn)
-	if err != nil {
-		return err
-	}
-
 	// One NAT table and one lock shared by both transports, matching
 	// upstream's addServices (services.go:23-30).
 	nat := natTable(config)
 	var natLock sync.Mutex
 
-	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, filter, dialer, ca, secretMatcher)
+	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, snapshot, ca, secretMatcher)
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 	logrus.Info("allowNet TCP: handler overridden with SNI-inspecting forwarder")
 
-	s.SetTransportProtocolHandler(udp.ProtocolNumber, UDPWithFilter(s, nat, &natLock, filter))
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, UDPWithFilter(s, nat, &natLock, snapshot))
 	logrus.Info("allowNet UDP: handler overridden with allowlist-checking forwarder")
 
-	return nil
+	return installOutboundModeGate(s, snapshot)
 }
 
 // stackOf reaches VirtualNetwork's unexported gVisor stack, the only handle

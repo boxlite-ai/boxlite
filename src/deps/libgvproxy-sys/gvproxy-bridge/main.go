@@ -174,7 +174,8 @@ type DNSZone struct {
 	DefaultIP string      `json:"default_ip"`        // Default IP for unmatched queries in this zone
 }
 
-// GvproxyConfig matches the Rust structure (must stay in sync!)
+// GvproxyConfig is the bridge startup wire object. Network settings mirror
+// Rust's GvproxyConfig; OutboundRevision is optional control-plane metadata.
 type GvproxyConfig struct {
 	SocketPath       string         `json:"socket_path"`
 	Subnet           string         `json:"subnet"`
@@ -190,6 +191,7 @@ type GvproxyConfig struct {
 	CaptureFile      *string        `json:"capture_file,omitempty"`
 	AllowNet         []string       `json:"allow_net,omitempty"`
 	OutboundDisabled bool           `json:"outbound_disabled,omitempty"`
+	OutboundRevision string         `json:"outbound_revision,omitempty"`
 	Secrets          []SecretConfig `json:"secrets,omitempty"`
 	CACertPEM        string         `json:"ca_cert_pem,omitempty"`
 	CAKeyPEM         string         `json:"ca_key_pem,omitempty"`
@@ -460,7 +462,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		if config.OutboundDisabled {
 			mode = "disabled"
 		}
-		policy, err := newOutboundPolicyController(vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet})
+		policy, err := newOutboundPolicyController(vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, config.OutboundRevision)
 		if err != nil {
 			initErr <- fmt.Errorf("initialize outbound policy: %w", err)
 			return
@@ -494,6 +496,8 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 					mux := http.NewServeMux()
 					mux.Handle("/", controlMux(vn.ServicesMux(), vn.DialContextTCP))
 					mux.Handle("/network/outbound", policy)
+					mux.Handle(outboundStatusPath, policy)
+					mux.Handle(outboundSnapshotPath, policy)
 					if sErr := http.Serve(l, mux); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
