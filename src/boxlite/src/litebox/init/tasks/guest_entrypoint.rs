@@ -29,6 +29,18 @@ pub(crate) struct GuestEntrypointBuilder {
     limit: usize,
 }
 
+fn unsafe_kernel_cmdline_entry(key: &str, value: &str) -> bool {
+    let mut in_quote = true;
+    for ch in key.chars().chain(std::iter::once('=')).chain(value.chars()) {
+        match ch {
+            '"' => in_quote = !in_quote,
+            ' ' if !in_quote => return true,
+            _ => {}
+        }
+    }
+    !in_quote
+}
+
 impl GuestEntrypointBuilder {
     /// Kernel cmdline size limit for ARM64 (Apple Silicon).
     ///
@@ -112,6 +124,19 @@ impl GuestEntrypointBuilder {
                 env_key = %key,
                 env_value = %Self::redact_for_log(value),
                 "Skipping env var: contains non-ASCII characters"
+            );
+            return false;
+        }
+
+        // Tradeoff: omit only the unsafe guest boot-time copy so the VM can start
+        // without a libkrun protocol change. Container init and exec still receive
+        // the original value through independent RPC config. The cost is that
+        // boxlite-guest and guest-executor processes do not inherit skipped
+        // entries; they use defaults, so guest and container environments differ.
+        if unsafe_kernel_cmdline_entry(key, value) {
+            tracing::warn!(
+                env_key = %key,
+                "Skipping guest boot env var: unsafe kernel command-line quoting"
             );
             return false;
         }
