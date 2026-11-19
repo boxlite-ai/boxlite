@@ -407,6 +407,8 @@ Hosted CI and the standalone Listener Box use the same TypeScript Scale Set clie
 
 An authenticated queued-job observation can seed an additional supported resource label, with up to 64 open sessions per scope. When more specifications are waiting, an empty poll on an idle set gives another specification a turn. An active set keeps its session.
 
+A failed session releases its lane during backoff. Other specifications can start while the failed one waits for its retry deadline.
+
 A workflow can request a new specification directly:
 
 ```yaml
@@ -448,6 +450,8 @@ An owner that loses an acquisition reply reconciles the first replay against the
 ### Asynchronous allocation queue
 
 The owner admits eligible offers under the current quota. It records the request IDs before the acquire call and persists the returned result before acknowledging the message. An idle poll keeps accepted work reserved until GitHub reports assignment or cancellation.
+
+On reconnect, an explicit acquired count bounds the reservations carried from the previous session. Missing acquisition statistics preserve the existing charges.
 
 The pool counts the original workers for each set. An assigned job can start its reserved Box even while other Boxes are booting. The shared work queues allow eight scope planners and 32 allocation consumers to make progress independently.
 

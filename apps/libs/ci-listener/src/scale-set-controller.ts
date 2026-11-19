@@ -1,6 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
-import { setTimeout as delay } from 'node:timers/promises'
 import { CapacityPolicy } from './capacity'
 import { ExecutionJournal } from './execution/journal'
 import { ExecutionScope, object, positive, scopeKey } from './execution/model'
@@ -107,7 +106,8 @@ export class ScaleSetController {
   private readonly stop = new AbortController()
   private readonly lanes = new Map<string, Lane>()
   private readonly persisted = new Set<string>()
-  private readonly waiting = new Set<string>()
+  private readonly waiting = new Map<string, number>()
+  private readonly cooling = new Map<string, NodeJS.Timeout>()
   private readonly prefix: string
   private readonly signal: AbortSignal
   constructor(
@@ -144,35 +144,52 @@ export class ScaleSetController {
     }
     for (const label of [...occupied, DEFAULT_RESOURCE_LABEL, ...idle]) this.watch(label)
   }
-  watch(label: string) {
-    if (this.lanes.has(label) || this.waiting.has(label) || this.signal.aborted) return
-    this.waiting.add(label)
+  watch(label: string, failures = 0) {
+    if (this.lanes.has(label) || this.waiting.has(label) || this.cooling.has(label) || this.signal.aborted) return
+    this.waiting.set(label, failures)
     this.openNext()
   }
   private openNext() {
     if (this.signal.aborted || this.lanes.size >= 64) return
-    const next = this.waiting.values().next()
+    const next = this.waiting.entries().next()
     if (next.done) return
-    const label = next.value
+    const [label, failures] = next.value
     this.waiting.delete(label)
     const selection = selectRunnerLabels([label], this.labels)
     if (!selection) throw new StateCorrupt()
     const lane: Lane = { label, task: Promise.resolve() }
     this.lanes.set(label, lane)
-    lane.task = this.listen(lane, [...selection.labels])
+    lane.task = this.listen(lane, [...selection.labels], failures)
       .then((rotate) => {
-        if (rotate) {
-          this.lanes.delete(label)
-          this.waiting.add(label)
-          this.openNext()
-        }
+        if (rotate && !this.signal.aborted) this.waiting.set(label, 0)
       })
       .catch((error) => {
         if (!this.signal.aborted) this.host.report(error)
       })
+      .finally(() => {
+        this.lanes.delete(label)
+        this.openNext()
+      })
+  }
+  private retryAfter(label: string, deadline: number, failures: number) {
+    const schedule = () => {
+      if (this.signal.aborted) return
+      const wait = Math.max(0, Math.min(deadline - Date.now(), 2_147_483_647))
+      this.cooling.set(
+        label,
+        setTimeout(() => {
+          if (Date.now() < deadline) return schedule()
+          this.cooling.delete(label)
+          this.watch(label, failures)
+        }, wait),
+      )
+    }
+    schedule()
   }
   async close() {
     this.stop.abort()
+    for (const timer of this.cooling.values()) clearTimeout(timer)
+    this.cooling.clear()
     await Promise.all([...this.lanes.values()].map((lane) => lane.task))
   }
   private async drainRemoved(id: number) {
@@ -314,236 +331,247 @@ export class ScaleSetController {
     const session = await this.host.service.open(set.id, this.lease.owner, signal)
     return { row, session, id: set.id }
   }
-  private async listen(lane: Lane, labels: string[]) {
+  private async listen(lane: Lane, labels: string[], failures: number) {
     const signal = this.signal,
       key = this.prefix + lane.label
-    let failures = 0
-    while (!signal.aborted) {
-      let session: ScaleSetSession | undefined,
-        retry = 0
-      try {
-        const start = await this.work.run(signal, () => this.start(key, labels, signal))
-        session = start.session
-        let row = start.row
-        const previous = readRecord(row)
-        const pendingRequests = new Map(previous.pending.map(({ id, phase }) => [id, phase]))
-        const save = async (assigned: number, message: number | null, origin: string | null, held: number) => {
-          const old = readRecord(row)
-          const pending = Array.from(pendingRequests, ([id, phase]) => ({ id, phase }))
-          if (
-            old.pending.length !== pending.length ||
-            old.pending.some(({ id, phase }) => pendingRequests.get(id) !== phase) ||
-            old.held !== held ||
-            old.assigned !== assigned ||
-            old.message !== message ||
-            old.session !== origin
-          ) {
-            ;[row] = await this.state.commit(this.lease, [
-              { key, expected: row.version, payload: { ...old, assigned, held, pending, message, session: origin } },
-            ])
-          } else await this.journal.check(this.lease)
-          lane.target = { id: start.id, labels, assigned, held, check: { key, version: row.version } }
-          this.host.wake()
-        }
-        let verifyAfter = 0
-        const verifyAcquisitions = async (assigned: number, held: number) => {
-          const uncertain = [...pendingRequests].filter(([, phase]) => phase === 'verify')
-          if (!uncertain.length) return { assigned, held }
-          const current = await this.host.service.currentStatistics(start.id, signal)
-          verifyAfter = Date.now() + 50_000
-          // Confirmed requests already account for part of the service total. An
-          // assigned job may be one of them, so only deduct the guaranteed overlap.
-          const confirmed = [...pendingRequests.values()].filter((phase) => phase === 'accepted').length
-          const knownWaiting = Math.max(0, confirmed - current.assigned)
-          const possible =
-            current.acquired === undefined
-              ? uncertain.length
-              : Math.min(uncertain.length, Math.max(0, current.acquired - knownWaiting))
-          const candidates = pendingRequests.size - uncertain.length + possible
-          // Keep ambiguous IDs while any could be owned. Their shared reservation
-          // follows the count without guessing which individual request succeeded.
-          if (current.acquired === 0 && current.assigned === 0) for (const [id] of uncertain) pendingRequests.delete(id)
-          const increase = Math.max(0, current.assigned - assigned)
-          const retained = Math.min(candidates, Math.max(0, held - increase))
-          const released = held - retained - increase
-          if (released > 0)
-            await this.withdrawCanceled(start.id, released, current.assigned + retained, lane.target!.check)
-          if (!retained) pendingRequests.clear()
-          return { assigned: current.assigned, held: retained }
-        }
-        const carried = Math.max(
-          0,
-          Math.min(previous.held, pendingRequests.size) - Math.max(0, start.session.initial - previous.assigned),
-        )
-        if (!carried) pendingRequests.clear()
-        await this.work.run(signal, () => save(start.session.initial, previous.message, previous.session, carried))
-        let last: number | undefined
-        while (!signal.aborted) {
-          const capacity = await this.work.run(signal, async () => {
-            const policy = await this.host.policy(signal)
-            const free = await this.journal.remainingCapacity(this.lease, scopeKey(this.scope), policy)
-            const limits = policy.limits.flatMap((limit) => (limit.maximum === null ? [] : [limit.maximum]))
-            return Math.min(2_147_483_647, free + this.host.charged(start.id), ...limits)
+    if (signal.aborted) return false
+    let session: ScaleSetSession | undefined
+    let retryAt = 0
+    try {
+      const start = await this.work.run(signal, () => this.start(key, labels, signal))
+      session = start.session
+      let row = start.row
+      const previous = readRecord(row)
+      const pendingRequests = new Map(previous.pending.map(({ id, phase }) => [id, phase]))
+      const save = async (assigned: number, message: number | null, origin: string | null, held: number) => {
+        const old = readRecord(row)
+        const pending = Array.from(pendingRequests, ([id, phase]) => ({ id, phase }))
+        if (
+          old.pending.length !== pending.length ||
+          old.pending.some(({ id, phase }) => pendingRequests.get(id) !== phase) ||
+          old.held !== held ||
+          old.assigned !== assigned ||
+          old.message !== message ||
+          old.session !== origin
+        ) {
+          ;[row] = await this.state.commit(this.lease, [
+            { key, expected: row.version, payload: { ...old, assigned, held, pending, message, session: origin } },
+          ])
+        } else await this.journal.check(this.lease)
+        lane.target = { id: start.id, labels, assigned, held, check: { key, version: row.version } }
+        this.host.wake()
+      }
+      let verifyAfter = 0
+      const verifyAcquisitions = async (assigned: number, held: number) => {
+        const uncertain = [...pendingRequests].filter(([, phase]) => phase === 'verify')
+        if (!uncertain.length) return { assigned, held }
+        const current = await this.host.service.currentStatistics(start.id, signal)
+        verifyAfter = Date.now() + 50_000
+        // Confirmed requests already account for part of the service total. An
+        // assigned job may be one of them, so only deduct the guaranteed overlap.
+        const confirmed = [...pendingRequests.values()].filter((phase) => phase === 'accepted').length
+        const knownWaiting = Math.max(0, confirmed - current.assigned)
+        const possible =
+          current.acquired === undefined
+            ? uncertain.length
+            : Math.min(uncertain.length, Math.max(0, current.acquired - knownWaiting))
+        const candidates = pendingRequests.size - uncertain.length + possible
+        // Keep ambiguous IDs while any could be owned. Their shared reservation
+        // follows the count without guessing which individual request succeeded.
+        if (current.acquired === 0 && current.assigned === 0) for (const [id] of uncertain) pendingRequests.delete(id)
+        const increase = Math.max(0, current.assigned - assigned)
+        const retained = Math.min(candidates, Math.max(0, held - increase))
+        const released = held - retained - increase
+        if (released > 0)
+          await this.withdrawCanceled(start.id, released, current.assigned + retained, lane.target!.check)
+        if (!retained) pendingRequests.clear()
+        return { assigned: current.assigned, held: retained }
+      }
+      // New-session statistics cover all previous phases, including identities
+      // already ambiguous after an earlier reconnect. Assigned jobs have their own target.
+      const increase = Math.max(0, session.initial - previous.assigned)
+      const acquired = session.initialAcquired
+      const carried = Math.min(pendingRequests.size, Math.max(0, previous.held - increase), acquired ?? Infinity)
+      if (!carried) pendingRequests.clear()
+      else if (acquired !== undefined && carried < pendingRequests.size) {
+        // The service reports a count, not which requests survived the disconnect.
+        for (const id of pendingRequests.keys()) pendingRequests.set(id, 'verify')
+      }
+      await this.work.run(signal, async () => {
+        const released = previous.held - carried - increase
+        if (released > 0)
+          await this.withdrawCanceled(start.id, released, start.session.initial + carried, {
+            key,
+            version: row.version,
           })
-          const message = await session.poll(capacity, last, signal)
-          failures = 0
-          // On reconnect a lost acquire may never be redelivered. Compare any
-          // missing request with service statistics, keeping explicit reoffers charged.
-          const offered = new Set(message?.available.map((job) => String(job.id)))
-          let missing = false
-          for (const [id, phase] of pendingRequests) {
-            if (phase !== 'requested' || offered.has(id)) continue
-            pendingRequests.set(id, 'verify')
-            missing = true
-          }
-          let refreshedAssigned: number | undefined
-          if ([...pendingRequests.values()].includes('verify') && (missing || !message || Date.now() >= verifyAfter)) {
-            await this.work.run(signal, async () => {
-              const target = lane.target!
-              const next = await verifyAcquisitions(target.assigned, target.held)
-              refreshedAssigned = next.assigned
-              const prior = readRecord(row)
-              await save(next.assigned, prior.message, prior.session, next.held)
-            })
-          }
-          if (!message) {
-            if (this.waiting.size && !lane.target!.held && !lane.target!.assigned && !this.host.charged(start.id))
-              return true
-            continue
-          }
+        await save(start.session.initial, previous.message, previous.session, carried)
+      })
+      let last: number | undefined
+      while (!signal.aborted) {
+        const capacity = await this.work.run(signal, async () => {
+          const policy = await this.host.policy(signal)
+          const free = await this.journal.remainingCapacity(this.lease, scopeKey(this.scope), policy)
+          const limits = policy.limits.flatMap((limit) => (limit.maximum === null ? [] : [limit.maximum]))
+          return Math.min(2_147_483_647, free + this.host.charged(start.id), ...limits)
+        })
+        const message = await session.poll(capacity, last, signal)
+        failures = 0
+        // On reconnect a lost acquire may never be redelivered. Compare any
+        // missing request with service statistics, keeping explicit reoffers charged.
+        const offered = new Set(message?.available.map((job) => String(job.id)))
+        let missing = false
+        for (const [id, phase] of pendingRequests) {
+          if (phase !== 'requested' || offered.has(id)) continue
+          pendingRequests.set(id, 'verify')
+          missing = true
+        }
+        let refreshedAssigned: number | undefined
+        if ([...pendingRequests.values()].includes('verify') && (missing || !message || Date.now() >= verifyAfter)) {
           await this.work.run(signal, async () => {
-            // A crash after acquisition can leave a message with pre-acquisition statistics.
-            // Resolve a conflicting first delivery against the current set before acquiring again.
-            let assigned = refreshedAssigned ?? message.assigned ?? lane.target!.assigned
-            if (last === undefined && assigned !== lane.target!.assigned)
-              assigned = (await this.host.service.currentStatistics(start.id, signal)).assigned
-            // Statistics can account for an assignment before its ID arrives. Removing
-            // that ID narrows the pending candidates without consuming a second hold.
-            for (const id of message.settledRequests) pendingRequests.delete(String(id))
-            let held = Math.min(
-              pendingRequests.size,
-              Math.max(0, lane.target!.held - Math.max(0, assigned - lane.target!.assigned)),
+            const target = lane.target!
+            const next = await verifyAcquisitions(target.assigned, target.held)
+            refreshedAssigned = next.assigned
+            const prior = readRecord(row)
+            await save(next.assigned, prior.message, prior.session, next.held)
+          })
+        }
+        if (!message) {
+          if (this.waiting.size && !lane.target!.held && !lane.target!.assigned && !this.host.charged(start.id))
+            return true
+          continue
+        }
+        await this.work.run(signal, async () => {
+          // A crash after acquisition can leave a message with pre-acquisition statistics.
+          // Resolve a conflicting first delivery against the current set before acquiring again.
+          let assigned = refreshedAssigned ?? message.assigned ?? lane.target!.assigned
+          if (last === undefined && assigned !== lane.target!.assigned)
+            assigned = (await this.host.service.currentStatistics(start.id, signal)).assigned
+          // Statistics can account for an assignment before its ID arrives. Removing
+          // that ID narrows the pending candidates without consuming a second hold.
+          for (const id of message.settledRequests) pendingRequests.delete(String(id))
+          let held = Math.min(
+            pendingRequests.size,
+            Math.max(0, lane.target!.held - Math.max(0, assigned - lane.target!.assigned)),
+          )
+          if (!held) pendingRequests.clear()
+          const canceled = lane.target!.held - held - Math.max(0, assigned - lane.target!.assigned)
+          if (canceled > 0) await this.withdrawCanceled(start.id, canceled, assigned + held, lane.target!.check)
+          if (message.available.length && (capacity > assigned || held) && this.host.creationReady(lane.label)) {
+            const authorized = await this.host.authority(signal)
+            const eligible = message.available.filter(
+              (job) =>
+                job.owner.toLowerCase() === this.scope.installation.account.login &&
+                authorized.has(job.repository.toLowerCase()) &&
+                selectRunnerLabels(job.labels, this.labels)?.label === lane.label,
             )
-            if (!held) pendingRequests.clear()
-            const canceled = lane.target!.held - held - Math.max(0, assigned - lane.target!.assigned)
-            if (canceled > 0) await this.withdrawCanceled(start.id, canceled, assigned + held, lane.target!.check)
-            if (message.available.length && (capacity > assigned || held) && this.host.creationReady(lane.label)) {
-              const authorized = await this.host.authority(signal)
-              const eligible = message.available.filter(
-                (job) =>
-                  job.owner.toLowerCase() === this.scope.installation.account.login &&
-                  authorized.has(job.repository.toLowerCase()) &&
-                  selectRunnerLabels(job.labels, this.labels)?.label === lane.label,
-              )
-              const offers = [...new Map(eligible.map((job) => [String(job.id), job.id])).values()]
-              const existing = new Set(pendingRequests.keys())
-              const unresolved = offers.filter(
-                (id) => existing.has(String(id)) && pendingRequests.get(String(id)) !== 'accepted',
-              )
-              const novel = offers.filter((id) => !existing.has(String(id))).slice(0, acquisitionWindow - existing.size)
-              // When several candidates share fewer holds, none can spend another
-              // candidate's slot. A redelivery needs a fresh quota CAS in that case.
-              const covered = held === existing.size
-              const needReservation = covered ? novel : [...unresolved, ...novel]
-              if (covered && unresolved.length) {
-                const requests = unresolved
-                const accepted = await start.session.acquire(requests, signal)
-                for (const id of requests) pendingRequests.set(String(id), 'verify')
-                for (const id of accepted) pendingRequests.set(String(id), 'accepted')
-                if (accepted.length !== requests.length) {
+            const offers = [...new Map(eligible.map((job) => [String(job.id), job.id])).values()]
+            const existing = new Set(pendingRequests.keys())
+            const unresolved = offers.filter(
+              (id) => existing.has(String(id)) && pendingRequests.get(String(id)) !== 'accepted',
+            )
+            const novel = offers.filter((id) => !existing.has(String(id))).slice(0, acquisitionWindow - existing.size)
+            // When several candidates share fewer holds, none can spend another
+            // candidate's slot. A redelivery needs a fresh quota CAS in that case.
+            const covered = held === existing.size
+            const needReservation = covered ? novel : [...unresolved, ...novel]
+            if (covered && unresolved.length) {
+              const requests = unresolved
+              const accepted = await start.session.acquire(requests, signal)
+              for (const id of requests) pendingRequests.set(String(id), 'verify')
+              for (const id of accepted) pendingRequests.set(String(id), 'accepted')
+              if (accepted.length !== requests.length) {
+                const next = await verifyAcquisitions(assigned, held)
+                assigned = next.assigned
+                held = next.held
+              }
+            }
+            const free = Math.max(0, capacity - assigned - held)
+            const ids = needReservation.slice(0, free)
+            if (ids.length) {
+              const policy = await this.offerPolicy(start.id, assigned + held, signal)
+              const prior = readRecord(row)
+              // Invalidate older plans before reserving. The pool holds these slots
+              // without dispatching a Box until Actions reports assigned demand.
+              await save(assigned, prior.message, prior.session, held + ids.length)
+              let reserved = 0
+              while (reserved < ids.length && this.host.creationReady(lane.label)) {
+                signal.throwIfAborted()
+                const allocation = await this.journal.reserve(
+                  this.lease,
+                  scopeKey(this.scope),
+                  null,
+                  {
+                    ...policy,
+                    checks: [...(policy.checks ?? []), { key, version: row.version }],
+                  },
+                  { labels, scaleSet: start.id },
+                )
+                if (!allocation) break
+                reserved++
+              }
+              if (reserved && this.host.creationReady(lane.label)) {
+                const offered = ids.slice(0, reserved)
+                for (const id of offered) pendingRequests.set(String(id), 'requested')
+                await save(assigned, prior.message, prior.session, held + reserved)
+                const accepted = await start.session.acquire(offered, signal)
+                let reconcile = false
+                const confirmed = new Set(accepted.map(String))
+                for (const request of offered) {
+                  const id = String(request)
+                  if (confirmed.has(id)) pendingRequests.set(id, 'accepted')
+                  else if (existing.has(id)) {
+                    pendingRequests.set(id, 'verify')
+                    reconcile = true
+                  } else pendingRequests.delete(id)
+                }
+                held = Math.min(pendingRequests.size, held + accepted.length)
+                if (reconcile) {
                   const next = await verifyAcquisitions(assigned, held)
                   assigned = next.assigned
                   held = next.held
                 }
               }
-              const free = Math.max(0, capacity - assigned - held)
-              const ids = needReservation.slice(0, free)
-              if (ids.length) {
-                const policy = await this.offerPolicy(start.id, assigned + held, signal)
-                const prior = readRecord(row)
-                // Invalidate older plans before reserving. The pool holds these slots
-                // without dispatching a Box until Actions reports assigned demand.
-                await save(assigned, prior.message, prior.session, held + ids.length)
-                let reserved = 0
-                while (reserved < ids.length && this.host.creationReady(lane.label)) {
-                  signal.throwIfAborted()
-                  const allocation = await this.journal.reserve(
-                    this.lease,
-                    scopeKey(this.scope),
-                    null,
-                    {
-                      ...policy,
-                      checks: [...(policy.checks ?? []), { key, version: row.version }],
-                    },
-                    { labels, scaleSet: start.id },
-                  )
-                  if (!allocation) break
-                  reserved++
-                }
-                if (reserved && this.host.creationReady(lane.label)) {
-                  const offered = ids.slice(0, reserved)
-                  for (const id of offered) pendingRequests.set(String(id), 'requested')
-                  await save(assigned, prior.message, prior.session, held + reserved)
-                  const accepted = await start.session.acquire(offered, signal)
-                  let reconcile = false
-                  const confirmed = new Set(accepted.map(String))
-                  for (const request of offered) {
-                    const id = String(request)
-                    if (confirmed.has(id)) pendingRequests.set(id, 'accepted')
-                    else if (existing.has(id)) {
-                      pendingRequests.set(id, 'verify')
-                      reconcile = true
-                    } else pendingRequests.delete(id)
-                  }
-                  held = Math.min(pendingRequests.size, held + accepted.length)
-                  if (reconcile) {
-                    const next = await verifyAcquisitions(assigned, held)
-                    assigned = next.assigned
-                    held = next.held
-                  }
-                }
-              }
             }
-            for (const runner of message.worked) {
-              const allocation = await this.journal.allocation(this.lease, 'worker/' + runner.name.slice(7))
-              if (
-                allocation &&
-                allocation.value.scope === scopeKey(this.scope) &&
-                allocation.value.supply?.scaleSet === start.id &&
-                allocation.value.runner.id === runner.id &&
-                allocation.value.runner.phase === 'known' &&
-                !allocation.value.runner.worked
-              ) {
-                await this.journal.advance(this.lease, allocation.record.key, allocation.record.version, {
-                  runner: { ...allocation.value.runner, worked: true },
-                })
-              }
-            }
-            await save(assigned, message.id, start.session.id, held)
-            signal.throwIfAborted()
-            await start.session.ack(message.id, signal)
-            last = message.id
-          })
-        }
-      } catch (error) {
-        lane.target = undefined
-        if (signal.aborted) return false
-        this.host.report(error)
-        if (error instanceof LeaseLost || error instanceof StateCorrupt) return false
-        failures++
-        const deadline = error instanceof GitHubRequestError ? (error.retryAt ?? 0) : 0
-        const backoff = Math.min(60_000, 1000 * 2 ** Math.min(6, failures - 1))
-        retry = Math.max(deadline - Date.now(), backoff) + Math.floor(Math.random() * 500)
-      } finally {
-        if (session)
-          try {
-            await session.close()
-          } catch (error) {
-            this.host.report(error)
           }
+          for (const runner of message.worked) {
+            const allocation = await this.journal.allocation(this.lease, 'worker/' + runner.name.slice(7))
+            if (
+              allocation &&
+              allocation.value.scope === scopeKey(this.scope) &&
+              allocation.value.supply?.scaleSet === start.id &&
+              allocation.value.runner.id === runner.id &&
+              allocation.value.runner.phase === 'known' &&
+              !allocation.value.runner.worked
+            ) {
+              await this.journal.advance(this.lease, allocation.record.key, allocation.record.version, {
+                runner: { ...allocation.value.runner, worked: true },
+              })
+            }
+          }
+          await save(assigned, message.id, start.session.id, held)
+          signal.throwIfAborted()
+          await start.session.ack(message.id, signal)
+          last = message.id
+        })
       }
-      if (retry) await delay(Math.min(retry, 2_147_483_647), undefined, { signal })
+    } catch (error) {
+      lane.target = undefined
+      if (signal.aborted) return false
+      this.host.report(error)
+      if (error instanceof LeaseLost || error instanceof StateCorrupt) return false
+      failures++
+      const deadline = error instanceof GitHubRequestError ? (error.retryAt ?? 0) : 0
+      const backoff = Math.min(60_000, 1000 * 2 ** Math.min(6, failures - 1))
+      retryAt = Math.max(deadline, Date.now() + backoff) + Math.floor(Math.random() * 500)
+    } finally {
+      if (session)
+        try {
+          await session.close()
+        } catch (error) {
+          this.host.report(error)
+        }
     }
+    if (retryAt) this.retryAfter(lane.label, retryAt, failures)
     return false
   }
 }
