@@ -33,6 +33,7 @@ func (p *outboundPolicyController) compile(policy outboundPolicy, revision strin
 	policy.tcp = nil
 	snapshot := &outboundSnapshot{
 		policy: policy, revision: revision, filter: filter, dialer: dialer, legacyAllow: policy.AllowNet,
+		extended: policy.compiled,
 	}
 	if rules != nil {
 		if err := snapshot.setTCPPolicy(policy.Mode, *rules); err != nil {

@@ -279,10 +279,14 @@ impl BoxImpl {
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
-        let locker = self.disk_locker()?;
-        let _lock = LockGuard::new_async(locker.as_ref()).await;
-        self.ensure_box_exists()?;
+        let _lock = self.acquire_disk_admission().await?;
         fut.await
+    }
+
+    pub(crate) async fn acquire_disk_admission(&self) -> BoxliteResult<LockGuard<'static>> {
+        let lock = LockGuard::new_owned(self.disk_locker()?).await;
+        self.ensure_box_exists()?;
+        Ok(lock)
     }
 
     /// Confirm the box row still exists after acquiring disk admission, so waiters
@@ -323,11 +327,13 @@ impl BoxImpl {
         self.config.container.id.as_str()
     }
 
-    /// Metadata for this box. Local reads are synchronous: everything comes
-    /// from persisted state plus the bindings this handle itself published.
+    #[cfg(test)]
     pub(crate) fn info(&self) -> BoxInfo {
-        let state = self.state.read();
-        let mut info = BoxInfo::new(&self.config, &state);
+        self.info_from_state(&self.state.read())
+    }
+
+    fn info_from_state(&self, state: &BoxState) -> BoxInfo {
+        let mut info = BoxInfo::new(&self.config, state);
         // Bindings are only reportable while the shim that owns their listeners
         // is still the live one — a recycled PID must not inherit them.
         if state.status.is_active()
@@ -347,10 +353,16 @@ impl BoxImpl {
         info
     }
 
-    pub(crate) fn refresh_network_policy(&self) -> BoxliteResult<()> {
-        let persisted = self.runtime.box_manager.update_box(&self.config.id)?;
-        self.state.write().outbound_policy = persisted.outbound_policy;
-        Ok(())
+    pub(crate) fn info_from_store(&self) -> BoxliteResult<BoxInfo> {
+        let (durable, _, complete) = self.runtime.box_manager.outbound_state(&self.config.id)?;
+        // Visibility and outbound policy must come from the same durable row.
+        let mut state = self.state.read().clone();
+        state.outbound_policy = durable.outbound_policy;
+        let mut info = self.info_from_state(&state);
+        if complete.is_some() {
+            info.network = None;
+        }
+        Ok(info)
     }
 
     // ========================================================================
@@ -1798,8 +1810,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
-        self.refresh_network_policy()?;
-        Ok(BoxImpl::info(self))
+        self.info_from_store()
     }
 
     async fn start(&self) -> BoxliteResult<()> {
@@ -1892,6 +1903,72 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
+    async fn published_ports(
+        &self,
+    ) -> BoxliteResult<Option<Vec<crate::runtime::types::PublishedPort>>> {
+        let (state, outbound) = self.read_complete_control()?;
+        if let Some(ports) = super::ports::resolved_from_state(&self.config, &state) {
+            return Ok(Some(ports));
+        }
+        let pid = crate::util::PidFileReader::at(self.layout.pid_file_path());
+        let Some(shim) = pid
+            .verified_shim()
+            .filter(|shim| state.pid == Some(shim.identity().pid))
+        else {
+            return Ok(None);
+        };
+        let identity = shim.identity();
+        if let Some(ports) = self
+            .live
+            .get()
+            .and_then(|live| live.published_ports.as_ref())
+            .and_then(|ports| ports.bindings_for(identity))
+        {
+            return Ok(Some(ports.to_vec()));
+        }
+        if !shim.has_runtime_port_control() {
+            return Ok(None);
+        }
+        let policy = &outbound.committed.policy;
+        let Ok(backend) = self.observation_backend(&state, &policy.mode, &policy.allow_net) else {
+            return Ok(None);
+        };
+        let ports =
+            super::init::observe_published_ports(backend.as_ref(), &self.config.options.ports)
+                .await;
+        if pid
+            .verified_shim()
+            .is_none_or(|current| current.identity() != identity)
+        {
+            return Ok(None);
+        }
+        match ports {
+            Ok(ports) => Ok(ports),
+            Err(BoxliteError::Unsupported(_) | BoxliteError::InvalidState(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn complete_outbound_snapshot(
+        &self,
+    ) -> BoxliteResult<crate::net::CompleteOutboundSnapshot> {
+        Ok(self.read_complete_control()?.1.committed)
+    }
+
+    async fn complete_outbound_status(&self) -> BoxliteResult<crate::net::CompleteOutboundStatus> {
+        self.read_complete_outbound_status().await
+    }
+
+    async fn replace_complete_outbound(
+        &self,
+        policy: crate::net::CompleteOutboundPolicy,
+        revision: crate::net::OutboundRevision,
+        expected: Option<crate::net::OutboundRevision>,
+    ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        self.replace_complete_outbound_control(policy, revision, expected)
+            .await
+    }
+
     async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
         self.read_outbound_status().await
     }

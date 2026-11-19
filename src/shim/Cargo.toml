@@ -16,6 +16,7 @@ boxlite = { path = "../boxlite", default-features = false, features = ["gvproxy"
 boxlite-shared.workspace = true
 chrono = "0.4"
 libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 signal-hook = "0.3"
 tokio = { version = "1.37", features = ["rt", "time"] }

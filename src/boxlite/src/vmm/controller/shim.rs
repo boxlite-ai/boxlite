@@ -8,6 +8,7 @@ use crate::{
     vmm::{InstanceSpec, VmmKind},
 };
 
+use crate::net::{OutboundBootstrap, OutboundCapabilities};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
@@ -15,6 +16,50 @@ use super::{
     VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics,
     spawn::{ShimSpawner, SpawnedShim},
 };
+
+pub(crate) async fn probe_outbound_capabilities() -> BoxliteResult<OutboundCapabilities> {
+    probe_outbound_capabilities_at(crate::util::find_binary("boxlite-shim")?).await
+}
+
+async fn probe_outbound_capabilities_at(shim: PathBuf) -> BoxliteResult<OutboundCapabilities> {
+    use std::{process::Stdio, time::Duration};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_util::sync::CancellationToken;
+
+    const MAX_REPLY: usize = 4096;
+    const TIMEOUT: Duration = Duration::from_secs(5);
+    let cancellation = CancellationToken::new();
+    let _cancel_on_drop = cancellation.clone().drop_guard();
+    tokio::spawn(async move {
+        let error = |error: std::io::Error| BoxliteError::Engine(format!("outbound shim probe: {error}"));
+        let mut child = tokio::process::Command::new(shim)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+            .kill_on_drop(true).spawn().map_err(error)?;
+        let exchange = async {
+            let mut input = child.stdin.take().ok_or_else(|| BoxliteError::Engine("missing probe stdin".into()))?;
+            input.write_all(br#"{"outbound_policy_probe":1}"#).await.map_err(error)?;
+            drop(input);
+            let output = child.stdout.take().ok_or_else(|| BoxliteError::Engine("missing probe stdout".into()))?;
+            let mut reply = Vec::new();
+            output.take((MAX_REPLY + 1) as u64).read_to_end(&mut reply).await.map_err(error)?;
+            if reply.len() > MAX_REPLY || !child.wait().await.map_err(error)?.success() {
+                return Err(BoxliteError::Unsupported("shim did not acknowledge outbound capability probe".into()));
+            }
+            serde_json::from_slice(&reply).map_err(|e| BoxliteError::Unsupported(format!("invalid outbound probe reply: {e}")))
+        };
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => Err(BoxliteError::Engine("outbound shim probe cancelled".into())),
+            result = tokio::time::timeout(TIMEOUT, exchange) => result.unwrap_or_else(|_| {
+                Err(BoxliteError::Unsupported("outbound shim probe timed out".into()))
+            }),
+        };
+        if result.is_err() {
+            let _ = child.kill().await;
+            child.wait().await.map_err(error)?;
+        }
+        result
+    }).await.map_err(|e| BoxliteError::Engine(format!("join outbound shim probe: {e}")))?
+}
 
 // ============================================================================
 // SHIM HANDLER - Runtime operations on running VM
@@ -259,6 +304,7 @@ pub struct ShimController {
     /// Box filesystem layout (provides paths for stderr, sockets, etc.)
     layout: BoxFilesystemLayout,
     outbound_revision: Option<crate::net::OutboundRevision>,
+    complete_outbound: Option<OutboundBootstrap>,
 }
 
 impl ShimController {
@@ -296,6 +342,7 @@ impl ShimController {
             options,
             layout,
             outbound_revision: None,
+            complete_outbound: None,
         })
     }
 
@@ -304,6 +351,11 @@ impl ShimController {
         revision: Option<crate::net::OutboundRevision>,
     ) -> Self {
         self.outbound_revision = revision;
+        self
+    }
+
+    pub(crate) fn with_complete_outbound(mut self, outbound: Option<OutboundBootstrap>) -> Self {
+        self.complete_outbound = outbound;
         self
     }
 }
@@ -373,8 +425,15 @@ impl VmmController for ShimController {
         };
 
         // Serialize the config for passing to subprocess
-        let config_json =
-            serialize_shim_config(&serializable_config, self.outbound_revision.as_ref())?;
+        let config_json = match &self.complete_outbound {
+            Some(outbound) => serde_json::to_string(
+                &serde_json::json!({"config": serializable_config, "outbound_v1": outbound}),
+            )
+            .map_err(|e| {
+                BoxliteError::Engine(format!("Failed to serialize complete shim launch: {e}"))
+            })?,
+            None => serialize_shim_config(&serializable_config, self.outbound_revision.as_ref())?,
+        };
 
         // Clean up stale socket file if it exists (defense in depth)
         // Only relevant for Unix sockets

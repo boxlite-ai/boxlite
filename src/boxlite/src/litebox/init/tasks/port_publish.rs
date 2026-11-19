@@ -47,6 +47,33 @@ struct PlannedPort {
     transport: TransportProtocol,
 }
 
+fn equivalent_requests(planned: &[PlannedPort]) -> HashMap<MatchKey, usize> {
+    let mut counts = HashMap::new();
+    for mapping in planned {
+        *counts.entry(mapping.match_key()).or_default() += 1;
+    }
+    counts
+}
+
+pub(crate) async fn observe_published_ports(
+    backend: &dyn NetworkBackend,
+    requested: &[PortSpec],
+) -> BoxliteResult<Option<Vec<PublishedPort>>> {
+    let mut planned = PlannedPort::plan(requested)?;
+    planned.sort_by_key(PlannedPort::is_automatic);
+    let counts = equivalent_requests(&planned);
+    let mut forwards = AdoptableForwards::new(&backend.list_forwards().await?);
+    let mut ports = Vec::with_capacity(planned.len());
+    for mapping in &planned {
+        let Some(local) = forwards.claim(mapping, counts[&mapping.match_key()])? else {
+            return Ok(None);
+        };
+        ports.push((mapping.request_index, mapping.published_at(local)));
+    }
+    ports.sort_unstable_by_key(|(index, _)| *index);
+    Ok(Some(ports.into_iter().map(|(_, port)| port).collect()))
+}
+
 impl PlannedPort {
     /// Resolve every request up front. Validating the whole plan before the
     /// first backend call keeps a bad later mapping from stranding earlier
@@ -209,10 +236,7 @@ impl<'a> PortPublisher<'a> {
         mut adoptable: AdoptableForwards,
     ) -> BoxliteResult<Vec<PublishedPort>> {
         let planned = std::mem::take(&mut self.planned);
-        let mut equivalent_requests: HashMap<MatchKey, usize> = HashMap::new();
-        for mapping in &planned {
-            *equivalent_requests.entry(mapping.match_key()).or_default() += 1;
-        }
+        let equivalent_requests = equivalent_requests(&planned);
 
         let mut resolved = Vec::with_capacity(planned.len());
         for mapping in &planned {
@@ -599,6 +623,25 @@ mod tests {
             remote: format!("{GUEST_IP}:{guest_port}"),
             protocol: "tcp".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn outbound_published_ports_read_uses_existing_assignments_without_repair() {
+        let backend =
+            MockBackend::default().with_active(vec![active_forward("127.0.0.1:49152", 3000)]);
+        let ports = observe_published_ports(&backend, &[mapping(None, 3000)])
+            .await
+            .unwrap();
+        assert_eq!(ports, Some(vec![published_port(49152, 3000)]));
+
+        let missing =
+            observe_published_ports(&backend, &[mapping(None, 3000), mapping(None, 3001)])
+                .await
+                .unwrap();
+        assert!(missing.is_none());
+        assert_eq!(backend.list_call_count(), 2);
+        assert!(backend.exposed.lock().unwrap().is_empty());
+        assert!(backend.unexposed.lock().unwrap().is_empty());
     }
 
     fn lifecycle(pid: u32, start_time: u64) -> ShimPidRecord {

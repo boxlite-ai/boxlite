@@ -8,6 +8,21 @@ use boxlite::net::{
 #[path = "../tests/outbound_revision.rs"]
 mod tests;
 
+/// Read assigned host bindings as a JSON array or null when unknown.
+/// On success, release *out_json with boxlite_free_string. On error it is NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_published_ports(
+    network: *mut CBoxNetworkHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        read_json(network, out_json, out_error, |network| {
+            network.tokio_rt.block_on(network.handle.published_ports())
+        })
+    }
+}
+
 /// Read persisted policy and revision as JSON, without claiming live confirmation.
 /// On success, release *out_json with boxlite_free_string. On error it is NULL.
 #[unsafe(no_mangle)]

@@ -34,6 +34,8 @@
     {"id":"invalid-ipv4","rule":"192.0.2.999","canonical":null},
     {"id":"leading-zero-ipv4","rule":"192.0.02.8","canonical":null},
     {"id":"wildcard-ipv4","rule":"*.192.0.2.8","canonical":null},
+    {"id":"leading-zero-ipv4-prefix","rule":"192.0.2.0/024","canonical":null},
+    {"id":"leading-zero-ipv6-prefix-with-port","rule":"[2001:db8::/032]:443","canonical":null},
     {"id":"ipv4-prefix-overflow","rule":"192.0.2.0/33","canonical":null},
     {"id":"ipv6-prefix-overflow","rule":"2001:db8::/129","canonical":null},
     {"id":"mapped-prefix-too-wide","rule":"::ffff:192.0.2.8/95","canonical":null},
