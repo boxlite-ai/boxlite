@@ -274,6 +274,12 @@ func run() int {
 		TLSKeyFile:  cfg.TLSKeyFile,
 		EnableTLS:   cfg.EnableTLS,
 		LogRequests: cfg.ApiLogRequests,
+		ApiVersion:  cfg.ApiVersion,
+		ProtectedBoot: api.ProtectedBootConfig{
+			RunnerID:   cfg.ProtectedProxyRunnerID,
+			DoHURL:     cfg.ProtectedProxyDoHURL,
+			DoHAddress: cfg.ProtectedProxyDoHAddress,
+		},
 	})
 
 	apiServerErrChan := make(chan error)

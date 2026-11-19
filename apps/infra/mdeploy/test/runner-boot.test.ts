@@ -11,6 +11,10 @@
  */
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import {
   RUNNER_ENV_FILE,
@@ -20,6 +24,8 @@ import {
   type BootPlatform,
 } from '../stack/runner-boot.ts'
 import { renderUnitEnvironmentPolicyScripts } from '../stack/runner-upgrade.ts'
+import { runnerHealthProbe } from '../stack/runner-health-probe.ts'
+import { extraRunnersOf } from '../stack/runner-registration.ts'
 
 const platform = (overrides: Partial<BootPlatform> = {}): BootPlatform => ({
   hostAddress: 'HOST_IP=$(curl -s http://metadata/ip)',
@@ -49,6 +55,83 @@ const render = (overrides: Partial<Parameters<typeof renderRunnerBoot>[0]> = {})
     }),
     'base64',
   ).toString('utf8')
+
+const protectedProxy = {
+  runnerId: '8137cc0d-5d3f-43b8-aa32-b9304740269e',
+  url: 'https://runner-2.example.com:3003/',
+  caPem: '',
+  certFile: '/etc/boxlite/listener.pem',
+  keyFile: '/etc/boxlite/listener.key',
+  caFile: '/etc/boxlite/enrollment-ca.pem',
+  dohUrl: 'https://resolver.example.com/dns-query',
+  dohAddress: '1.1.1.1:443',
+}
+
+test('the enrolled slot boots V0 and is excluded from automatic V2 registration', () => {
+  const slot = (name: string) => ({ resourceName: `Runner-${name}`, nameTag: name, controlPlaneRunnerName: name })
+  const assignments = [
+    { slot: slot('default'), token: 't0' },
+    { slot: { ...slot('runner-2'), protectedProxy }, token: 't1' },
+    { slot: slot('runner-3'), token: 't2' },
+  ]
+  assert.deepEqual(extraRunnersOf(assignments), [assignments[2]])
+  const script = render({ protectedProxy })
+  assert.match(script, /^API_VERSION=0$/m)
+  assert.match(script, /^ENABLE_TLS=true$/m)
+  assert.ok(script.includes(`BOXLITE_PROTECTED_PROXY_RUNNER_ID=${protectedProxy.runnerId}`))
+  assert.ok(script.includes(`TLS_KEY_FILE=${protectedProxy.keyFile}`))
+  assert.match(render(), /^API_VERSION=2$/m)
+})
+
+test('managed environment convergence refuses enrollment overrides', () => {
+  const apiUrl = 'https://api.example.test'
+  for (const [key, value] of Object.entries({
+    BOXLITE_PROTECTED_PROXY_RUNNER_ID: 'd02ae8d4-f05c-42f4-bb57-d1fdb71b5d42',
+    TLS_CERT_FILE: '/etc/boxlite/custom.pem',
+  })) {
+    const runnerEnv = JSON.stringify({ [key]: value })
+    const enrolled = { apiUrl, runnerEnv, protectedProxy }
+    assert.throws(() => renderUnitEnvironmentPolicyScripts(enrolled), new RegExp(`deployment-owned key ${key}`))
+  }
+  assert.doesNotThrow(() =>
+    renderUnitEnvironmentPolicyScripts({ apiUrl, runnerEnv: '{"TLS_CERT_FILE":"/etc/boxlite/custom.pem"}' }),
+  )
+})
+
+test('health probing uses the deployed name and CA for an enrolled Runner', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-health-'))
+  try {
+    const envFile = join(directory, 'runner.env')
+    const ca = join(directory, 'enrollment-ca.pem')
+    writeFileSync(ca, 'test CA path')
+    const command = `${runnerHealthProbe}\ncurl() { printf '%s\\n' "$@"; }\nrunner_http_health 3003 -fsS`
+    const probe = () =>
+      execFileSync('bash', ['-c', command], {
+        encoding: 'utf8',
+        env: { ...process.env, BOXLITE_RUNNER_ENV_FILE: envFile },
+      })
+        .trim()
+        .split('\n')
+    writeFileSync(envFile, 'API_VERSION=2\n')
+    assert.deepEqual(probe(), ['-fsS', 'http://127.0.0.1:3003/'])
+    writeFileSync(
+      envFile,
+      `BOXLITE_PROTECTED_PROXY_RUNNER_ID=test\nBOXLITE_PROTECTED_PROXY_DNS_NAME=runner-2.example.com\nBOXLITE_PROTECTED_PROXY_CA_FILE=${ca}\n`,
+    )
+    assert.deepEqual(probe(), [
+      '-fsS',
+      '--noproxy',
+      '*',
+      '--cacert',
+      ca,
+      '--resolve',
+      'runner-2.example.com:3003:127.0.0.1',
+      'https://runner-2.example.com:3003/',
+    ])
+  } finally {
+    rmSync(directory, { recursive: true })
+  }
+})
 
 test('cloud boot installs the standalone kernel before starting the runner', () => {
   const script = render()

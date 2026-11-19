@@ -52,7 +52,8 @@ export const REGISTER_RUNNERS_COMMAND = 'node scripts/register-extra-runners.mjs
  * registered under. An empty result is the ordinary single-host case and means
  * no command should be created at all — see `stack.test.ts`.
  */
-export const extraRunnersOf = (fleet: readonly RunnerAssignment[]): RunnerAssignment[] => fleet.slice(1)
+export const extraRunnersOf = (fleet: readonly RunnerAssignment[]): RunnerAssignment[] =>
+  fleet.slice(1).filter(({ slot }) => !slot.protectedProxy)
 
 /**
  * What the script is handed, as the one JSON value it parses.

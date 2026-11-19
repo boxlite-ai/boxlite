@@ -11,9 +11,13 @@ fn fixture() -> serde_json::Value {
 #[test]
 fn outbound_bootstrap_shim_extracts_identity_and_retains_provisioning_policy() {
     let wire = fixture();
-    let (spec, revision) = parse_config(&wire.to_string()).unwrap();
+    let (spec, ShimNetworkLaunch::Ordinary(Some(revision))) =
+        decode_launch(&wire.to_string()).unwrap()
+    else {
+        panic!("legacy bootstrap must retain its outbound revision");
+    };
     assert_eq!(
-        revision.unwrap().as_str(),
+        revision.as_str(),
         wire["outbound_revision"].as_str().unwrap()
     );
     let network = spec.network_backend_spec.unwrap();
@@ -26,9 +30,15 @@ fn outbound_bootstrap_shim_extracts_identity_and_retains_provisioning_policy() {
 fn outbound_bootstrap_shim_accepts_legacy_messages_and_rejects_bad_metadata() {
     let mut wire = fixture();
     wire.as_object_mut().unwrap().remove("outbound_revision");
-    assert!(parse_config(&wire.to_string()).unwrap().1.is_none());
+    assert!(matches!(
+        decode_launch(&wire.to_string()).unwrap().1,
+        ShimNetworkLaunch::Ordinary(None)
+    ));
     wire["outbound_revision"] = serde_json::Value::Null;
-    assert!(parse_config(&wire.to_string()).unwrap().1.is_none());
+    assert!(matches!(
+        decode_launch(&wire.to_string()).unwrap().1,
+        ShimNetworkLaunch::Ordinary(None)
+    ));
     for token in [
         serde_json::json!(""),
         serde_json::json!("bad token"),
@@ -38,10 +48,26 @@ fn outbound_bootstrap_shim_accepts_legacy_messages_and_rejects_bad_metadata() {
     ] {
         wire["outbound_revision"] = token;
         assert!(
-            parse_config(&wire.to_string())
+            decode_launch(&wire.to_string())
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid outbound bootstrap revision")
         );
     }
+}
+
+#[test]
+fn outbound_bootstrap_shim_rejects_unknown_protected_launch_version() {
+    let wire = serde_json::json!({
+        "version": 999,
+        "instance": fixture(),
+        "route": {},
+    });
+
+    assert!(
+        decode_launch(&wire.to_string())
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported protected shim launch version")
+    );
 }

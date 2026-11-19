@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/bits"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
 // Per-box bandwidth shaping for the guest link.
@@ -409,7 +411,7 @@ type shapedConn struct {
 	// RX queue between Write and the pacer goroutine. Bounded both by frame
 	// count (the channel capacity) and by bytes (maxQueueBytes); a frame that
 	// would exceed either is dropped and counted rather than blocking Write.
-	queue         chan []byte
+	queue         chan guestLinkFrame
 	queueBytes    atomic.Int64 // bytes currently queued
 	maxQueueBytes int64
 
@@ -424,6 +426,13 @@ type shapedConn struct {
 	closeOnce sync.Once
 	stats     shaperStats
 }
+
+type guestLinkFrame struct {
+	bytes      []byte
+	generation *udpLinkGeneration
+}
+
+var errSealedUDPFrame = errors.New("UDP reply belongs to a sealed generation")
 
 // wrapConn is the single place a connection becomes shaped; main.go and the test
 // harness both go through it so the two cannot drift.
@@ -451,7 +460,7 @@ func newShapedConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig, now func(
 		c.rxTokenBucket = newTokenBucket(cfg.RX, now)
 		queueBytes, queueFrames := queueBounds(cfg.RX)
 		c.maxQueueBytes = queueBytes
-		c.queue = make(chan []byte, queueFrames)
+		c.queue = make(chan guestLinkFrame, queueFrames)
 		go c.pace()
 	}
 	return c
@@ -631,8 +640,24 @@ func (c *shapedConn) Read(p []byte) (int, error) {
 // frame is fine without a pool: the queue is bounded and drains at the
 // configured rate, so churn is capped by the limit the user asked for.
 func (c *shapedConn) Write(p []byte) (int, error) {
+	return c.WriteGuestFrame(p, nil)
+}
+
+// WriteGuestFrame accepts the optional packet owner from the tap writer. Keep
+// the generation beside the queued bytes so the pacer never has to infer it
+// from addresses or ports that may be reused after reconciliation.
+func (c *shapedConn) WriteGuestFrame(p []byte, owner tcpip.PacketOwner) (int, error) {
+	generation, _ := owner.(*udpLinkGeneration)
 	if c.rxTokenBucket == nil {
-		return c.Conn.Write(p)
+		n, err := c.deliverFrame(guestLinkFrame{bytes: p, generation: generation})
+		if errors.Is(err, errSealedUDPFrame) {
+			return len(p), nil
+		}
+		return n, err
+	}
+	if generation != nil && generation.isSealed() {
+		c.dropped(int64(len(p)))
+		return len(p), nil
 	}
 
 	size := int64(len(p))
@@ -644,10 +669,11 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 	frame := make([]byte, len(p))
 	copy(frame, p)
 
+	c.queueBytes.Add(size)
 	select {
-	case c.queue <- frame:
-		c.queueBytes.Add(size)
+	case c.queue <- guestLinkFrame{bytes: frame, generation: generation}:
 	default:
+		c.queueBytes.Add(-size)
 		c.dropped(size)
 	}
 	return len(p), nil
@@ -658,8 +684,8 @@ func (c *shapedConn) dropped(size int64) {
 	c.stats.rxDroppedBytes.Add(size)
 }
 
-func (c *shapedConn) dequeue(frame []byte) {
-	c.queueBytes.Add(-int64(len(frame)))
+func (c *shapedConn) dequeue(frame guestLinkFrame) {
+	c.queueBytes.Add(-int64(len(frame.bytes)))
 }
 
 // pace drains the RX queue at the configured rate.
@@ -671,38 +697,95 @@ func (c *shapedConn) pace() {
 			return
 		case frame := <-c.queue:
 			c.dequeue(frame)
+			if frame.generation != nil && frame.generation.isSealed() {
+				c.dropped(int64(len(frame.bytes)))
+				continue
+			}
 
 			// The frame arrives whole, so the only adjustment needed is to
 			// leave the length prefix out of the charge.
-			charge := int64(len(frame))
+			charge := int64(len(frame.bytes))
 			if charge > int64(c.framer.prefixLen) {
 				charge -= int64(c.framer.prefixLen)
 			}
 			if d := c.rxTokenBucket.reserve(charge); d > 0 {
 				c.stats.rxThrottledEvents.Add(1)
 				c.stats.rxThrottledNs.Add(int64(d))
-				if !c.sleep(d) {
+				if !c.waitFrame(d, frame.generation) {
+					if frame.generation != nil && frame.generation.isSealed() {
+						c.dropped(int64(len(frame.bytes)))
+						continue
+					}
 					c.drain()
 					return
 				}
 			}
-			if !c.writeFrame(frame) {
+			delivered, keepPacing := c.writeFrame(frame)
+			if !keepPacing {
+				c.drain()
 				return
 			}
-			c.stats.rxDeliveredBytes.Add(charge)
+			if delivered {
+				c.stats.rxDeliveredBytes.Add(charge)
+			}
 		}
 	}
 }
 
-// writeFrame reports whether the pacer should keep running.
-func (c *shapedConn) writeFrame(frame []byte) bool {
+func (c *shapedConn) waitFrame(delay time.Duration, generation *udpLinkGeneration) bool {
+	if generation == nil {
+		return c.sleep(delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-c.stop:
+		return false
+	case <-generation.sealed:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (c *shapedConn) deliverFrame(frame guestLinkFrame) (int, error) {
+	generation := frame.generation
+	if generation == nil {
+		return c.Conn.Write(frame.bytes)
+	}
+	if !generation.admit() {
+		return 0, errSealedUDPFrame
+	}
+	n, err := c.Conn.Write(frame.bytes)
+	complete := n == len(frame.bytes) && err == nil
+	retryable := n == 0 && errors.Is(err, syscall.ENOBUFS)
+	uncertain := !complete && !retryable
+	if uncertain {
+		_ = c.Conn.Close()
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+	}
+	generation.finish(uncertain)
+	return n, err
+}
+
+func (c *shapedConn) writeFrame(frame guestLinkFrame) (delivered, keepPacing bool) {
 	for {
-		if _, err := c.Conn.Write(frame); err != nil {
-			if errors.Is(err, syscall.ENOBUFS) {
+		if n, err := c.deliverFrame(frame); err != nil {
+			if errors.Is(err, errSealedUDPFrame) {
+				c.dropped(int64(len(frame.bytes)))
+				return false, true
+			}
+			if errors.Is(err, syscall.ENOBUFS) && (frame.generation == nil || n == 0) {
 				// The same retry upstream performs (gvisor-tap-vsock#367), but
 				// paced: a bare continue spins a core while the buffer drains.
-				if !c.sleep(200 * time.Microsecond) {
-					return false
+				if !c.waitFrame(200*time.Microsecond, frame.generation) {
+					if frame.generation != nil && frame.generation.isSealed() {
+						c.dropped(int64(len(frame.bytes)))
+						return false, true
+					}
+					return false, false
 				}
 				continue
 			}
@@ -711,9 +794,9 @@ func (c *shapedConn) writeFrame(frame []byte) bool {
 			// disconnect. Reaching into the switch from here is neither possible
 			// (disconnect is unexported) nor desirable.
 			_ = c.Conn.Close()
-			return false
+			return false, false
 		}
-		return true
+		return true, true
 	}
 }
 
@@ -722,7 +805,7 @@ func (c *shapedConn) drain() {
 		select {
 		case frame := <-c.queue:
 			c.dequeue(frame)
-			c.dropped(int64(len(frame)))
+			c.dropped(int64(len(frame.bytes)))
 		default:
 			return
 		}

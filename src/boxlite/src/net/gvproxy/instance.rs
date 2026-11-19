@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::ffi;
 use super::logging;
 use super::stats::NetworkStats;
+use super::{ManagedProxyRoute, ffi};
+use crate::net::{NetworkBackendEndpoint, NetworkBackendSpec, OutboundSnapshot};
 
 /// Safe wrapper for gvproxy library with automatic resource management
 ///
@@ -18,7 +19,7 @@ use super::stats::NetworkStats;
 ///
 /// ## Logging
 ///
-/// On the first call to `GvproxyInstance::new()`, a logging callback is registered
+/// On the first instance creation, a logging callback is registered
 /// with the Go side via `gvproxy_set_log_callback`. This causes all Go `slog` logs
 /// to be forwarded to Rust's `tracing` with the target `"gvproxy"`.
 ///
@@ -57,19 +58,26 @@ impl GvproxyInstance {
     /// This automatically initializes the logging bridge on first use.
     ///
     /// [`NetworkBackendSpec`]: super::super::NetworkBackendSpec
+    #[cfg(test)]
     pub(crate) fn new(config: super::config::GvproxyConfig) -> BoxliteResult<Self> {
-        Self::new_with_revision(config, None)
+        Self::new_with_route(config, None, None)
     }
 
-    fn new_with_revision(
+    fn new_with_route(
         config: super::config::GvproxyConfig,
         revision: Option<&crate::net::OutboundRevision>,
+        managed: Option<(&OutboundSnapshot, &ManagedProxyRoute)>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
         let socket_path = config.socket_path.clone();
-        let id = ffi::create_instance(&config, revision)?;
+        let id = match managed {
+            Some((policy, route)) => {
+                ffi::create_managed_instance(&config, &policy.revision, route)?
+            }
+            None => ffi::create_instance(&config, revision)?,
+        };
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
@@ -93,7 +101,7 @@ impl GvproxyInstance {
     pub fn from_config(
         spec: &super::super::NetworkBackendSpec,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        Self::from_seed(spec, None)
+        Self::from_seed(spec, None, None)
     }
 
     /// Restore a Runtime-owned snapshot identity while provisioning networking.
@@ -101,12 +109,28 @@ impl GvproxyInstance {
         spec: &super::super::NetworkBackendSpec,
         revision: &crate::net::OutboundRevision,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        Self::from_seed(spec, Some(revision))
+        Self::from_seed(spec, Some(revision), None)
+    }
+
+    /// Install the verified route and effective policy before returning a Guest endpoint.
+    pub fn from_managed_config(
+        spec: &NetworkBackendSpec,
+        policy: &OutboundSnapshot,
+        route: &ManagedProxyRoute,
+    ) -> BoxliteResult<(Self, NetworkBackendEndpoint)> {
+        policy.policy.validate()?;
+        if !spec.outbound_disabled || !spec.allow_net.is_empty() {
+            return Err(BoxliteError::Network(
+                "Protected launch requires disabled legacy egress".into(),
+            ));
+        }
+        Self::from_seed(spec, None, Some((policy, route)))
     }
 
     fn from_seed(
         spec: &super::super::NetworkBackendSpec,
         revision: Option<&crate::net::OutboundRevision>,
+        managed: Option<(&OutboundSnapshot, &ManagedProxyRoute)>,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
         let secrets = spec.secrets.iter().map(Into::into).collect();
 
@@ -119,16 +143,17 @@ impl GvproxyInstance {
             .with_secrets(secrets)
             .with_rate_limit(spec.rate_limit);
         config.outbound_disabled = spec.outbound_disabled;
+        if let Some((policy, _)) = managed {
+            config.outbound_disabled =
+                policy.policy.mode == crate::runtime::options::NetworkMode::Disabled;
+            config.allow_net.clone_from(&policy.policy.allow_net);
+        }
 
         if let (Some(cert), Some(key)) = (spec.ca_cert_pem.as_deref(), spec.ca_key_pem.as_deref()) {
             config = config.with_ca(cert.to_string(), key.to_string());
         }
 
-        let instance = if revision.is_some() {
-            Self::new_with_revision(config, revision)?
-        } else {
-            Self::new(config)?
-        };
+        let instance = Self::new_with_route(config, revision, managed)?;
 
         let connection_type = if cfg!(target_os = "macos") {
             super::super::ConnectionType::UnixDgram
