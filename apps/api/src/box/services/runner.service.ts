@@ -417,7 +417,6 @@ export class RunnerService {
       updateData.appVersion = appVersion
     }
 
-    // Refreshed whenever a heartbeat carries it, never nulled when it does
     // `null` is the runner's own statement that it has no data disk to
     // advertise, so the stored identity clears: the runner is the source of
     // truth, and a stale identity is exactly what made the expansion
