@@ -772,7 +772,8 @@ connection-help footer. Successful requests clear filtering and show a reservati
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
-The **Managed domain** tab lists only platform hostnames, including its filter, count and allowance.
+The **Managed domain** tab lists platform hostnames and the organization's allowance.
+The default allowance is 20 names shared by generated App environment URLs and names acquired with **Request domain**.
 **Custom domain** includes draft and replaced configurations.
 Its separate one-domain allowance excludes replaced configurations.
 
