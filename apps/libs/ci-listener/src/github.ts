@@ -128,7 +128,7 @@ export function githubRetryAt(response: Response): number | undefined {
   return retryAt
 }
 
-export async function readGitHubBody(response: Response): Promise<string> {
+export async function readGitHubBody(response: Response, maxBytes = 1_048_576): Promise<string> {
   if (!response.body) throw new Error('Missing GitHub JSON response')
   const reader = response.body.getReader(),
     chunks: Uint8Array[] = []
@@ -138,7 +138,7 @@ export async function readGitHubBody(response: Response): Promise<string> {
       const chunk = await reader.read()
       if (chunk.done) break
       bytes += chunk.value.byteLength
-      if (bytes > 1_048_576) {
+      if (bytes > maxBytes) {
         await reader.cancel()
         throw new Error('GitHub response limit')
       }

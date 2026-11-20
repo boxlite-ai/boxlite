@@ -35,6 +35,7 @@ export interface ScaleTarget {
   assigned: number
   held: number
   check: StateCheck
+  delivery: { covered: number; waitingForDispatch: boolean; offline: boolean }
 }
 interface Lane {
   label: string
@@ -107,6 +108,7 @@ interface SetHost {
 export class ScaleSetController {
   private readonly stop = new AbortController()
   private readonly lanes = new Map<string, Lane>()
+  private readonly confirmed = new Map<string, ScaleTarget>()
   private readonly persisted = new Set<string>()
   private readonly waiting = new Map<string, number>()
   private readonly cooling = new Map<string, NodeJS.Timeout>()
@@ -126,7 +128,12 @@ export class ScaleSetController {
     this.signal = AbortSignal.any([this.stop.signal, lifetime])
   }
   targets(): ScaleTarget[] {
-    return [...this.lanes.values()].flatMap((lane) => (lane.target ? [lane.target] : []))
+    if (this.signal.aborted) return []
+    for (const [label, target] of this.confirmed) {
+      const { offline, covered, waitingForDispatch } = target.delivery
+      if (offline && covered >= target.assigned && !waitingForDispatch) this.confirmed.delete(label)
+    }
+    return [...this.confirmed.values()]
   }
   async restore(): Promise<void> {
     const occupied: string[] = [],
@@ -174,7 +181,10 @@ export class ScaleSetController {
     )
     lane.task = this.listen(lane, [...selection.labels], failures, log)
       .then((rotate) => {
-        if (rotate && !this.signal.aborted) this.waiting.set(label, 0)
+        if (rotate) {
+          this.confirmed.delete(label)
+          if (!this.signal.aborted) this.waiting.set(label, 0)
+        }
       })
       .catch((error) => {
         if (!this.signal.aborted) this.host.report(error, log.failure(error))
@@ -201,6 +211,7 @@ export class ScaleSetController {
   }
   async close() {
     this.stop.abort()
+    this.confirmed.clear()
     for (const timer of this.cooling.values()) clearTimeout(timer)
     this.cooling.clear()
     await Promise.all([...this.lanes.values()].map((lane) => lane.task))
@@ -410,7 +421,20 @@ export class ScaleSetController {
           const saved = await log.during('persist-target', () => this.state.commit(this.lease, changes, checks))
           row = saved.find((record) => record.key === key)!
         } else await this.journal.check(this.lease)
-        lane.target = { id: start.id, labels, assigned, held, check: { key, version: row.version } }
+        lane.target = {
+          id: start.id,
+          labels,
+          assigned,
+          held,
+          check: { key, version: row.version },
+          delivery: {
+            covered: 0,
+            waitingForDispatch:
+              assigned > 0 || held > 0 || old.assigned > 0 || old.held > 0 || this.host.charged(start.id) > 0,
+            offline: false,
+          },
+        }
+        this.confirmed.set(lane.label, lane.target)
         this.host.wake()
       }
       let verifyAfter = 0
@@ -655,9 +679,21 @@ export class ScaleSetController {
         })
       }
     } catch (error) {
-      lane.target = undefined
-      if (signal.aborted) return false
       const failure = log.failure(error)
+      if (
+        signal.aborted ||
+        error instanceof LeaseLost ||
+        error instanceof StateCorrupt ||
+        error instanceof ScaleSetRemoved ||
+        failure.stage === 'authority' ||
+        (lane.target && failure.stage !== 'poll')
+      ) {
+        this.confirmed.delete(lane.label)
+      } else if (lane.target) {
+        // An unsuccessful read carries no new assignment. The planner owns the unserved part of the last observation.
+        lane.target.delivery.offline = true
+      }
+      if (signal.aborted) return false
       if (!(error instanceof LeaseLost || error instanceof StateCorrupt)) {
         failures++
         const deadline = error instanceof GitHubRequestError ? (error.retryAt ?? 0) : 0

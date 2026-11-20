@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
 import { JobNotice } from '../jobs'
+import type { ScaleTarget } from '../scale-set-controller'
 import { JitRegistration, RunnerEffect, RunnerIdentity } from '../runners'
 import { ExecutionLease, StateCheck } from '../state/store'
 import { LeaseLost, StateConflict, StateCorrupt } from '../state/database'
@@ -187,7 +188,7 @@ export class WorkerPool {
   /** Reconcile the assigned count including charged reservations which have not reached GitHub yet. */
   async balanceScaleSets(
     lease: ExecutionLease,
-    targets: readonly { id: number; labels: string[]; assigned: number; held: number; check: StateCheck }[],
+    targets: readonly ScaleTarget[],
     policy: CapacityPolicy,
     signal: AbortSignal,
     drain?: StateCheck,
@@ -222,6 +223,7 @@ export class WorkerPool {
     const checks = new Map<number, StateCheck[]>()
     let admissionFailure: { cause: unknown } | undefined
     const waitingForAssignment = new Set<string>()
+    const fullyDispatched = new Set<ScaleTarget>()
     const retire = new Set<string>()
     for (const row of rows)
       if (drain && row.value.supply?.scaleSet && row.value.delivery === 'done' && !row.value.closing)
@@ -236,6 +238,10 @@ export class WorkerPool {
       // Keep an acquired slot charged while its service assignment is pending.
       // Count dispatched workers first so a queued reservation cannot start a surplus Box.
       const undispatched = original.filter((row) => row.value.box.phase === 'none')
+      // These credits follow this observation across a failed poll, including grants from interrupted passes.
+      const delivery = target.delivery
+      delivery.covered = Math.max(delivery.covered, Math.min(original.length, target.assigned))
+      if (!undispatched.length) fullyDispatched.add(target)
       const ready = this.creationReady(selection.label)
       const grants = ready ? Math.max(0, target.assigned - (original.length - undispatched.length)) : 0
       for (const row of undispatched.slice(grants)) waitingForAssignment.add(row.record.key)
@@ -257,7 +263,11 @@ export class WorkerPool {
         } else if (row.value.delivery === 'done') retire.add(row.record.key)
       }
       if (!ready || admissionFailure) continue
-      for (let count = original.length; count < Math.min(target.assigned, original.length + 16); count++) {
+      for (
+        let count = original.length;
+        count < target.assigned && (!delivery.offline || delivery.covered < target.assigned);
+        count++
+      ) {
         try {
           await backend.admit(signal)
         } catch (error) {
@@ -282,6 +292,9 @@ export class WorkerPool {
           { labels: target.labels, scaleSet: target.id },
         )
         if (!row) break
+        delivery.covered = Math.min(target.assigned, delivery.covered + 1)
+        delivery.waitingForDispatch = true
+        fullyDispatched.delete(target)
         const next = await this.journal.scope(lease, this.scopeKey)
         // A concurrent release may have changed the count; a new pass takes a complete snapshot.
         if (next.active !== rows.length + 1) throw new StateConflict()
@@ -309,6 +322,8 @@ export class WorkerPool {
       true,
     )
     if (admissionFailure) throw admissionFailure.cause
+    // Enqueuing a Box create is not a durable dispatch. A later pass observes the committed creation intent.
+    for (const target of targets) target.delivery.waitingForDispatch = !fullyDispatched.has(target)
   }
   creationReady(label: string): boolean {
     return (this.creationFailures.get(label)?.retryAt ?? 0) <= Date.now()
