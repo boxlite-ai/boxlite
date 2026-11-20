@@ -3,7 +3,7 @@
 
 //! BoxLite's native VMM. [`Vm::new`] validates a [`VmConfig`], creates the
 //! host VM, registers guest RAM and loads the kernel; [`Vm::run`] runs every
-//! vCPU until the guest powers off or resets, or a [`StopHandle`] stops it.
+//! vCPU until the guest powers off or resets, or a [`VmControl`] stops it.
 //!
 //! The VMM owns the guest machine and delegates host operations to
 //! `boxlite-hypervisor`. BoxLite runtime integration belongs in its engine adapter.
@@ -27,6 +27,7 @@ mod bus;
 )]
 mod chipset;
 mod config;
+mod control;
 #[cfg(target_arch = "x86_64")]
 mod cpu_features;
 #[cfg_attr(
@@ -51,6 +52,7 @@ mod events;
     )
 )]
 mod irq;
+pub(crate) mod lifecycle;
 mod memory;
 #[cfg(target_arch = "x86_64")]
 mod vcpu;
@@ -80,7 +82,9 @@ pub use chipset::{BusKind, Conflict};
 pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };
-pub use error::{Error, Result};
+pub use control::VmControl;
+pub use error::{ControlReason, Error, Result};
+pub use lifecycle::VmStatus;
 pub use memory::ReclaimPolicy;
 pub use vm::{StopHandle, Vm, VmExit};
 
