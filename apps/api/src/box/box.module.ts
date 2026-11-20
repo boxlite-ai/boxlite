@@ -81,6 +81,10 @@ import { RunnerDiskExpansion } from './entities/runner-disk-expansion.entity'
 import { RunnerDiskUsageSample } from './entities/runner-disk-usage-sample.entity'
 import { RunnerDiskExpansionService } from './services/runner-disk-expansion.service'
 import { GcpDiskClient } from './services/gcp-disk-client'
+import { ProxyCredentialCipher } from './outbound-proxy/proxy-credential-cipher'
+import { ProxyRegistryStore } from './outbound-proxy/proxy-registry.store'
+import { ManagedOutboundBootstrap } from './services/managed-outbound-bootstrap'
+import { ManagedOutboundCoordinator } from './services/managed-outbound.coordinator'
 
 @Module({
   imports: [
@@ -118,6 +122,20 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     CustomDomainMaintenanceController,
   ],
   providers: [
+    {
+      provide: ProxyRegistryStore,
+      inject: [DataSource],
+      useFactory: (source: DataSource) => {
+        const enabled = process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true'
+        return new ProxyRegistryStore(
+          source,
+          new ProxyCredentialCipher(enabled ? process.env.OUTBOUND_PROXY_REGISTRY_KEYS : undefined),
+          enabled,
+        )
+      },
+    },
+    ManagedOutboundBootstrap,
+    ManagedOutboundCoordinator,
     CheckpointService,
     CheckpointArchiveStore,
     CheckpointRecoverService,
@@ -173,6 +191,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     },
   ],
   exports: [
+    ProxyRegistryStore,
     CheckpointService,
     CheckpointRecoverService,
     BoxService,

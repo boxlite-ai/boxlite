@@ -6,10 +6,13 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -96,7 +99,7 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"runner_id": c.RunnerID, "version": 1,
-			"operations": []string{"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired"},
+			"operations": []string{"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes"},
 		})
 	})
 	path := "/boxes/:boxId/network/outbound/bootstrap"
@@ -120,13 +123,20 @@ func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation
 		decode.DisallowUnknownFields()
 		var key protectedBootKey
 		var payload any = &key
+		var restartVolumes []dto.VolumeDTO
 		switch operation {
 		case boxlite.ProtectedBootStart:
-			var route protectedBootRoute
-			if decode.Decode(&route) != nil {
+			var input struct {
+				protectedBootRoute
+				RestartVolumes []dto.VolumeDTO `json:"restart_volumes,omitempty"`
+			}
+			if decode.Decode(&input) != nil ||
+				(input.RestartVolumes != nil && !input.Restart) || !validRestartVolumes(input.RestartVolumes) {
 				ctx.Status(http.StatusBadRequest)
 				return
 			}
+			route := input.protectedBootRoute
+			restartVolumes = input.RestartVolumes
 			if route.Key.Policy.Policy.AllowNet == nil {
 				route.Key.Policy.Policy.AllowNet = []string{}
 			}
@@ -191,7 +201,7 @@ func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation
 			ctx.Status(http.StatusServiceUnavailable)
 			return
 		}
-		result, err := r.Boxlite.ProtectedBoot(ctx.Request.Context(), boxID, operation, payload)
+		result, err := r.Boxlite.ProtectedBoot(ctx.Request.Context(), boxID, operation, payload, restartVolumes)
 		if err != nil {
 			switch {
 			case boxlite.IsNotFound(err):
@@ -205,4 +215,19 @@ func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation
 		}
 		ctx.JSON(http.StatusOK, gin.H{"box_id": boxID, "receipt": result})
 	}
+}
+
+func validRestartVolumes(volumes []dto.VolumeDTO) bool {
+	for _, volume := range volumes {
+		if !filepath.IsLocal(volume.VolumeId) || filepath.Base(volume.VolumeId) != volume.VolumeId ||
+			!filepath.IsAbs(volume.MountPath) || strings.ContainsRune(volume.VolumeId, 0) ||
+			strings.ContainsRune(volume.MountPath, 0) {
+			return false
+		}
+		if volume.Subpath != nil && *volume.Subpath != "" &&
+			(!filepath.IsLocal(*volume.Subpath) || strings.ContainsRune(*volume.Subpath, 0)) {
+			return false
+		}
+	}
+	return true
 }

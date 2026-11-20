@@ -1398,6 +1398,10 @@ paths:
         Disabled with a non-empty list is invalid. Requires a running box
         created with a NIC; unsupported backends return an explicit error.
 
+        On eligible BoxLite Cloud Runners, a proxy name binds a registration
+        from the same organization. Explicit null requests unbind. An already
+        bound Box requires a proxy value in every complete replacement.
+
         New TCP/UDP flows use the replacement allowlist. Existing flows retain
         their policy. Disabled suspends NIC traffic, including DNS and inbound,
         while preserving the control channel for re-enabling.
@@ -3130,6 +3134,15 @@ components:
             gate. That connection is dialed by name, and under a non-empty
             list an answer in a private, loopback or CGNAT range is refused
             unless an IP or CIDR rule covers it.
+        proxy:
+          anyOf:
+            - type: string
+              pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+            - type: "null"
+          description: |
+            A BoxLite Cloud proxy registration selected by name. Omission on
+            create leaves the Box unbound. Explicit null is an unbind on update.
+            Local runtimes and unenrolled Runners do not support binding.
 
     OutboundSnapshot:
       type: object
@@ -3172,6 +3185,49 @@ components:
           type: array
           items:
             type: string
+        proxy:
+          $ref: "#/components/schemas/OutboundProxyStatus"
+
+    OutboundProxyStatus:
+      type: object
+      readOnly: true
+      required: [desired, committed, pending, installed, runtime_readback]
+      properties:
+        desired:
+          $ref: "#/components/schemas/OutboundProxyIdentity"
+        committed:
+          $ref: "#/components/schemas/OutboundProxyIdentity"
+        pending:
+          $ref: "#/components/schemas/OutboundProxyApplication"
+        installed:
+          $ref: "#/components/schemas/OutboundProxyApplication"
+        runtime_readback:
+          type: string
+          enum: [authenticated, unknown]
+          description: Unknown means the Runtime snapshot could not be confirmed for this assignment.
+
+    OutboundProxyIdentity:
+      anyOf:
+        - type: object
+          required: [name, revision]
+          properties:
+            name:
+              type: string
+            revision:
+              type: integer
+              minimum: 1
+        - type: "null"
+
+    OutboundProxyApplication:
+      anyOf:
+        - type: object
+          required: [policy_revision, proxy]
+          properties:
+            policy_revision:
+              type: string
+            proxy:
+              $ref: "#/components/schemas/OutboundProxyIdentity"
+        - type: "null"
 
     InboundNetworkSpec:
       type: object

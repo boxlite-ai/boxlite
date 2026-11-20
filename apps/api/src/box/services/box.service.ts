@@ -27,6 +27,7 @@ import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
+import { RunnerState } from '../enums/runner-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
@@ -106,6 +107,8 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { ManagedOutboundBootstrap } from './managed-outbound-bootstrap'
+import { ManagedOutboundCoordinator } from './managed-outbound.coordinator'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
 import { RunnerOutboundControl } from '../runner-adapter/outbound-control'
 import { OutboundPrecondition } from './outbound-policy.coordinator'
@@ -133,6 +136,7 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  outboundProxy?: string | null
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
@@ -225,6 +229,8 @@ export class BoxService {
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
+    private readonly outboundBootstrap?: ManagedOutboundBootstrap,
+    private readonly outboundCoordinator?: ManagedOutboundCoordinator,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -323,6 +329,12 @@ export class BoxService {
       nestedVirtualizationEnabled,
     })
     validateSecrets(createBoxDto.secrets)
+    const proxyName = options.outboundProxy ?? null
+    const proxyEnabled = process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true'
+    if (proxyName !== null) {
+      if (!proxyEnabled || !this.outboundBootstrap) throw new ConflictException('Managed outbound proxy is unavailable')
+      await this.outboundBootstrap.resolveName(organization.id, proxyName)
+    }
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
@@ -358,7 +370,8 @@ export class BoxService {
       // `box.image` records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
+      const needsFreshBox =
+        proxyName !== null || !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -468,11 +481,31 @@ export class BoxService {
       // before the insert: it has no way to give a slot back, so a create its
       // own input or placement refuses must not spend one. Only the box limit
       // and a name collision, which the insert itself settles, come after it.
-      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
+      const runnerOptions =
+        proxyName === null
+          ? { regions: [region.id], boxClass }
+          : { regions: [region.id], boxClass, requiresProtectedProxyBootstrap: true }
+      const insertedBox = await this.persistOnAvailableRunner(box, runnerOptions, async (runner) => {
+        let managed = proxyName !== null
+        if (!managed && proxyEnabled && this.outboundBootstrap && runner.apiVersion === '0') {
+          managed = await this.runnerAdapterFactory
+            .create(runner)
+            .then((adapter) => adapter.supportsProtectedBootstrap?.(true))
+            .then(
+              (eligible) => eligible === true,
+              () => false,
+            )
+        }
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        const onPersist = managed
+          ? async (manager: EntityManager, inserted: Box) => {
+              await options.onPersist?.(manager, inserted)
+              await this.outboundBootstrap.seed(manager, inserted, proxyName)
+            }
+          : options.onPersist
         const insert = () =>
-          options.onPersist
-            ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
+          onPersist
+            ? this.boxRepository.insert(box, options.maxCreatedBoxes, onPersist)
             : this.boxRepository.insert(box, options.maxCreatedBoxes)
         return createBoxDto.name
           ? insert()
@@ -1089,6 +1122,22 @@ export class BoxService {
       desiredState: BoxDesiredState.STARTED,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
+    if (this.outboundBootstrap && box.runnerId && process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true') {
+      const runner = await this.runnerService.findOne(box.runnerId)
+      if (runner?.apiVersion === '0') {
+        const ready = await this.runnerAdapterFactory
+          .create(runner)
+          .then((adapter) => adapter.supportsProtectedBootstrap?.(true, !!box.volumes?.length))
+          .then(
+            (eligible) => eligible === true,
+            () => false,
+          )
+        if (ready) {
+          const intent = await this.outboundBootstrap.legacyRestartIntent(box)
+          if (intent) updateData.outboundControl = intent
+        }
+      }
+    }
 
     const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
@@ -1445,11 +1494,32 @@ export class BoxService {
 
   async getOutboundNetwork(boxIdOrName: string, organizationId: string) {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    return this.boxRepository.readOutbound(box.id, organizationId)
+    return this.outboundCoordinator
+      ? this.outboundCoordinator.read(box.id, organizationId)
+      : this.boxRepository.readOutbound(box.id, organizationId)
+  }
+
+  @Cron(CronExpression.EVERY_30_SECONDS, { name: 'reconcile-managed-outbound', waitForCompletion: true })
+  async reconcileManagedOutbound(): Promise<void> {
+    if (process.env.OUTBOUND_PROXY_REGISTRY_ENABLED !== 'true' || !this.outboundCoordinator) return
+    const errors = await this.outboundCoordinator.poll(
+      (box, manager) => this.outboundControl(box, manager),
+      async (box) => {
+        const previous = await this.runnerService.findOne(box.prevRunnerId)
+        if (!previous || previous.state !== RunnerState.READY) return
+        const adapter = await this.runnerAdapterFactory.create(previous)
+        await this.outboundBootstrap?.retire(box, adapter, 'previous')
+      },
+    )
+    if (errors) this.logger.warn(`Managed outbound reconciliation deferred for ${errors} Boxes`)
   }
 
   async getOutboundStatus(boxIdOrName: string, organizationId: string) {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const managed = await this.outboundCoordinator?.status(box.id, organizationId, (locked) =>
+      this.outboundControl(locked),
+    )
+    if (managed) return managed
     return this.boxRepository.outboundStatus(box.id, organizationId, (locked) => this.outboundControl(locked))
   }
 
@@ -1458,6 +1528,7 @@ export class BoxService {
     policy: OutboundPolicy,
     organizationId: string,
     matches?: OutboundPrecondition,
+    proxy?: string | null,
   ): Promise<Box> {
     if (hasDisabledOutboundRules(policy.mode, policy.allow_net)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
@@ -1465,6 +1536,18 @@ export class BoxService {
     const allowNet = this.resolveOutboundAllowNet(policy.allow_net) ?? []
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
     const resolved = { ...policy, allow_net: allowNet }
+    if (proxy !== undefined || (await this.outboundCoordinator?.recognizes(box.id, organizationId))) {
+      if (!this.outboundCoordinator || process.env.OUTBOUND_PROXY_REGISTRY_ENABLED !== 'true')
+        throw new ConflictException('Managed outbound proxy is unavailable')
+      return this.outboundCoordinator.replace(
+        box.id,
+        organizationId,
+        resolved,
+        proxy,
+        (locked, manager) => this.outboundControl(locked, manager),
+        matches,
+      )
+    }
     return this.boxRepository.replaceOutbound(
       box.id,
       organizationId,
@@ -1474,10 +1557,17 @@ export class BoxService {
     )
   }
 
-  private async outboundControl(box: Box): Promise<RunnerOutboundControl> {
-    const runner = box.runnerId ? await this.runnerService.findOne(box.runnerId) : null
+  private async outboundControl(box: Box, manager?: EntityManager): Promise<RunnerOutboundControl> {
+    if (!box.runnerId) throw new ConflictException('Box runner is unavailable')
+    const runner = manager
+      ? await manager.findOneBy(Runner, { id: box.runnerId })
+      : await this.runnerService.findOne(box.runnerId)
     if (!runner) throw new ConflictException('Box runner is unavailable')
-    return new RunnerOutboundControl(runner, box.id)
+    return new RunnerOutboundControl(runner, box.id, async (epoch, command) => {
+      const adapter = await this.runnerAdapterFactory.create(runner)
+      if (!adapter.managedOutbound) throw new ConflictException('Box runner lacks protected outbound control')
+      return adapter.managedOutbound(box.id, epoch, command)
+    })
   }
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch
@@ -1528,6 +1618,7 @@ export class BoxService {
       this.logger.debug(`Box ${boxId} is already in state ${newState}`)
       return
     }
+    if (newState === BoxState.STARTED && (await this.outboundBootstrap?.blocksExternalStart(box))) return
 
     //  only allow updating the state of started | stopped boxes
     if (![BoxState.STARTED, BoxState.STOPPED].includes(box.state)) {

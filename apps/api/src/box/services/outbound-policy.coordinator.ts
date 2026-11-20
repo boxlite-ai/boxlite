@@ -19,9 +19,10 @@ import {
   outboundRecord,
   persistedOutbound,
 } from '../stores/outbound-policy.store'
+import { reconcileManagedOutbound } from './managed-outbound-reconciliation'
 
 type Attempt = { pending: OutboundPending; previous: OutboundSnapshot; confirmed: boolean }
-type Reservation = { attempt: Attempt } | { completed: Box } | { preconditionFailed: true }
+type Reservation = { attempt: Attempt } | { completed: Box } | { preconditionFailed: true } | { managedConflict: true }
 export type OutboundPrecondition = (revision: string) => boolean
 
 function samePending(left: OutboundPending | undefined, right: OutboundPending): boolean {
@@ -99,13 +100,29 @@ export class OutboundPolicyCoordinator {
       requireRunning(locked.box)
       let previous = persistedOutbound(locked.box)
       const control = await this.control(locked.box)
-      const pending = outboundRecord(locked.box).pending
+      let current = outboundRecord(locked.box)
+      if (current.bootstrap || current.managed?.retirement) return { managedConflict: true }
+      if (current.managed) {
+        const { epoch, pending, unbindRelease } = current.managed
+        const managed = control.managed
+        if (
+          (pending || unbindRelease) &&
+          (!managed || !(await reconcileManagedOutbound(locked, (command) => managed(epoch, command))))
+        )
+          return { managedConflict: true }
+        current = outboundRecord(locked.box)
+        previous = persistedOutbound(locked.box)
+        if (current.managed?.binding || current.managed?.runnerId !== locked.box.runnerId || locked.box.prevRunnerId)
+          return { managedConflict: true }
+      }
+      const pending = current.pending
       let expected = previous.revision
       if (pending) {
         if (pending.runnerId !== locked.box.runnerId) throw new ConflictException('Outbound pending owner changed')
         const runtime = await control.status()
         if (completed(runtime, pending.candidate)) {
-          await locked.write({ version: 1, revision: pending.candidate.revision }, pending.candidate)
+          current = { ...current, revision: pending.candidate.revision, pending: undefined }
+          await locked.write(current, pending.candidate)
           previous = pending.candidate
           expected = previous.revision
         } else {
@@ -117,10 +134,11 @@ export class OutboundPolicyCoordinator {
       }
       if (matches && !matches(previous.revision)) return { preconditionFailed: true }
       const next: OutboundPending = { expected, candidate, runnerId: locked.box.runnerId }
-      await locked.write({ version: 1, revision: previous.revision, pending: next })
+      await locked.write({ ...current, revision: previous.revision, pending: next })
       return { attempt: { pending: next, previous, confirmed: false } }
     })
     if ('preconditionFailed' in reservation) throw new HttpException('Outbound precondition failed', 412)
+    if ('managedConflict' in reservation) throw new ConflictException('A complete authorized proxy update is required')
     if ('completed' in reservation) return reservation.completed
     const attempt = reservation.attempt
     try {
@@ -196,7 +214,7 @@ export class OutboundPolicyCoordinator {
         if (!status || !completed(status, pending.candidate)) throw cause
       }
       attempt.confirmed = true
-      await locked.write({ version: 1, revision: pending.candidate.revision }, pending.candidate)
+      await locked.write({ ...current, revision: pending.candidate.revision, pending: undefined }, pending.candidate)
       return locked.box
     })
   }

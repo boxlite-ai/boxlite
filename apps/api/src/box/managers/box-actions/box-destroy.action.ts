@@ -14,6 +14,7 @@ import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { BoxRepository } from '../../repositories/box.repository'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
+import { ManagedOutboundBootstrap } from '../../services/managed-outbound-bootstrap'
 
 @Injectable()
 export class BoxDestroyAction extends BoxAction {
@@ -22,6 +23,7 @@ export class BoxDestroyAction extends BoxAction {
     protected runnerAdapterFactory: RunnerAdapterFactory,
     protected boxRepository: BoxRepository,
     protected redisLockProvider: RedisLockProvider,
+    private readonly outboundBootstrap?: ManagedOutboundBootstrap,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
@@ -29,6 +31,17 @@ export class BoxDestroyAction extends BoxAction {
   @WithSpan()
   async run(box: Box, lockCode: LockCode): Promise<SyncState> {
     if (box.state === BoxState.DESTROYED) {
+      return DONT_SYNC_AGAIN
+    }
+    if (await this.outboundBootstrap?.isProtected(box)) {
+      const runnerId = box.prevRunnerId ?? box.runnerId
+      const runner = runnerId ? await this.runnerService.findOne(runnerId) : undefined
+      if (!runner || runner.state !== RunnerState.READY) return DONT_SYNC_AGAIN
+      const adapter = await this.runnerAdapterFactory.create(runner)
+      const previous = !!box.prevRunnerId
+      if ((await this.outboundBootstrap.retire(box, adapter, previous ? 'previous' : 'destroy')) && !previous) {
+        await this.updateBoxState(box, BoxState.DESTROYED, lockCode)
+      }
       return DONT_SYNC_AGAIN
     }
 

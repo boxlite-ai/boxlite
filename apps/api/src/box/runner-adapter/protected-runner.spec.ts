@@ -22,6 +22,7 @@ describe('Protected Runner TLS and placement', () => {
   let otherKey: Buffer
   let trustedKey: Buffer
   let healthCalls: number
+  let volumeRestarts: boolean
   const received: { path: string; body: any }[] = []
   const boxId = '597da250-c3f6-4276-a0c2-25657a8fdeda'
   const bootPath = `/v1/boxes/${boxId}/network/outbound/bootstrap`
@@ -88,12 +89,31 @@ describe('Protected Runner TLS and placement', () => {
         request.headers.authorization === 'Bearer test-bearer' &&
         request.headers['x-boxlite-runner-id'] === runnerId
       ) {
-        response.end(JSON.stringify({ runner_id: runnerId, version: 1, operations: ['start', 'receipt', 'retire'] }))
+        response.end(
+          JSON.stringify({
+            runner_id: runnerId,
+            version: 1,
+            operations: [
+              'start',
+              'receipt',
+              'retire',
+              'release-gate',
+              'seal-gate',
+              'managed-route',
+              'unbound-start',
+              'remove-retired',
+              ...(volumeRestarts ? ['restart-volumes'] : []),
+            ],
+          }),
+        )
       } else if (
         request.method === 'POST' &&
         request.headers.authorization === 'Bearer test-bearer' &&
         (request.url === '/boxes' ||
-          [bootPath, `${bootPath}/receipt`, `${bootPath}/retire`].includes(request.url ?? ''))
+          request.url === `/v1/boxes/${boxId}/network/outbound/managed-route` ||
+          ['', '/receipt', '/retire', '/release-gate', '/seal-gate'].some(
+            (suffix) => request.url === bootPath + suffix,
+          ))
       ) {
         let incoming = ''
         request.setEncoding('utf8')
@@ -103,17 +123,50 @@ describe('Protected Runner TLS and placement', () => {
         request.on('end', () => {
           const body = JSON.parse(incoming)
           received.push({ path: request.url!, body })
+          if (request.url?.endsWith('/managed-route')) {
+            const route = {
+              binding: null,
+              snapshot: { revision: 'live-revision', policy: { mode: 'enabled', allow_net: [] } },
+              diagnostic: 'synthetic-private-field',
+            }
+            response.end(
+              JSON.stringify({
+                box_id: boxId,
+                receipt: {
+                  runner_id: runnerId,
+                  epoch: 'fixture-epoch',
+                  durable: route,
+                  installed: route,
+                  pending_attempt: null,
+                  unbind_settlement: 'unbind-attempt',
+                  rollback: null,
+                  retired_attempt: null,
+                },
+              }),
+            )
+            return
+          }
+          const seal = request.url === `${bootPath}/seal-gate`
+          const gate = seal || request.url === `${bootPath}/release-gate`
+          const boot = {
+            key: request.url === bootPath || gate ? body.key : body,
+            epoch: 'fixture-epoch',
+            outcome: request.url?.endsWith('/retire') ? 'retired' : 'confirmed',
+          }
           response.end(
             JSON.stringify(
               request.url === '/boxes'
                 ? { daemonVersion: 'boxlite' }
                 : {
                     box_id: boxId,
-                    receipt: {
-                      key: request.url === bootPath ? body.key : body,
-                      epoch: 'fixture-epoch',
-                      outcome: request.url?.endsWith('/retire') ? 'retired' : 'confirmed',
-                    },
+                    receipt: gate
+                      ? {
+                          boot,
+                          generation: 'fixture-generation',
+                          sealed: seal,
+                          closed: seal,
+                        }
+                      : boot,
                   },
             ),
           )
@@ -128,6 +181,7 @@ describe('Protected Runner TLS and placement', () => {
 
   beforeEach(() => {
     healthCalls = 0
+    volumeRestarts = false
     received.length = 0
     server.setSecureContext({ key: trustedKey, cert: trusted })
   })
@@ -138,6 +192,15 @@ describe('Protected Runner TLS and placement', () => {
     rmSync(directory, { recursive: true, force: true })
     if (originalEnvironments === undefined) delete process.env.BOXLITE_PROTECTED_PROXY_ENROLLMENTS
     else process.env.BOXLITE_PROTECTED_PROXY_ENROLLMENTS = originalEnvironments
+  })
+
+  it('distinguishes volume-backed restarts from the existing protected boot operations', async () => {
+    enroll(trusted)
+    const runner = await adapter(record())
+    await expect(runner.supportsProtectedBootstrap(true)).resolves.toBe(true)
+    await expect(runner.supportsProtectedBootstrap(true, true)).resolves.toBe(false)
+    volumeRestarts = true
+    await expect(runner.supportsProtectedBootstrap(true, true)).resolves.toBe(true)
   })
 
   it('uses the deployment CA in the normal V0 health path and rejects untrusted TLS', async () => {
@@ -230,5 +293,39 @@ describe('Protected Runner TLS and placement', () => {
       epoch: 'fixture-epoch',
       outcome: 'retired',
     })
+  })
+
+  it('requires exact epoch, generation and gate state in the enrolled Runner receipt', async () => {
+    enroll(trusted)
+    const chosen = await adapter(record())
+    const key: ProtectedBootKey = {
+      runner_id: runnerId,
+      attempt_id: 'fixture-attempt',
+      registration_id: 'fixture-registration',
+      registration_revision: '3',
+      policy: { revision: 'fixture-policy', policy: { mode: 'enabled', allow_net: [] } },
+    }
+    expect(await chosen.supportsProtectedBootstrap(true)).toBe(true)
+    await expect(
+      chosen.changeProtectedBootGate(boxId, key, 'fixture-epoch', 'fixture-generation', 'seal'),
+    ).resolves.toBeUndefined()
+    await expect(
+      chosen.changeProtectedBootGate(boxId, key, 'fixture-epoch', 'different-generation', 'release'),
+    ).rejects.toThrow('exact protected recovery gate change')
+    await expect(
+      chosen.changeProtectedBootGate(boxId, key, 'different-epoch', 'fixture-generation', 'seal'),
+    ).rejects.toThrow('exact protected bootstrap evidence')
+  })
+
+  it('uses the enrolled channel for managed route readback and verifies scope', async () => {
+    enroll(trusted)
+    const chosen = await adapter(record())
+    const receipt = await chosen.managedOutbound(boxId, 'fixture-epoch', { operation: 'inspect' })
+    expect(receipt.durable.binding).toBeNull()
+    expect(receipt.unbind_settlement).toBe('unbind-attempt')
+    expect(JSON.stringify(receipt)).not.toContain('synthetic-private-field')
+    await expect(chosen.managedOutbound(boxId, 'stale-epoch', { operation: 'inspect' })).rejects.toThrow(
+      'exact managed outbound evidence',
+    )
   })
 })

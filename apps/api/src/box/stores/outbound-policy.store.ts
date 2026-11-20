@@ -3,6 +3,8 @@ import { DataSource, EntityManager } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { OutboundControlRecord } from '../entities/outbound-control-record'
 import { OutboundSnapshot, validOutboundRevision, validOutboundSnapshot } from '../runner-adapter/outbound-control'
+import { validManagedControl } from '../runner-adapter/protected-outbound'
+import { validBootstrapIntent } from '../runner-adapter/protected-runner'
 
 /** COMMIT may have succeeded; callers must inspect a new primary transaction before recovery. */
 export class OutboundCommitUnknown extends Error {
@@ -18,6 +20,8 @@ export function outboundRecord(box: Box): OutboundControlRecord {
   if (
     control.version !== 1 ||
     !validOutboundRevision(control.revision) ||
+    (control.bootstrap !== undefined && !validBootstrapIntent(control.bootstrap)) ||
+    (control.managed !== undefined && !validManagedControl(control.managed)) ||
     (pending !== undefined &&
       (!pending ||
         !validOutboundRevision(pending.expected) ||
@@ -43,18 +47,60 @@ export function persistedOutbound(box: Box): OutboundSnapshot {
 
 export type LockedOutboundBox = {
   box: Box
-  write(control: OutboundControlRecord, confirmed?: OutboundSnapshot): Promise<void>
+  manager: EntityManager
+  write(control: OutboundControlRecord, confirmed?: OutboundSnapshot, dueAt?: Date | null): Promise<void>
 }
 
 /** All callbacks use a primary connection; a failed transaction is released before another operation starts. */
 export class OutboundPolicyStore {
   constructor(private readonly dataSource: DataSource) {}
 
+  async claimManagedWork(limit = 16): Promise<{ id: string; organizationId: string }[]> {
+    if (limit <= 0) return []
+    const runner = this.dataSource.createQueryRunner('master')
+    try {
+      return await runner.query(
+        `
+        WITH due AS (
+          SELECT id FROM box WHERE "outboundControlDueAt" <= now()
+            AND ("outboundControl" -> 'managed' ?| ARRAY['pending', 'unbindRelease']
+              OR ("prevRunnerId" IS NOT NULL AND "outboundControl" -> 'managed' IS NOT NULL))
+          ORDER BY "outboundControlDueAt", id LIMIT $1 FOR UPDATE SKIP LOCKED
+        ), leased AS (
+          UPDATE box b SET "outboundControlDueAt" = now() + interval '60 seconds'
+          FROM due WHERE b.id = due.id RETURNING b.id, b."organizationId"
+        ) SELECT * FROM leased
+      `,
+        [Math.min(limit, 16)],
+      )
+    } finally {
+      await runner.release()
+    }
+  }
+
   async read(id: string, organizationId: string): Promise<Box> {
     const runner = this.dataSource.createQueryRunner('master')
     try {
       return await this.find(runner.manager, id, organizationId, false)
     } finally {
+      await runner.release()
+    }
+  }
+
+  async view<T>(
+    id: string,
+    organizationId: string,
+    read: (box: Box, manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    const runner = this.dataSource.createQueryRunner('master')
+    try {
+      await runner.startTransaction('REPEATABLE READ')
+      await runner.query('SET TRANSACTION READ ONLY')
+      const result = await read(await this.find(runner.manager, id, organizationId, false), runner.manager)
+      await runner.commitTransaction()
+      return result
+    } finally {
+      if (runner.isTransactionActive) await runner.rollbackTransaction()
       await runner.release()
     }
   }
@@ -73,7 +119,8 @@ export class OutboundPolicyStore {
       const box = await this.find(runner.manager, id, organizationId, true)
       const result = await operation({
         box,
-        write: async (control, confirmed) => {
+        manager: runner.manager,
+        write: async (control, confirmed, dueAt) => {
           outboundRecord({ outboundControl: control } as Box)
           if (
             confirmed &&
@@ -92,6 +139,13 @@ export class OutboundPolicyStore {
           }
           const result = await runner.manager.update(Box, { id, organizationId }, update)
           if (result.affected !== 1) throw new NotFoundException('Box not found')
+          if (dueAt !== undefined) {
+            await runner.query('UPDATE box SET "outboundControlDueAt" = $3 WHERE id = $1 AND "organizationId" = $2', [
+              id,
+              organizationId,
+              dueAt,
+            ])
+          }
           Object.assign(box, update)
         },
       })

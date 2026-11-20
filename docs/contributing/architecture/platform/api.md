@@ -1261,6 +1261,12 @@ Removal replies are keyed by the native Box identity, the Runner Box name,
 and the exact retired attempt. A retry returns its saved receipt if the name
 is in use again and leaves the new Box intact.
 
+Runners advertising `restart-volumes` refresh the declared mounts for a volume-backed protected restart.
+A volume-backed managed Box waits for that capability before restarting.
+The Runner rejects malformed `restart_volumes` arrays before admitting the boot attempt.
+
+A confirmed startup or readback queues its resolved image digest and size for BoxSync.
+
 ## Preview proxy API
 
 **Service:** `apps/proxy` · **Base host:** `proxy.<domain>` and

@@ -66,11 +66,11 @@ func TestIntegrationProtectedBootRetiresAfterPreSpawnFailure(t *testing.T) {
 	}
 	attempt := json.RawMessage(`{"runner_id":"8137cc0d-5d3f-43b8-aa32-b9304740269e","attempt_id":"fixture-attempt","registration_id":"fixture-registration","registration_revision":"7","policy":{"revision":"fixture-policy","policy":{"mode":"disabled"}}}`)
 	request := json.RawMessage(fmt.Sprintf(`{"key":%s,"scheme":"https","host":"proxy.example.com","port":443,"doh_url":"https://resolver.example.com/dns-query","doh_address":"1.1.1.1:443"}`, attempt))
-	_, err = client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootStart, request)
+	_, err = client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootStart, request, nil)
 	if err == nil || !strings.Contains(err.Error(), "Failed to create stderr file") {
 		t.Fatalf("expected stderr creation failure before shim spawn, got %v", err)
 	}
-	receipt, err := client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRetire, attempt)
+	receipt, err := client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRetire, attempt, nil)
 	if err != nil {
 		t.Fatalf("retire the admitted attempt without a shim: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestIntegrationProtectedBootTCPPaths(t *testing.T) {
 		} {
 			postProtectedBoot(t, ctx, https, path, tt.token, tt.runnerID, request, tt.status)
 		}
-		if _, err := client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRead, json.RawMessage(attempt)); !boxlite.IsInvalidState(err) {
+		if _, err := client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRead, json.RawMessage(attempt), nil); !boxlite.IsInvalidState(err) {
 			t.Fatalf("denied HTTP requests must leave startup unconfirmed: %v", err)
 		}
 		receipt := postProtectedBoot(t, ctx, https, path, bootAPIToken, bootRunnerID, request, http.StatusOK)
@@ -219,7 +219,15 @@ func TestIntegrationProtectedBootTCPPaths(t *testing.T) {
 		if err := json.Unmarshal(receipt, &evidence); err != nil || evidence.Epoch == "" || evidence.Outcome != "confirmed" {
 			t.Fatalf("unexpected startup evidence: %s (%v)", receipt, err)
 		}
+		image, reported := client.PendingImageReport(boxID)
+		if !reported || image.Digest == "" || image.SizeBytes <= 0 {
+			t.Fatalf("protected start did not report its resolved image: %+v", image)
+		}
+		client.ClearPendingImageReport(boxID)
 		observed := postProtectedBoot(t, ctx, https, path+"/receipt", bootAPIToken, bootRunnerID, attempt, http.StatusOK)
+		if replayed, ok := client.PendingImageReport(boxID); !ok || replayed != image {
+			t.Fatalf("confirmed readback did not restore the image report: %+v", replayed)
+		}
 		if string(observed) != string(receipt) {
 			t.Fatalf("read back exact startup evidence: %s", observed)
 		}
@@ -345,8 +353,27 @@ func verifyGatedGuestEgress(t *testing.T, ctx context.Context, client *blclient.
 	key := bootKey("gate-attempt")
 	const generation = "held-generation"
 	path := runnerURL + "/v1/boxes/" + boxID + "/network/outbound/bootstrap"
-	request := fmt.Sprintf(`{"key":%s,"recovery_generation":%q,"restart":true}`, key, generation)
+	tools := t.TempDir()
+	probeLog := filepath.Join(tools, "mount-probe")
+	probeCmd := []byte("#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$BOXLITE_TEST_VOLUME_PROBE\"\n")
+	if err := os.WriteFile(filepath.Join(tools, "mountpoint"), probeCmd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BOXLITE_TEST_VOLUME_PROBE", probeLog)
+	for _, malformed := range []string{`"{"`, `[{}]`, `[{"volumeId":"../../escape","mountPath":"/data"}]`} {
+		request := fmt.Sprintf(`{"key":%s,"recovery_generation":%q,"restart":true,"restart_volumes":%s}`, key, generation, malformed)
+		postProtectedBoot(t, ctx, runnerHTTPS, path, bootAPIToken, bootRunnerID, request, http.StatusBadRequest)
+	}
+	if _, err := client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRead, json.RawMessage(key), nil); !boxlite.IsInvalidState(err) {
+		t.Fatalf("malformed volume metadata changed the protected attempt: %v", err)
+	}
+	const volumes = `[{"volumeId":"protected-volume-fixture","mountPath":"/data"}]`
+	request := fmt.Sprintf(`{"key":%s,"recovery_generation":%q,"restart":true,"restart_volumes":%s}`, key, generation, volumes)
 	receipt := postProtectedBoot(t, ctx, runnerHTTPS, path, bootAPIToken, bootRunnerID, request, http.StatusOK)
+	if probe, err := os.ReadFile(probeLog); err != nil || !strings.Contains(string(probe), "protected-volume-fixture") {
+		t.Fatalf("protected restart did not check the persisted volume: %s (%v)", probe, err)
+	}
 	var boot struct{ Epoch, Outcome string }
 	if err = json.Unmarshal(receipt, &boot); err != nil || boot.Epoch == "" || boot.Outcome != "confirmed" {
 		t.Fatalf("invalid gated startup receipt: %s (%v)", receipt, err)
@@ -426,7 +453,7 @@ for name, run in (("tcp", tcp_probe), ("udp", udp_probe), ("dns", dns_probe)):
 		var retired json.RawMessage
 		for {
 			var err error
-			retired, err = client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRetire, json.RawMessage(key))
+			retired, err = client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRetire, json.RawMessage(key), nil)
 			if err == nil {
 				break
 			}
