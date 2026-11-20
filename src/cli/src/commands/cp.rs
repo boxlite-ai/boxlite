@@ -1,6 +1,6 @@
 use crate::cli::GlobalFlags;
 use anyhow::{Result, anyhow};
-use boxlite::{BoxStatus, CopyOptions, LiteBox};
+use boxlite::{BoxStatus, BoxliteRuntime, CopyOptions, LiteBox};
 use clap::Args;
 use std::path::PathBuf;
 
@@ -24,10 +24,19 @@ pub struct CpArgs {
 }
 
 pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
-    let rt = global.create_runtime()?;
-
     let direction = parse_direction(&args.src, &args.dst)?;
-    args.require_supported_backend(global.targets_rest()?)?;
+    let targets_rest = global.targets_rest()?;
+    args.require_supported_backend(targets_rest)?;
+
+    #[cfg(not(test))]
+    let rt = global.create_runtime()?;
+    // The embedded unit test uses a real local runtime without starting a VM.
+    #[cfg(test)]
+    let rt = if targets_rest {
+        global.create_runtime()?
+    } else {
+        BoxliteRuntime::new_for_test(global.resolve_runtime_options()?)?
+    };
 
     let opts = CopyOptions {
         follow_symlinks: args.follow_symlinks,
@@ -38,11 +47,13 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     let box_name = match &direction {
         Direction::HostToBox { box_name, .. } | Direction::BoxToHost { box_name, .. } => box_name,
     };
-    let handle = require_box(&rt, box_name).await?;
-    let status = handle.info().await?.status;
-    if status == BoxStatus::Paused {
-        anyhow::bail!("cp is not allowed on paused boxes: box '{box_name}' is {status}");
-    }
+    let (handle, status) = match copy_target(&rt, box_name).await {
+        Ok(target) => target,
+        Err(error) => {
+            shutdown_without_handles(&rt).await;
+            return Err(error);
+        }
+    };
 
     // Let the copy decide whether it can boot the box. An explicit start
     // would bypass the guard against running the user's main command again.
@@ -56,9 +67,17 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     };
 
     let stopped = stop_after_copy(&handle, status).await;
+    drop(handle);
+    shutdown_without_handles(&rt).await;
     copied?;
     stopped?;
     Ok(())
+}
+
+async fn shutdown_without_handles(rt: &BoxliteRuntime) {
+    // With the handle gone, async shutdown cancels the runtime token without
+    // stopping a box. Drop then skips its database-wide shutdown scan.
+    let _ = rt.shutdown(None).await;
 }
 
 async fn stop_after_copy(
@@ -140,11 +159,16 @@ fn non_empty(path: &str, role: &str) -> Result<String> {
     }
 }
 
-async fn require_box(rt: &boxlite::BoxliteRuntime, name: &str) -> Result<LiteBox> {
-    match rt.get(name).await? {
-        Some(b) => Ok(b),
-        None => Err(anyhow!("box '{}' not found", name)),
+async fn copy_target(rt: &BoxliteRuntime, box_name: &str) -> Result<(LiteBox, BoxStatus)> {
+    let handle = rt
+        .get(box_name)
+        .await?
+        .ok_or_else(|| anyhow!("box '{box_name}' not found"))?;
+    let status = handle.info().await?.status;
+    if status == BoxStatus::Paused {
+        anyhow::bail!("cp is not allowed on paused boxes: box '{box_name}' is {status}");
     }
+    Ok((handle, status))
 }
 
 #[cfg(test)]
@@ -301,6 +325,88 @@ mod tests {
                 .contains("cp is not allowed on paused boxes"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn local_paused_copy_preserves_shim_and_persisted_status() {
+        let home = tempfile::tempdir().unwrap();
+        let mut cli = crate::cli::try_parse_from([
+            "boxlite",
+            "--home",
+            home.path().to_str().unwrap(),
+            "cp",
+            "cp-box:/file.txt",
+            home.path().join("file.txt").to_str().unwrap(),
+        ])
+        .unwrap();
+        cli.global.url = None;
+        cli.global.profile = None;
+        let crate::cli::Commands::Cp(args) = cli.command else {
+            panic!("expected cp command");
+        };
+
+        let rt =
+            BoxliteRuntime::new_for_test(cli.global.resolve_runtime_options().unwrap()).unwrap();
+        let handle = rt
+            .create(
+                boxlite::BoxOptions {
+                    detach: false,
+                    auto_delete: Some(0),
+                    ..Default::default()
+                },
+                Some(BOX_ID.into()),
+            )
+            .await
+            .unwrap();
+        let id = handle.id().clone();
+        drop(handle);
+        drop(rt);
+
+        let mut shim = tokio::process::Command::new("sleep")
+            .arg("300")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = shim.id().unwrap();
+        let start_time = boxlite::util::process_start_time(pid).unwrap();
+        let box_home = home.path().join("boxes").join(id.as_str());
+        std::fs::create_dir_all(&box_home).unwrap();
+        std::fs::write(box_home.join("shim.pid"), format!("{pid}\n{start_time}\n")).unwrap();
+
+        // Use the runtime-created record and locks, then emulate a paused shim.
+        let sql = |statement: &str| {
+            let output = std::process::Command::new("sqlite3")
+                .arg(home.path().join("db/boxlite.db"))
+                .arg(statement)
+                .output()
+                .expect("run sqlite3 on the test database");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        sql(&format!(
+            "UPDATE box_state SET status = 'paused', pid = {pid}, \
+             json = json_set(json, '$.status', 'paused', '$.pid', {pid}) WHERE id = '{id}'"
+        ));
+
+        let error = execute(args, &cli.global).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cp is not allowed on paused boxes"),
+            "{error}"
+        );
+        let shim_status = shim.try_wait();
+        let persisted_status = sql(&format!("SELECT status FROM box_state WHERE id = '{id}'"));
+        assert!(
+            matches!(shim_status, Ok(None)),
+            "cp stopped the paused shim: {shim_status:?}, database status: {persisted_status:?}"
+        );
+        assert_eq!(persisted_status.trim(), "paused");
+        shim.kill().await.unwrap();
     }
 
     #[rstest::rstest]

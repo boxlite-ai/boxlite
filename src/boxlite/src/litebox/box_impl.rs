@@ -885,7 +885,7 @@ impl BoxImpl {
             (state.status, state.pid)
         };
         if matches!(status, BoxStatus::Paused | BoxStatus::Unknown) {
-            ShimHandler::stop_verified(self.id(), pid, &self.layout.pid_file_path())?;
+            ShimHandler::stop_verified_async(self.id(), pid, &self.layout.pid_file_path()).await?;
         }
 
         // Abort the box watcher (if armed) so it does not run past stop().
