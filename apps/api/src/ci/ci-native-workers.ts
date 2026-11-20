@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common'
 import { EntityManager } from 'typeorm'
 import {
   ConfirmedWorkerAbsent,
@@ -173,7 +173,12 @@ export class CiNativeWorkers {
       return box
     }
     const context = () => Context.platform(PlatformReason.CI_RUNNER)
-    const rejectUndispatchedCreate = async (name: string, effect: string): Promise<never> => {
+    const rejectUndispatchedCreate = async (
+      name: string,
+      effect: string,
+      reason: ConfirmedWorkerCreationRejected['reason'] = 'undispatched',
+      cause?: unknown,
+    ): Promise<never> => {
       await this.store.transaction(async (tx, state) => {
         // The same expected-null ledger write fences a racing Box persistence transaction.
         const original = await inspect(tx, state, name)
@@ -200,7 +205,11 @@ export class CiNativeWorkers {
           },
         ])
       })
-      throw new ConfirmedWorkerCreationRejected(effect)
+      throw new ConfirmedWorkerCreationRejected(
+        effect,
+        reason,
+        cause instanceof HttpException ? cause.getStatus() : undefined,
+      )
     }
     const running = async (name: string) => {
       const box = await owned(name, 'jit-deliver')
@@ -292,7 +301,8 @@ export class CiNativeWorkers {
             return original.allocation.effect!.id
           })
         } catch (error) {
-          if (error instanceof CreationAdmissionDenied) return rejectUndispatchedCreate(launch.name, error.effect)
+          if (error instanceof CreationAdmissionDenied)
+            return rejectUndispatchedCreate(launch.name, error.effect, 'admission', error)
           throw error
         }
         const dto = Object.assign(new CreateBoxDto(), {
@@ -337,11 +347,11 @@ export class CiNativeWorkers {
           })
         } catch (error) {
           if (error instanceof CreationAdmissionDenied && error.effect === creationEffect)
-            return rejectUndispatchedCreate(launch.name, creationEffect)
+            return rejectUndispatchedCreate(launch.name, creationEffect, 'admission', error)
           // Classify by the effect boundary, so new error types cannot strand
           // a reservation. A failed COMMIT after onPersist remains uncertain.
           if (persistenceEntered) throw error
-          return rejectUndispatchedCreate(launch.name, creationEffect)
+          return rejectUndispatchedCreate(launch.name, creationEffect, 'before-persistence', error)
         }
         return boxToBoxResponse(created)
       },

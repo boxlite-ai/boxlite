@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { GitHubExecutionBackend } from './execution/backend'
 import { ExecutionJournal } from './execution/journal'
-import { decodeScope, ExecutionScope } from './execution/model'
+import { scopeKey, decodeScope, ExecutionScope } from './execution/model'
 import { Listener, ListenerHost } from './listener'
 import { ScaleSetController, ScaleSetWork } from './scale-set-controller'
 import { ActionsScaleSets } from './scale-set-client'
@@ -44,6 +44,7 @@ class ActionsFixture {
   acquiredCount: number | undefined = 0
   initialAcquired?: number
   readonly throttledSets = new Map<number, number>()
+  rejectNextPoll = false
   target = 0
   definition?: { id: number; name: string; labels: unknown[]; runnerGroupId: number }
   installation?: GitHubInstallation
@@ -178,6 +179,10 @@ class ActionsFixture {
     }
     if (method === 'DELETE' && path.includes('/9/sessions/')) return new Response(null, { status: 204 })
     if (path === '/messages' && method === 'GET') {
+      if (this.rejectNextPoll) {
+        this.rejectNextPoll = false
+        return new Response('private response body', { status: 503 })
+      }
       if (!this.messages.length)
         await new Promise<void>((resolve, reject) => {
           const signal = options.signal!
@@ -234,6 +239,8 @@ class ActionsFixture {
 
 const scenarios = [
   'reconciles acquired and replayed demand',
+  'continues assigning workers when the event observer throws',
+  'traces a failed poll with its scale set and HTTP status',
   'backs off failed Box startup',
   'backs off a Box exit without a status code',
   'checks an organization runner group',
@@ -371,7 +378,13 @@ for (const storage of ['sqlite', 'postgres'])
         }
         const errors: string[] = []
         const inbox = new ListenerInbox(state)
+        const observe = jest.fn()
+        if (scenario === 'continues assigning workers when the event observer throws')
+          observe.mockImplementation(() => {
+            throw new Error('logging unavailable')
+          })
         const host: ListenerHost = {
+          observe,
           discover: async () => ({ scopes: [scope], completed: [], pending: false, ready: true }),
           backend: async (original, lease) =>
             new GitHubExecutionBackend(state, lease, original, source, { workers, authorize: async () => {} }, [
@@ -381,6 +394,7 @@ for (const storage of ['sqlite', 'postgres'])
           scan: jest.fn(),
           accept: (event) => inbox.receive(event),
         }
+        const report = jest.spyOn(host, 'report')
         let listener: Listener
         let maximum = 2
         let policyOwner: ExecutionLease | undefined
@@ -598,6 +612,7 @@ for (const storage of ['sqlite', 'postgres'])
             )
             await scans.finish(claim, { success: true, intervalMs: 60_000 })
           }
+          fixture.rejectNextPoll = scenario === 'traces a failed poll with its scale set and HTTP status'
           stop = start()
           if (fixture.discoverCustom && !scanOnly) {
             await until(() => fixture.requests.includes('GET /messages/default'))
@@ -623,6 +638,22 @@ for (const storage of ['sqlite', 'postgres'])
             expect(await listener!.receive(webhook)).toBe('stored')
           }
           await until(() => fixture.sessions.length > 0)
+          if (scenario === 'traces a failed poll with its scale set and HTTP status') {
+            await until(() => fixture.sessions.length === 2)
+            expect(report).toHaveBeenCalledWith(
+              expect.any(Error),
+              'scale-set-session',
+              expect.objectContaining({
+                stage: 'poll',
+                scaleSet: 9,
+                label: 'boxlite',
+                scope: scopeKey(decodeScope(scope)),
+                httpStatus: 503,
+              }),
+            )
+            expect(JSON.stringify(report.mock.calls)).not.toContain('private response body')
+            return
+          }
           if (pg) {
             await until(() => fixture.requests.includes('GET /messages'))
             const [{ cutoff }] = await pg.query('SELECT clock_timestamp() AS cutoff')
@@ -643,6 +674,12 @@ for (const storage of ['sqlite', 'postgres'])
             fixture.publish(0, maximum, [123])
             await until(() => fixture.acknowledged.includes(0))
             expect(fixture.acquired).toEqual([])
+            expect(observe).toHaveBeenCalledWith(
+              expect.objectContaining({ event: 'ci-scale-set-message-received', offered: 1 }),
+            )
+            expect(observe).not.toHaveBeenCalledWith(
+              expect.objectContaining({ event: 'ci-scale-set-first-reservation' }),
+            )
             if (maximum) await until(() => (workers.deliverJit as jest.Mock).mock.calls.length === 1)
             else expect(workers.create).not.toHaveBeenCalled()
             return
@@ -688,6 +725,10 @@ for (const storage of ['sqlite', 'postgres'])
             fixture.loseBeforeAcquire = true
             fixture.publish(1, 0, [123])
             await until(() => fixture.sessions.length === 2)
+            const failure = report.mock.calls.find(([, operation]) => operation === 'scale-set-session')
+            expect(failure?.[2]).toMatchObject({ stage: 'acquire', scaleSet: 9, messageId: 1 })
+            expect(failure?.[2]).not.toHaveProperty('httpStatus')
+            expect(observe).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'ci-scale-set-acquired' }))
             maximum = 0
             fixture.publish(1, 0, [123])
             await until(() => fixture.acknowledged.includes(1))
@@ -1060,6 +1101,28 @@ for (const storage of ['sqlite', 'postgres'])
           fixture.publish(1, 2)
           await until(() => (workers.deliverJit as jest.Mock).mock.calls.length === 2)
           expect(await journal.used('tenant')).toBe(2)
+          if (scenario === 'reconciles acquired and replayed demand') {
+            await until(() => observe.mock.calls.filter(([e]) => e.event === 'ci-worker-jit-delivered').length === 2)
+            const events = observe.mock.calls.map(([event]) => event)
+            const context = { scope: scopeKey(decodeScope(scope)), scaleSet: 9, label: 'boxlite' }
+            const timeline = events.filter((e) => e.event.startsWith('ci-scale-set-'))
+            expect(timeline.slice(0, 5)).toMatchObject([
+              { event: 'ci-scale-set-session-opened', ...context, assigned: 0 },
+              { event: 'ci-scale-set-poll-started', ...context, capacity: 2 },
+              { event: 'ci-scale-set-message-received', ...context, messageId: 0, offered: 5 },
+              {
+                event: 'ci-scale-set-first-reservation',
+                ...context,
+                messageId: 0,
+                allocation: expect.stringMatching(/^worker\//),
+              },
+              { event: 'ci-scale-set-acquired', ...context, messageId: 0, attempted: 2, accepted: 2 },
+            ])
+            for (const event of ['ci-worker-box-known', 'ci-worker-runner-known', 'ci-worker-jit-delivered']) {
+              expect(events.filter((e) => e.event === event)).toHaveLength(2)
+            }
+            expect(JSON.stringify(events)).not.toMatch(/local-token|messageQueueAccessToken|private response body/)
+          }
           if (fixture.discoverCustom) {
             expect(fixture.definition?.runnerGroupId).toBe(scanOnly ? 1 : 5)
             expect(fixture.definition?.labels).toContainEqual({ name: fixture.labels[0], type: 'System' })

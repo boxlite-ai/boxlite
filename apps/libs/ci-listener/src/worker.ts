@@ -49,7 +49,11 @@ export class ConfirmedWorkerAbsent extends Error {
 
 /** A trusted host recorded that this exact creation operation produced no Box. */
 export class ConfirmedWorkerCreationRejected extends Error {
-  constructor(readonly rejectedCreationEffect: string) {
+  constructor(
+    readonly rejectedCreationEffect: string,
+    readonly reason: 'admission' | 'before-persistence' | 'undispatched' | 'recorded' = 'recorded',
+    readonly platformStatus?: number,
+  ) {
     super('Original CI Box creation was definitively rejected')
     if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(rejectedCreationEffect))
       throw new Error('Original CI creation operation required')

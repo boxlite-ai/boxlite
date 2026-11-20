@@ -55,6 +55,9 @@ export interface WorkerEvent {
     | 'ci-worker-released'
     | 'ci-worker-create-rejected'
     | 'ci-worker-reserved'
+    | 'ci-worker-box-known'
+    | 'ci-worker-runner-known'
+    | 'ci-worker-jit-delivered'
     | 'ci-worker-execution-started'
     | 'ci-worker-execution-settled'
   level: 'info' | 'warn'
@@ -76,6 +79,8 @@ export interface WorkerEvent {
   status?: string
   exitCode?: number | null
   errorType?: string
+  reason?: ConfirmedWorkerCreationRejected['reason']
+  platformStatus?: number
   queueWaitMs?: number
   durationMs?: number
 }
@@ -403,6 +408,7 @@ export class WorkerPool {
       if (retireIdle && current.record.version !== planned.record.version) return
       const startedAt = Date.now()
       const timed = current.value.delivery !== 'done' || current.value.closing || retireIdle
+      let failure: { errorType: string } | undefined
       if (timed) this.event(scope, current, 'ci-worker-execution-started', 'info', { queueWaitMs })
       try {
         await backend.retire?.(current.value.name)
@@ -412,11 +418,15 @@ export class WorkerPool {
             }
           : undefined
         await this.reconcile(lease, current, backend, scope, signal, retireIdle, checks, checkRetirement)
+      } catch (error) {
+        if (!signal?.aborted) failure = { errorType: error instanceof Error ? error.constructor.name : 'Unknown' }
+        throw error
       } finally {
         try {
           await backend.retire?.(current.value.name)
         } finally {
           const latest = await this.journal.allocation(lease, planned.record.key)
+          if (failure) this.event(scope, latest ?? current, 'ci-worker-recovery-deferred', 'warn', failure)
           if (latest?.record.version !== current.record.version) this.execution!.wake()
           if (timed)
             this.event(scope, latest ?? current, 'ci-worker-execution-settled', 'info', {
@@ -446,7 +456,14 @@ export class WorkerPool {
       return selection
     }
     const update = async (change: AllocationChange) => {
+      const previous = row.value
       row = await this.journal.advance(lease, row.record.key, row.record.version, change)
+      if (previous.box.phase !== 'known' && row.value.box.phase === 'known')
+        this.event(scope, row, 'ci-worker-box-known', 'info')
+      if (previous.runner.phase !== 'known' && row.value.runner.phase === 'known')
+        this.event(scope, row, 'ci-worker-runner-known', 'info')
+      if (previous.delivery !== 'done' && row.value.delivery === 'done')
+        this.event(scope, row, 'ci-worker-jit-delivered', 'info')
     }
     const intent = async (kind: EffectKind, change: AllocationChange = {}) => {
       row = await this.journal.advance(
@@ -549,7 +566,10 @@ export class WorkerPool {
         selectRunnerLabels(row.value.supply?.labels ?? selection?.labels ?? this.settings.labels, this.settings.labels)!
           .label,
       )
-      this.event(scope, row, 'ci-worker-create-rejected', 'warn')
+      this.event(scope, row, 'ci-worker-create-rejected', 'warn', {
+        reason: error.reason,
+        ...(error.platformStatus === undefined ? {} : { platformStatus: error.platformStatus }),
+      })
       return
     }
     let status: string | undefined, exitCode: number | null | undefined
@@ -704,7 +724,10 @@ export class WorkerPool {
     row: AllocationRow,
     event: WorkerEvent['event'],
     level: WorkerEvent['level'],
-    details: Pick<WorkerEvent, 'status' | 'exitCode' | 'errorType' | 'queueWaitMs' | 'durationMs'> = {},
+    details: Pick<
+      WorkerEvent,
+      'status' | 'exitCode' | 'errorType' | 'queueWaitMs' | 'durationMs' | 'reason' | 'platformStatus'
+    > = {},
   ): void {
     const value = row.value
     this.observe({

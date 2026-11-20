@@ -28,7 +28,8 @@ import {
   ListenerState,
   StateDatabase,
   VerifiedWebhook,
-  WorkerEvent,
+  ListenerEvent,
+  ScaleSetFailure,
   decodeRepository,
   decodeScope,
 } from '@boxlite-ai/ci-listener'
@@ -524,18 +525,20 @@ export class SelfHost implements ListenerHost {
     }
   }
 
-  report(error: unknown, operation: string): void {
+  report(error: unknown, operation: string, context?: ScaleSetFailure): void {
     if (['listener-cycle', 'listener-session'].includes(operation)) this.discoveryReady = false
     console.error(
       JSON.stringify({
         event: 'ci-listener-deferred',
+        timestamp: new Date().toISOString(),
         operation,
+        ...context,
         error: error instanceof Error ? error.constructor.name : 'Unknown',
       }),
     )
   }
-  observe(event: WorkerEvent): void {
-    console.error(JSON.stringify(event))
+  observe(event: ListenerEvent): void {
+    console.error(JSON.stringify({ timestamp: new Date().toISOString(), ...event }))
   }
   async close(): Promise<void> {
     const results = await Promise.allSettled([this.recovery?.close(), this.directory?.close()])

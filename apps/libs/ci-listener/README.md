@@ -477,6 +477,27 @@ When assigned demand falls, the pool first withdraws surplus allocations that ha
 
 A successful idle unregister and confirmation of absence precede stopping the Box. A busy refusal or an uncertain result keeps the original worker available for recovery.
 
+### Diagnosing a queued job
+
+Start with the repository, run and job IDs in `ci-job-notification`. Its `result` distinguishes a stored webhook from a duplicate. An in-progress job can be joined to its worker by `runnerId`.
+
+A Scale Set can already be polling when a queued webhook arrives. Follow its `scope`, `label` and `scaleSet` through these timestamps:
+
+```text
+session-opened → poll-started → message-received → first-reservation → acquired
+assigned demand → worker-reserved → box-known → runner-known → jit-delivered → worker-released
+```
+
+The first line abbreviates `ci-scale-set-*` events. A poll logs its advertised capacity. A message logs its ID, raw offer count and assigned count when supplied, including assignment messages with zero offers.
+
+`ci-scale-set-first-reservation` marks the first committed slot in that offer batch. `ci-scale-set-acquired` reports attempted and accepted counts per successful GitHub call. A charged redelivery can acquire work using its existing slot.
+
+`ci-scale-set-offers-skipped` records capacity, creation backoff, unmatched offers or an unavailable slot. A `scale-set-session` warning includes the failed stage, a known HTTP status and the retry deadline in Unix milliseconds when one was scheduled. Before GitHub returns a set ID, use the scope and label.
+
+Workers provisioned directly from assigned demand emit `ci-worker-reserved`. Use the allocation key to follow Box identity, runner identity and JIT handoff through shutdown and release. A deferred worker records its last durable effect. A lost response leaves the external outcome uncertain.
+
+A confirmed Box creation rejection records whether admission failed, the platform rejected creation before persistence, or recovery proved the create was never dispatched. A replayed rejection uses `recorded` because the original platform status is only available on the live attempt.
+
 ## Independent repository compensation
 
 Every Listener replica runs two compensation lanes alongside the single execution
