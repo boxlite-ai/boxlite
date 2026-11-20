@@ -59,10 +59,12 @@ Local runs the CLI on your execution host; runtime image pulls and commands you 
 There is no plugin telemetry, background service, bundled credential store, or installation hook.
 
 The file helper reads reviewed sources and writes requested downloads; it requires Python and host filesystem access.
-There are no lifecycle hooks or native-only package variants.
+One plugin package supports both hosts.
 The helper uses existing MCP contracts without a BoxLite CLI dependency, new server API, transfer cache or additional checksum/readback step.
 
 Both hosts own their MCP connections and credentials; Claude adds one model request per file operation.
+
+Claude uses a private persistent session for downloads, so its transcripts or saved result files can retain downloaded data.
 
 OAuth credentials stay with the host; API keys stay in the user's chosen private host environment.
 Keep mode selection, Box IDs, runtime homes, and app secrets outside the plugin and version control.
@@ -82,7 +84,7 @@ To roll back, install a retained verified package version, recheck its supported
 
 These files are a release candidate, not evidence of an approved public listing.
 OpenAI's public submission connection is OAuth; API-key setup currently requires a supported native host, and optional local execution needs platform eligibility review.
-File transfer uses existing remote MCP tools and a packaged script, without lifecycle hooks or a bundled MCP server.
+The packaged file transfer script calls the existing remote MCP tools through the selected host.
 
 A dedicated host process reloads existing configuration; it does not attach to the current interactive session.
 Native API-key acceptance does not establish OAuth file-transfer acceptance.

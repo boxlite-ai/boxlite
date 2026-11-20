@@ -31,11 +31,12 @@ def download(client, box, source, destination):
     value = result.get('structuredContent')
     if value is None:
         content = result.get('content', [])
-        if len(content) != 1 or content[0].get('type') != 'text':
+        if (not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], dict)
+                or content[0].get('type') != 'text' or not isinstance(content[0].get('text'), str)):
             raise TransferError('MCP download did not return its archive object')
         try:
             value = json.loads(content[0]['text'])
-        except (ValueError, KeyError):
+        except ValueError:
             raise TransferError('MCP download returned malformed archive metadata') from None
     if not isinstance(value, dict) or not isinstance(value.get('base64'), str):
         raise TransferError('MCP download is missing archive bytes')

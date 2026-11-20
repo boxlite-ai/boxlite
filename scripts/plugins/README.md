@@ -95,8 +95,9 @@ Resolve the tag, verify that the digest was attested by the publisher on `main`,
   gh attestation verify "oci://$reference" --repo boxlite-ai/boxlite \
     --signer-workflow boxlite-ai/boxlite/.github/workflows/publish-plugins.yml \
     --source-ref refs/heads/main
-  oras manifest fetch "$reference" |
-    jq -e --arg version "$version" '.annotations["org.opencontainers.image.version"] == $version'
+  manifest="$(oras manifest fetch "$reference")"
+  printf '%s\n' "$manifest" |
+    jq -es --arg version "$version" 'length == 1 and .[0].annotations["org.opencontainers.image.version"] == $version'
   oras pull "$reference" --output "boxlite-plugin-$version"
   cd "boxlite-plugin-$version"
   sha256sum --check SHA256SUMS "boxlite-review-kit-$version.zip.sha256"
@@ -123,9 +124,11 @@ It also checks nonzero exits, absent IDs, and cleanup, and fails if any required
 make plugin:boxlite:smoke:cloud
 ```
 
-This bounded test client is maintenance tooling, not a plugin execution path.
-The plugin file helper supplies arguments to Codex app-server or Claude permission callbacks; the host calls existing `uploadFiles` and `downloadFiles`.
-It handles archive base64 inside the program and prints only completion metadata, without hooks, checksums or upload readback.
+This bounded test client is for maintenance.
+
+The plugin file helper supplies arguments to Codex app-server or a blocking execution hook in the Claude child process. The host calls existing `uploadFiles` and `downloadFiles`.
+
+The helper handles archive base64 inside the program and prints completion metadata. It adds no checksum or upload readback.
 
 The [design](https://github.com/boxlite-ai/boxlite/issues/2928) and [usage contract](../../plugins/boxlite/skills/boxlite/references/cloud.md#files) describe both host adapters.
 `make test:unit:plugins` exercises local filesystem and host subprocess boundaries; its peers are fixtures.
@@ -186,7 +189,7 @@ Claude requires its permission control channel and raw structured tool events; e
 Both adapters start dedicated host processes using existing configuration; neither reads credentials or implements MCP transport.
 No live interactive socket is reused and no credential fallback occurs.
 
-Build the single distributable with `make plugin:boxlite:dist`; it contains no lifecycle hooks.
+Build the single distributable with `make plugin:boxlite:dist`. The Claude execution hook is registered in the child process for a single transfer.
 Keep marketplace eligibility, deployed OAuth acceptance and API-key acceptance separate in release evidence.
 
-References: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Claude permission callbacks](https://code.claude.com/docs/en/agent-sdk/user-input), [programmatic MCP data handling](https://www.anthropic.com/research/code-execution-with-mcp).
+References: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Claude SDK hooks](https://code.claude.com/docs/en/agent-sdk/hooks), [programmatic MCP data handling](https://www.anthropic.com/research/code-execution-with-mcp).

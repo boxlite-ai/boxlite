@@ -1,8 +1,13 @@
 """Bounded regular-file archives; never extract untrusted tar metadata directly."""
+from contextlib import suppress
+import ctypes
+import errno
 import io
 import os
 from pathlib import Path, PurePosixPath
+import secrets
 import stat
+import sys
 import tarfile
 
 MAX_BYTES = 8 * 1024 * 1024
@@ -23,7 +28,7 @@ def safe_name(name):
 
 def public_name(name):
     name = safe_name(name)
-    for part in PurePosixPath(name).parts:
+    for part in PurePosixPath(name.casefold()).parts:
         if part in PRIVATE or part.startswith('.env') or part.endswith(('.pem', '.key')):
             raise ValueError('Sensitive or cache path refused; prepare a reviewed source directory')
     return name
@@ -34,6 +39,38 @@ def open_node(name, parent=None, directory=False):
     if directory:
         flags |= os.O_DIRECTORY
     return os.open(name, flags, dir_fd=parent)
+
+
+def _publish_directory(source_parent, source, target_parent, target):
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == 'darwin':
+        rename = getattr(libc, 'renameatx_np', None)
+        flag = 0x4  # RENAME_EXCL
+    else:
+        rename = getattr(libc, 'renameat2', None)
+        flag = 1  # RENAME_NOREPLACE
+    if rename is None:
+        raise ValueError('Atomic download placement is unavailable on this host')
+    rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    rename.restype = ctypes.c_int
+    if rename(source_parent, os.fsencode(source), target_parent, os.fsencode(target), flag):
+        error = ctypes.get_errno()
+        if error in (errno.ENOSYS, errno.ENOTSUP, errno.EINVAL):
+            raise ValueError('Destination filesystem does not support atomic download placement')
+        raise OSError(error, os.strerror(error), target)
+
+
+def _clear_staging_directory(directory):
+    for name in os.listdir(directory):
+        if not stat.S_ISDIR(os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode):
+            os.unlink(name, dir_fd=directory)
+            continue
+        child = open_node(name, directory, directory=True)
+        try:
+            _clear_staging_directory(child)
+        finally:
+            os.close(child)
+        os.rmdir(name, dir_fd=directory)
 
 
 class Archive:
@@ -128,7 +165,10 @@ class Archive:
                     member.type = tarfile.DIRTYPE
                 else:
                     member.size = len(data)
-                archive.addfile(member, None if data is None else io.BytesIO(data))
+                try:
+                    archive.addfile(member, None if data is None else io.BytesIO(data))
+                except ValueError:
+                    raise ValueError('Source path cannot be represented in USTAR; use a shorter path') from None
                 if output.tell() > MAX_BYTES:
                     raise ValueError('Tar archive exceeds 8 MiB including headers')
         if output.tell() > MAX_BYTES:
@@ -158,6 +198,10 @@ class Archive:
                     result.add(name, data)
                 else:
                     result.add(name)
+            # tarfile can stop iteration without raising after a malformed member header.
+            tail_size = len(raw) - archive.offset
+            if tail_size < 1024 or raw.count(b'\0', archive.offset) != tail_size:
+                raise ValueError('Missing or invalid tar end marker')
         result.tree()
         return result
 
@@ -165,14 +209,20 @@ class Archive:
         directories, files = self.tree()
         destination = Path(destination).absolute()
         parent = open_node(destination.anchor, directory=True)
+        stage_name = None
+        stage = None
         root = None
         try:
             for component in destination.parts[1:-1]:
                 next_fd = open_node(component, parent, directory=True)
                 os.close(parent)
                 parent = next_fd
-            os.mkdir(destination.name, 0o700, dir_fd=parent)
-            root = open_node(destination.name, parent, directory=True)
+            candidate = '.boxlite-download-' + secrets.token_hex(16)
+            os.mkdir(candidate, 0o700, dir_fd=parent)
+            stage_name = candidate
+            stage = open_node(stage_name, parent, directory=True)
+            os.mkdir('files', 0o700, dir_fd=stage)
+            root = open_node('files', stage, directory=True)
             for name in sorted(directories, key=lambda p: (p.count('/'), p)):
                 fd = self._parent(root, name)
                 try:
@@ -188,9 +238,17 @@ class Archive:
                         stream.write(data)
                 finally:
                     os.close(fd)
+            _publish_directory(stage, 'files', parent, destination.name)
         finally:
             if root is not None:
                 os.close(root)
+            if stage is not None:
+                with suppress(OSError):
+                    _clear_staging_directory(stage)
+                os.close(stage)
+            if stage_name is not None:
+                with suppress(OSError):
+                    os.rmdir(stage_name, dir_fd=parent)
             os.close(parent)
 
     @staticmethod

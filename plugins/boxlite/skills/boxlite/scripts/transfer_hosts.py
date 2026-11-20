@@ -15,6 +15,7 @@ from transfer_archive import open_node
 TIMEOUT = 180
 MAX_MESSAGE = 32 * 1024 * 1024
 PLACEHOLDER = '__BOXLITE_FILE_DATA__'
+CLAUDE_GUARD = 'boxlite-file-transfer'
 
 
 class TransferError(Exception):
@@ -32,7 +33,7 @@ class HostProcess:
     def __init__(self, command, cwd):
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, start_new_session=True, cwd=cwd)
-        self.buffer = b''
+        self.buffer = bytearray()
         os.set_blocking(self.process.stdin.fileno(), False)
         self.deadline = time.monotonic() + TIMEOUT
 
@@ -83,16 +84,22 @@ class HostProcess:
 
     def receive(self):
         self.remaining()
-        while b'\n' not in self.buffer:
+        newline = self.buffer.find(b'\n')
+        while newline < 0:
+            if len(self.buffer) >= MAX_MESSAGE:
+                raise TransferError('Host response exceeds the file-tool limit')
             if not select.select([self.process.stdout], [], [], self.remaining())[0]:
                 raise TransferError('Host timed out returning a result; completion is unknown')
             chunk = os.read(self.process.stdout.fileno(), 65536)
             if not chunk:
                 raise TransferError('Host stopped before returning the tool result')
-            self.buffer += chunk
-            if len(self.buffer) > MAX_MESSAGE:
-                raise TransferError('Host response exceeds the file-tool limit')
-        line, self.buffer = self.buffer.split(b'\n', 1)
+            start = len(self.buffer)
+            self.buffer.extend(chunk)
+            newline = self.buffer.find(b'\n', start)
+        if newline >= MAX_MESSAGE:
+            raise TransferError('Host response exceeds the file-tool limit')
+        line = self.buffer[:newline]
+        del self.buffer[:newline + 1]
         try:
             value = json.loads(line)
         except ValueError:
@@ -151,7 +158,7 @@ class CodexHost:
 
 
 class ClaudeHost:
-    """Supply updatedInput to Claude's permission callback, then consume its raw tool event."""
+    """Guard one file operation with Claude's execution hook and consume its raw result."""
     def __init__(self, server, cwd=None, mcp_config=None, plugin_dir=None):
         if not server or not re.fullmatch(r'[A-Za-z0-9_.:-]+', server):
             raise TransferError('Select an existing Claude MCP connection explicitly')
@@ -179,8 +186,7 @@ class ClaudeHost:
             raise TransferError('Claude file handoff only supports uploadFiles and downloadFiles')
         command = ['claude', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
                    '--verbose', '--permission-prompt-tool', 'stdio', '--permission-mode', 'default',
-                   '--max-turns', '1', '--tools', '', '--disable-slash-commands',
-                   '--settings', json.dumps({'permissions': {'ask': ['mcp__*']}})] + self.options
+                   '--max-turns', '1', '--tools', '', '--disable-slash-commands'] + self.options
         if name == 'uploadFiles':
             command.append('--no-session-persistence')
         # Downloads need a persistent host session: no-session-persistence assigns
@@ -193,8 +199,11 @@ class ClaudeHost:
 
     def exchange(self, channel, tool, name, proposed, arguments):
         channel.send({'type': 'control_request', 'request_id': 'initialize',
-                      'request': {'subtype': 'initialize'}})
+                      'request': {'subtype': 'initialize', 'hooks': {'PreToolUse': [
+                          {'hookCallbackIds': [CLAUDE_GUARD], 'onFailure': 'block'}]}}})
+        initialized = False
         approved = None
+        permission_answered = False
         session_id = None
         while True:
             message = channel.receive()
@@ -210,26 +219,49 @@ class ClaudeHost:
                 session_id = actual
             elif kind == 'control_response':
                 response = message.get('response', {})
-                if response.get('request_id') != 'initialize' or response.get('subtype') != 'success':
+                if initialized or response.get('request_id') != 'initialize' or response.get('subtype') != 'success':
                     raise TransferError('Claude control initialization failed')
+                capabilities = response.get('response')
+                if (not isinstance(capabilities, dict) or capabilities.get('hooks_applied') is not True
+                        or capabilities.get('hook_on_failure_supported') is not True):
+                    raise TransferError('Claude did not register a blocking execution hook; update Claude Code')
+                initialized = True
                 # No payload reaches the model; its only job is to propose the selected call once.
                 prompt = ('Call this MCP tool exactly once with these exact arguments. Do not call other tools. '
-                          'The permission handler supplies file bytes; do not generate or copy them.\n'
+                          'The execution hook supplies file bytes; do not generate or copy them.\n'
                           + json.dumps({'tool': tool, 'arguments': proposed}))
                 channel.send({'type': 'user', 'message': {'role': 'user', 'content': prompt}})
             elif kind == 'control_request':
                 request = message.get('request', {})
-                valid = (approved is None and request.get('subtype') == 'can_use_tool'
-                         and request.get('tool_name') == tool and request.get('input') == proposed
-                         and request.get('mcp_server', {}).get('name') == self.server
-                         and isinstance(request.get('tool_use_id'), str) and request['tool_use_id'])
-                decision = ({'behavior': 'allow', 'updatedInput': arguments} if valid else
-                            {'behavior': 'deny', 'message': 'Outside the single selected file operation'})
+                hook = request.get('subtype') == 'hook_callback'
+                call = request.get('input') if hook else request
+                use_id = request.get('tool_use_id')
+                server = call.get('mcp_server') if isinstance(call, dict) else None
+                selected = (initialized and isinstance(use_id, str) and bool(use_id)
+                            and isinstance(server, dict) and server.get('name') == self.server
+                            and call.get('tool_name') == tool)
+                refusal = 'Outside the single selected file operation'
+                if hook:
+                    valid = (selected and approved is None and request.get('callback_id') == CLAUDE_GUARD
+                             and call.get('hook_event_name') == 'PreToolUse' and call.get('tool_input') == proposed)
+                    output = {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                              'permissionDecisionReason': refusal}
+                    if valid:
+                        output = {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow',
+                                  'updatedInput': arguments}
+                        approved = use_id
+                    decision = {'hookSpecificOutput': output}
+                else:
+                    # A host ask rule may still prompt after the guard has checked and rewritten the call.
+                    valid = (selected and not permission_answered and use_id == approved
+                             and request.get('subtype') == 'can_use_tool' and call.get('input') == arguments)
+                    decision = ({'behavior': 'allow', 'updatedInput': arguments} if valid else
+                                {'behavior': 'deny', 'message': refusal})
+                    permission_answered = valid
                 channel.send({'type': 'control_response', 'response': {'subtype': 'success',
                               'request_id': message['request_id'], 'response': decision}})
                 if not valid:
                     raise TransferError('Claude proposed an unexpected or repeated operation; no additional approval')
-                approved = request['tool_use_id']
             elif kind == 'user':
                 blocks = message.get('message', {}).get('content', [])
                 if not isinstance(blocks, list):
@@ -244,6 +276,8 @@ class ClaudeHost:
                     raw = message.get('tool_use_result')
                     if name == 'downloadFiles':
                         return self.download_result(raw, block.get('content'), session_id)
+                    if isinstance(raw, dict):
+                        tool_result(raw)
                     content = block.get('content')
                     if isinstance(content, str):
                         content = [{'type': 'text', 'text': content}]

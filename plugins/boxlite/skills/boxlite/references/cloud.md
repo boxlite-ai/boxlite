@@ -44,7 +44,7 @@ Select the host and connection explicitly; failures never switch credentials or 
 | Host | Data handoff | Requirement and cost |
 | --- | --- | --- |
 | `codex` | Local app-server `mcpServer/tool/call` | Installed Codex with this method; no additional model request |
-| `claude` | Permission callback `updatedInput` and raw `structuredContent` event | Installed Claude Code; one additional model request per operation |
+| `claude` | Blocking execution hook with `updatedInput` and raw `structuredContent` event | Claude Code with blocking `PreToolUse` callback support; one additional model request per operation |
 
 Use the actual configured server name, not a tool namespace guessed from its display label:
 
@@ -60,15 +60,17 @@ A connection supplied only through flags on another process is not automatically
 For Claude, pass an existing `--mcp-config /absolute/private-config.json` or `--plugin-dir /absolute/plugin` when needed; only Claude reads those files.
 
 Claude's single model turn proposes the selected tool and a placeholder, never archive bytes.
-The permission callback checks the exact tool, connection, Box and path, injects the program-generated arguments, and allows only that operation once.
-Existing host deny rules still apply; wrong or repeated calls fail without additional approval.
+The helper sends the prompt only after Claude confirms the execution hook was registered and blocks on failure.
+The hook checks the exact tool, connection, Box, path and input, then supplies the program-generated arguments for that call once.
+
+Claude still applies host deny and ask rules. If a rule asks, the helper checks the guarded call ID and exact arguments before responding.
 
 Downloads use Claude's raw structured result or its complete saved JSON when large results omit that field.
 Saved results must belong to the actual child session under Claude's projects directory; arbitrary paths and symlinks are refused.
 Claude downloads create a normal private session, so host transcripts/result files can retain copies of transferred data.
 
 The helper stops the child after the matching result, and a one-turn limit prevents a follow-up model request containing the payload.
-No lifecycle hooks are registered; the helper does not read the host's token store or manage login/refresh.
+The hook is scoped to the dedicated child session. Claude owns the token store, login and refresh.
 
 Claude also needs its own model login available to the child process; the parent session alone does not guarantee that.
 A token supplied only to the parent can be absent from its Bash subprocess, even when the BoxLite MCP connection succeeds.
@@ -86,7 +88,10 @@ The helper never retries, changes credentials or leaves a transfer-ticket cache;
 
 The helper archive limit is 8 MiB including tar headers and padding; client response-size limits can be lower.
 Use reviewed regular files/directories; source links, sensitive/cache paths and unsafe archive members are refused.
-Downloads require a new local directory with existing, non-symlink parents; files and directories use private permissions.
+Upload paths must fit USTAR, including its 100-byte filename field and 155-byte directory-prefix field.
+
+Downloads require a new local directory with existing, non-symlink parents and a filesystem that supports atomic directory placement.
+The helper writes with private permissions and places the directory at the requested path only after the full archive has been written.
 
 A guest source ending in `/.` downloads directory contents; another spelling retains the directory name.
 Upload keeps the existing server overwrite behavior; choose the destination deliberately.

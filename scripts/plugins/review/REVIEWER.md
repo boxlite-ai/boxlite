@@ -60,7 +60,7 @@ Do not add a mandatory checksum or upload readback to the product workflow.
 A fixture run establishes only the boundaries it actually exercised; record deployed-server and native OAuth results separately.
 
 Both adapters reload existing host configuration and leave credential handling to that host.
-Claude adds one model request and injects bytes through a permission callback, without lifecycle hooks.
+Claude adds one model request and supplies bytes through a blocking execution hook in the child session.
 API-key acceptance is not OAuth acceptance; verify the selected host's OAuth connection separately.
 
 ## Demo recording

@@ -1,6 +1,7 @@
 """File contracts and host-control boundaries; native hosts are tested separately."""
 import base64
 import contextlib
+import errno
 import io
 import json
 import os
@@ -26,7 +27,7 @@ class FileTransferTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.source = self.root / 'source'
         self.source.mkdir()
         (self.source / 'binary.bin').write_bytes(bytes(range(256)) * 1024)
@@ -100,12 +101,33 @@ class FileTransferTests(unittest.TestCase):
         self.assertFalse(self.calls())
 
     def test_claude_does_not_approve_twice_or_ignore_tool_errors(self):
-        for fault in ('repeat', 'tool-error'):
+        for fault in ('repeat', 'tool-error', 'raw-tool-error'):
             self.fault(fault)
             before = len(self.calls())
             with self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
             self.assertEqual(len(self.calls()), before + 1)
+
+    def test_claude_requires_the_guard_before_dispatch(self):
+        (self.root / 'uploaded.tar').write_bytes(transfer_archive.Archive.snapshot(self.source).encode())
+        for fault in ('managed-wrong-target', 'hooks-ignored', 'hook-failure-unsupported'):
+            self.fault(fault)
+            with self.subTest(fault=fault):
+                prior_calls = self.calls()
+                with self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
+                    transfer.download(client, 'box-1', '/workspace/fresh', self.destination)
+                self.assertEqual(self.calls(), prior_calls)
+                self.assertFalse(self.destination.exists())
+
+    def test_claude_preserves_host_permission_decisions(self):
+        self.fault('managed-deny')
+        with self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
+            transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
+        self.assertFalse(self.calls())
+        self.fault('managed-ask')
+        with self.client('claude') as client:
+            self.assertEqual(transfer.upload(client, 'box-1', self.source, '/workspace/fresh')['status'], 'completed')
+        self.assertEqual(len(self.calls()), 1)
 
     def test_claude_never_uses_truncated_display_content_as_download_bytes(self):
         (self.root / 'uploaded.tar').write_bytes(transfer_archive.Archive.snapshot(self.source).encode())
@@ -256,6 +278,7 @@ class FileTransferTests(unittest.TestCase):
 
     def test_download_checks_metadata_base64_and_size_before_writing(self):
         cases = [{}, {'content': []}, {'content': [{'type': 'text', 'text': 'invalid JSON'}]},
+                 {'content': None}, {'content': [None]}, {'content': [{'type': 'text', 'text': None}]},
                  {'structuredContent': {'base64': '!'}}, {'structuredContent': {'base64': 1}},
                  {'structuredContent': {'base64': 'A' * (4 * ((transfer.MAX_BYTES + 2) // 3) + 1)}}]
         class Response:
@@ -294,6 +317,94 @@ class FileTransferTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 transfer_archive.Archive.decode(stream.getvalue())
             self.assertFalse(self.destination.exists())
+
+    def test_download_requires_a_complete_tar_end_marker(self):
+        archive = transfer_archive.Archive()
+        archive.add('first', b'a')
+        archive.add('second', b'b')
+        encoded = archive.encode()
+        with tarfile.open(fileobj=io.BytesIO(encoded), mode='r:') as reader:
+            second = reader.getmember('second').offset
+            end = reader.offset
+
+        class Response:
+            def call(self, *args):
+                return {'structuredContent': {'base64': base64.b64encode(raw).decode()}}
+
+        damaged = bytearray(encoded)
+        damaged[second] ^= 1
+        for label, raw in (('truncated', encoded[:second]), ('short footer', encoded[:end + 512]),
+                           ('corrupt header', damaged)):
+            destination = self.root / label
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError):
+                    transfer.download(Response(), 'box-1', '/workspace/data', destination)
+                self.assertFalse(destination.exists())
+        raw = encoded[:end + 1024]
+        transfer.download(Response(), 'box-1', '/workspace/data', self.destination)
+        self.assertEqual((self.destination / 'second').read_bytes(), b'b')
+
+    def test_download_write_failure_can_retry_at_the_same_path(self):
+        archive = transfer_archive.Archive()
+        archive.add('first', b'a')
+        archive.add('nested/second', b'b')
+        open_file = os.open
+
+        def fail_second(path, flags, *args, **kwargs):
+            if path == 'second' and flags & os.O_CREAT:
+                raise OSError(errno.ENOSPC, 'fixture disk is full')
+            return open_file(path, flags, *args, **kwargs)
+
+        before = set(self.root.iterdir())
+        with patch.object(os, 'open', fail_second), self.assertRaises(OSError):
+            archive.save(self.destination)
+        self.assertEqual(set(self.root.iterdir()), before)
+        archive.save(self.destination)
+        self.assertEqual((self.destination / 'nested/second').read_bytes(), b'b')
+
+    def test_download_never_replaces_a_directory_created_during_write(self):
+        archive = transfer_archive.Archive()
+        archive.add('one', b'a')
+        open_file = os.open
+
+        def create_destination(path, flags, *args, **kwargs):
+            if path == 'one' and flags & os.O_CREAT:
+                self.destination.mkdir(exist_ok=True)
+            return open_file(path, flags, *args, **kwargs)
+
+        before = set(self.root.iterdir())
+        with patch.object(os, 'open', create_destination), self.assertRaises(FileExistsError):
+            archive.save(self.destination)
+        self.assertEqual(list(self.destination.iterdir()), [])
+        self.assertEqual(set(self.root.iterdir()), before | {self.destination})
+
+    def test_source_policy_folds_case_without_renaming_allowed_files(self):
+        for name in ('.ENV', '.SSH', 'certificate.PEM', 'private.KEY'):
+            path = self.source / name
+            path.write_bytes(b'fixture')
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'Sensitive'):
+                transfer_archive.Archive.snapshot(path)
+            path.unlink()
+        path = self.source / 'ReadMe.TXT'
+        path.write_bytes(b'ok')
+        self.assertEqual(transfer_archive.Archive.snapshot(path).files, {'ReadMe.TXT': b'ok'})
+
+    def test_upload_explains_ustar_filename_limit_before_contacting_host(self):
+        path = self.source / ('x' * 101)
+        path.write_bytes(b'fixture')
+        with self.client('codex') as client, self.assertRaisesRegex(ValueError, 'USTAR'):
+            transfer.upload(client, 'box-1', path, '/workspace/fresh')
+        self.assertFalse(self.calls())
+
+    def test_host_message_limit_applies_to_each_complete_frame(self):
+        script = 'import os; os.write(1, b\'{"text":"abc"}\\n{"id":2}\\n\')'
+        child = transfer_hosts.HostProcess([sys.executable, '-c', script], self.root)
+        try:
+            with patch.object(transfer_hosts, 'MAX_MESSAGE', 15):
+                self.assertEqual(child.receive(), {'text': 'abc'})
+                self.assertEqual(child.receive(), {'id': 2})
+        finally:
+            child.close()
 
     def test_archive_boundaries_are_checked_before_filesystem_writes(self):
         for names in [('same', 'same'), ('parent', 'parent/file'), ('parent/file', 'parent')]:
