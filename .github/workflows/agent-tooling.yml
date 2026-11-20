@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     steps:
       - uses: actions/checkout@v4
       - name: Resolve tooling.ref, validate the profile, adopt the tip

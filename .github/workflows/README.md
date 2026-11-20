@@ -10,6 +10,39 @@ publish chain, the cloud deploy path, the local and cloud end-to-end suites, and
 Shared step bundles live one directory over, in [`.github/actions/`](../actions) — GitHub does not
 support subdirectories under `.github/workflows/`, so composite actions are where reuse goes.
 
+## Runner placement
+
+Eligible Ubuntu x64 jobs use ephemeral workers through the
+[BoxLite CI connection](../../apps/github-ci-runner/README.md).
+The connection needs permission to register workers and quota for the requested
+[resources](../../apps/libs/ci-listener/README.md#resource-labels).
+
+| Runner label | Jobs |
+| --- | --- |
+| `boxlite` | Lightweight lint, setup, status and release uploads using the default 10 GiB disk |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, and Go and Python CodeQL |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, Go coverage, and standalone guest artifact builds |
+| GitHub-hosted Ubuntu | Service-container jobs, Docker image and SDK builds, Dashboard, Rust coverage, Nix, and Actions, Rust, C/C++ and TypeScript CodeQL |
+
+The platform matrix controls check names and artifacts. Linux ARM64 and macOS
+legs run on their native platforms. BoxLite jobs install tools through the
+[runner setup action](../actions/setup-boxlite-runner/action.yml) where needed.
+
+Rust and Nix use GitHub-hosted Ubuntu for their AppArmor user-namespace setup.
+The x64 Go hardware tests require BoxLite workers with nested virtualization and
+usable `/dev/kvm`.
+
+The workers serving this repository must pass Docker startup before
+service-container and Docker build jobs can use BoxLite. GitHub-hosted
+runners provide Docker for those jobs, including API client drift, API tests,
+and Linux manylinux and wheel builds.
+[Docker startup contract](../../apps/libs/ci-listener/README.md#docker-startup).
+
+The local E2E workflow uses its GCP runner pool for persistent caches and VM
+lifecycle. Deployment recovery uses GitHub-hosted runners. npm publishing uses
+GitHub-hosted capacity for its
+[provenance requirement](https://docs.npmjs.com/generating-provenance-statements/).
+
 ## How they fit together
 
 ```text

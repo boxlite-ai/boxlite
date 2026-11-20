@@ -126,7 +126,7 @@ jobs:
   upload_to_release:
     name: Upload to GitHub Release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     if: github.event_name == 'release'
     permissions:
       contents: write

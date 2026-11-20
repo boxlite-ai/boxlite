@@ -91,7 +91,7 @@ jobs:
   upload_to_release:
     name: Upload wheels to GitHub Release
     needs: build_wheels
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     if: github.event_name == 'release' && github.event.action == 'published'
     permissions:
       contents: write  # Required to upload to releases

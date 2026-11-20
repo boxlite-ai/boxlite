@@ -187,7 +187,7 @@ jobs:
     name: Upload to GitHub Release
     needs: [ config, build ]
     if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions:
       contents: write   # Required to upload assets to GitHub Release
 

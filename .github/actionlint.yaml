@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels:
+    - boxlite
+    - boxlite-4vcpu-16gbmem-30gbdisk
+    - boxlite-4vcpu-16gbmem-64gbdisk
+    - gcp-e2e

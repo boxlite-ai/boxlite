@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions:
       contents: read
       pull-requests: read
@@ -101,10 +101,11 @@ jobs:
     name: Check Rust formatting
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.quality == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -117,7 +118,7 @@ jobs:
     name: Run Clippy on ${{ matrix.os }}
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.quality == 'true' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: true
       matrix:
@@ -125,6 +126,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
+      - name: Install native build dependencies
+        if: runner.environment == 'self-hosted'
+        run: sudo apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -173,10 +180,11 @@ jobs:
     name: Python lint and format checks
     needs: changes
     if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.quality == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
 
       - uses: ./.github/actions/setup-python
 
@@ -193,10 +201,11 @@ jobs:
     name: Node.js lint and format checks
     needs: changes
     if: ${{ needs.changes.outputs.node == 'true' || needs.changes.outputs.quality == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -219,7 +228,7 @@ jobs:
     name: C SDK lint and format checks
     needs: changes
     if: ${{ needs.changes.outputs.c == 'true' || needs.changes.outputs.quality == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -227,7 +236,7 @@ jobs:
       - name: Install clang tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-format clang-tidy
+          sudo apt-get install -y --no-install-recommends clang-format clang-tidy libc6-dev make
 
       - name: Run C lint
         run: make lint:c
@@ -239,10 +248,11 @@ jobs:
     name: Go formatting
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.quality == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
 
       - uses: ./.github/actions/setup-go
         with:
@@ -255,10 +265,11 @@ jobs:
     name: Installer script smoke test
     needs: changes
     if: ${{ needs.changes.outputs.install_script == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
 
       - name: Run installer script smoke test
         run: make test:install-script
@@ -272,7 +283,7 @@ jobs:
     name: Lint (conclusion)
     needs: [changes, rustfmt, clippy, python, node, c, go, install_script]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions: {}
     steps:
       - name: All lint jobs passed or were skipped

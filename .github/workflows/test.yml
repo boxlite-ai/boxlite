@@ -96,7 +96,7 @@ env:
 jobs:
   # Detect which files changed to conditionally run tests
   changes:
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions:
       contents: read
       pull-requests: read
@@ -123,6 +123,7 @@ jobs:
       nix: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.nix == 'true' }}
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
       - name: Validate Makefile syntax
         run: make -n help
       - uses: ./.github/actions/ci-config
@@ -333,13 +334,19 @@ jobs:
     name: Workflow and infrastructure checks
     needs: changes
     if: ${{ needs.changes.outputs.infra == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install CI script test dependencies
+        run: sudo apt-get install -y --no-install-recommends gcc libc6-dev patchelf python3-venv
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -514,7 +521,7 @@ jobs:
     name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.python == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -526,6 +533,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - uses: ./.github/actions/setup-python
         with:
@@ -548,7 +558,7 @@ jobs:
     name: Node.js Tests (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.node == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -560,6 +570,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -606,7 +619,7 @@ jobs:
     name: Go Tests (${{ matrix.platform.target }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.go == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -618,6 +631,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
 
       - uses: ./.github/actions/setup-go
 
@@ -693,7 +709,7 @@ jobs:
     needs: changes
     # Qualify all five builds periodically without repeating them on routine CI runs.
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -722,6 +738,9 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: runner.environment == 'self-hosted'
+
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.changes.outputs.rust-toolchain }}
@@ -736,7 +755,7 @@ jobs:
     name: Submodule setup tests
     needs: changes
     if: ${{ needs.changes.outputs.setup == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions:
       contents: "read"
     steps:
@@ -744,6 +763,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-boxlite-runner
 
       - name: Test worktree submodule setup
         run: make test:setup:submodules
@@ -916,13 +936,14 @@ jobs:
     name: Plugin package coverage
     needs: changes
     if: ${{ needs.changes.outputs.plugins == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     timeout-minutes: 5
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
       - uses: ./.github/actions/setup-python
       - name: Install coverage collector
         run: python3 -m pip install coverage==7.13.5
@@ -960,7 +981,7 @@ jobs:
           needs.changes.outputs.dashboard == 'false' &&
           needs.changes.outputs.plugins == 'false' &&
           needs.changes.outputs.infra == 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     timeout-minutes: 5
     permissions:
       contents: read
@@ -983,7 +1004,7 @@ jobs:
     name: Test (conclusion)
     needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions: {}
     steps:
       - name: All test jobs passed or were skipped

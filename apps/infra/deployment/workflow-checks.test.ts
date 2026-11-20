@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
+import { data, Evaluator, Lexer, Parser } from '@actions/expressions'
 import { load as loadYaml } from 'js-yaml'
 import { parse as parseToml } from 'smol-toml'
 
@@ -18,6 +19,69 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const picomatch = createRequire(import.meta.url)('picomatch') as (pattern: string, options: { dot: boolean }) => (path: string) => boolean
 const workflow = (name: string): any => loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows', name), 'utf8'))
 const matches = (pattern: string, path: string) => picomatch(pattern, { dot: true })(path)
+
+function matrixRunner(selection: string, os: string) {
+  const osEntry = { key: 'os', value: new data.StringData(os) }
+  const context = new data.Dictionary(
+    { key: 'matrix', value: new data.Dictionary(osEntry, { key: 'platform', value: new data.Dictionary(osEntry) }) },
+  )
+  const expression = selection.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+  const ast = new Parser(new Lexer(expression).lex().tokens, ['matrix'], []).parse()
+  return new Evaluator(ast, context).evaluate().coerceString()
+}
+
+test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native platform routing', () => {
+  const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
+  const jobs = [
+    ['lint.yml', 'clippy', 64],
+    ['test.yml', 'go', 64],
+    ['test.yml', 'guest_artifacts', 64],
+    ['test.yml', 'python', 30],
+    ['test.yml', 'node', 30],
+    ['build-go.yml', 'test', 30],
+    ['build-node.yml', 'test', 30],
+  ] as const
+
+  for (const [name, job, disk] of jobs) {
+    const selection = workflow(name).jobs[job]['runs-on']
+    for (const { os, target } of platforms) {
+      const expected = target === 'linux-x64-gnu' ? `boxlite-4vcpu-16gbmem-${disk}gbdisk` : os
+      assert.equal(matrixRunner(selection, os), expected, `${name} ${job} on ${os}`)
+    }
+  }
+})
+
+for (const [name, job, matrix] of [
+  ['api-client-drift.yml', 'check-generated-clients', false],
+  ['build-box-images.yml', 'build', false],
+  ['release-box-images.yml', 'release', false],
+  ['build-c.yml', 'build', true],
+  ['build-node.yml', 'build', true],
+  ['build-runtime.yml', 'build', true],
+  ['build-wheels.yml', 'build_wheels', true],
+  ['test.yml', 'api', false],
+  ['test.yml', 'dashboard', false],
+  ['test.yml', 'nix', false],
+  ['test.yml', 'rust', true],
+] as const) {
+  test(`${name}/${job} uses GitHub-hosted Ubuntu`, () => {
+    const selection = workflow(name).jobs[job]['runs-on']
+    assert.equal(matrix ? matrixRunner(selection, 'ubuntu-latest') : selection, 'ubuntu-latest')
+  })
+}
+
+test('CodeQL places every language on its qualified runner and retains its build mode', () => {
+  const job = workflow('codeql.yml').jobs.analyze
+  assert.equal(job['runs-on'], '${{ matrix.runner }}')
+  assert.deepEqual(job.strategy.matrix.include, [
+    { language: 'actions', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'go', 'build-mode': 'autobuild', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'javascript-typescript', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'python', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'rust', 'build-mode': 'none', runner: 'ubuntu-latest' },
+  ])
+})
 
 function testSuites(paths: string[]) {
   const filter = workflow('test.yml').jobs.changes.steps.find((step: any) => step.uses?.startsWith('dorny/paths-filter'))
