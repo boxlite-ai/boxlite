@@ -185,7 +185,9 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
     })
     lockProvider = new RedisLockProvider(redis)
     resizeDisk = jest.fn(async () => ({ operation: 'op-integration' }))
-    getDisk = jest.fn(async () => ({}))
+    // A real disks.get carries the device size; the size check reads it
+    // every round, so the default matches the fixture's 200 GiB disk.
+    getDisk = jest.fn(async () => ({ sizeGb: '200' }))
 
     service = makeService()
     runnerService = new RunnerService(
@@ -231,7 +233,7 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
   })
 
   describe('dataDiskRef persistence', () => {
-    it('refreshes the identity on a heartbeat that carries it and keeps it when one does not', async () => {
+    it('refreshes the identity on a heartbeat that carries it and clears it when the heartbeat omits it', async () => {
       const runner = await saveRunner({ dataDiskRef: null })
 
       await runnerService.updateRunnerHealth(
@@ -249,8 +251,40 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
       let stored = await runners.findOneByOrFail({ id: runner.id })
       expect(stored.dataDiskRef).toEqual({ ...ref, diskName: 'disk-new' })
 
-      // An older runner binary reporting no field must not erase it: the
-      // controller would skip this runner forever after such a heartbeat.
+      // A heartbeat without the identity is the runner saying it has no disk
+      // to advertise: the stored value clears. The runner is the source of
+      // truth; keeping a stale identity is what once made the expansion
+      // controller PATCH a different disk with it.
+      await runnerService.updateRunnerHealth(
+        runner.id,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        null,
+      )
+      stored = await runners.findOneByOrFail({ id: runner.id })
+      expect(stored.dataDiskRef).toBeNull()
+
+      // Callers with no opinion (the periodic poller passes undefined) leave
+      // the stored value untouched: set it again, omit the argument, and the
+      // identity survives.
+      await runnerService.updateRunnerHealth(
+        runner.id,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { ...ref, diskName: 'disk-new' },
+      )
       await runnerService.updateRunnerHealth(runner.id, undefined, undefined, undefined, undefined)
       stored = await runners.findOneByOrFail({ id: runner.id })
       expect(stored.dataDiskRef).toEqual({ ...ref, diskName: 'disk-new' })
@@ -469,15 +503,18 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
       expect(resizeDisk).toHaveBeenCalledWith(runner.dataDiskRef, 250)
     })
 
-    it('degrades to size-only when the baseline read fails', async () => {
+    it('skips the round when the device read fails', async () => {
+      resizeDisk.mockClear()
       getDisk.mockRejectedValue(new Error('read boom'))
       const runner = await thirstyRunner()
 
       await service.evaluateAndConfirm()
 
-      expect(resizeDisk).toHaveBeenCalledWith(runner.dataDiskRef, 250)
-      const row = await expansions.findOne({ where: { runnerId: runner.id, accepted: true } })
-      expect(row).toMatchObject({ performanceUpdated: false })
+      // Without the device size the size check cannot hold: the round is
+      // deferred to the next cron tick instead of PATCHing blind.
+      expect(resizeDisk).not.toHaveBeenCalled()
+      const row = await expansions.findOne({ where: { runnerId: runner.id } })
+      expect(row).toBeNull()
     })
   })
 })

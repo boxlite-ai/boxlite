@@ -80,8 +80,9 @@ type Config struct {
 	// everything infra provisions today.
 	RunnerDataDiskType string `envconfig:"RUNNER_DATA_DISK_TYPE"`
 	// DataDiskDevice overrides the block device path the resize ticker reads
-	// (default /dev/disk/by-id/google-boxlite-data). Test/local-only: prod
-	// never sets it.
+	// (default /dev/disk/by-id/google-boxlite-data). The resolved path also
+	// feeds the healthcheck's identity gate, so both readers share one device.
+	// Test/local-only: prod never sets it.
 	DataDiskDevice string `envconfig:"RUNNER_DATA_DISK_DEVICE"`
 }
 

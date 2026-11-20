@@ -216,14 +216,13 @@ export function nextSizeGiB(capacityGiB: number, headroomGiB: number, stepPercen
 export const PERFORMANCE_COOLDOWN_MS = 4 * 60 * 60 * 1000 + 10 * 60 * 1000
 
 /**
- * Bounds the optional baseline read (disks.get) so a hung read cannot stall
- * the round. The generated client's default Get config is a 600,000 ms
- * timeout with idempotent retries (SDK 7.9.0), runners are evaluated
- * sequentially, and the cron lease lasts 60s — one black-holed read would
- * delay every later runner's expansion and outlive the lease. 5 seconds is
- * far above a healthy read; expiry takes the same size-only fallback as a
- * failed read, and the next cron round retries naturally: that retry is the
- * bounded retry.
+ * Bounds the disks.get read so a hung read cannot stall the round. The
+ * generated client's default Get config is a 600,000 ms timeout with
+ * idempotent retries (SDK 7.9.0), runners are evaluated sequentially, and the
+ * cron lease lasts 60s — one black-holed read would delay every later
+ * runner's expansion and outlive the lease. 5 seconds is far above a healthy
+ * read; expiry takes the same skip-this-round fallback as a failed read, and
+ * the next cron round retries naturally: that retry is the bounded retry.
  */
 export const BASELINE_READ_DEADLINE_MS = 5_000
 
@@ -346,7 +345,12 @@ export function sampleBucketAt(now: Date, intervalMinutes: number): Date {
  * the disk's measured baseline supports it — provisioned IOPS/throughput
  * scaled proportionally to the capacity growth, clipped to the per-disk
  * ceiling, same-value fields never sent
- * (investigations/2026-11-13-runner-data-disk-performance-scaling.md). Budget exhaustion or reaching the cap marks the runner
+ * (investigations/2026-11-13-runner-data-disk-performance-scaling.md). Every
+ * target is compared against the disk's real size read from GCP before
+ * anything is sent: growing a disk to a size it already has is a request GCP
+ * always rejects, and it would not relieve the filesystem actually under
+ * pressure either, so such a round skips instead of PATCHing. Budget
+ * exhaustion or reaching the cap marks the runner
  * unschedulable as `disk_expand_exhausted` — unconditionally of the water
  * level, because a runner that cannot grow should take no new boxes; the mark
  * lifts itself once usage drops, budget frees up, and the cap has room again.
@@ -550,6 +554,7 @@ export class RunnerDiskExpansionService {
     this.gaugeValues.missingRef = ready.filter((r) => !isDiskCapacityExpandable(r.dataDiskRef)).length
     this.gaugeValues.uncapped = 0
 
+
     let patchesThisRound = 0
     for (const runner of ready) {
       signal.throwIfAborted()
@@ -664,10 +669,66 @@ export class RunnerDiskExpansionService {
       return false
     }
 
-    // 6) One PATCH per runner per round.
+    // 6) One PATCH per runner per round. The target is compared against the
+    // disk's real size read from GCP before anything is sent: growing a disk
+    // to a size it already has is a request GCP always rejects, and a target
+    // not larger than the device means the reported capacity describes a
+    // different disk than dataDiskRef names — growing that disk relieves
+    // nothing, so the round skips silently. Data whose report and disk
+    // disagree no longer reaches this code path (the heartbeat clears a
+    // stored identity the runner no longer corroborates), so there is no
+    // alert or counter here; hosts in that state surface through
+    // runner_disk_missing_ref and generic disk alerting instead.
     const toGiB = nextSizeGiB(runner.diskGiB, headroom, expansion.stepPercentage, cap)
-    await this.initiate(runner, ctx.dataDiskRef, toGiB, now)
+    const snapshot = await this.readDiskSnapshot(runner, ctx.dataDiskRef)
+    if (!snapshot) {
+      return false
+    }
+    const deviceGiB = Number(snapshot.sizeGb)
+    if (toGiB <= deviceGiB) {
+      this.logger.debug(
+        `Runner ${runner.id} target ${toGiB}GiB is not larger than disk ${ctx.dataDiskRef.diskName} (${deviceGiB}GiB); skipping this round`,
+        expansionLogBase(runner, ctx.dataDiskRef),
+      )
+      return false
+    }
+    const performance = await this.resolvePerformanceFields(runner, ctx.dataDiskRef, toGiB, snapshot, now)
+    await this.initiate(runner, ctx.dataDiskRef, toGiB, performance, now)
     return true
+  }
+
+  /**
+   * Reads the disk snapshot every PATCH is grounded in. Null sends the round
+   * to the next cron tick: without the device size the size check cannot
+   * hold, and PATCHing blind would grow a disk to a size it already has —
+   * a request GCP always rejects. A read failure is an incident, so it
+   * warns per round until it stops; the deferral itself costs one minute.
+   */
+  private async readDiskSnapshot(runner: Runner, ref: RunnerDataDiskRef): Promise<GcpDiskSnapshot | null> {
+    let snapshot: GcpDiskSnapshot
+    try {
+      // Deadline-raced: see BASELINE_READ_DEADLINE_MS. Expiry lands in the
+      // same skip as a failed read below.
+      snapshot = await raceDeadline(this.gcpDiskClient.getDisk(ref))
+    } catch (e) {
+      this.logger.warn(`Runner ${runner.id} device size read failed, skipping expansion this round: ${errorMessage(e)}`, {
+        ...expansionLogBase(runner, ref),
+        'disk.expansion_result': 'device_read_failed',
+      })
+      return null
+    }
+    // A real disks.get always carries sizeGb; an absent or non-positive one
+    // is treated like a failed read.
+    const sizeGb = Number(snapshot.sizeGb)
+    if (!Number.isFinite(sizeGb) || sizeGb <= 0) {
+      this.logger.warn(`Runner ${runner.id} disk snapshot lacks a usable device size, skipping expansion this round`, {
+        ...expansionLogBase(runner, ref),
+        'disk.expansion_result': 'device_size_missing',
+        'disk.perf_baseline_size_gib': String(snapshot.sizeGb ?? ''),
+      })
+      return null
+    }
+    return snapshot
   }
 
   /**
@@ -688,7 +749,13 @@ export class RunnerDiskExpansionService {
     return min === null || min === undefined ? fallbackGiB : Number(min)
   }
 
-  private async initiate(runner: Runner, ref: RunnerDataDiskRef, toGiB: number, now: Date): Promise<void> {
+  private async initiate(
+    runner: Runner,
+    ref: RunnerDataDiskRef,
+    toGiB: number,
+    performance: { fields: GcpDiskPerformanceFields | undefined; attributes: Record<string, string | number> },
+    now: Date,
+  ): Promise<void> {
     // The intent row lands before the cloud call. It is what keeps a later
     // round from re-requesting this resize while one is in flight (the
     // pending gate reads it), and it separates persistence failures from
@@ -708,13 +775,6 @@ export class RunnerDiskExpansionService {
       confirmedAt: null,
     })
     const rowId = inserted.identifiers[0].id as string
-    // Performance rides the same PATCH when its own cooldown allows. The
-    // decision lands after the intent row exists (the pending gate already
-    // owns the runner) and before the cloud call, so only gate-passing
-    // runners pay the disk read. A read failure degrades to size-only here —
-    // it must never reach the resizeDisk catch, which would misclassify it
-    // as a cloud rejection and drop the capacity PATCH the design protects.
-    const performance = await this.resolvePerformanceFields(runner, ref, toGiB, now)
     let operation: string
     try {
       ;({ operation } = performance?.fields
@@ -772,11 +832,12 @@ export class RunnerDiskExpansionService {
   /**
    * The performance fields this PATCH carries, or undefined for size-only.
    *
-   * The cooldown gate runs first: a performance change is budgeted once per
-   * 4h per disk and a rejected attempt also starts the cooldown, so one
-   * (runnerId, requestedAt) query over performanceUpdated rows answers it.
-   * The disk read next: a failure degrades to size-only — capacity never
-   * waits on a read, and the baseline is never guessed from local state.
+   * The snapshot arrives already read by the caller (the size check is
+   * grounded in it every round, so the read happens even when the performance
+   * cooldown holds). The cooldown gate runs first: a performance change is
+   * budgeted once per 4h per disk and a rejected attempt also starts the
+   * cooldown, so one (runnerId, requestedAt) query over performanceUpdated
+   * rows answers it.
    * Both fields flat relative to the disk's current values also yields
    * size-only: sending a same-value field is unreliable (the sibling size
    * field has proof GCP 400s on "must be larger") and at minimum burns a 4h
@@ -786,6 +847,7 @@ export class RunnerDiskExpansionService {
     runner: Runner,
     ref: RunnerDataDiskRef,
     toGiB: number,
+    snapshot: GcpDiskSnapshot,
     now: Date,
   ): Promise<{ fields: GcpDiskPerformanceFields | undefined; attributes: Record<string, string | number> }> {
     const cooldownStart = new Date(now.getTime() - PERFORMANCE_COOLDOWN_MS)
@@ -811,19 +873,7 @@ export class RunnerDiskExpansionService {
       return { fields: undefined, attributes: {} }
     }
 
-    let disk: GcpDiskSnapshot
-    try {
-      // Deadline-raced: see BASELINE_READ_DEADLINE_MS. Expiry lands in the
-      // same size-only fallback as a failed read below.
-      disk = await raceDeadline(this.gcpDiskClient.getDisk(ref))
-    } catch (e) {
-      this.logger.warn(`Runner ${runner.id} disk read failed, expanding size only: ${errorMessage(e)}`, {
-        ...expansionLogBase(runner, ref),
-        'disk.expansion_result': 'perf_read_failed',
-      })
-      return { fields: undefined, attributes: {} }
-    }
-    const target = performanceTarget(disk.provisionedIops, disk.provisionedThroughput, disk.sizeGb, toGiB)
+    const target = performanceTarget(snapshot.provisionedIops, snapshot.provisionedThroughput, snapshot.sizeGb, toGiB)
     if (!target) {
       // The snapshot exists but lacks provisioned values (legacy disks,
       // non-hyperdisk types): performance can never ride until a baseline
@@ -832,7 +882,7 @@ export class RunnerDiskExpansionService {
       this.logger.warn(`Runner ${runner.id} disk snapshot lacks provisioned performance values, expanding size only`, {
         ...expansionLogBase(runner, ref),
         'disk.expansion_result': 'perf_baseline_missing',
-        'disk.perf_baseline_size_gib': String(disk.sizeGb ?? ''),
+        'disk.perf_baseline_size_gib': String(snapshot.sizeGb ?? ''),
       })
       return { fields: undefined, attributes: {} }
     }
@@ -845,9 +895,9 @@ export class RunnerDiskExpansionService {
         ...expansionLogBase(runner, ref),
         'disk.expansion_result': 'perf_ceiling',
         'disk.perf_ceiling_fields': target.ceilingFields.join(','),
-        'disk.perf_baseline_size_gib': String(disk.sizeGb ?? ''),
-        'disk.perf_baseline_iops': String(disk.provisionedIops ?? ''),
-        'disk.perf_baseline_throughput': String(disk.provisionedThroughput ?? ''),
+        'disk.perf_baseline_size_gib': String(snapshot.sizeGb ?? ''),
+        'disk.perf_baseline_iops': String(snapshot.provisionedIops ?? ''),
+        'disk.perf_baseline_throughput': String(snapshot.provisionedThroughput ?? ''),
         'disk.to_gib': toGiB,
       })
     }
@@ -857,9 +907,9 @@ export class RunnerDiskExpansionService {
     return {
       fields: fields.iops !== undefined || fields.throughput !== undefined ? fields : undefined,
       attributes: {
-        'disk.perf_from_iops': String(disk.provisionedIops),
-        'disk.perf_from_throughput': String(disk.provisionedThroughput),
-        'disk.perf_from_size_gib': String(disk.sizeGb),
+        'disk.perf_from_iops': String(snapshot.provisionedIops),
+        'disk.perf_from_throughput': String(snapshot.provisionedThroughput),
+        'disk.perf_from_size_gib': String(snapshot.sizeGb),
         ...(target.iops !== undefined ? { 'disk.perf_to_iops': target.iops } : {}),
         ...(target.throughput !== undefined ? { 'disk.perf_to_throughput': target.throughput } : {}),
       },

@@ -4,11 +4,11 @@
  */
 
 /**
- * Identifies the cloud data disk backing a runner's `BOXLITE_HOME` filesystem,
- * as reported by the runner itself in each healthcheck. Only runners whose
- * infrastructure provisions such a disk (GCP Hyperdisk today) send one; the
- * column is refreshed on every heartbeat that carries it and never nulled, so
- * an older runner binary must not wipe a newer one's disk identity.
+ * Identifies the cloud data disk carrying a runner's `BOXLITE_HOME` filesystem,
+ * as reported by the runner itself in each healthcheck. The runner sends the
+ * identity only while its own check confirms the device actually carries the
+ * BoxLite home, and a heartbeat without one clears the stored identity — the
+ * runner's report is the source of truth for whether a disk exists to grow.
  */
 export interface RunnerDataDiskRef {
   /** Cloud provider owning the disk; `gcp` is the only writer today. */

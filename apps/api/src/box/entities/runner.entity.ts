@@ -185,9 +185,11 @@ export class Runner {
 
   /**
    * The cloud data disk behind this runner's `BOXLITE_HOME`, reported by the
-   * runner in each healthcheck. Refreshed whenever a heartbeat carries it and
-   * never written to null: an older runner binary reporting no disk must not
-   * erase the identity a newer one reported.
+   * runner in each healthcheck. The runner sends the identity only while its
+   * own check confirms the device carries the BoxLite home, so a heartbeat
+   * without one clears the stored value — the runner is the source of truth.
+   * Callers with no opinion (the periodic poller) leave the stored value
+   * untouched.
    */
   @Column({
     type: 'jsonb',

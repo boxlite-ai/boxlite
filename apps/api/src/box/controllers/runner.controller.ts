@@ -341,7 +341,10 @@ export class RunnerController {
       {
         nestedVirtualizationEnabled: healthcheck.nestedVirtualizationEnabled,
       },
-      healthcheck.dataDiskRef,
+      // Field absent = the runner verified it has no disk to advertise; a
+      // null clears the stored identity (the poller caller passes undefined
+      // and keeps whatever is stored).
+      healthcheck.dataDiskRef ?? null,
     )
   }
 }

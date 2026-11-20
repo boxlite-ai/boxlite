@@ -82,6 +82,9 @@ The attachment is fixed at creation too: a host that existed before its disk doe
 and that disk stays unattached, and billed, until the host is destroyed and recreated; a `--replace`
 would carry the ignored attachment over.
 
+The runner reports the disk identity only while the device actually carries the BoxLite home.
+A host without the attached disk is therefore never treated as expandable.
+
 ## Verify and recover
 
 Inspect both assignments (only the first for a single-runner stage), including every binary and

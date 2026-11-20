@@ -376,7 +376,7 @@ export class RunnerService {
       infoFailed?: boolean
       nestedVirtualizationEnabled?: boolean
     },
-    dataDiskRef?: RunnerDataDiskRef,
+    dataDiskRef?: RunnerDataDiskRef | null,
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     // A timed-out attempt can resume here after its retry has committed.
@@ -417,12 +417,16 @@ export class RunnerService {
       updateData.appVersion = appVersion
     }
 
-    // Refreshed whenever a heartbeat carries it, never nulled when it does
-    // not: an older runner binary reporting no disk must not erase the
-    // identity a newer one reported (the expansion controller skips runners
-    // without one, so a wiped identity would silently stop expansion).
+    // `null` is the runner's own statement that it has no data disk to
+    // advertise, so the stored identity clears: the runner is the source of
+    // truth, and a stale identity is exactly what made the expansion
+    // controller size a resize from one filesystem and PATCH a different
+    // disk. The cost is bounded: a downgrade to a binary that cannot verify
+    // pauses expansion until it re-reports, and a transient verification
+    // failure clears for one heartbeat. `undefined` is callers with no
+    // opinion — the periodic poller — and leaves the stored value untouched.
     if (dataDiskRef !== undefined) {
-      updateData.dataDiskRef = dataDiskRef
+      updateData.dataDiskRef = dataDiskRef ?? null
     }
 
     if (serviceHealth !== undefined) {
