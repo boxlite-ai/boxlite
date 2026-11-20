@@ -10,6 +10,7 @@ import { Listener, ListenerBackend, ListenerHost } from './listener'
 import { ActionsScaleSets } from './scale-set-client'
 import { JitRegistration } from './runners'
 import { SqliteStateDatabase } from './state/sqlite'
+import { StateCorrupt } from './state/database'
 import { ExecutionLease, ListenerState } from './state/store'
 import { ListenerInbox, verifyWebhook } from './webhook'
 import { ScanClaim } from './compensation/queue'
@@ -257,6 +258,58 @@ describe('CI shared Listener orchestration', () => {
     await runUntil(Promise.race([released.promise, new Promise<void>((done) => setTimeout(done, 800))]))
     expect(seeded).toBe(true)
     expect(await journal.used(scope.organization)).toBe(0)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('keeps a charged worker recoverable when discovery and the cleanup backend both fail', async () => {
+    const journal = new ExecutionJournal(state)
+    const reported = deferred()
+    const offline = new Error('Cleanup backend unavailable')
+    let key: string | undefined
+    jest.mocked(host.discover).mockImplementation(async (owner) => {
+      if (!key) {
+        const scopeId = await journal.define(owner, scope)
+        const row = await journal.reserve(owner, scopeId, null, testCapacity({ account: 1, tenant: 1 }), {
+          labels: ['boxlite'],
+          scaleSet: 9,
+        })
+        key = row!.record.key
+      }
+      throw new Error('Directory offline')
+    })
+    jest.mocked(host.backend).mockRejectedValue(offline)
+    jest.mocked(host.report).mockImplementation((error, operation) => {
+      if (error === offline && operation === 'scope-backend') reported.resolve()
+    })
+    await runUntil(reported.promise)
+    expect(await journal.used(scope.organization)).toBe(1)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('propagates a corrupt scale set registration without polling or provisioning', async () => {
+    const failure = new StateCorrupt()
+    const failed = deferred()
+    const scan = state.scan.bind(state)
+    jest.spyOn(state, 'scan').mockImplementation(async (owner, range) => {
+      if (range.prefix.startsWith('scale-set/')) throw failure
+      return scan(owner, range)
+    })
+    jest.mocked(host.report).mockImplementation((error) => {
+      if (error === failure) failed.resolve()
+    })
+    await runUntil(failed.promise)
+    expect(host.report).not.toHaveBeenCalledWith(failure, 'scope-backend')
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('closes the active scale set backend when discovery removes an idle scope', async () => {
+    const closed = deferred()
+    jest.mocked(host.discover).mockImplementation(async () => ({
+      scopes: jest.mocked(host.backend).mock.calls.length ? [] : [scope],
+      completed: [],
+      pending: true,
+      ready: true,
+    }))
+    jest.mocked(backend.close).mockImplementation(async () => closed.resolve())
+    await runUntil(closed.promise)
+    expect(backend.close).toHaveBeenCalledTimes(1)
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
   it('retains an undispatched worker when discovery restores its scope during a drain', async () => {

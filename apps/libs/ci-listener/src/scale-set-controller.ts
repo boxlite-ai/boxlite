@@ -6,7 +6,7 @@ import { ExecutionScope, object, positive, retryCapacity, scopeKey } from './exe
 import { GitHubRequestError } from './github'
 import { DEFAULT_RESOURCE_LABEL, selectRunnerLabels } from './resource-labels'
 import { ScaleSetDiagnostics, ScaleSetEvent, ScaleSetFailure } from './scale-set-diagnostics'
-import { ActionsScaleSets, ScaleSetRemoved, ScaleSetSession } from './scale-set-client'
+import { ActionsScaleSets, isRequestIdText, ScaleSetRemoved, ScaleSetSession } from './scale-set-client'
 import { LeaseLost, StateCorrupt, StateRecord } from './state/database'
 import { ExecutionLease, ListenerState, StateChange, StateCheck } from './state/store'
 
@@ -75,8 +75,7 @@ function readRecord(row: StateRecord): SetRecord {
       v.pending.every(
         (job): job is PendingRequest =>
           object(job) &&
-          typeof job.id === 'string' &&
-          /^[1-9]\d{0,18}$/.test(job.id) &&
+          isRequestIdText(job.id) &&
           (job.phase === 'requested' || job.phase === 'accepted' || job.phase === 'verify'),
       ) &&
       new Set(v.pending.map((job) => job.id)).size === v.pending.length

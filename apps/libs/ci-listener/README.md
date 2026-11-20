@@ -459,6 +459,8 @@ An owner that loses an acquisition reply reconciles the first replay against the
 
 ### Asynchronous allocation queue
 
+GitHub sends job request IDs as signed 64-bit JSON integers. The listener preserves their exact digits across offers, acquisition and settlement, including zero and negative IDs. Pending requests use canonical decimal text in the journal.
+
 The owner admits eligible offers under the current quota. It records the request IDs before the acquire call and persists the returned result before acknowledging the message. An idle poll keeps accepted work reserved until GitHub reports assignment or cancellation.
 
 On reconnect, an explicit acquired count bounds the reservations carried from the previous session. Missing acquisition statistics preserve the existing charges.

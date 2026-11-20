@@ -219,6 +219,46 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(stored.filter((row) => row.key.startsWith('receipt/'))).toHaveLength(8)
       expect(stored.filter((row) => row.key.startsWith('job-fact/'))).toHaveLength(8)
     })
+    it('retains the queued labels when a completion omits them', async () => {
+      await inbox.receive(verifyWebhook(signed(), secret)!)
+      const completed = verifyWebhook(
+        signed({
+          ...payload(),
+          action: 'completed',
+          workflow_job: { ...payload().workflow_job, status: 'completed', labels: [], runner_id: 91 },
+        }),
+        secret,
+      )!
+      await inbox.receive(completed)
+      expect((await state.read(['job-fact/9/55']))[0].payload).toMatchObject({
+        status: 'completed',
+        labels: ['boxlite'],
+        runner: 91,
+      })
+      expect(await state.read(['notice/9/55'])).toHaveLength(0)
+    })
+    it.each([{ labels: [''] }, { labels: ['x'.repeat(129)] }, { labels: Array(101).fill('boxlite') }, { runner: -1 }])(
+      'rejects invalid observation metadata without recording a delivery: %j',
+      async (invalid) => {
+        const event = verifyWebhook(signed(), secret)!
+        await expect(
+          inbox.receive({
+            ...event,
+            observation: { ...event.observation!, ...invalid },
+          }),
+        ).rejects.toBeInstanceOf(StateCorrupt)
+        expect(await state.read(['receipt/' + event.delivery, 'job-fact/9/55', 'notice/9/55'])).toEqual([])
+      },
+    )
+    it('preserves a corrupt job fact for investigation instead of advancing the notice', async () => {
+      const event = verifyWebhook(signed(), secret)!
+      const prior = await state.ingress('9/21', (tx) =>
+        tx.write([{ key: 'job-fact/9/55', expected: null, payload: { hint: null } }]),
+      )
+      await expect(inbox.receive(event)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await state.read(['job-fact/9/55'])).toEqual(prior)
+      expect(await state.read(['notice/9/55', 'receipt/' + event.delivery])).toEqual([])
+    })
     it('counts duplicate and out-of-order job transitions once', async () => {
       const send = (status: 'queued' | 'in_progress' | 'completed') =>
         inbox.receive(

@@ -517,6 +517,18 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await state.read([policy.key])).toEqual([policy])
       expect((await state.read(['worker/guarded']))[0].payload).toEqual({ admitted: true })
     })
+    it('rejects an invalid or duplicate scope refresh before committing any worker', async () => {
+      const lease = await owner()
+      const worker = { key: 'worker/refresh', expected: null, payload: { admitted: true } }
+      const activity = 'scope-state/' + '1'.repeat(64)
+      await expect(state.commit(lease, [worker], [], 'worker/other')).rejects.toThrow('Invalid scope activity refresh')
+      await expect(
+        state.commit(lease, [worker, { key: activity, expected: null, payload: {} }], [], activity),
+      ).rejects.toThrow('Invalid scope activity refresh')
+      const batch = Array.from({ length: 100 }, (_, i) => ({ ...worker, key: 'worker/batch-' + i }))
+      await expect(state.commit(lease, batch, [], activity)).rejects.toThrow('Invalid scope activity refresh')
+      expect(await state.read([worker.key, activity, batch[0].key])).toEqual([])
+    })
     it('quota fence rejects a stale policy before any allocation write', async () => {
       const lease = await owner()
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant', expected: null, payload: { limit: 2 } }])
