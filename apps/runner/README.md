@@ -561,6 +561,72 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ---
 
+## GCP Filestore mount engine
+
+The runner's internal volume DTO accepts a Filestore reference alongside the
+volume ID and guest mount path:
+
+```json
+{
+  "volumeId": "09f81aef-69a3-488b-b872-e193831549f3",
+  "mountPath": "/data",
+  "filestore": {
+    "instance": "boxlite-filestore-stage",
+    "server": "10.20.24.2",
+    "export": "/vol1"
+  }
+}
+```
+
+`instance` is the logical mount identity, while `server` and `export` identify
+the NFS target. The runner validates all three on every reference before
+per-call mount deduplication, requires one target per instance within a request,
+and rejects Filestore `subpath` instead of silently ignoring it. Public Volume
+provisioning and control-plane admission are outside this runner-only slice.
+
+### Mount and record lifecycle
+
+- One NFSv4.1 mount per instance is shared by every box referencing it. The
+  runner creates it on demand and reclaims it when no box record references it.
+  An existing mount is reused only after `findmnt` confirms NFSv4 and the exact
+  `server:export` source; a different target fails with a mount mismatch.
+- A box binds to `/mnt/boxlite-filestore-<instance>/<volume_id>`. The directory
+  is named by volume ID, so boxes sharing a volume share data. Destroy removes
+  the box reference, not the volume data.
+- Per-instance mutexes serialize mount, record, and reclaim decisions. Create
+  rolls back records written before a later volume or final record write fails.
+  After a successful record rollback, it immediately reclaims any resulting
+  unreferenced Filestore mounts, independently of scheduled cleanup and its
+  dry-run mode. A record rollback failure skips reclaim because references
+  cannot be verified. New mounts create the empty record directory before
+  starting the mount command. If Create exits while mounting or directory
+  preparation is still running, completion triggers reference-aware reclaim
+  after the pending marker clears. Rollback reclaim uses a bounded context
+  detached from caller cancellation. Existing mounts with no records retain the
+  missing-records guard. Reclaim rechecks references and pending operations
+  under the instance lock instead of stating a potentially unreachable NFS root
+  for a recency check; start replay retains existing entries until replacements
+  are durable.
+- Prepare failures return `FILESTORE_VOLUME_PREPARE_FAILED` with box, volume,
+  and instance IDs plus the mount error. Logs do not include box environment
+  variables, secrets, authorization headers, or job payloads.
+
+### Troubleshooting and prerequisites
+
+Start returns Filestore preparation errors, including target mismatches, before
+starting the box, and the `START_BOX` job reports that failure. Object-storage-
+only boxes retain the existing fallback: mount replay failures are logged and
+Start proceeds, so a box started while object storage is unreachable can show an
+empty guest directory; stop it, restore connectivity, and start it again. NFS
+`hard` mounts block I/O while the network is down.
+
+If a later request resolves the same logical instance to another server or
+export, the runner rejects the target mismatch instead of binding the old share.
+Unmount the stale path or reboot the host before retrying. The host needs an NFS
+client (`nfs-utils` on RHEL-family or `nfs-common` on Debian-family), util-linux
+for `mountpoint` and `findmnt`, NFSv4.1 support, and network access to port 2049
+on the Filestore instance.
+
 ## Background services
 
 ### Box state sync

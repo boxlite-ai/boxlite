@@ -10,6 +10,35 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
+func TestHealthcheckCapabilitiesWireContract(t *testing.T) {
+	payloads := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		payloads <- payload
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	config := apiclient.NewConfiguration()
+	config.Servers = apiclient.ServerConfigurations{{URL: server.URL}}
+	client := apiclient.NewAPIClient(config)
+	service := &Service{client: client, domain: "runner.test", apiPort: 8080, proxyPort: 8081}
+	healthcheck := service.newHealthcheck(false)
+
+	if _, err := client.RunnersAPI.RunnerHealthcheck(context.Background()).RunnerHealthcheck(*healthcheck).Execute(); err != nil {
+		t.Fatal(err)
+	}
+	payload := <-payloads
+	got, present := payload["capabilities"].([]any)
+	if !present || len(got) != 1 || got[0] != "filestore" {
+		t.Fatalf("capabilities = %v (present=%t), want [filestore]; body = %v", got, present, payload)
+	}
+}
+
 func TestHealthcheckCapabilityWireContract(t *testing.T) {
 	for _, field := range []string{"supportsPrivileged", "nestedVirtualizationEnabled"} {
 		disabled, enabled := false, true
