@@ -532,18 +532,41 @@ Raw RAM starts at offset zero and follows guest physical address order,
 skipping the `[3 GiB, 4 GiB)` PCI hole. Machine state targets the same host
 and KVM environment.
 
+### Restoring a snapshot
+
+On Linux x86_64, `Vm::from_state(state_path, memory_path)` restores the two
+files from `control.export(state_path, memory_path)`. The state file ends
+after the declared machine state, and the memory file contains exactly the
+declared RAM bytes. The constructor validates the machine state and KVM GPA
+limit, loads and registers RAM, and returns a device-less VM in `Created`.
+It returns image I/O, host VM creation, and RAM registration errors directly.
+
+Call `vm.run()` to install platform and vCPU state and start guest execution.
+To inspect or re-export the restored state before the guest enters, call
+`control.pause()` in `Created` and start `run()` on the VM owner thread.
+From a control thread, call `control.wait_paused(timeout)`, then
+`control.resume()` when the guest can enter. If installation or initial
+parking fails, `run()` returns the error after joining every started vCPU
+and publishes `Exited`. Pause waiters receive `TerminalOutcome`. The owner
+drops the VM to release its RAM.
+
+On Linux x86_64 with read/write `/dev/kvm`, run
+`make test:integration:vmm:kvm` for the flat-guest round trips, including the
+3073 MiB split-RAM case. Run `make test:integration:vmm:linux` with
+`VMM_KERNEL` set to a readable `vmlinux` for the Linux round trip.
+
+### Run and teardown
+
 `Vm::run` runs on x86_64, against any backend that implements
 `boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend. Before
 it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
 devices it is given, so a conflict fails with `ChipsetConflicts` and leaves
 nothing mapped.
 
-1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
-   sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
-   registers, then waits at a start gate until every vCPU is configured. A
-   vCPU that fails setup sends `VcpuFailed` before it arrives, so the latch
-   keeps every vCPU out of the guest, and a thread that fails to start aborts
-   the gate, so no worker waits forever.
+1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its
+   vCPU, applies its boot or saved state, and waits at a start gate until
+   every vCPU is configured. If a vCPU fails setup or a thread fails to
+   start, the failure sets the stop latch and releases the gate.
 2. Before each guest entry, the worker checks for a pause or stop. To park,
    it completes pending I/O, notifies the backend of the stop, and acknowledges
    the current pause epoch. When it can enter, it runs and hands the exit to

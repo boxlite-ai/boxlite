@@ -561,6 +561,35 @@ A terminal event before commit yields `TerminalOutcome`. Cleanup checks the
 device and inode against each open file before unlinking its path. Existing
 targets return `AlreadyExists` and retain their contents. [Rust create-new contract](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.create_new)
 
+### Snapshot restore
+
+On Linux x86_64, `Vm::from_state(state_path, memory_path)` opens the two files
+produced by `VmControl::export`. It validates the v1 header and machine state,
+including vCPU and IRQ chip order, and checks the RAM layout and KVM GPA limit.
+It streams the declared RAM bytes into anonymous mappings before creating the
+host VM and registering those mappings. Each file must end at its declared
+payload boundary. A successful import returns a device-less VM in `Created`.
+Parsing, input I/O, host creation, and RAM registration errors belong to the
+constructor.
+
+`Vm::run` claims the run and consumes any initial pause reservation together.
+The driver restores the in-kernel platform state before launching the scoped
+vCPU owners. Each owner creates its vCPU and restores the saved state. This
+path uses the saved CPUID, MSRs, and registers and skips boot preparation.
+The start gate holds all guest execution until every vCPU has installed its
+state. By default execution starts immediately after setup. A `control.pause()`
+reservation made in `Created` keeps guest entry closed through `Paused` until
+`control.resume()`. Platform or vCPU installation and initial parking errors
+end the run. The driver releases waiters, joins the vCPUs and publishes
+`Exited`. The owner drops the VM to release the RAM.
+
+On a Linux x86_64 host with read/write `/dev/kvm`, run
+`make test:integration:vmm:kvm` for the flat-guest tests and
+`make test:integration:vmm:linux` with `VMM_KERNEL` for the Linux test.
+`make coverage:vmm:kvm` and `make coverage:vmm:boot` exercise the same
+restore paths under coverage. The split-RAM case streams a 3073 MiB snapshot
+across the 32-bit MMIO hole.
+
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED
     share, and it keeps travelling that way (`src/guest/src/service/container.rs:406-488`).

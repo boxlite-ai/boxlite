@@ -11,7 +11,7 @@ use std::{
     sync::{Condvar, Mutex, PoisonError},
 };
 
-use boxlite_hypervisor::{Vcpu, VcpuExit, X86BootRegisters, X86Vcpu, X86Vm};
+use boxlite_hypervisor::{Vcpu, VcpuExit, X86Vcpu, X86Vm};
 
 #[cfg(target_os = "linux")]
 use crate::snapshot::state::VcpuRecord;
@@ -21,6 +21,7 @@ use crate::{
     error::{Error, Result},
     events::{Event, EventSender},
     lifecycle::Lifecycle,
+    vm::Startup,
 };
 
 /// Holds the workers until every vCPU is configured, so no vCPU runs before
@@ -55,7 +56,7 @@ impl StartGate {
 pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) host_vm: &'a H,
     pub(crate) vcpu_count: u8,
-    pub(crate) boot_regs: &'a X86BootRegisters,
+    pub(crate) startup: &'a Startup,
     pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
     pub(crate) lifecycle: &'a Lifecycle,
@@ -69,34 +70,36 @@ impl<H: X86Vm> Workers<'_, H> {
     /// whose lock an earlier panic poisoned, ends the VM with
     /// [`Error::VcpuPanicked`] instead of leaving the thread.
     pub(crate) fn run(&self, id: u8) {
-        let vcpu = match catch_panic(id, || self.configure(id)) {
-            Ok(vcpu) => Some(vcpu),
-            Err(error) => {
-                // Sent before arriving, so the latch is set before any vCPU
-                // leaves the gate and none enters the guest.
-                self.sender.send(Event::VcpuFailed(error));
-                None
-            }
-        };
-        // A failed vCPU still arrives, so the others are never left waiting.
-        self.gate.arrive_and_wait(self.vcpu_count);
-        let Some(mut vcpu) = vcpu else {
-            return;
-        };
-        match catch_panic(id, || self.run_guest(&mut vcpu, id)) {
+        match catch_panic(id, || {
+            let mut vcpu = self.configure(id)?;
+            self.gate.arrive_and_wait(self.vcpu_count);
+            self.run_guest(&mut vcpu, id)
+        }) {
             Ok(Some(event)) => self.sender.send(event),
             Ok(None) => {}
-            Err(error) => self.sender.send(Event::VcpuFailed(error)),
+            Err(error) => {
+                // Latch the failure before releasing any workers at the gate.
+                self.sender.send(Event::VcpuFailed(error));
+                self.gate.abort();
+            }
         }
     }
 
     fn configure(&self, id: u8) -> Result<H::Vcpu> {
         let mut vcpu = self.host_vm.create_vcpu(id.into())?;
-        let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
-        vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
-        // The other vCPUs wait in their reset state for INIT and SIPI.
-        if id == 0 {
-            vcpu.set_boot_registers(self.boot_regs)?;
+        match self.startup {
+            Startup::Boot { regs } => {
+                let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
+                vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
+                // The other vCPUs wait in their reset state for INIT and SIPI.
+                if id == 0 {
+                    vcpu.set_boot_registers(regs)?;
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Startup::Restore(machine) => {
+                vcpu.restore_state(&machine.vcpus[usize::from(id)].state)?;
+            }
         }
         self.kicks
             .lock()

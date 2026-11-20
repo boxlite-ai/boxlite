@@ -13,6 +13,8 @@
 use std::{io, ptr::NonNull, sync::Arc};
 
 use boxlite_hypervisor::{MemoryRegion, Vm};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use vm_memory::Bytes;
 use vm_memory::{GuestAddress, GuestMemoryBackend, GuestMemoryRegion, VolatileSlice};
 
 use crate::error::{Error, Result};
@@ -23,6 +25,10 @@ pub(crate) type GuestMemoryMmap = vm_memory::GuestMemoryMmap<()>;
 
 /// Bytes per MiB.
 const MIB: u64 = 1 << 20;
+
+/// Maximum snapshot I/O request size.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) const SNAPSHOT_CHUNK: usize = MIB as usize;
 
 /// Alignment of guest RAM ranges, independent of the host page size.
 const GUEST_PAGE_SIZE: u64 = 4 << 10;
@@ -306,6 +312,22 @@ impl GuestRam {
         self.memory
             .iter()
             .map(|region| (region.start_addr(), region.len() as usize))
+    }
+
+    /// Fills fresh RAM in ascending GPA order from the packed image.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn read_image(&self, source: &mut impl io::Read) -> Result<()> {
+        let mut buffer = vec![0; SNAPSHOT_CHUNK];
+        for (start, size) in self.ranges() {
+            for offset in (0..size).step_by(SNAPSHOT_CHUNK) {
+                let chunk = &mut buffer[..SNAPSHOT_CHUNK.min(size - offset)];
+                source.read_exact(chunk).map_err(Error::Snapshot)?;
+                self.memory
+                    .write_slice(chunk, GuestAddress(start.0 + offset as u64))
+                    .map_err(|error| Error::Snapshot(io::Error::other(error)))?;
+            }
+        }
+        Ok(())
     }
 
     /// Each RAM range as the hypervisor registers it, in ascending guest order.
