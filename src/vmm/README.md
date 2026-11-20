@@ -32,7 +32,7 @@ boxlite-vmm
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
-| `hotplug` | `HotplugMemory`: the window above 4 GiB that virtio-mem plugs in 2 MiB blocks and the VMM maps in 128 MiB slots |
+| `hotplug` | `HotplugMemory` places a window after boot RAM, plugs 2 MiB blocks and maps 128 MiB slots |
 | `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
@@ -181,8 +181,13 @@ instead of reading registrations back from the view.
 `HotplugMemory` owns the window that grows and shrinks guest RAM at runtime.
 Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
 
-- The window starts at 4 GiB, above the 32-bit MMIO hole, and is absent from
-  E820. Its capacity is a positive multiple of 128 MiB.
+- The window starts at or above 4 GiB after all boot RAM. The base is rounded
+  up to the bundled Linux guest's memory block size, and capacity must be a
+  positive multiple of that size. A guest with 6 GiB of boot RAM and 1 GiB of
+  hotplug capacity has a window at `[7 GiB, 8 GiB)`.
+- The planner checks the end against KVM's GPA limit and Linux's pluggable
+  address limit. It checks capacity against KVM's slot budget after boot RAM.
+  E820 and the startup identity map describe the backed boot ranges.
 - The guest plugs 2 MiB blocks. A 128 MiB slot gets its own private anonymous
   mapping and KVM registration when its first block is plugged.
 - Unplugging the last block of a slot removes its KVM registration, publishes
@@ -190,9 +195,9 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
   alive until it drops, as the [Guest RAM](#guest-ram) diagram shows.
 - Publishing a removal cannot fail: a poisoned view lock is still used, and a
   region already missing from the view counts as removed.
-- Unplugging blocks in a slot that stays mapped discards them with
-  `MADV_DONTNEED`, so the host bound is the mapped slots, not the plugged
-  blocks.
+- Unplugging blocks discards them with `MADV_DONTNEED` while other blocks in
+  that slot remain plugged. An emptied slot retained after a failed unmap
+  retains its contents.
 - A failed slot map unregisters the slots that plug added and leaves every
   block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
   leaks a slot whose unmap fails.

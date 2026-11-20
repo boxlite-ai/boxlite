@@ -12,6 +12,8 @@ use super::*;
 use crate::mock_vm::{Call, MockVm};
 
 const MIB: u64 = 1 << 20;
+const GIB: u64 = 1024 * MIB;
+const HOTPLUG_START: u64 = 4 * GIB;
 
 fn view() -> GuestMemoryView {
     GuestMemoryView::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1_0000)]).unwrap())
@@ -20,7 +22,9 @@ fn view() -> GuestMemoryView {
 fn window(vm: MockVm, capacity_mib: u32) -> (Arc<MockVm>, GuestMemoryView, HotplugMemory<MockVm>) {
     let vm = Arc::new(vm);
     let view = view();
-    let memory = HotplugMemory::new(Arc::clone(&vm), view.clone(), capacity_mib).unwrap();
+    let window =
+        HotplugWindow::plan(&[(GuestAddress(0), 0x1_0000)], capacity_mib, 64 * GIB, 16).unwrap();
+    let memory = HotplugMemory::new(Arc::clone(&vm), view.clone(), window);
     (vm, view, memory)
 }
 
@@ -47,15 +51,107 @@ const SLOT: usize = SLOT_SIZE as usize;
 const SECOND_SLOT: u64 = HOTPLUG_START + SLOT_SIZE;
 
 #[test]
+#[cfg(target_arch = "x86_64")]
+fn window_starts_after_high_boot_ram() {
+    use crate::memory::{GuestRam, ram_ranges};
+
+    let ranges = ram_ranges(6144);
+    let mut ram = GuestRam::new(&ranges).unwrap();
+    let vm = Arc::new(MockVm::new());
+    ram.map(vm.as_ref()).unwrap();
+    let window = HotplugWindow::plan(&ranges, 128, 64 * GIB, 1).unwrap();
+    let mut memory = HotplugMemory::new(Arc::clone(&vm), ram.memory().clone(), window);
+
+    assert_eq!(memory.base(), 7 * GIB);
+    memory
+        .plug(memory.blocks(memory.base(), 1).unwrap())
+        .unwrap();
+    assert_eq!(slot_calls(&vm)[2], (true, 7 * GIB, SLOT));
+    drop(memory);
+    ram.unmap(vm.as_ref()).unwrap();
+}
+
+#[test]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn kvm_rejects_the_old_window_and_maps_the_planned_window() {
+    use boxlite_hypervisor::{Error, KvmVm};
+
+    use crate::{
+        cpu_features::X86MemoryCaps,
+        memory::{GuestRam, ram_ranges},
+    };
+
+    let ranges = ram_ranges(6144);
+    let mut ram = GuestRam::new(&ranges).unwrap();
+    let vm = Arc::new(KvmVm::new().unwrap());
+    ram.map(vm.as_ref()).unwrap();
+    let old_window = HotplugWindow {
+        base: 4 * GIB,
+        slots: 1,
+    };
+    let mut old = HotplugMemory::new(Arc::clone(&vm), ram.memory().clone(), old_window);
+    let error = old.plug(0..1).unwrap_err();
+    assert!(
+        matches!(error.get_ref().and_then(|e| e.downcast_ref::<Error>()),
+        Some(Error::MapMemory { source, .. }) if source.kind() == io::ErrorKind::AlreadyExists)
+    );
+
+    let caps = X86MemoryCaps::from_cpuid(vm.supported_cpuid()).unwrap();
+    let window = HotplugWindow::plan(&ranges, 128, caps.physical_end, 1).unwrap();
+    let mut memory = HotplugMemory::new(Arc::clone(&vm), ram.memory().clone(), window);
+    assert_eq!(memory.base(), 7 * GIB);
+    memory.plug(0..1).unwrap();
+    ram.memory()
+        .memory()
+        .write_obj(0x2au8, GuestAddress(7 * GIB))
+        .unwrap();
+    memory.unplug(0..1).unwrap();
+    ram.unmap(vm.as_ref()).unwrap();
+}
+
+#[test]
 fn capacity_must_be_a_positive_multiple_of_a_slot() {
     for capacity in [0, 64, 129] {
-        let error = HotplugMemory::new(Arc::new(MockVm::new()), view(), capacity)
-            .err()
-            .unwrap();
+        let error = HotplugWindow::plan(&[], capacity, 64 * GIB, 16).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
     let (_, _, memory) = window(MockVm::new(), 256);
     assert_eq!((memory.base(), memory.size()), (HOTPLUG_START, 256 * MIB));
+}
+
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn placement_and_capacity_follow_linux_memory_block_alignment() {
+    use crate::memory::ram_ranges;
+
+    for (boot_mib, base, block_mib) in [
+        (512, 4 * GIB, 128),
+        (3072, 4 * GIB, 128),
+        (3073, 4 * GIB + SLOT_SIZE, 128),
+        (63 * 1024, 64 * GIB, 2048),
+        (64 * 1024, 65 * GIB, 1024),
+        (63 * 1024 + 128, 64 * GIB + SLOT_SIZE, 128),
+    ] {
+        let boot = ram_ranges(boot_mib);
+        let plan = HotplugWindow::plan(&boot, block_mib, 128 * GIB, 16).unwrap();
+        assert_eq!(plan.base, base, "{boot_mib} MiB of boot RAM");
+        assert!(HotplugWindow::plan(&boot, block_mib / 2, 128 * GIB, 16).is_err());
+    }
+}
+
+#[test]
+fn window_respects_address_and_slot_limits() {
+    let boot = [(GuestAddress(4 * GIB), GIB as usize)];
+    assert!(HotplugWindow::plan(&boot, 128, 5 * GIB + SLOT_SIZE, 1).is_ok());
+    assert!(HotplugWindow::plan(&boot, 256, 5 * GIB + SLOT_SIZE, 2).is_err());
+    assert!(HotplugWindow::plan(&boot, 128, 5 * GIB + SLOT_SIZE, 0).is_err());
+
+    let boot = [(GuestAddress(GUEST_PLUGGABLE_END - 2 * SLOT_SIZE), SLOT)];
+    assert!(HotplugWindow::plan(&boot, 128, 2 * GUEST_PLUGGABLE_END, 1).is_ok());
+    assert!(HotplugWindow::plan(&boot, 256, 2 * GUEST_PLUGGABLE_END, 2).is_err());
+    assert!(HotplugWindow::plan(&[(GuestAddress(u64::MAX), 1)], 128, u64::MAX, 1).is_err());
+    assert!(HotplugWindow::plan(&[(GuestAddress(u64::MAX - 1), 1)], 128, u64::MAX, 1).is_err());
 }
 
 #[test]

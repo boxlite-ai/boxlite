@@ -7,7 +7,8 @@
 //! plugs and unplugs in [`BLOCK_SIZE`] blocks. The VMM backs and registers it
 //! in [`SLOT_SIZE`] slots: a slot gains its own anonymous mapping and KVM
 //! registration when its first block is plugged, and loses both when its last
-//! block is unplugged. An unplugged block inside a still-mapped slot is
+//! block is unplugged and unregistration succeeds. An unplugged block inside a
+//! slot that still contains plugged blocks is
 //! discarded with `MADV_DONTNEED`. The host memory bound is therefore the
 //! mapped slots, not the plugged blocks.
 //!
@@ -38,9 +39,68 @@ pub(crate) const SLOT_SIZE: u64 = 128 * MIB;
 
 const BLOCKS_PER_SLOT: usize = (SLOT_SIZE / BLOCK_SIZE) as usize;
 
-/// Where the window starts on x86_64: above the 32-bit MMIO hole, outside
-/// every boot RAM range and E820 entry.
-pub(crate) const HOTPLUG_START: u64 = 1 << 32;
+/// The lowest window address, immediately above the x86_64 MMIO hole.
+const HOTPLUG_MIN_ADDR: u64 = 1 << 32;
+/// Exclusive pluggable limit of the bundled guest's four-level direct map.
+const GUEST_PLUGGABLE_END: u64 = 1 << 46;
+
+/// An x86_64 virtio-mem window checked against boot RAM, Linux and KVM.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HotplugWindow {
+    base: u64,
+    slots: usize,
+}
+
+impl HotplugWindow {
+    pub(crate) fn plan(
+        boot_ranges: &[(GuestAddress, usize)],
+        capacity_mib: u32,
+        physical_end: u64,
+        available_slots: usize,
+    ) -> io::Result<Self> {
+        let overflow = || io::Error::new(io::ErrorKind::InvalidInput, "hotplug address overflow");
+        let boot_end = boot_ranges.iter().try_fold(0, |highest, (start, size)| {
+            let end = start.0.checked_add(*size as u64).ok_or_else(overflow)?;
+            Ok::<_, io::Error>(highest.max(end))
+        })?;
+        // The bundled Linux x86_64 guest uses probe_memory_block_size() with
+        // the hypervisor bit set. At 64 GiB it scales up to a divisor of boot_end.
+        let alignment = if boot_end < 1 << 36 {
+            SLOT_SIZE
+        } else {
+            (1u64 << boot_end.trailing_zeros().min(31)).max(SLOT_SIZE)
+        };
+        let size = u64::from(capacity_mib) * MIB;
+        if size == 0 || !size.is_multiple_of(alignment) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "hotplug capacity must be a positive multiple of {} MiB",
+                    alignment / MIB
+                ),
+            ));
+        }
+        let base = boot_end
+            .max(HOTPLUG_MIN_ADDR)
+            .checked_next_multiple_of(alignment)
+            .ok_or_else(overflow)?;
+        let end = base.checked_add(size).ok_or_else(overflow)?;
+        if end > physical_end.min(GUEST_PLUGGABLE_END) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "hotplug window exceeds the guest physical address limit",
+            ));
+        }
+        let slots = (size / SLOT_SIZE) as usize;
+        if slots > available_slots {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "hotplug capacity exceeds the available KVM memory slots",
+            ));
+        }
+        Ok(Self { base, slots })
+    }
+}
 
 /// Whether a block range is plugged, unplugged or both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,24 +120,15 @@ pub(crate) struct HotplugMemory<V: Vm + ?Sized> {
 }
 
 impl<V: Vm + ?Sized> HotplugMemory<V> {
-    /// An empty window of `capacity_mib` at [`HOTPLUG_START`]. Nothing is
-    /// mapped or registered until a plug.
-    pub(crate) fn new(vm: Arc<V>, view: GuestMemoryView, capacity_mib: u32) -> io::Result<Self> {
-        let size = u64::from(capacity_mib) * MIB;
-        if size == 0 || !size.is_multiple_of(SLOT_SIZE) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "hotplug capacity must be a positive multiple of 128 MiB",
-            ));
-        }
-        let slots = (size / SLOT_SIZE) as usize;
-        Ok(Self {
+    /// Nothing is mapped or registered in the window until a plug.
+    pub(crate) fn new(vm: Arc<V>, view: GuestMemoryView, window: HotplugWindow) -> Self {
+        Self {
             vm,
             view,
-            base: HOTPLUG_START,
-            slots: vec![None; slots],
-            plugged: vec![false; slots * BLOCKS_PER_SLOT],
-        })
+            base: window.base,
+            slots: vec![None; window.slots],
+            plugged: vec![false; window.slots * BLOCKS_PER_SLOT],
+        }
     }
 
     /// The first guest address of the window.
