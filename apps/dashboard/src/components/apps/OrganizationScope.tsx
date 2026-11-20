@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
+import { AppHostingAccess, hasMockAppHostingAccess } from './AppHostingAccess'
 import { RoutePath } from '@/enums/RoutePath'
 import { useAppsScope } from '@/lib/apps/client'
 import { Fragment, useEffect, useRef, type ReactNode } from 'react'
@@ -15,6 +16,7 @@ export function OrganizationScope({ children }: { children: ReactNode }) {
     previous.current = organizationId
   }, [organizationId])
   if (!organizationId) return <p className="p-6">Select an organization to view Apps.</p>
+  if (!hasMockAppHostingAccess()) return <AppHostingAccess />
   if (!canRead)
     return (
       <p role="alert" className="p-6">

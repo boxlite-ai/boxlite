@@ -7,9 +7,24 @@ From `apps/`, `npm run start:dev` starts the local console at
 `http://localhost:3000` and proxies `/api` to the dev control plane. An unset or
 empty `VITE_BASE_API_URL` uses the current origin's `/api` prefix.
 
-## Apps
+## App hosting
 
-Apps sits after Boxes in the main navigation and uses the same OIDC session,
+**Applications → App hosting** defaults to an early-access introduction. The
+**Get early access** button is a UI placeholder: it sends no application and does
+not report approval. List and detail entry points withhold management content.
+This frontend presentation is not server-side authorization; the Apps API and
+CLI retain their existing permissions. A server eligibility contract is required
+before this becomes an enforceable allowlist or admits production organizations.
+
+In mock mode, open `/dashboard/apps?appHosting=enabled` to exercise the admitted
+flow, or `?appHosting=restricted` to restore the default entry. The fixture lasts
+for that browser tab, including detail navigation, and has no effect outside a
+mock build. No query parameter grants production access.
+
+App hosting uses the Console's shared resource headings, buttons and type scale.
+UI text uses Inter; code, URLs, paths and technical values use Commit Mono.
+
+App hosting uses the same OIDC session,
 organization switcher and resource permissions. Its management requests go to
 `/api/v1/{organizationId}/apps` through the shared `ApiClient`; the App detail
 projection is `GET /apps/{appId}/view` within that organization namespace.

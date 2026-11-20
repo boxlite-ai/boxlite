@@ -17,10 +17,6 @@ import { FlatButton, DIALOG_FRAME } from './spec'
 // stores are declared by the agent in boxlite.toml. Creating it opens the app's
 // page with setup instructions for the agent.
 
-function Heading({ children }: { children: string }) {
-  return <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">{children}</div>
-}
-
 export function CreateAppDialog({
   open,
   onOpenChange,
@@ -54,14 +50,17 @@ export function CreateAppDialog({
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[520px] font-mono text-body')}>
+      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[520px] font-sans text-body')}>
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">New app</DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">New app</DialogTitle>
         </DialogHeader>
 
         <div className="flex flex-col gap-2">
-          <Heading>Name</Heading>
+          <label htmlFor="new-app-name" className="form-field-label">
+            Name
+          </label>
           <Input
+            id="new-app-name"
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value.toLowerCase())}
@@ -74,11 +73,11 @@ export function CreateAppDialog({
             <div className="text-meta text-destructive">{problem}</div>
           ) : (
             // Each environment gets its own address when it is created, so there is none to preview yet.
-            <div className="text-meta text-muted-foreground">
+            <div className="text-body text-muted-foreground">
               {name ? 'Gets its own URL when you create it.' : 'Lowercase letters, digits and dashes.'}
             </div>
           )}
-          <p className="mt-2 text-meta text-muted-foreground">
+          <p className="mt-2 text-body text-muted-foreground">
             That is all you set. Creating it only reserves the name and URL: nothing runs until your coding agent
             deploys, creating the runtime, database, sign-in and storage it needs.
           </p>

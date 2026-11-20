@@ -27,7 +27,7 @@ const ROW_GRID = 'grid-cols-[120px_64px_minmax(0,1fr)_150px_80px_140px] gap-x-4'
 function Progress({ release }: { release: AppRelease }) {
   const elapsed = useElapsed(release.running?.since ?? release.startedAt ?? release.createdAt)
   return (
-    <span className="truncate text-[12px] text-muted-foreground">
+    <span className="truncate text-meta text-muted-foreground">
       {release.running
         ? `${release.running.name}${release.running.detail ? ` · ${release.running.detail}` : ''}`
         : 'queued'}
@@ -64,12 +64,12 @@ function DeploymentRow({
       onClick={onSelect}
       onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelect()}
       className={cn(
-        `group grid ${ROW_GRID} min-h-[52px] cursor-pointer items-center border-b border-border/60 px-2 py-2 font-mono text-body outline-none transition-colors hover:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`,
+        `group grid ${ROW_GRID} min-h-[52px] cursor-pointer items-center border-b border-border/60 px-4 py-2 font-sans text-body outline-none transition-colors hover:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`,
         inProgress && 'bg-warning/[0.04]',
       )}
     >
       {inProgress ? (
-        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.5px] text-warning">
+        <span className="inline-flex items-center gap-1.5 font-sans text-meta uppercase tracking-[0.5px] text-warning">
           <Spinner className="size-[11px]" /> {status.label}
         </span>
       ) : (
@@ -81,13 +81,13 @@ function DeploymentRow({
           <span className="truncate text-foreground">{release.summary}</span>
           {release.current && <Tag tone="brand">Current</Tag>}
           {rollingBack && (
-            <span className="inline-flex items-center gap-1.5 text-[12px] text-warning">
+            <span className="inline-flex items-center gap-1.5 text-meta text-warning">
               <Spinner className="size-3" /> Starting rollback…
             </span>
           )}
         </span>
         {release.status === 'failed' && (release.cause || release.error) && (
-          <span className="truncate text-[12px] text-destructive" title={release.error}>
+          <span className="truncate text-meta text-destructive" title={release.error}>
             {release.cause ?? release.error}
           </span>
         )}
@@ -110,7 +110,7 @@ function DeploymentRow({
             <DropdownMenuTrigger asChild>
               <MoreButton aria-label={`Actions for ${release.id}`} />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[14rem] font-mono">
+            <DropdownMenuContent align="end" className="min-w-[14rem] font-sans">
               <DropdownMenuItem className="cursor-pointer" onClick={onSelect}>
                 Timeline and log
               </DropdownMenuItem>

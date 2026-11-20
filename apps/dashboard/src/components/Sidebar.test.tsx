@@ -392,7 +392,6 @@ describe('Sidebar primary navigation', () => {
     const infrastructure = document.querySelector('[role="group"][aria-label="Infrastructure"]')!
     expect([...infrastructure.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
       '/dashboard/boxes',
-      '/dashboard/apps',
       '/dashboard/images',
       '/dashboard/volumes',
       '/dashboard/domains',
@@ -408,16 +407,15 @@ describe('Sidebar primary navigation', () => {
     expect(applications?.textContent).toContain('Runners')
   })
 
-  it('selects Apps immediately after Boxes in primary navigation', () => {
+  it('selects App hosting under Applications, outside Infrastructure', () => {
     renderRoute('/dashboard/apps/demo')
     const infrastructure = document.querySelector('[role="group"][aria-label="Infrastructure"]')!
-    const links = [...infrastructure.querySelectorAll('a')]
-    expect(links[0].getAttribute('href')).toBe('/dashboard/boxes')
-    expect(links[1].getAttribute('href')).toBe('/dashboard/apps')
-    expect(links[1].textContent).toBe('Apps')
-    expect(links[1].getAttribute('aria-current')).toBe('page')
-    expect(links[1].querySelector('[data-icon="app"]')?.getAttribute('data-selected')).toBe('true')
-    expect(links[1].querySelector('.lucide-app-window')).not.toBeNull()
+    const applications = document.querySelector('[role="group"][aria-label="Applications"]')!
+    expect(infrastructure.querySelector('a[href="/dashboard/apps"]')).toBeNull()
+    const link = applications.querySelector('a[href="/dashboard/apps"]')!
+    expect(link.textContent).toBe('App hosting')
+    expect(link.getAttribute('aria-current')).toBe('page')
+    expect(document.querySelectorAll('a[href="/dashboard/apps"]')).toHaveLength(1)
   })
 
   it('keeps Volumes in primary navigation', () => {

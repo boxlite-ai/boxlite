@@ -45,14 +45,14 @@ export function useConfirm(): [(options: ConfirmOptions) => Promise<boolean>, Re
   const element = (
     <Dialog open={!!options} onOpenChange={(open) => !open && close(false)}>
       {options && (
-        <DialogContent className={cn(DIALOG_FRAME, 'max-w-[480px] font-mono text-body')}>
+        <DialogContent className={cn(DIALOG_FRAME, 'max-w-[480px] font-sans text-body')}>
           <DialogHeader>
-            <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">{options.title}</DialogTitle>
+            <DialogTitle className="font-display text-section font-semibold">{options.title}</DialogTitle>
           </DialogHeader>
           <div className="text-body leading-[1.6] text-muted-foreground">{options.body}</div>
           {options.typeToConfirm && (
             <label className="flex flex-col gap-2">
-              <span className="text-[13px] text-muted-foreground">
+              <span className="text-body text-muted-foreground">
                 Type <span className="text-foreground">{options.typeToConfirm}</span> to confirm
               </span>
               <input

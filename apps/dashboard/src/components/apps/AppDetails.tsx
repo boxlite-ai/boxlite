@@ -253,40 +253,40 @@ function AppDetails() {
 
   return (
     <div className="flex min-h-[calc(100svh-60px)] w-full flex-col px-4 pb-10 pt-4 sm:px-6 lg:px-[40px]">
-      <div className="flex items-center gap-[9px] font-mono text-[12px] text-muted-foreground">
+      <div className="flex items-center gap-[9px] font-sans text-meta text-muted-foreground">
         <button type="button" onClick={() => navigate(RoutePath.APPS)} className="hover:text-foreground">
-          apps
+          App hosting
         </button>
         <span className="text-border">/</span>
         <span className="text-foreground">{app?.name ?? appId}</span>
       </div>
 
       {isNotFound ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center font-mono text-muted-foreground">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center font-sans text-muted-foreground">
           <Container className="size-8" strokeWidth={1.3} />
           <div className="text-foreground">{env === 'main' ? 'App not found' : `No environment named ${env}`}</div>
           <button
             type="button"
             onClick={() => navigate(RoutePath.APPS)}
-            className="mt-2 border border-border px-4 py-2 text-[13px] hover:bg-card"
+            className="mt-2 border border-border px-4 py-2 text-body hover:bg-card"
           >
-            Back to Apps
+            Back to App hosting
           </button>
         </div>
       ) : isError && !app ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center font-mono">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center font-sans">
           <div className="text-body font-semibold text-foreground">The app could not be loaded</div>
           <div className="max-w-lg text-meta text-muted-foreground">{errorText(error)}</div>
           <button
             type="button"
             onClick={() => refetch()}
-            className="mt-2 border border-border px-4 py-2 text-[13px] hover:bg-card focus-visible:ring-2 focus-visible:ring-brand/35"
+            className="mt-2 border border-border px-4 py-2 text-body hover:bg-card focus-visible:ring-2 focus-visible:ring-brand/35"
           >
             Retry
           </button>
         </div>
       ) : isLoading || !app ? (
-        <div className="flex flex-1 items-center justify-center gap-2 font-mono text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center gap-2 font-sans text-muted-foreground">
           <RefreshCw className="size-4 animate-spin" /> Loading app…
         </div>
       ) : (
@@ -325,14 +325,14 @@ function AppDetails() {
             // Each tab has its own primary action; Open app leads only on Overview.
           />
 
-          {/* The console's segmented tabs (as on Billing and Images). */}
+          {/* Content tabs share the Console underline navigation. */}
           <Tabs value={tab} onValueChange={(next) => goTo(next as AppTab)} className="mb-7 gap-0">
-            <TabsList variant="segmented" className="max-w-full overflow-x-auto">
+            <TabsList variant="underline" className="max-w-full overflow-x-auto">
               {TABS.map((candidate) => (
                 <TabsTrigger
                   key={candidate.id}
                   value={candidate.id}
-                  className="font-mono"
+                  className="font-sans"
                   // The tab already open goes back to its top level (from a deployment, to the list).
                   onClick={() => candidate.id === tab && goTo(tab)}
                 >
@@ -400,7 +400,7 @@ function AppDetails() {
 
 // The bordered control used in the box details header (stop, ⋮, refresh).
 const HEADER_BUTTON =
-  'inline-flex h-[34px] items-center gap-2 border border-border px-[15px] font-mono text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50 data-[state=open]:bg-background'
+  'inline-flex h-[34px] items-center gap-2 border border-border px-[15px] font-sans text-body font-medium text-foreground outline-none transition-colors hover:bg-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50 data-[state=open]:bg-background'
 
 function Header({
   app,
@@ -438,7 +438,7 @@ function Header({
     <div className="mb-5 mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-dashed border-border pb-4">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
         <h1 className="font-display text-section font-semibold text-foreground">{app.name}</h1>
-        <span className="font-mono text-em text-border">/</span>
+        <span className="font-sans text-em text-border">/</span>
         {environment}
         {/* Before the first release the progress line says it all. */}
         {(app.activeRelease || !app.deploying) && (
@@ -446,7 +446,7 @@ function Header({
         )}
         {app.deploying && <DeployProgress deploying={app.deploying} />}
         {inFlight && (
-          <span className="inline-flex items-center gap-2 font-mono text-meta text-warning">
+          <span className="inline-flex items-center gap-2 font-sans text-meta text-warning">
             <Spinner className="size-3.5" />
             {inFlight}
           </span>
@@ -462,8 +462,8 @@ function Header({
               <MoreVertical className="size-4" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[15rem] font-mono">
-            <div className="px-2 py-1.5 text-[12px] text-muted-foreground">Environment · {app.environment}</div>
+          <DropdownMenuContent align="end" className="min-w-[15rem] font-sans">
+            <div className="px-2 py-1.5 text-meta text-muted-foreground">Environment · {app.environment}</div>
             {/* Nothing runs before the first release, so there is nothing to restart or sleep. */}
             {/* Asleep, there is nothing to restart or put to sleep; the next request wakes it. */}
             {app.activeRelease && app.status !== 'sleeping' && app.box && (
@@ -491,7 +491,7 @@ function Header({
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
-            <div className="px-2 py-1.5 text-[12px] text-muted-foreground">App · {app.name}</div>
+            <div className="px-2 py-1.5 text-meta text-muted-foreground">App · {app.name}</div>
             <DropdownMenuItem
               disabled={!canDelete}
               className="cursor-pointer text-destructive focus:text-destructive"
@@ -507,7 +507,7 @@ function Header({
             type="button"
             onClick={() => void openApp(app.id, app.environment)}
             // The same primary button on every tab: opening the app is always one click.
-            className="inline-flex h-[34px] items-center gap-2 bg-primary px-[15px] font-mono text-[13px] font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-brand/35"
+            className="inline-flex h-[34px] items-center gap-2 bg-primary px-[15px] font-sans text-body font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-brand/35"
           >
             Open app <ArrowUpRight className="size-3.5" />
           </button>
@@ -542,8 +542,8 @@ function AccessMenu({
           <ChevronDown className="size-3.5" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[20rem] font-mono">
-        <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+      <DropdownMenuContent align="end" className="w-[20rem] font-sans">
+        <div className="px-2 py-1.5 text-meta text-muted-foreground">
           Who can open {app.environment}
           {app.accessSource === 'online' ? ' · set here' : ' · as your agent set it'}
         </div>
@@ -555,7 +555,7 @@ function AccessMenu({
           >
             <span className="flex flex-col gap-0.5">
               <span>{capitalize(VISIBILITY_LABEL[visibility])}</span>
-              <span className="text-[11px] text-muted-foreground">{ACCESS_REASON[visibility]}</span>
+              <span className="text-meta text-muted-foreground">{ACCESS_REASON[visibility]}</span>
             </span>
             {visibility === app.visibility && <Check className="mt-0.5 size-4 shrink-0" />}
           </DropdownMenuItem>

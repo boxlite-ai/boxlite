@@ -57,35 +57,35 @@ export function AppTable({
           </div>
         ))
       ) : error && apps.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 px-6 py-20 text-center font-mono">
+        <div className="flex flex-col items-center justify-center gap-3 px-6 py-20 text-center font-sans">
           <div className="text-body font-semibold text-foreground">The apps could not be loaded</div>
           <div className="max-w-md text-meta text-muted-foreground">{error}</div>
           <button
             type="button"
             onClick={onRetry}
-            className="mt-2 border border-border px-[13px] py-[6px] text-[11px] transition-colors hover:border-brand"
+            className="mt-2 border border-border px-[13px] py-[6px] text-meta transition-colors hover:border-brand"
           >
             Retry
           </button>
         </div>
       ) : apps.length === 0 && filter ? (
-        <div className="px-6 py-14 text-center font-mono text-meta text-muted-foreground">
+        <div className="px-6 py-14 text-center font-sans text-meta text-muted-foreground">
           No app matches &ldquo;{filter}&rdquo;.
         </div>
       ) : apps.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
           <AgentApp className="mb-4 size-14 text-muted-foreground" />
-          <div className="font-mono text-body font-semibold text-foreground">No apps yet</div>
-          <div className="mt-2 max-w-sm font-mono text-meta text-muted-foreground">
+          <div className="font-sans text-body font-semibold text-foreground">No apps yet</div>
+          <div className="mt-2 max-w-sm font-sans text-meta text-muted-foreground">
             Create one with a name, then paste its prompt into your coding agent. The agent builds and deploys it.
           </div>
           {onCreate && (
             <button
               type="button"
               onClick={onCreate}
-              className="mt-4 border border-border px-[13px] py-[6px] font-mono text-[11px] transition-colors hover:border-brand"
+              className="mt-4 border border-border px-[13px] py-[6px] font-sans text-meta transition-colors hover:border-brand"
             >
-              New App →
+              New app
             </button>
           )}
         </div>
@@ -100,26 +100,26 @@ export function AppTable({
               aria-label={`Open ${app.name}`}
               onClick={() => onRowClick(app)}
               onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onRowClick(app)}
-              className={`group grid ${GRID} cursor-pointer items-center border-b border-border/60 px-2 py-[13px] text-body outline-none transition-colors hover:bg-card/50 focus-visible:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`}
+              className={`group grid ${GRID} cursor-pointer resource-list-row items-center text-body outline-none transition-colors hover:bg-card/50 focus-visible:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`}
             >
               <span className="inline-flex min-w-0 items-center gap-3">
                 <AppIcon app={app} />
-                <span className="truncate font-mono font-medium text-foreground">{app.name}</span>
+                <span className="truncate font-sans font-medium text-foreground">{app.name}</span>
                 {app.environments > 1 && (
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground" title="The row shows main">
+                  <span className="shrink-0 font-sans text-meta text-muted-foreground" title="The row shows main">
                     {app.environments} environments
                   </span>
                 )}
               </span>
-              <span className="flex min-w-0 flex-col font-mono text-[12px]">
+              <span className="flex min-w-0 flex-col font-sans text-body">
                 {app.status === 'draft' ? (
                   <span className="text-muted-foreground">Not published</span>
                 ) : (
                   <>
-                    <span className="truncate text-foreground" title={app.url}>
+                    <span className="truncate font-mono text-foreground" title={app.url}>
                       {shortHost(app.url)}
                     </span>
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="text-meta text-muted-foreground">
                       {capitalize(VISIBILITY_LABEL[app.visibility])}
                     </span>
                   </>
@@ -128,20 +128,20 @@ export function AppTable({
               <span className="flex min-w-0 flex-col gap-0.5">
                 <StatusBadge label={status.label} color={status.color} caps />
                 {app.progress && (
-                  <span className="truncate pl-[15px] font-mono text-[11px] text-warning">{app.progress}</span>
+                  <span className="truncate pl-[15px] font-sans text-meta text-warning">{app.progress}</span>
                 )}
                 {app.attention && !app.progress && (
-                  <span className="truncate pl-[15px] font-mono text-[11px] text-destructive" title={app.attention}>
+                  <span className="truncate pl-[15px] font-sans text-meta text-destructive" title={app.attention}>
                     {app.attention}
                   </span>
                 )}
                 {app.status === 'draft' && !!app.liveIn?.length && (
-                  <span className="truncate pl-[15px] font-mono text-[11px] text-muted-foreground">
+                  <span className="truncate pl-[15px] font-sans text-meta text-muted-foreground">
                     Running in {app.liveIn.join(', ')}
                   </span>
                 )}
               </span>
-              <span className="truncate font-mono text-[12px] text-muted-foreground">
+              <span className="truncate font-sans text-meta text-muted-foreground">
                 {app.lastDeploy ? (
                   <>
                     <span className="text-foreground">{app.lastDeploy.releaseId}</span> · {relTime(app.lastDeploy.at)} ·{' '}
@@ -168,7 +168,7 @@ export function AppTable({
                     <DropdownMenuTrigger asChild>
                       <MoreButton />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-[12rem] font-mono">
+                    <DropdownMenuContent align="end" className="min-w-[12rem] font-sans">
                       <DropdownMenuItem className="cursor-pointer" onClick={() => onRowClick(app)}>
                         Open app page
                       </DropdownMenuItem>
@@ -189,7 +189,7 @@ export function AppTable({
         })
       )}
       {!loading && apps.length > 0 && (
-        <div className="mt-auto pt-4 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+        <div className="resource-footer mt-auto">
           Showing {apps.length} {apps.length === 1 ? 'app' : 'apps'}
         </div>
       )}

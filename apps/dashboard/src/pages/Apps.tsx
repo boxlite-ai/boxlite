@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ascii'
 import { AppTable } from '@/components/apps/AppTable'
 import { CreateAppDialog } from '@/components/apps/CreateAppDialog'
@@ -62,8 +63,11 @@ const Apps: React.FC = () => {
   const attention = apps.filter((app) => app.status === 'failed').length
 
   return (
-    <div className="flex min-h-[calc(100svh-60px)] flex-col gap-[22px] px-4 pb-[22px] pt-7 sm:px-6 lg:px-[40px]">
-      <h1 className="font-display text-page font-semibold text-foreground">Apps</h1>
+    <div className="resource-page flex-1">
+      <header className="space-y-2">
+        <h1 className="resource-title">App hosting</h1>
+        <p className="text-body text-muted-foreground">Deploy and manage your apps on BoxLite.</p>
+      </header>
 
       {apps.length >= FLEET_THRESHOLD && (
         <div className="grid grid-cols-3 gap-3">
@@ -77,19 +81,18 @@ const Apps: React.FC = () => {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="resource-toolbar">
         <SearchField value={filter} onChange={setFilter} placeholder="Filter apps…" count={visible.length} />
-        <button
+        <Button
           type="button"
           onClick={() => setCreateOpen(true)}
           disabled={!!cannotCreate}
           title={cannotCreate ?? undefined}
-          className="inline-flex h-9 items-center justify-center gap-[7px] bg-primary px-[15px] text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <Plus className="size-3.5" strokeWidth={2.4} /> New App
-        </button>
+          <Plus className="size-3.5" aria-hidden="true" /> New app
+        </Button>
       </div>
-      {cannotCreate && <p className="-mt-3 text-right font-mono text-[12px] text-muted-foreground">{cannotCreate}</p>}
+      {cannotCreate && <p className="-mt-3 text-right font-sans text-body text-muted-foreground">{cannotCreate}</p>}
 
       <AppTable
         apps={visible}
@@ -114,10 +117,10 @@ const Apps: React.FC = () => {
       />
 
       <AlertDialog open={!!toDelete} onOpenChange={(open) => !open && setToDelete(null)}>
-        <AlertDialogContent className="font-mono">
+        <AlertDialogContent className="font-sans">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {toDelete?.name}?</AlertDialogTitle>
-            <AlertDialogDescription asChild className="text-[12px]">
+            <AlertDialogDescription asChild className="text-body">
               <div>{toDelete && deleteAppBody(toDelete.name)}</div>
             </AlertDialogDescription>
           </AlertDialogHeader>

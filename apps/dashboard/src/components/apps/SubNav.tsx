@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Button } from '@/components/ui/button'
+import { ResourceSectionHeading } from '@/components/ResourceLayout'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { useAppsScope } from '@/lib/apps/client'
@@ -56,7 +58,7 @@ export function Workbench<T extends string>({
               disabled={item.disabled}
               onClick={() => onChange(item.id)}
               className={cn(
-                '-ml-px flex h-9 shrink-0 items-center justify-between gap-3 whitespace-nowrap border border-border px-4 text-left font-mono text-xs outline-none transition-colors first:ml-0 focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-35 md:-mt-px md:ml-0 md:first:mt-0',
+                '-ml-px flex h-9 shrink-0 items-center justify-between gap-3 whitespace-nowrap border border-border px-4 text-left font-sans text-body outline-none transition-colors first:ml-0 focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-35 md:-mt-px md:ml-0 md:first:mt-0',
                 active
                   ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
                   : 'text-muted-foreground hover:text-foreground',
@@ -65,9 +67,7 @@ export function Workbench<T extends string>({
             >
               <span className="truncate">{item.label}</span>
               {item.count !== undefined && (
-                <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
-                  {item.count}
-                </span>
+                <span className="shrink-0 text-meta font-normal tabular-nums text-muted-foreground">{item.count}</span>
               )}
             </button>
           )
@@ -92,19 +92,12 @@ export function Screen({
 }) {
   return (
     <section className="flex min-h-[360px] flex-col">
-      <header className="flex min-h-[36px] shrink-0 flex-wrap items-center gap-x-[9px] gap-y-2 pb-3">
-        <span className="text-label leading-none text-brand">▸</span>
-        <h2 className="whitespace-nowrap font-mono text-[11px] font-normal uppercase tracking-[2px] text-foreground">
-          {title}
-        </h2>
-        <span className="min-w-[24px] flex-1 border-t border-dashed border-border" />
-        {actions && <span className="flex shrink-0 items-center gap-[6px]">{actions}</span>}
-      </header>
+      <ResourceSectionHeading title={title} right={actions} />
       {padded ? (
-        <div className="min-w-0 flex-1 pt-1 font-mono text-body">{children}</div>
+        <div className="min-w-0 flex-1 pt-1 font-sans text-body">{children}</div>
       ) : (
         // Tables keep their columns on a narrow pane and scroll sideways instead of overlapping.
-        <div className="min-w-0 flex-1 overflow-x-auto font-mono text-body">
+        <div className="min-w-0 flex-1 overflow-x-auto font-sans text-body">
           <div className="min-w-[720px]">{children}</div>
         </div>
       )}
@@ -138,24 +131,18 @@ export function ToolButton({
 }) {
   const { canWrite } = useAppsScope()
   return (
-    <button
+    <Button
       type="button"
       title={title}
       aria-label={label}
+      size="sm"
+      variant={primary ? 'default' : danger ? 'danger' : 'outline'}
       disabled={disabled || loading || (requiresWrite && !canWrite)}
       onClick={onClick}
-      className={cn(
-        'inline-flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap px-[10px] font-mono text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-40',
-        primary
-          ? 'bg-primary font-semibold text-primary-foreground transition-opacity hover:opacity-85'
-          : danger
-            ? 'border border-border text-destructive hover:border-destructive'
-            : 'border border-border text-muted-foreground hover:border-brand hover:text-foreground',
-      )}
     >
       {loading && <Spinner className="size-3.5" />}
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -184,7 +171,7 @@ export function FilterChip({
       onClick={onClick}
       aria-pressed={selected}
       className={cn(
-        '-ml-px inline-flex h-[30px] items-center gap-1 border border-border px-3 font-mono text-xs outline-none transition-colors first:ml-0 focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-35',
+        '-ml-px inline-flex h-[30px] items-center gap-1 border border-border px-3 font-sans text-body outline-none transition-colors first:ml-0 focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-35',
         selected
           ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
           : 'text-muted-foreground hover:text-foreground',

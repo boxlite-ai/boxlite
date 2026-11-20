@@ -96,7 +96,7 @@ export function TrafficPanel({ metrics: m }: { metrics: AppMetrics }) {
                 type="button"
                 onClick={() => setView(v)}
                 className={cn(
-                  '-ml-px border border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[1px] transition-colors first:ml-0',
+                  '-ml-px border border-border px-3 py-1.5 font-sans text-meta uppercase tracking-[1px] transition-colors first:ml-0',
                   view === v
                     ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
                     : 'text-muted-foreground hover:text-foreground',
@@ -114,29 +114,29 @@ export function TrafficPanel({ metrics: m }: { metrics: AppMetrics }) {
             <div
               key={h.label}
               className={cn(
-                'flex flex-col gap-1 px-[22px] py-4 font-mono',
+                'flex flex-col gap-1 px-[22px] py-4 font-sans',
                 i > 0 && 'xl:border-l xl:border-border',
                 i % 2 === 1 && 'border-l border-border',
               )}
             >
-              <span className="text-[10px] uppercase tracking-[1.5px] text-muted-foreground">{h.label}</span>
+              <span className="text-label uppercase tracking-[1.5px] text-muted-foreground">{h.label}</span>
               <span
                 className={cn(
-                  'text-[24px] font-semibold tabular-nums tracking-tight',
+                  'text-section font-semibold tabular-nums tracking-tight',
                   h.bad ? 'text-destructive' : 'text-foreground',
                 )}
               >
                 {h.value}
-                {h.unit && <span className="ml-1 text-[12px] font-normal text-muted-foreground">{h.unit}</span>}
+                {h.unit && <span className="ml-1 text-meta font-normal text-muted-foreground">{h.unit}</span>}
               </span>
-              <span className="h-[16px] truncate text-[11px] text-muted-foreground">{h.note ?? ''}</span>
+              <span className="h-[16px] truncate text-meta text-muted-foreground">{h.note ?? ''}</span>
             </div>
           ))}
         </div>
         <div className="px-[22px] py-5">
           <div className="mb-3 flex flex-wrap items-center gap-4">
             {Object.entries(chart.config).map(([key, { label, color }]) => (
-              <span key={key} className="inline-flex items-center gap-1.5 font-mono text-[12px]">
+              <span key={key} className="inline-flex items-center gap-1.5 font-sans text-meta">
                 <span className="size-[9px] shrink-0" style={{ background: color }} />
                 <span className="text-foreground">{label}</span>
               </span>

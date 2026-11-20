@@ -13,7 +13,7 @@ export function DeployProgress({ deploying }: { deploying: NonNullable<AppDetail
   const elapsed = useElapsed(deploying.since)
   return (
     <span
-      className="inline-flex min-w-0 items-center gap-2 font-mono text-meta text-warning"
+      className="inline-flex min-w-0 items-center gap-2 font-sans text-meta text-warning"
       title={deploying.detail ?? undefined}
       data-testid="deploy-progress"
     >

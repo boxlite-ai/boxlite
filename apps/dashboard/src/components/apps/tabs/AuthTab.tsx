@@ -102,7 +102,7 @@ function GearButton({ onClick }: { onClick: () => void }) {
 }
 
 const LINK_BUTTON =
-  'inline-flex h-[28px] items-center gap-1.5 whitespace-nowrap border border-border px-[10px] font-mono text-[12px] text-muted-foreground outline-none transition-colors hover:border-brand hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35'
+  'inline-flex h-[28px] items-center gap-1.5 whitespace-nowrap border border-border px-[10px] font-sans text-meta text-muted-foreground outline-none transition-colors hover:border-brand hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35'
 
 function UserActions({ app, user }: { app: AppDetail; user: AppEndUser }) {
   const { canWrite } = useAppsScope()
@@ -147,7 +147,7 @@ function UserActions({ app, user }: { app: AppDetail; user: AppEndUser }) {
         <DropdownMenuTrigger asChild>
           <MoreButton />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[12rem] font-mono">
+        <DropdownMenuContent align="end" className="min-w-[12rem] font-sans">
           {user.blocked ? (
             <DropdownMenuItem
               disabled={!canWrite}
@@ -220,7 +220,7 @@ function Users({
       {error ? (
         <EmptyNote title="Users could not be read">{errorText(error)}</EmptyNote>
       ) : loading ? (
-        <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 py-8 text-body text-muted-foreground">
           <Spinner className="size-4" /> Loading users…
         </div>
       ) : shown.length === 0 ? (
@@ -270,7 +270,7 @@ function MethodMenu({
       <DropdownMenuTrigger asChild>
         <MoreButton />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[14rem] font-mono">
+      <DropdownMenuContent align="end" className="min-w-[14rem] font-sans">
         <DropdownMenuItem disabled={!canWrite} className="cursor-pointer" onClick={onEdit}>
           {editLabel}
         </DropdownMenuItem>
@@ -327,7 +327,7 @@ function MethodRow({
           <ProviderLogo provider={method.provider} />
         </span>
         <span>{label}</span>
-        <span className="truncate text-[12px]">Needs your own {label} OAuth app.</span>
+        <span className="truncate text-meta">Needs your own {label} OAuth app.</span>
         <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
           <ToolButton requiresWrite onClick={onEdit}>
             Set up
@@ -350,9 +350,7 @@ function MethodRow({
         {label}
       </span>
       {!method.declared && (
-        <span className="truncate text-[12px] text-muted-foreground">
-          Ready, but not on this app&apos;s sign-in page
-        </span>
+        <span className="truncate text-meta text-muted-foreground">Ready, but not on this app&apos;s sign-in page</span>
       )}
       <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
         <Tag tone={method.declared ? 'good' : 'neutral'}>{keys} · ready</Tag>
@@ -400,7 +398,7 @@ function EmailRow({ app, status, onEdit }: { app: AppDetail; status: AppAuthStat
           <ProviderLogo provider="email" />
         </span>
         <span>Email code</span>
-        <span className="truncate text-[12px]">
+        <span className="truncate text-meta">
           {declared
             ? 'On the sign-in page, but needs your mail sender to send codes.'
             : 'Needs your mail sender (SMTP).'}
@@ -419,7 +417,7 @@ function EmailRow({ app, status, onEdit }: { app: AppDetail; status: AppAuthStat
         <ProviderLogo provider="email" />
       </span>
       <span className={cn('font-semibold', declared ? 'text-foreground' : 'text-muted-foreground')}>Email code</span>
-      <span className="truncate text-[12px] text-muted-foreground">
+      <span className="truncate text-meta text-muted-foreground">
         {declared ? `from ${sender.from}` : "Ready, but not on this app's sign-in page"}
       </span>
       <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
@@ -447,7 +445,7 @@ function EmailRow({ app, status, onEdit }: { app: AppDetail; status: AppAuthStat
 function SignInOff({ app, status }: { app: AppDetail; status: AppAuthStatus }) {
   const [copied, setCopied] = useState(false)
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center font-mono">
+    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center font-sans">
       <div className="font-display text-em font-semibold text-foreground">Sign-in is off.</div>
       <div className="max-w-[460px] text-meta text-muted-foreground">
         Anyone who can open the app uses it without an account. Your agent turns sign-in on with GitHub
@@ -515,7 +513,7 @@ function SettingRow({ label, hint, children }: { label: string; hint?: ReactNode
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-6 border-b border-border/60 py-3 last:border-b-0">
       <div className="min-w-0">
         <div className="text-foreground">{label}</div>
-        {hint && <div className="text-[12px] text-muted-foreground">{hint}</div>}
+        {hint && <div className="text-meta text-muted-foreground">{hint}</div>}
       </div>
       <div className="flex items-center gap-2 text-right">{children}</div>
     </div>
@@ -528,10 +526,10 @@ function AuthSettingsDialog({ app, status, onClose }: { app: AppDetail; status: 
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         onOpenAutoFocus={(e) => e.preventDefault()}
-        className={cn(DIALOG_FRAME, 'max-w-[600px] font-mono text-body')}
+        className={cn(DIALOG_FRAME, 'max-w-[600px] font-sans text-body')}
       >
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">Auth settings</DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">Auth settings</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col pb-5">
           <SettingRow label="Who can open the app" hint="Set from the access menu in the app header.">
