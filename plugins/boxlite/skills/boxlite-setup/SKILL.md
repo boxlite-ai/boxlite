@@ -58,7 +58,8 @@ A web-only host cannot provide Local mode: explain the missing capability and pr
 ## File transfer prerequisites
 
 Cloud file transfer needs Python 3.9+ and host shell/filesystem access.
-For Claude, the helper registers a blocking hook in its child session.
+Claude Code must support blocking SDK hooks, verified with version 2.1.328.
+The helper reports an upgrade requirement if Claude cannot register the hook.
 
 Use the [file workflow](../boxlite/references/cloud.md#files) to select an existing Codex or Claude MCP connection.
 The selected host owns credentials and sends MCP requests; the helper handles local bytes and host-control messages only.

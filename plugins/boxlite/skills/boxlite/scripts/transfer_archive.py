@@ -79,6 +79,8 @@ class Archive:
         self.files = {}
         self.directories = set()
         self.size = 0
+        self.single_file = False
+        self.executables = set()
 
     def add(self, name, data=None):
         name = safe_name(name)
@@ -122,7 +124,14 @@ class Archive:
             if stat.S_ISDIR(before.st_mode):
                 if name:
                     result.add(name)
-                for child in sorted(os.listdir(fd)):
+                remaining = MAX_ENTRIES - len(result.files) - len(result.directories)
+                children = []
+                with os.scandir(fd) as entries:
+                    for entry in entries:
+                        if len(children) == remaining:
+                            raise ValueError('Too many archive entries')
+                        children.append(entry.name)
+                for child in sorted(children):
                     relative = public_name(f'{name}/{child}' if name else child)
                     child_fd = open_node(child, fd)
                     try:
@@ -139,6 +148,8 @@ class Archive:
                         after.st_size, after.st_mtime_ns, after.st_ctime_ns) or len(data) != before.st_size:
                     raise ValueError('Source changed while being read')
                 result.add(name, data)
+                if before.st_mode & stat.S_IXUSR:
+                    result.executables.add(name)
             else:
                 raise ValueError('Only regular files and directories are supported')
 
@@ -149,18 +160,22 @@ class Archive:
                 next_fd = open_node(component, fd)
                 os.close(fd)
                 fd = next_fd
-            visit(fd, '' if stat.S_ISDIR(os.fstat(fd).st_mode) else source.name)
+            result.single_file = stat.S_ISREG(os.fstat(fd).st_mode)
+            visit(fd, source.name if result.single_file else '')
         finally:
             os.close(fd)
         return result
 
     def encode(self):
         output = io.BytesIO()
+        directories, files = self.tree()
+        entries = [(d, None) for d in sorted(directories)] + sorted(files.items())
+        if not self.single_file:
+            entries.insert(0, ('.', None))
         with tarfile.open(fileobj=output, mode='w', format=tarfile.USTAR_FORMAT) as archive:
-            for name, data in [('.', None), *[(d, None) for d in sorted(self.tree()[0])],
-                               *sorted(self.files.items())]:
+            for name, data in entries:
                 member = tarfile.TarInfo(name)
-                member.mode = 0o700 if data is None else 0o600
+                member.mode = 0o700 if data is None or name in self.executables else 0o600
                 if data is None:
                     member.type = tarfile.DIRTYPE
                 else:
@@ -239,6 +254,12 @@ class Archive:
                 finally:
                     os.close(fd)
             _publish_directory(stage, 'files', parent, destination.name)
+            try:
+                reported = os.stat(destination, follow_symlinks=False)
+            except OSError:
+                raise ValueError('Download was written but the requested path no longer identifies it') from None
+            if not os.path.samestat(os.fstat(root), reported):
+                raise ValueError('Download was written but the requested path no longer identifies it')
         finally:
             if root is not None:
                 os.close(root)

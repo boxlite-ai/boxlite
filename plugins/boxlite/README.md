@@ -64,6 +64,8 @@ The helper uses existing MCP contracts without a BoxLite CLI dependency, new ser
 
 Both hosts own their MCP connections and credentials; Claude adds one model request per file operation.
 
+Claude's model request includes the tool name, Box ID and remote path. A placeholder represents the upload archive.
+
 Claude uses a private persistent session for downloads, so its transcripts or saved result files can retain downloaded data.
 
 OAuth credentials stay with the host; API keys stay in the user's chosen private host environment.

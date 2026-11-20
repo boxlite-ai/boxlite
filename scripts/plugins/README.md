@@ -83,7 +83,7 @@ Use the new build workflow on tags created after the migration. Historical GitHu
 
 ### Download and verify
 
-Resolve the tag, verify that the digest was attested by the publisher on `main`, and check that the manifest's version matches. Use [ORAS](https://oras.land/docs/installation/), GitHub CLI, and `jq`.
+Resolve the artifact by version and verify the publisher's signed build commit against the Git tag. The same attestation records the build run ID and attempt. Use [ORAS](https://oras.land/docs/installation/), GitHub CLI, and `jq`.
 
 ```sh
 (
@@ -92,12 +92,20 @@ Resolve the tag, verify that the digest was attested by the publisher on `main`,
   version=0.2.0
   digest="$(oras resolve "$image:$version")"
   reference="$image@$digest"
-  gh attestation verify "oci://$reference" --repo boxlite-ai/boxlite \
+  commit="$(gh api "repos/boxlite-ai/boxlite/commits/tags%2Fboxlite-plugin-v$version" --jq .sha)"
+  provenance="$(gh attestation verify "oci://$reference" --repo boxlite-ai/boxlite \
     --signer-workflow boxlite-ai/boxlite/.github/workflows/publish-plugins.yml \
-    --source-ref refs/heads/main
+    --source-ref refs/heads/main --format json \
+    --predicate-type https://boxlite.ai/attestations/plugin-build-source/v1)"
+  printf '%s\n' "$provenance" | jq -es --arg commit "$commit" '
+    length == 1 and any(.[0][].verificationResult.statement.predicate;
+      .commit == $commit and (.runId | test("^[1-9][0-9]*$"))
+      and (.runAttempt | test("^[1-9][0-9]*$")))'
   manifest="$(oras manifest fetch "$reference")"
   printf '%s\n' "$manifest" |
-    jq -es --arg version "$version" 'length == 1 and .[0].annotations["org.opencontainers.image.version"] == $version'
+    jq -es --arg version "$version" --arg commit "$commit" '
+      length == 1 and .[0].annotations["org.opencontainers.image.version"] == $version
+      and .[0].annotations["org.opencontainers.image.revision"] == $commit'
   oras pull "$reference" --output "boxlite-plugin-$version"
   cd "boxlite-plugin-$version"
   sha256sum --check SHA256SUMS "boxlite-review-kit-$version.zip.sha256"
@@ -108,7 +116,7 @@ Run the commands in order and stop if a verification fails. On macOS, use `shasu
 
 If the version tag moves, find retained digests, including untagged entries. [Package Versions](https://github.com/orgs/boxlite-ai/packages/container/boxlite-plugin/versions)
 
-Resume the verification with a candidate digest and use it only when its attestation and version annotation match.
+Resume the verification with a candidate digest and use it only when the signed build commit and manifest annotations match.
 
 Publishing packages preserves the existing OpenAI submission and Claude directory review steps.
 

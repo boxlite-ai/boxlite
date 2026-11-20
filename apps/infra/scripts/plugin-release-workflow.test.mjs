@@ -188,7 +188,20 @@ test('plugin build is read-only and publication uses only the verified attempt',
 
   const { run, calls, output } = execute(t, verifyScript)
   assert.equal(run.status, 0, run.stderr)
-  assert.equal(output, `version=${version}\nartifact_id=1234\ncreated=2026-11-20T00:00:00Z\n`)
+  const settings = new Map(output.trim().split('\n').map((line) => line.split(/=(.*)/s).slice(0, 2)))
+  assert.equal(settings.get('version'), version)
+  assert.equal(settings.get('artifact_id'), '1234')
+  assert.equal(settings.get('created'), '2026-11-20T00:00:00Z')
+  assert.ok(settings.has('build_source'), 'verifier provides the tagged build identity to the signer')
+  assert.deepEqual(JSON.parse(settings.get('build_source')), { commit: 'a'.repeat(40), runId: '555', runAttempt: '2' })
+  const sourceAttestation = publisher.jobs.publish.steps.find((step) => step.id === 'attest-source')
+  assert.match(sourceAttestation.uses, /^actions\/attest@/)
+  assert.deepEqual(sourceAttestation.with, {
+    'subject-name': '${{ steps.registry.outputs.image }}',
+    'subject-digest': '${{ steps.registry.outputs.digest }}',
+    'predicate-type': 'https://boxlite.ai/attestations/plugin-build-source/v1',
+    predicate: '${{ needs.verify.outputs.build_source }}',
+  })
   assert.ok(calls.some((args) => args.includes(
     `repos/boxlite-ai/boxlite/actions/runs/555/artifacts?name=boxlite-plugins-${version}-555-2`,
   )))

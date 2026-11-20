@@ -120,14 +120,30 @@ class FileTransferTests(unittest.TestCase):
                 self.assertFalse(self.destination.exists())
 
     def test_claude_preserves_host_permission_decisions(self):
-        self.fault('managed-deny')
-        with self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
+        for fault in ('managed-deny', 'managed-ask'):
+            with self.subTest(fault=fault):
+                self.fault(fault)
+                with self.client('claude') as client, self.assertRaises(transfer_hosts.TransferError):
+                    transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
+                self.assertFalse(self.calls())
+
+    def test_claude_ignores_project_settings_and_requires_explicit_project_connection(self):
+        project = self.root / 'project'
+        project.mkdir()
+        config = project / '.mcp.json'
+        config.write_text('{}')
+        launch = self.root / 'claude-launch.json'
+        with transfer_hosts.ClaudeHost('chosen-server', cwd=project) as client:
+            with self.assertRaisesRegex(transfer_hosts.TransferError, 'trusted'):
+                transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
+        self.assertFalse(launch.exists())
+
+        with transfer_hosts.ClaudeHost('chosen-server', cwd=project, mcp_config=config) as client:
             transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
-        self.assertFalse(self.calls())
-        self.fault('managed-ask')
-        with self.client('claude') as client:
-            self.assertEqual(transfer.upload(client, 'box-1', self.source, '/workspace/fresh')['status'], 'completed')
-        self.assertEqual(len(self.calls()), 1)
+        observed = json.loads(launch.read_text())
+        self.assertNotEqual(Path(observed['cwd']).resolve(), project)
+        self.assertEqual(observed['args'][observed['args'].index('--setting-sources') + 1], 'user')
+        self.assertEqual(observed['args'][observed['args'].index('--mcp-config') + 1], str(config))
 
     def test_claude_never_uses_truncated_display_content_as_download_bytes(self):
         (self.root / 'uploaded.tar').write_bytes(transfer_archive.Archive.snapshot(self.source).encode())
@@ -405,6 +421,71 @@ class FileTransferTests(unittest.TestCase):
                 self.assertEqual(child.receive(), {'id': 2})
         finally:
             child.close()
+
+    def test_group_signal_permission_errors_still_close_and_reap_the_child(self):
+        for refused in (signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(signal=refused):
+                host = transfer_hosts.HostProcess([sys.executable, '-c', ''], self.root)
+                host.process.wait(timeout=5)
+
+                def signal_group(pid, sig):
+                    if sig == refused:
+                        raise PermissionError(errno.EPERM, 'fixture signal denied')
+
+                with patch.object(os, 'killpg', signal_group), patch.object(host.process, 'wait', wraps=host.process.wait) as wait:
+                    host.close()
+                    wait.assert_called()
+                self.assertTrue(host.process.stdin.closed)
+                self.assertTrue(host.process.stdout.closed)
+
+    def test_upload_archive_preserves_single_file_landing_and_owner_execute(self):
+        single = self.source / 'start.sh'
+        single.write_bytes(b'fixture')
+        single.chmod(0o755)
+        with tarfile.open(fileobj=io.BytesIO(transfer_archive.Archive.snapshot(single).encode())) as archive:
+            self.assertEqual([(member.name, member.mode) for member in archive], [('start.sh', 0o700)])
+        with tarfile.open(fileobj=io.BytesIO(transfer_archive.Archive.snapshot(self.source).encode())) as archive:
+            self.assertTrue(archive.next().isdir())
+            self.assertEqual(archive.getmember('start.sh').mode, 0o700)
+            self.assertEqual(archive.getmember('binary.bin').mode, 0o600)
+
+    def test_upload_discovery_uses_a_bounded_directory_listing(self):
+        names_seen = []
+        scandir = os.scandir
+
+        @contextlib.contextmanager
+        def recording_scan(fd):
+            with scandir(fd) as entries:
+                def counted():
+                    for entry in entries:
+                        names_seen.append(entry.name)
+                        yield entry
+                yield counted()
+
+        with patch.object(transfer_archive, 'MAX_ENTRIES', 1), patch.object(os, 'scandir', recording_scan):
+            with self.assertRaisesRegex(ValueError, 'Too many archive entries'):
+                transfer_archive.Archive.snapshot(self.source)
+        self.assertEqual(len(names_seen), 2)
+
+    def test_download_reports_when_published_files_no_longer_match_requested_path(self):
+        parent = self.root / 'parent'
+        parent.mkdir()
+        moved = self.root / 'moved'
+        destination = parent / 'download'
+        archive = transfer_archive.Archive()
+        archive.add('report', b'fixture')
+        publish = transfer_archive._publish_directory
+
+        def move_and_publish(*args):
+            parent.rename(moved)
+            parent.mkdir()
+            publish(*args)
+
+        with patch.object(transfer_archive, '_publish_directory', move_and_publish):
+            with self.assertRaisesRegex(ValueError, 'written.*requested path'):
+                archive.save(destination)
+        self.assertFalse(destination.exists())
+        self.assertEqual((moved / 'download/report').read_bytes(), b'fixture')
 
     def test_archive_boundaries_are_checked_before_filesystem_writes(self):
         for names in [('same', 'same'), ('parent', 'parent/file'), ('parent/file', 'parent')]:

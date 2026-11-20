@@ -55,15 +55,17 @@ python3 SKILL_DIR/scripts/transfer.py --host claude --server SELECTED_SERVER upl
 python3 SKILL_DIR/scripts/transfer.py --host claude --server SELECTED_SERVER download --box BOX_ID --source /workspace/new-release/. --destination /absolute/new-download
 ```
 
-Each adapter starts a dedicated host process that reloads existing configuration; it does not attach to the running interactive session.
-A connection supplied only through flags on another process is not automatically inherited.
-For Claude, pass an existing `--mcp-config /absolute/private-config.json` or `--plugin-dir /absolute/plugin` when needed; only Claude reads those files.
+Each adapter starts a dedicated host process. A connection supplied only through flags on another process must be supplied to the helper too.
+
+Claude starts in a private empty directory and uses user and managed configuration. Select a connection from those scopes or pass a trusted `--mcp-config /absolute/private-config.json` or `--plugin-dir /absolute/plugin`.
+
+Project-scoped connections require an explicit trusted configuration. A project `.mcp.json` triggers this requirement before Claude starts, and only Claude reads the explicitly selected files.
 
 Claude's single model turn proposes the selected tool and a placeholder, never archive bytes.
 The helper sends the prompt only after Claude confirms the execution hook was registered and blocks on failure.
 The hook checks the exact tool, connection, Box, path and input, then supplies the program-generated arguments for that call once.
 
-Claude still applies host deny and ask rules. If a rule asks, the helper checks the guarded call ID and exact arguments before responding.
+Claude still applies host deny and ask rules. If it requests a permission decision, the helper stops so the transfer can be handled in a session that asks the user.
 
 Downloads use Claude's raw structured result or its complete saved JSON when large results omit that field.
 Saved results must belong to the actual child session under Claude's projects directory; arbitrary paths and symlinks are refused.
@@ -93,9 +95,13 @@ Upload paths must fit USTAR, including its 100-byte filename field and 155-byte 
 Downloads require a new local directory with existing, non-symlink parents and a filesystem that supports atomic directory placement.
 The helper writes with private permissions and places the directory at the requested path only after the full archive has been written.
 
-A guest source ending in `/.` downloads directory contents; another spelling retains the directory name.
-Upload keeps the existing server overwrite behavior; choose the destination deliberately.
-Guest mount paths such as `/tmp` may not support file transfer; prefer a suitable rootfs path such as `/workspace`.
+If the parent moved during placement, the helper reports that the download was written and the requested path changed.
+
+A guest source ending in `/.` downloads directory contents. Other paths retain the directory name.
+
+A single-file upload can name a destination file and follows the server's overwrite behavior. Uploads preserve the source owner's execute bit.
+
+Guest mount paths such as `/tmp` may not support file transfer. Use a suitable rootfs path such as `/workspace`.
 
 ## Deploy and update
 

@@ -10,6 +10,8 @@ session = str(uuid.uuid4())
 root = Path(sys.argv[0]).parent
 fault = (root / 'fault').read_text() if (root / 'fault').exists() else ''
 claude = Path(sys.argv[0]).name == 'claude'
+if claude:
+    (root / 'claude-launch.json').write_text(json.dumps({'cwd': str(Path.cwd()), 'args': sys.argv[1:]}))
 
 
 def emit(value):

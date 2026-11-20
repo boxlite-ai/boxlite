@@ -1,4 +1,5 @@
 """Hand file-tool data to installed hosts over local pipes; hosts own MCP and authentication."""
+from contextlib import suppress
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import select
 import signal
 import stat
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -39,26 +41,23 @@ class HostProcess:
 
     def close(self):
         try:
-            os.killpg(self.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            # The group has already exited; there is nothing left to signal.
-            pass
-        try:
-            self.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            # The grace period ended; the finally block escalates to SIGKILL.
-            pass
-        finally:
-            # Leader exit does not imply descendant exit: terminate the remaining group too.
             try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                # No descendants remain after the graceful shutdown.
-                pass
-            try:
-                self.process.wait(timeout=5)
+                # Some hosts return EPERM for an exited process that has not been reaped.
+                with suppress(ProcessLookupError, PermissionError):
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                with suppress(subprocess.TimeoutExpired):
+                    self.process.wait(timeout=5)
             finally:
+                # Leader exit does not imply descendant exit.
+                try:
+                    with suppress(ProcessLookupError, PermissionError):
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                finally:
+                    self.process.wait(timeout=5)
+        finally:
+            try:
                 self.process.stdin.close()
+            finally:
                 self.process.stdout.close()
 
     def remaining(self):
@@ -184,18 +183,25 @@ class ClaudeHost:
             proposed['body_base64'] = PLACEHOLDER
         elif name != 'downloadFiles':
             raise TransferError('Claude file handoff only supports uploadFiles and downloadFiles')
+        if not self.options:
+            cwd = Path(self.cwd).resolve()
+            if any(os.path.lexists(parent / '.mcp.json') for parent in (cwd, *cwd.parents)):
+                raise TransferError('Select the connection with a trusted --mcp-config or --plugin-dir for this project')
         command = ['claude', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
                    '--verbose', '--permission-prompt-tool', 'stdio', '--permission-mode', 'default',
-                   '--max-turns', '1', '--tools', '', '--disable-slash-commands'] + self.options
+                   '--max-turns', '1', '--tools', '', '--disable-slash-commands',
+                   '--setting-sources', 'user'] + self.options
         if name == 'uploadFiles':
             command.append('--no-session-persistence')
         # Downloads need a persistent host session: no-session-persistence assigns
         # result files a different ID, so they cannot be bound to the reported session.
-        channel = HostProcess(command, self.cwd)
-        try:
-            return self.exchange(channel, tool, name, proposed, arguments)
-        finally:
-            channel.close()
+        # Start outside the caller's project so its auto-discovered MCP definitions cannot run.
+        with tempfile.TemporaryDirectory(prefix='.boxlite-claude-', dir=Path.home()) as workspace:
+            channel = HostProcess(command, workspace)
+            try:
+                return self.exchange(channel, tool, name, proposed, arguments)
+            finally:
+                channel.close()
 
     def exchange(self, channel, tool, name, proposed, arguments):
         channel.send({'type': 'control_request', 'request_id': 'initialize',
@@ -203,7 +209,6 @@ class ClaudeHost:
                           {'hookCallbackIds': [CLAUDE_GUARD], 'onFailure': 'block'}]}}})
         initialized = False
         approved = None
-        permission_answered = False
         session_id = None
         while True:
             message = channel.receive()
@@ -252,16 +257,14 @@ class ClaudeHost:
                         approved = use_id
                     decision = {'hookSpecificOutput': output}
                 else:
-                    # A host ask rule may still prompt after the guard has checked and rewritten the call.
-                    valid = (selected and not permission_answered and use_id == approved
-                             and request.get('subtype') == 'can_use_tool' and call.get('input') == arguments)
-                    decision = ({'behavior': 'allow', 'updatedInput': arguments} if valid else
-                                {'behavior': 'deny', 'message': refusal})
-                    permission_answered = valid
+                    valid = False
+                    if request.get('subtype') == 'can_use_tool':
+                        refusal = 'Claude requires explicit permission in a session that can ask the user'
+                    decision = {'behavior': 'deny', 'message': refusal}
                 channel.send({'type': 'control_response', 'response': {'subtype': 'success',
                               'request_id': message['request_id'], 'response': decision}})
                 if not valid:
-                    raise TransferError('Claude proposed an unexpected or repeated operation; no additional approval')
+                    raise TransferError(refusal)
             elif kind == 'user':
                 blocks = message.get('message', {}).get('content', [])
                 if not isinstance(blocks, list):
