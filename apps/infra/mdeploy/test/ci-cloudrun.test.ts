@@ -133,7 +133,7 @@ function capture(configured: boolean) {
   return { service: unwrap(service.args), records }
 }
 
-test('the Cloud Run API sets a maximum of five and keeps one instance warm only with CI', () => {
+test('the Cloud Run API defaults to a maximum of five and keeps one instance warm only with CI', () => {
   const on = capture(true).service
   assert.deepEqual(on.scaling, { maxInstanceCount: 5, minInstanceCount: 1 })
   assert.equal(on.template.containers[0].resources.cpuIdle, false)

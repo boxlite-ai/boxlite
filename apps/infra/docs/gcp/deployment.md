@@ -68,9 +68,20 @@ mdeploy uses Pulumi with GCS state. API/dashboard, collector and registry proxy 
 the proxy runs on GKE Autopilot, and runners use Compute Engine; see [architecture](architecture.md).
 Cloudflare credentials come from the encrypted `deploy` group.
 
-mdeploy sets a service-level maximum of five instances for the shared API/dashboard Cloud Run service.
+The shared API/dashboard Cloud Run service defaults to a maximum of five instances across revisions.
+To override it for a stage, set the optional mstage `deploy` variable `CLOUD_RUN_API_MAX_INSTANCES`
+to a positive decimal integer. A blank value fails validation.
+
+From `apps/infra`, this example sets the dev maximum to eight.
+
+```sh
+npm run mstage env set -- CLOUD_RUN_API_MAX_INSTANCES=8 --stage dev --digest
+```
+
+The next API deployment uses the mstage value first, then the exported shell value. If both are absent,
+the maximum is five. With `--local-env`, mdeploy reads the shell directly.
+
 Hosted CI keeps at least one instance warm. Without hosted CI, the service can scale to zero.
-See the [GCP API provider](../../mdeploy/stack/providers/gcp/api.ts) for the scaling settings.
 
 The API, collector and registry proxy set Service metadata `labels.stage`; the GKE Proxy cluster sets `resourceLabels.stage`.
 Both use the deployed stage, for example `dev`, so Backoffice can select matching resources.

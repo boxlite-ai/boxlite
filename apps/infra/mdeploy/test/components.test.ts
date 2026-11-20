@@ -202,6 +202,44 @@ test('missing, deleted and foreign-stack workloads never become empty or full ta
     )
 })
 
+test('the GCP CLI uses the stage API cap before the shell value', async () => {
+  const key = 'CLOUD_RUN_API_MAX_INSTANCES'
+  for (const [exported, stored, local, expected] of [
+    [undefined, undefined, false, undefined],
+    ['9', undefined, false, '9'],
+    ['9', '8', false, '8'],
+    ['9', '8', true, '9'],
+  ] as const) {
+    const shell = { [key]: exported, PULUMI_CONFIG_PASSPHRASE: 'test' }
+    const result = await run({
+      argv: ['--stage', stage, '--diff', ...(local ? ['--local-env'] : [])],
+      environment: { ...environment, ...shell },
+      cwd,
+      checkLogin: async () => 0,
+      log: () => {},
+      fetchEnv: async () => {
+        assert.equal(local, false)
+        const values: Record<string, string> = {}
+        if (stored !== undefined) values[key] = stored
+        return { source: 'mstage', values }
+      },
+      targetWith: async ({ config, scope }) =>
+        gcpTarget({
+          config,
+          scope,
+          backend: {} as any,
+          stateBucket: async () => 'test-state',
+          identity: { ...identity, childEnvironment: async () => ({ env: shell, expiresAt: null }) },
+          createStackWith: async ({ envVars }) => {
+            assert.equal(envVars[key], expected)
+            return { setAllConfig: async () => {}, preview: async () => {} } as any
+          },
+        }),
+    })
+    assert.equal(result, 0)
+  }
+})
+
 for (const components of ['api', 'runner', 'api+runner'] as const) {
   for (const intent of ['diff', 'deploy'] as const)
     test(`CLI forwards ${components} through the GCP adapter to ${intent}`, async () => {

@@ -6,7 +6,7 @@ import { recordServices } from './service-recording.ts'
 
 process.env.MSTAGE_CONFIG ??= fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
 
-const customDomainApi = (stage: string, apiEnvironment: Record<string, string> = {}) =>
+const customDomainApi = (stage: string, apiEnvironment: Record<string, string> = {}, apiMaxInstances?: number) =>
   recordServices('boxlite-app', stage, () => {
     const output = (globalThis as any).$util.output
     const placement: any = {
@@ -17,6 +17,7 @@ const customDomainApi = (stage: string, apiEnvironment: Record<string, string> =
     }
     const providers = gcpStackProviders({
       stage,
+      apiMaxInstances,
       project: 'boxlite-dev-project',
       region: 'us-east5',
       zone: 'us-east5-a',
@@ -112,4 +113,11 @@ test('GCP supplies its certificate resources and IAM without stored custom-domai
   assert.equal(String(queryGrant.args.member), 'serviceAccount:api@example.com')
   assert.equal(String(queryGrant.args.role), 'CustomDomainQueryRole')
   assert.equal(queryGrant.args.condition, undefined)
+})
+
+test('the GCP provider passes a stage override to service-level API scaling', () => {
+  const resources = customDomainApi('stage', { CI_GITHUB_APP_CLIENT_ID: 'test-client' }, 8)
+  const api = resources.find((resource) => resource.logical === 'Api')!
+  assert.deepEqual(api.args.scaling, { maxInstanceCount: 8, minInstanceCount: 1 })
+  assert.equal(api.args.template.scaling, undefined)
 })

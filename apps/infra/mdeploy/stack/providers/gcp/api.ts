@@ -319,6 +319,7 @@ export const gcpApiProvider =
     zone,
     domain,
     dashboardDomain,
+    maxInstanceCount = 5,
     callers,
     zoneId,
     network,
@@ -333,6 +334,7 @@ export const gcpApiProvider =
     domain: string
     /** Where the dashboard is served, or null for the stage domain itself. */
     dashboardDomain: string | null
+    maxInstanceCount?: number
     /** The identities allowed to invoke it. The proxy and the runner. */
     callers: $util.Output<string>[]
     /** The Cloudflare zone the record is written into. */
@@ -481,7 +483,7 @@ export const gcpApiProvider =
         // Left on, the first rename of this service costs two applies.
         deletionProtection: false,
         scaling: {
-          maxInstanceCount: 5,
+          maxInstanceCount,
           ...(continuousCi ? { minInstanceCount: 1 } : {}),
         },
         template: {

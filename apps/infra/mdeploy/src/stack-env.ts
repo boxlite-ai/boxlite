@@ -44,6 +44,17 @@ export class StackEnvError extends Error {
   }
 }
 
+/** A deploy-only override for the Cloud Run v2 service's int32 instance count. */
+export function cloudRunApiMaxInstancesFrom(environment: NodeJS.ProcessEnv): number | undefined {
+  const value = environment.CLOUD_RUN_API_MAX_INSTANCES
+  if (value === undefined) return undefined
+  const count = Number(value)
+  if (!/^\d+$/.test(value) || count < 1 || count > 2_147_483_647) {
+    throw new StackEnvError('CLOUD_RUN_API_MAX_INSTANCES must be a positive 32-bit integer')
+  }
+  return count
+}
+
 /** Configuration that must be supplied, with the reason it matters. */
 const required = (environment: NodeJS.ProcessEnv, key: string, why: string): string => {
   const value = environment[key]?.trim()

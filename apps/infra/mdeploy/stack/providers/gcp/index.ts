@@ -75,6 +75,7 @@ export const gcpStackProviders = ({
   zone: declaredZone = null,
   domain,
   dashboardDomain = null,
+  apiMaxInstances,
   zoneId,
   relayHost = null,
   artifactsBucket,
@@ -99,6 +100,7 @@ export const gcpStackProviders = ({
   domain: string
   /** Where the dashboard is served, or null for the stage domain itself. */
   dashboardDomain?: string | null
+  apiMaxInstances?: number
   /** The Cloudflare zone every public record is written into. */
   zoneId: string
   /** The SMTP relay a GCP stage sends through. Google provides none. */
@@ -183,6 +185,7 @@ export const gcpStackProviders = ({
         zone,
         domain,
         dashboardDomain,
+        maxInstanceCount: apiMaxInstances,
         // The proxy resolves a box through it; a runner registers itself with
         // it. Cloud Run admits named invokers and nobody else.
         callers: [placement(network, 'proxy').serviceAccount, placement(network, 'runner').serviceAccount],

@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
+import { cloudRunApiMaxInstancesFrom } from '../src/stack-env.ts'
 import { valuesOfGroup } from 'mstage/select-group'
 import { serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from '../src/env.ts'
 
@@ -61,6 +62,26 @@ test('a stage that seeded only the required keys can deploy', () => {
   // four no store could ever hold.
   const resolved = narrow('deploy', minimal)
   assert.deepEqual(Object.keys(resolved).sort(), Object.keys(minimal).sort())
+})
+
+test('the optional Cloud Run cap is selected from the deploy group only', () => {
+  const key = 'CLOUD_RUN_API_MAX_INSTANCES'
+  const groups = Object.keys(config.envSelectGroup).filter((group) => config.envSelectGroup[group]?.includes(key))
+  assert.deepEqual(groups, ['deploy'])
+  assert.equal(cloudRunApiMaxInstancesFrom(narrow('deploy', minimal)), undefined)
+  for (const count of [1, 8, 2_147_483_647]) {
+    const selected = narrow('deploy', { ...minimal, [key]: String(count) })
+    assert.equal(cloudRunApiMaxInstancesFrom(selected), count)
+  }
+})
+
+test('invalid Cloud Run caps report the stage variable', () => {
+  for (const value of ['', ' ', '0', '-1', '1.5', '1e2', '8x', '2147483648']) {
+    assert.throws(
+      () => cloudRunApiMaxInstancesFrom({ CLOUD_RUN_API_MAX_INSTANCES: value }),
+      /CLOUD_RUN_API_MAX_INSTANCES/,
+    )
+  }
 })
 
 test('a required key the store lacks still stops the deploy, named', () => {

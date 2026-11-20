@@ -22,7 +22,7 @@
  * credentials to deploy at all.
  */
 
-import { readStackEnvironment } from '../src/stack-env.ts'
+import { cloudRunApiMaxInstancesFrom, readStackEnvironment } from '../src/stack-env.ts'
 import { gcpRunnerArtifactsBucket, resolveRunnerBinary } from '../stack/runner-binary.ts'
 import type { deployStack } from '../stack/index.ts'
 
@@ -268,6 +268,7 @@ export const gcpProgram =
         zone,
         domain: stackEnvironment.domain,
         dashboardDomain: stackEnvironment.dashboardDomain,
+        apiMaxInstances: cloudRunApiMaxInstancesFrom(environment),
         zoneId: stackEnvironment.dnsZoneId,
         relayHost: stackEnvironment.mailRelayHost,
         artifactsBucket,
