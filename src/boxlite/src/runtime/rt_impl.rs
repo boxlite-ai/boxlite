@@ -1736,6 +1736,7 @@ impl RuntimeImpl {
                 ProcessIdentity::Absent | ProcessIdentity::Legacy(_) => {
                     let shim = pid_reader.read_shim().ok();
                     let mut reused_pid = None;
+                    let mut file_candidate_alive = false;
                     if let Some(shim) = shim {
                         let record = shim.identity();
                         if !unverified_shim_may_be_alive(record.pid) {
@@ -1746,13 +1747,15 @@ impl RuntimeImpl {
                         {
                             reused_pid = Some(record.pid);
                             stale_shim = Some(Some(shim));
+                        } else {
+                            file_candidate_alive = true;
                         }
                     }
                     let frozen = matches!(state.status, BoxStatus::Paused | BoxStatus::Unknown);
-                    let preserve_frozen_pid = !rebooted
-                        && frozen
-                        && state.pid.is_some_and(unverified_shim_may_be_alive)
+                    let preserve_state_pid = state.pid.is_some_and(unverified_shim_may_be_alive)
                         && (state.status == BoxStatus::Unknown || state.pid != reused_pid);
+                    let preserve_frozen_pid =
+                        !rebooted && frozen && (preserve_state_pid || file_candidate_alive);
 
                     if preserve_frozen_pid {
                         if state.status == BoxStatus::Paused {
@@ -3915,6 +3918,88 @@ mod tests {
                 .all(|(_, _, status)| *status == BoxStatus::Unknown),
             "second recovery changed Unknown status: {repeated:?}"
         );
+    }
+
+    #[test]
+    fn test_recovery_frozen_file_only_pid_candidate() {
+        for initial_status in [BoxStatus::Paused, BoxStatus::Unknown] {
+            // Case 1: state.pid is None, shim.pid holds a live PID whose OS start time
+            // cannot be read -> keep Unknown and retain shim.pid.
+            {
+                let (runtime, _dir) = create_test_runtime();
+                let (pid, child) = spawn_dummy_process();
+                let _child = ChildGuard(child);
+                let config = test_box_config_in_layout(false, &runtime);
+                let mut state = BoxState::new();
+                state.mark_started();
+                state.status = initial_status;
+                let layout = runtime
+                    .layout
+                    .box_layout(config.id.as_str(), false)
+                    .unwrap();
+                std::fs::create_dir_all(layout.root()).unwrap();
+                let pid_file = layout.pid_file_path();
+                let start = crate::util::process_start_time(pid).unwrap();
+                // Mismatched fingerprint forces initial ProcessIdentity::Absent while
+                // the injected None start_time simulates unreadable OS metadata on re-check.
+                std::fs::write(&pid_file, format!("{pid}\n{}\n", start + 1)).unwrap();
+                runtime.box_manager.add_box(&config, &state).unwrap();
+
+                runtime
+                    .recover_boxes_with_process_start_time(None, |checked_pid| {
+                        assert_eq!(checked_pid, pid);
+                        None
+                    })
+                    .unwrap();
+
+                let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+                assert_eq!(
+                    recovered.status,
+                    BoxStatus::Unknown,
+                    "{initial_status}: must keep Unknown when file-only candidate may be alive"
+                );
+                assert_eq!(recovered.pid, None);
+                assert!(
+                    pid_file.exists(),
+                    "{initial_status}: must retain shim.pid when file-only candidate may be alive"
+                );
+            }
+
+            // Case 2: state.pid is None, shim.pid holds a live PID with proved reuse
+            // (mismatched OS start time) -> settle to Stopped and remove shim.pid.
+            {
+                let (runtime, _dir) = create_test_runtime();
+                let (pid, child) = spawn_dummy_process();
+                let _child = ChildGuard(child);
+                let config = test_box_config_in_layout(false, &runtime);
+                let mut state = BoxState::new();
+                state.mark_started();
+                state.status = initial_status;
+                let layout = runtime
+                    .layout
+                    .box_layout(config.id.as_str(), false)
+                    .unwrap();
+                std::fs::create_dir_all(layout.root()).unwrap();
+                let pid_file = layout.pid_file_path();
+                let start = crate::util::process_start_time(pid).unwrap();
+                std::fs::write(&pid_file, format!("{pid}\n{}\n", start + 1)).unwrap();
+                runtime.box_manager.add_box(&config, &state).unwrap();
+
+                runtime.recover_boxes().unwrap();
+
+                let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+                assert_eq!(
+                    recovered.status,
+                    BoxStatus::Stopped,
+                    "{initial_status}: must settle to Stopped when reuse is proved"
+                );
+                assert_eq!(recovered.pid, None);
+                assert!(
+                    !pid_file.exists(),
+                    "{initial_status}: must remove stale shim.pid when reuse is proved"
+                );
+            }
+        }
     }
 
     #[test]
