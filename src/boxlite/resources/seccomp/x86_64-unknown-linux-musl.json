@@ -527,6 +527,10 @@
         "comment": "libkrun: glibc 2.26+ maps open() to openat(AT_FDCWD, ...)"
       },
       {
+        "syscall": "openat2",
+        "comment": "M6 virtio-fs: guest path resolution uses openat2(RESOLVE_BENEATH) confinement"
+      },
+      {
         "syscall": "newfstatat",
         "comment": "libkrun: glibc 2.33+ maps stat/fstat to newfstatat"
       },
