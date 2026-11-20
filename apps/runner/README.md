@@ -743,6 +743,50 @@ This is the production path. The HTTP routes under `/boxes/` and
 `/artifacts/` exist for direct/SDK use; v2 turns those into pull-based
 job execution.
 
+#### Secret credentials on CREATE_BOX
+
+When a v2 job carries `secretCredential: {token, expiresAt}`, its secret
+definitions must omit `value` entirely. The runner obtains a GCP instance
+identity token with `format=full` and audience equal to `SECRET_SERVER_URL`,
+then posts the credential to `/internal/v1/fetch` using the identity token
+in both `Authorization: Bearer` and `X-Boxlite-Runner-Identity`.
+`BOXLITE_RUNNER_ATTESTOR` defaults to `gcp_iit`; other modes are unsupported.
+
+The response must match the box ID and exactly the requested secret names.
+Its values, hosts, headers and placeholders replace the job's definitions.
+Metadata retrieval and fetch share a five-second deadline. Fetch is attempted
+once, without redirects or retries, because a lost response may have consumed
+the credential. Retrieval and subsequent create failures are non-recoverable;
+there is no credential reissue in this MVP.
+
+An existing local box skips identity and secret retrieval. Replay only adopts
+that box; if it disappears before adoption, creation fails instead of producing
+a replacement without secrets. Jobs without credentials retain inline values,
+and START_BOX continues using runtime-local secrets. Direct HTTP create/recover
+still require inline values.
+
+Credential-free v2 jobs pass inline secrets to backend validation without extra
+name or value restrictions. Empty names, duplicate names and empty values retain
+their existing semantics; host and header validation remains in the backend.
+Credential-bearing jobs require unique, nonempty names to match fetched secrets.
+If replay adoption confirms the box is absent, the runner removes the volume
+ownership record written during preparation. Other lookup errors preserve that
+record because the box may still exist. The backend error wraps the lookup cause;
+credential job status retains its sanitized error.
+
+Configure an HTTPS `SECRET_SERVER_URL`; HTTP is accepted only for loopback test
+services. Credentials, identity tokens and returned secret content stay out of
+errors, job status and logs. The runner releases its job payload after execution;
+API terminal-state credential cleanup is owned by the API credential lifecycle.
+This releases references and does not promise memory zeroization.
+
+`make test:apps:runner FILTER='Secret|Credential|RequireExisting'` exercises fake
+metadata/Secret Server boundaries and the real SDK REST adoption path without a VM.
+The credential tests also verify that missing lookup capability, missing fetch
+configuration, empty instance identity and unsupported configured attestors stop
+creation before dispatching a credential. Collect runner coverage with
+`make test:apps:runner GOTEST_FILTER='-covermode=atomic -coverpkg=./... -coverprofile=/tmp/runner-coverage.out'`.
+
 ### Portable archive storage
 
 The [checkpoint design](https://github.com/boxlite-ai/boxlite/issues/2367)

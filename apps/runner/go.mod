@@ -3,6 +3,7 @@ module github.com/boxlite-ai/runner
 go 1.25.4
 
 require (
+	cloud.google.com/go/compute/metadata v0.8.0
 	cloud.google.com/go/storage v1.57.0
 	github.com/boxlite-ai/boxlite/libs/api-client-go v0.149.0
 	github.com/boxlite-ai/boxlite/sdks/go v0.9.0
@@ -37,7 +38,6 @@ require (
 	cloud.google.com/go v0.121.6 // indirect
 	cloud.google.com/go/auth v0.16.5 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
-	cloud.google.com/go/compute/metadata v0.8.0 // indirect
 	cloud.google.com/go/iam v1.5.2 // indirect
 	cloud.google.com/go/monitoring v1.24.2 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.27.0 // indirect

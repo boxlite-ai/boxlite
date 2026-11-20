@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -50,6 +51,7 @@ type Executor struct {
 	checkpointWorkDir string
 	operationMu       sync.Mutex
 	boxOperations     map[string]*boxOperation
+	secretFetcher     *secretFetcher
 }
 
 type boxOperation struct {
@@ -96,6 +98,7 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 		archiveStore:      cfg.ArchiveStore,
 		migrateWorkDir:    cfg.MigrateWorkDir,
 		checkpointWorkDir: cfg.CheckpointWorkDir,
+		secretFetcher:     newSecretFetcher(os.Getenv("SECRET_SERVER_URL"), os.Getenv("BOXLITE_RUNNER_ATTESTOR")),
 	}, nil
 }
 

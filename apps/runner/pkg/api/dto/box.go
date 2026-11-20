@@ -43,6 +43,10 @@ type CreateBoxDTO struct {
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`
+
+	// RequireExisting is internal to credential-bearing CREATE_BOX replays.
+	// It prevents a concurrent deletion from turning adoption into creation.
+	RequireExisting bool `json:"-"`
 } //	@name	CreateBoxDTO
 
 // Same outbound policy shape as CreateBoxDTO; an omitted field is left unchanged.
