@@ -13,6 +13,66 @@ use std::{
 use super::{Event, EventLoop};
 use crate::error::Error;
 
+pub(super) struct PollGate(mpsc::Sender<()>, mpsc::Receiver<()>);
+
+impl PollGate {
+    pub(super) fn enter(self) {
+        self.0.send(()).unwrap();
+        self.1.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+}
+
+#[test]
+fn coalesced_control_wakes_return_none_without_latching_stop() {
+    let mut events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    for _ in 0..3 {
+        sender.wake();
+    }
+    assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
+    let (returned, result) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        returned.send(events.wait(None)).unwrap();
+        events
+    });
+    let wake = result.recv_timeout(Duration::from_secs(5));
+    // Release the waiter if a regression swallowed the pure wake.
+    if wake.is_err() {
+        sender.send(Event::StopRequested);
+    }
+    let mut events = waiter.join().unwrap();
+    assert!(wake.unwrap().unwrap().is_none());
+    assert!(!sender.is_stopping());
+
+    let timeout = Duration::from_millis(20);
+    let started = Instant::now();
+    assert!(events.wait(Some(timeout)).unwrap().is_none());
+    assert!(started.elapsed() >= timeout);
+}
+
+#[test]
+fn terminal_event_takes_priority_over_control_wake_in_the_poller() {
+    let mut events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    let (reached, ready) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    events.before_poll = Some(PollGate(reached, gate));
+
+    thread::scope(|scope| {
+        let waiter = scope.spawn(|| events.wait(Some(Duration::from_secs(5))));
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        sender.wake();
+        assert!(!sender.is_stopping());
+        sender.send(Event::GuestShutdown);
+        release.send(()).unwrap();
+        assert!(matches!(
+            waiter.join().unwrap(),
+            Ok(Some(Event::GuestShutdown))
+        ));
+    });
+    assert!(sender.is_stopping());
+}
+
 #[test]
 fn returns_queued_events_in_order() {
     let mut events = EventLoop::new().unwrap();

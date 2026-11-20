@@ -434,8 +434,9 @@ worker slot synchronously.
   - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
     vCPU and waits at a start gate until every vCPU is configured; a thread
     that fails to start aborts the gate.
-  - It then loops: run, dispatch the exit through the chipset, run again.
-  - An idle vCPU waits inside the host, never in a VMM thread. KVM's in-kernel
+  - Before each guest entry, a vCPU checks the pause and stop state. It waits
+    on a condition variable while parked.
+  - When the VM is running, idle vCPUs wait inside the host. KVM's in-kernel
     irqchip waits out `HLT`; with the in-kernel GIC, HVF waits out `WFI` inside
     `hv_vcpu_run` and wakes the vCPU for its vtimer and for SPIs set from any
     thread, as an M5 Pro on macOS 27 showed
@@ -465,8 +466,9 @@ worker slot synchronously.
     cleanup; quiesce success does not imply snapshot support or delivery of
     buffered network traffic.
 - **The `run()` thread.**
-  - It waits on one poller for stop requests, vCPU outcomes and device
-    failures.
+  - It waits on one poller for control wakeups, stop requests, vCPU outcomes
+    and device failures. It rechecks the mailbox and terminal queue at least
+    once per second while idle.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.
@@ -487,7 +489,7 @@ engine adapter calls it from
 
 ```rust
 let mut vm = Vm::new(config, console)?;
-let control = vm.control(); // Clone for threads that observe or stop the VM.
+let control = vm.control(); // Clone for threads that observe or control the VM.
 let exit = vm.run()?;       // Blocks on the thread that owns the VM.
 ```
 
@@ -499,13 +501,33 @@ logged.
 
 The driver holds exclusive access to `Vm` throughout `run`. The backend-independent
 `VmControl` shares lifecycle state through an `Arc` and keeps no VM resources
-such as RAM or vCPUs alive. External threads use `status()` and `stop()`.
-`StopHandle::stop` uses the same latch.
+such as RAM or vCPUs alive. External threads use `status()`, `stop()`,
+`pause()`, `wait_paused(timeout)`, and `resume()`. `StopHandle::stop` uses
+the same stop latch.
 
-`VmStatus` starts at `Created`, advances to `Running` as the driver starts,
-and becomes `Stopping` on a stop request or when the driver processes a
-terminal event. A stop in `Created` goes directly to `Stopping`, so the
-first `run` skips vCPU creation and takes the usual cleanup path.
+`VmStatus` normally moves from `Created` to `Running`. A device-less VM
+can reserve its first pause in `Created`. It keeps that status until
+`run` claims the reservation and enters `Pausing` before releasing the
+vCPU start gate. Every vCPU parks before its first guest entry.
+
+During execution, `pause()` posts a command in a single mailbox slot.
+The driver accepts it in `Running`, enters `Pausing`, and kicks the vCPUs.
+Before their next guest entry, vCPU owners complete pending I/O, notify the
+backend of the stop, and acknowledge the current pause epoch. The driver
+publishes `Paused` after one acknowledgement from each vCPU. `resume()`
+uses the same slot and current epoch to reopen guest entry and return to
+`Running`. The mailbox lock serializes admission against concurrent clones
+and timeout withdrawal. A pure poller wake prompts the driver to check the
+mailbox. Terminal events use the same poller and keep their queue priority.
+
+`pause()` waits up to five seconds when called in `Running`. A timeout
+withdraws a queued command. An accepted pause keeps collecting
+acknowledgements. `wait_paused(timeout)` observes the reserved or accepted
+epoch and its own timeout leaves the pause in place.
+
+A stop or terminal event moves the VM to `Stopping`, releases parked vCPUs,
+and wakes pending control calls with `TerminalOutcome`. A stop in `Created`
+lets the first `run` skip vCPU creation and take the usual cleanup path.
 The first terminal event determines the outcome of an active run.
 
 On teardown, the driver joins all scoped vCPUs, shuts down virtio workers,
