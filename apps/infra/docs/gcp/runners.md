@@ -82,42 +82,8 @@ The attachment is fixed at creation too: a host that existed before its disk doe
 and that disk stays unattached, and billed, until the host is destroyed and recreated; a `--replace`
 would carry the ignored attachment over.
 
-### Legacy hosts without the attached data disk
-
-A host created before its data disk existed keeps box state on its root filesystem. The boot script
-that attaches and mounts the disk is fixed at creation, so a later deploy does not attach it. The OS policy
-still converges the disk environment onto such a host.
-
-The runner therefore reports no `dataDiskRef` while the device is absent or carries another
-filesystem. The stored identity clears on the first heartbeat without one. Expansion skips the host,
-which surfaces as `runner_disk_missing_ref`; pressure on its root filesystem stays with generic disk
-alerting.
-
-Two recovery paths:
-
-1. **Recreate the host.** Drain its boxes, unprotect and delete the instance in Pulumi, and redeploy.
-   The new host boots with the current script, which attaches, formats and mounts its own disk.
-2. **Migrate in place.** The disk is already provisioned and billed. Attach it, then move the state:
-
-   ```bash
-   # Drain the host's boxes through the control plane first, then:
-   gcloud compute instances attach-disk <host> \
-     --disk=<app>-<stage>-runner-data-<n> --device-name=boxlite-data --zone=<zone>
-   # On the host:
-   sudo systemctl stop boxlite-runner
-   sudo mkfs.ext4 -m 0 /dev/disk/by-id/google-boxlite-data   # only if the disk is blank
-   sudo mkdir -p /mnt/data-migrate
-   sudo mount /dev/disk/by-id/google-boxlite-data /mnt/data-migrate
-   sudo rsync -a /var/lib/boxlite/ /mnt/data-migrate/
-   sudo rm -rf /var/lib/boxlite/*
-   sudo umount /mnt/data-migrate
-   echo '/dev/disk/by-id/google-boxlite-data /var/lib/boxlite ext4 discard,defaults,nofail 0 2' \
-     | sudo tee -a /etc/fstab
-   sudo mount /var/lib/boxlite
-   sudo systemctl start boxlite-runner
-   ```
-
-   After the mount, the next healthcheck advertises the identity and expansion resumes.
+The runner reports the disk identity only while the device actually carries the BoxLite home.
+A host without the attached disk is therefore never treated as expandable.
 
 ## Verify and recover
 
