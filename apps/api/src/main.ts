@@ -5,6 +5,7 @@
  */
 
 import { otelSdk } from './tracing'
+import { SECRET_CREDENTIAL_PATH } from './box/controllers/secret-credential.controller'
 import { installCiWebhookBodyParser } from './ci/ci-webhook-body'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { NestFactory } from '@nestjs/core'
@@ -141,7 +142,7 @@ async function bootstrap() {
   }
 
   const globalPrefix = 'api'
-  app.setGlobalPrefix(globalPrefix, { exclude: MCP_ROOT_ROUTES })
+  app.setGlobalPrefix(globalPrefix, { exclude: [...MCP_ROOT_ROUTES, SECRET_CREDENTIAL_PATH] })
 
   // Built once: the Swagger UI serves it, and the MCP catalog reads the dashboard routes from it.
   const document = SwaggerModule.createDocument(app, getOpenApiConfig(configService.get('oidc.issuer')))

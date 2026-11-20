@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, LessThan, In, EntityManager } from 'typeorm'
@@ -87,6 +87,10 @@ export class JobService {
           this.logger.error(`An incomplete job already exists for ${resourceType} ${resourceId} on runner ${runnerId}`)
         }
         throw new JobConflictError()
+      }
+      if (type === JobType.CREATE_BOX) {
+        this.logger.error(`Could not create job for box ${resourceId} on runner ${runnerId}`)
+        throw new ServiceUnavailableException('Could not create box job')
       }
       this.logger.error(`Error creating job: ${error}`)
       throw error
@@ -251,6 +255,13 @@ export class JobService {
 
       if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
         job.completedAt = new Date()
+        if (job.type === JobType.CREATE_BOX) {
+          const payload = job.getPayload()
+          if (payload?.secretCredential) {
+            delete payload.secretCredential
+            job.payload = JSON.stringify(payload)
+          }
+        }
       }
 
       if (resultMetadata) {

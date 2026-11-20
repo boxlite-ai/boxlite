@@ -659,6 +659,10 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * appear without failing anything.
    */
   const WILDCARD_RESOURCE_STATEMENTS: Array<[string, string]> = [
+    [
+      'DisassociateCredentialIngressInThisRegion',
+      'WAF disassociation requires *; exact action and region are pinned below',
+    ],
     ['BoxLiteAwsControlPlane', 'the control-plane calls SST makes have no resource-level ARNs'],
     ['RunnerCommandStatus', 'SSM command-history APIs are list-shaped and take no resource'],
     ['ReadIamAndAccountMetadata', 'account and IAM reads SST performs before it knows any resource'],
@@ -678,6 +682,14 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * specific API, not of its spelling — a new one has to be added here deliberately.
    */
   const RESOURCELESS_SECRETSMANAGER = ['secretsmanager:ListSecrets', 'secretsmanager:GetRandomPassword']
+
+  assert.deepEqual(findStatement(statements, 'DisassociateCredentialIngressInThisRegion'), {
+    Sid: 'DisassociateCredentialIngressInThisRegion',
+    Effect: 'Allow',
+    Action: 'wafv2:DisassociateWebACL',
+    Resource: '*',
+    Condition: { StringEquals: { 'aws:RequestedRegion': '<REGION>' } },
+  })
 
   for (const [sid] of WILDCARD_RESOURCE_STATEMENTS) {
     const statement = statements.find((candidate: any) => candidate.Sid === sid)

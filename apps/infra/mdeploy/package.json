@@ -8,6 +8,7 @@
     "mdeploy": "bin/mdeploy.ts"
   },
   "exports": {
+    "./internal-route-policy": "./stack/providers/aws/internal-route-policy.ts",
     "./hosts": "./stack/hosts.ts",
     "./runner-binary": "./stack/runner-binary.ts",
     "./runner-kernel": "./stack/runner-kernel.ts",
