@@ -18,7 +18,7 @@ function makeService() {
   const repository = { findOne: jest.fn().mockResolvedValue(null), save }
   const transaction = jest.fn(async (callback) => callback({ insert, findOneByOrFail }))
   const events = { emitAsync: jest.fn().mockResolvedValue([]) }
-  const service = new UserService(repository as never, events as never, { transaction } as never)
+  const service = new UserService(repository as never, events as never, { transaction } as never, {} as never)
 
   return { service, repository, insert, save, transaction, events }
 }

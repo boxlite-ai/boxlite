@@ -114,7 +114,7 @@ describe('RegistrationGate', () => {
     async (phase) => {
       vi.useFakeTimers()
       api.userApi.getAuthenticatedUser.mockReset().mockImplementation(
-        ({ timeout }: { timeout?: number }) =>
+        (_referralCode, { timeout }: { timeout?: number }) =>
           new Promise((_resolve, reject) => {
             if (timeout) setTimeout(() => reject(new Error('Operation timed out')), timeout)
           }),
