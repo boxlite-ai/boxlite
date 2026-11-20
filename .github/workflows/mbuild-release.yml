@@ -1,267 +1,60 @@
-# Release publication and dispatch orchestration hold no cloud Environment.
-name: mbuild-release
-run-name: publish ${{ inputs.tag }} to GHCR${{ !inputs['build-only'] && ' · dev acceptance · prod review' || '' }}
+name: BoxLite plugin GHCR smoke test
 
 on:
   workflow_dispatch:
-    inputs:
-      command:
-        description: Publish release images to GHCR
-        required: true
-        default: publish
-        type: choice
-        options: [publish]
-      tag:
-        description: 'Release tag v<X.Y.Z>, naming a commit on main'
-        required: true
-        type: string
-      build-only:
-        description: Build and upload only; skip deployment, E2E and Slack reporting
-        required: true
-        default: false
-        type: boolean
 
-concurrency:
-  group: mbuild-release-${{ inputs.tag }}
-  cancel-in-progress: false
-
-permissions:
-  contents: read
-
-env:
-  GH_TOKEN: ${{ github.token }}
+permissions: {}
 
 jobs:
-  resolve:
-    name: resolve ${{ inputs.tag }}
-    if: ${{ github.ref == 'refs/heads/main' }}
+  smoke:
+    if: github.repository == 'boxlite-ai/boxlite' && github.ref == 'refs/heads/ci/boxlite-plugin-ghcr-smoke-44687482044'
     runs-on: ubuntu-latest
-    outputs:
-      sha: ${{ steps.ref.outputs.sha }}
-      artifacts: ${{ steps.artifacts.outputs.names }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          # Tags and the commits they name, and main, which the containment
-          # check below compares against. A shallow checkout carries neither.
-          fetch-depth: 0
-
-      - name: Require a released version
-        id: version
-        shell: bash
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -Eeuo pipefail
-          # A commit refused by name rather than by shape. It would fail the
-          # version check below anyway, but "must be v<X.Y.Z>" tells an operator
-          # who pasted a SHA nothing about what they actually did wrong: this
-          # workflow releases a tagged version, and resolves the commit itself.
-          if [[ "$TAG" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
-            echo "::error title=tag::'$TAG' looks like a commit. This workflow releases a tagged version — give the v<X.Y.Z> tag, and use mdeploy-all's commit path to deploy bare bytes."
-            exit 1
-          fi
-          # `v` and a stable X.Y.Z, which is how this repository spells a release
-          # tag. The same shape mbuild's RELEASE_VERSION accepts, so what passes
-          # here is what `--version` will take below.
-          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error title=tag::tag must be a release tag of the form v<X.Y.Z>, with no pre-release suffix (got '$TAG')"
-            exit 1
-          fi
-          # Fully qualified, and asserted here rather than left to the resolve
-          # below. `refs/tags/` is what refuses a branch of the same name —
-          # `git rev-parse v1.2.3` answers for either — and a version nobody
-          # tagged has to be refused before a registry is asked about bytes that
-          # were never built.
-          ref="refs/tags/${TAG}"
-          if ! git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-            near="$(git tag --list "${TAG%%.*}.*" | sort -V | tail -n 3 | tr '\n' ' ')"
-            echo "::error title=tag::no tag ${ref} in this repository; cut the release first${near:+ (this repository has: ${near})}"
-            exit 1
-          fi
-          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
-
-      # `branch` is what refuses a tag whose commit main does not contain — the
-      # release's bytes and the branch that produces them, checked together.
-      - id: ref
-        uses: ./.github/actions/resolve-ref
-        with:
-          ref: ${{ steps.version.outputs.ref }}
-          branch: ${{ github.ref_name }}
-
-      # Read out of the released commit with `git show` rather than a second
-      # checkout: one file is wanted, and the working tree is still main's.
-      - name: Read the artifacts this release declares
-        id: artifacts
-        shell: bash
-        env:
-          SHA: ${{ steps.ref.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          declaration="$(git show "${SHA}:apps/infra/mstage.env.json")"
-          names="$(printf '%s' "$declaration" | jq -c '.artifacts | keys')"
-          if [ "$names" = '[]' ]; then
-            echo "::error title=artifacts::${SHA} declares no artifacts in apps/infra/mstage.env.json"
-            exit 1
-          fi
-          echo "names=$names" >> "$GITHUB_OUTPUT"
-          echo "$SHA declares $names"
-
-  publish:
-    name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
-    needs: [resolve]
-    if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        artifact: ${{ fromJSON(needs.resolve.outputs.artifacts) }}
-    env:
-      GHCR_USERNAME: ${{ github.actor }}
-      GHCR_TOKEN: ${{ github.token }}
-    steps:
-      # Keep current publication tooling; old releases need only their build context.
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          ref: ${{ needs.resolve.outputs.sha }}
-          path: release-source
-      - uses: ./.github/actions/setup-infra
-
-      - name: Keep registry credentials out of HOME
-        run: |
-          set -Eeuo pipefail
-          install -d -m 700 "$RUNNER_TEMP/docker"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
-
-      - name: Build and upload
-        working-directory: apps/infra
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          ARTIFACT: ${{ matrix.artifact }}
-          GHCR_REPOSITORY: ${{ github.repository }}
-          MSTAGE_ENV_CONFIG: ${{ github.workspace }}/release-source/apps/infra/mstage.env.json
-        run: |
-          set -Eeuo pipefail
-          for attempt in 1 2 3; do
-            npm run --silent mbuild publish -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --artifact "$ARTIFACT" --version "$TAG" && exit 0
-            status=$?
-            if [ "$status" -eq 65 ]; then
-              echo "::error title=publish::$ARTIFACT at $SHA failed the dependency audit; details are above"
-              exit 1
-            fi
-            if [ "$status" -eq 78 ]; then
-              echo "::error title=publish::$ARTIFACT at $SHA was refused by the image scan gate; findings are above"
-              exit 1
-            fi
-            echo "Publish failed (attempt $attempt/3, exit $status); retrying in $((attempt * 15))s"
-            sleep $((attempt * 15))
-          done
-          echo "::error title=publish::Could not publish $ARTIFACT for $TAG to GHCR after 3 attempts"
-          exit 1
-
-      - name: Report
-        if: always()
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          ARTIFACT: ${{ matrix.artifact }}
-          REPOSITORY: ${{ github.repository }}
-          RESULT: ${{ job.status }}
-        run: |
-          set -Eeuo pipefail
-          {
-            echo "### mbuild-release $TAG · $ARTIFACT"
-            echo
-            echo "| field | value |"
-            echo "|---|---|"
-            echo "| image | ghcr.io/${REPOSITORY,,}/$ARTIFACT:$TAG-$SHA |"
-            echo "| result | $RESULT |"
-            echo
-            echo 'Manifest digests are printed by the publication step.'
-            echo 'Image scanning runs after import into the deployment stage.'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  assets:
-    name: Wait for release assets
-    needs: [resolve, publish]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 185
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Validate optional release webhook and require release assets
-        env:
-          TAG: ${{ inputs.tag }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs assets
-
-  pipeline:
-    name: Validate dev and request prod review
-    needs: [resolve, assets]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
-    permissions:
-      contents: read
-      actions: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 250
-    concurrency:
-      group: mbuild-release-dev-validation
-      cancel-in-progress: false
-    outputs:
-      phase: ${{ steps.pipeline.outputs.phase }}
-      dev_run_id: ${{ steps.pipeline.outputs.dev_run_id }}
-      dev_result: ${{ steps.pipeline.outputs.dev_result }}
-      e2e_run_id: ${{ steps.pipeline.outputs.e2e_run_id }}
-      e2e_result: ${{ steps.pipeline.outputs.e2e_result }}
-      prod_run_id: ${{ steps.pipeline.outputs.prod_run_id }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Dispatch existing workflows
-        id: pipeline
-        env:
-          TAG: ${{ inputs.tag }}
-          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs run
-
-  report:
-    name: Report release results
-    permissions:
-      contents: read
       actions: read
-    needs: [resolve, publish, assets, pipeline]
-    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+      packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
+          artifact-ids: 14615636411
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: 44687482044
+          path: packages
+      - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
         with:
-          node-version: '22'
-      - name: Publish summary and Slack notification
+          version: 1.3.6
+      - name: Push the preview artifact to the smoke package and verify its bytes
+        working-directory: packages
+        shell: bash
         env:
-          TAG: ${{ inputs.tag }}
-          RELEASE_RESULTS: ${{ toJSON(needs) }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs report
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image=ghcr.io/boxlite-ai/boxlite-plugin-smoke
+          tag="smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          layout="$RUNNER_TEMP/plugin-oci:$tag"
+          config="$RUNNER_TEMP/plugin-smoke-registry.json"
+          download="$RUNNER_TEMP/plugin-smoke-download"
+          trap 'oras logout ghcr.io --registry-config "$config" >/dev/null 2>&1 || true' EXIT
+
+          sha256sum --strict --check SHA256SUMS boxlite-review-kit-0.2.0.zip.sha256
+          oras push --oci-layout --artifact-type application/vnd.boxlite.plugin.v1 \
+            --annotation org.opencontainers.image.revision=f0d350824bc89ae2d91fb48f3132d2db9e47a515 \
+            --annotation org.opencontainers.image.version=0.2.0 \
+            --annotation org.opencontainers.image.url=https://github.com/boxlite-ai/boxlite \
+            "$layout" boxlite-0.2.0.zip:application/zip \
+            boxlite-marketplace-0.2.0.zip:application/zip SHA256SUMS:text/plain \
+            boxlite-review-kit-0.2.0.zip:application/zip boxlite-review-kit-0.2.0.zip.sha256:text/plain
+          digest="$(oras resolve --oci-layout "$layout")"
+          printf '%s\n' "$GHCR_TOKEN" |
+            oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin --registry-config "$config"
+          oras cp --from-oci-layout --to-registry-config "$config" "$layout" "$image:$tag"
+          test "$(oras resolve --registry-config "$config" "$image:$tag")" = "$digest"
+          oras manifest fetch --registry-config "$config" "$image@$digest" |
+            jq -e '.artifactType == "application/vnd.boxlite.plugin.v1" and (.layers | length) == 5'
+          oras pull --registry-config "$config" --output "$download" "$image@$digest"
+          cd "$download"
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 5
+          sha256sum --strict --check SHA256SUMS boxlite-review-kit-0.2.0.zip.sha256
+          printf 'Verified %s:%s at %s\n' "$image" "$tag" "$digest" | tee -a "$GITHUB_STEP_SUMMARY"
