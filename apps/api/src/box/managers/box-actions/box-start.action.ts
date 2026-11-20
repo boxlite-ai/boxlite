@@ -21,6 +21,7 @@ import { CuratedImagePinService } from '../../../image/services/curated-image-pi
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 
 import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
+import { ManagedOutboundBootstrap } from '../../services/managed-outbound-bootstrap'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -34,12 +35,20 @@ export class BoxStartAction extends BoxAction {
     protected readonly redisLockProvider: RedisLockProvider,
     private readonly boxActivityService: BoxActivityService,
     private readonly curatedImagePins: CuratedImagePinService,
+    private readonly outboundBootstrap?: ManagedOutboundBootstrap,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
 
   @WithSpan()
   async run(box: Box, lockCode: LockCode): Promise<SyncState> {
+    if (box.prevRunnerId && (await this.outboundBootstrap?.isProtected(box))) {
+      const previous = await this.runnerService.findOne(box.prevRunnerId)
+      if (!previous || previous.state !== RunnerState.READY) return DONT_SYNC_AGAIN
+      const adapter = await this.runnerAdapterFactory.create(previous)
+      if (!(await this.outboundBootstrap.retire(box, adapter, 'previous'))) return DONT_SYNC_AGAIN
+      return this.handleRunnerBoxUnknownStateOnDesiredStateStart(box, lockCode)
+    }
     switch (box.state) {
       case BoxState.UNKNOWN: {
         return this.handleRunnerBoxUnknownStateOnDesiredStateStart(box, lockCode)
@@ -87,17 +96,15 @@ export class BoxStartAction extends BoxAction {
     const image = boxImageIsOrgOwned(box) ? box.image : await this.curatedImagePins.refFor(runner.id, box.image)
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    await runnerAdapter.createBox(
-      box,
-      image,
-      metadata,
-      await resolveNestedVirtualization(
-        box.organizationId,
-        this.organizationService,
-        runnerAdapter,
-        this.configService.getOrThrow('runnerHealthTimeout') * 1000,
-      ),
+    const nested = await resolveNestedVirtualization(
+      box.organizationId,
+      this.organizationService,
+      runnerAdapter,
+      this.configService.getOrThrow('runnerHealthTimeout') * 1000,
     )
+    const protectedStart = await this.outboundBootstrap?.start(box, runnerAdapter, { image, metadata, nested })
+    if (protectedStart === 'pending' || protectedStart === 'managed-stopped') return DONT_SYNC_AGAIN
+    if (protectedStart !== 'ready') await runnerAdapter.createBox(box, image, metadata, nested)
 
     await this.updateBoxState(box, BoxState.CREATING, lockCode)
     return SYNC_AGAIN
@@ -119,6 +126,8 @@ export class BoxStartAction extends BoxAction {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+    const protectedStart = await this.outboundBootstrap?.start(box, runnerAdapter)
+    if (protectedStart === 'pending' || protectedStart === 'managed-stopped') return DONT_SYNC_AGAIN
 
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
     if (box.volumes?.length) {
@@ -127,7 +136,7 @@ export class BoxStartAction extends BoxAction {
       )
     }
 
-    await runnerAdapter.startBox(box.id, box.authToken, metadata)
+    if (protectedStart !== 'ready') await runnerAdapter.startBox(box.id, box.authToken, metadata)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
     return SYNC_AGAIN
@@ -144,15 +153,17 @@ export class BoxStartAction extends BoxAction {
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+    if ((await this.outboundBootstrap?.start(box, runnerAdapter)) === 'pending') return DONT_SYNC_AGAIN
     const boxInfo = await runnerAdapter.boxInfo(box.id)
 
     switch (boxInfo.state) {
       case BoxState.STARTED: {
         await this.updateBoxState(box, BoxState.STARTED, lockCode, undefined, undefined, boxInfo.daemonVersion)
 
-        //  if box was transferred to a new runner, remove it from the old runner
         if (box.prevRunnerId) {
-          await this.removeBoxFromPreviousRunner(box)
+          await this.boxRepository.cleanupPreviousRunner(box, (runnerId) =>
+            this.removeBoxFromPreviousRunner(box.id, runnerId),
+          )
         }
 
         return DONT_SYNC_AGAIN
@@ -225,27 +236,22 @@ export class BoxStartAction extends BoxAction {
     return false
   }
 
-  private async removeBoxFromPreviousRunner(box: Box): Promise<void> {
-    const runner = await this.runnerService.findOne(box.prevRunnerId)
+  private async removeBoxFromPreviousRunner(boxId: string, runnerId: string): Promise<void> {
+    const runner = await this.runnerService.findOne(runnerId)
     if (!runner) {
-      this.logger.warn(`Previously assigned runner ${box.prevRunnerId} for box ${box.id} not found`)
-
-      await this.boxRepository.update(box.id, { updateData: { prevRunnerId: null } }, true)
+      this.logger.warn(`Previously assigned runner ${runnerId} for box ${boxId} not found`)
       return
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     try {
-      // First try to destroy the box
-      await runnerAdapter.destroyBox(box.id)
+      await runnerAdapter.destroyBox(boxId)
     } catch (error) {
       if (error.response?.status !== 404 && error.statusCode !== 404) {
-        this.logger.error(`Failed to cleanup box ${box.id} on previous runner ${runner.id}:`, error)
+        this.logger.error(`Failed to cleanup box ${boxId} on previous runner ${runner.id}:`, error)
         throw error
       }
     }
-
-    await this.boxRepository.update(box.id, { updateData: { prevRunnerId: null } }, true)
   }
 }

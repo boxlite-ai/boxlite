@@ -4,6 +4,7 @@ import { Writable } from 'node:stream'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { ExecutionContext, INestApplication } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
+import { EventEmitter2 } from '@nestjs/event-emitter'
 import { Test } from '@nestjs/testing'
 import { logs } from '@opentelemetry/api-logs'
 import { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs'
@@ -13,12 +14,16 @@ import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditInterceptor } from '../../audit/interceptors/audit.interceptor'
 import { AuditService } from '../../audit/services/audit.service'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxRepository } from '../repositories/box.repository'
+import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
 import { BoxliteOutboundProxyController } from '../../boxlite-rest/boxlite-outbound-proxy.controller'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { getPinoRequestOptions } from '../../common/utils/pino.util'
 import { useApiBodyParsers } from '../../mcp/mcp-body'
 import { IndexBoxOrganizationForProxy1795000000000 } from '../../migrations/pre-deploy/1795000000000-index-box-organization-for-proxy-migration'
 import { AddOutboundProxyRegistry1795000001000 } from '../../migrations/pre-deploy/1795000001000-add-outbound-proxy-registry-migration'
+import { ExtendOutboundProxyRuntimeState1795153000000 } from '../../migrations/pre-deploy/1795153000000-extend-outbound-proxy-runtime-state-migration'
 import { OrganizationMemberRole } from '../../organization/enums/organization-member-role.enum'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationService } from '../../organization/services/organization.service'
@@ -68,13 +73,21 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
     }).initialize()
     await db.query(`CREATE SCHEMA "${schema}"`)
     await db.query('CREATE TABLE organization (id uuid PRIMARY KEY)')
-    await db.query('CREATE TABLE box (id varchar PRIMARY KEY, "organizationId" uuid NOT NULL, "runnerId" varchar)')
+    await db.query(`CREATE TABLE box (
+      id varchar PRIMARY KEY, "organizationId" uuid NOT NULL, "runnerId" varchar,
+      "prevRunnerId" varchar, state varchar, "updatedAt" timestamptz, "outboundControl" jsonb
+    )`)
     await db.query('INSERT INTO organization VALUES ($1), ($2)', [org, otherOrg])
-    await db.query('INSERT INTO box VALUES ($1, $2, $3)', [owner.boxId, org, owner.runnerId])
+    await db.query('INSERT INTO box (id, "organizationId", "runnerId") VALUES ($1, $2, $3)', [
+      owner.boxId,
+      org,
+      owner.runnerId,
+    ])
     const migration = db.createQueryRunner()
     try {
       await new IndexBoxOrganizationForProxy1795000000000().up(migration)
       await new AddOutboundProxyRegistry1795000001000().up(migration)
+      await new ExtendOutboundProxyRuntimeState1795153000000().up(migration)
     } finally {
       await migration.release()
     }
@@ -89,6 +102,10 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
   beforeEach(async () => {
     await db.query('TRUNCATE outbound_proxy_registration, outbound_proxy_key CASCADE')
     await db.query('INSERT INTO outbound_proxy_key_selector DEFAULT VALUES')
+    await db.query(
+      'UPDATE box SET "runnerId" = $2, "prevRunnerId" = NULL, "outboundControlDueAt" = NULL WHERE id = $1',
+      [owner.boxId, owner.runnerId],
+    )
     cipher = new ProxyCredentialCipher(JSON.stringify({ a: keyA, b: keyB }))
     store = new ProxyRegistryStore(db, cipher, true)
     await store.activateKey('a')
@@ -97,6 +114,78 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
   async function create() {
     return store.create(org, proxyCreate(registration))
   }
+
+  it('schedules protected previous-Runner cleanup and keeps ownership and its pin', async () => {
+    await create()
+    await store.reserveReference(owner, registration.name)
+    const assignment = {
+      id: owner.boxId,
+      organizationId: org,
+      runnerId: 'replacement-runner',
+      prevRunnerId: owner.runnerId,
+    }
+    await db.query('UPDATE box SET "runnerId" = $2, "prevRunnerId" = $3, state = $4 WHERE id = $1', [
+      assignment.id,
+      assignment.runnerId,
+      assignment.prevRunnerId,
+      BoxState.STARTED,
+    ])
+
+    const boxes = new BoxRepository(db, new EventEmitter2(), {} as BoxLookupCacheInvalidationService)
+    const destroyLegacy = jest.fn()
+    await boxes.cleanupPreviousRunner({ ...assignment, runnerId: 'stale-runner' }, destroyLegacy)
+    const [unchanged] = await db.query('SELECT "prevRunnerId", "outboundControlDueAt" FROM box WHERE id = $1', [
+      owner.boxId,
+    ])
+    expect(unchanged).toEqual({ prevRunnerId: owner.runnerId, outboundControlDueAt: null })
+
+    await boxes.cleanupPreviousRunner(assignment, destroyLegacy)
+    expect(destroyLegacy).not.toHaveBeenCalled()
+    const [scheduled] = await db.query('SELECT "prevRunnerId", "outboundControlDueAt" FROM box WHERE id = $1', [
+      owner.boxId,
+    ])
+    expect(scheduled).toEqual({ prevRunnerId: owner.runnerId, outboundControlDueAt: expect.any(Date) })
+    await expect(store.remove(org, registration.name)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('pins pre-epoch bootstrap references and retained versions across rollout', async () => {
+    await create()
+    const [{ id: registrationId }] = await db.query(
+      'SELECT id FROM outbound_proxy_registration WHERE organization_id = $1 AND name = $2',
+      [org, registration.name],
+    )
+    const insert = (kind: string, purpose: string, epoch: string | null) =>
+      db.query(
+        `INSERT INTO outbound_proxy_reference
+          (organization_id, box_id, kind, registration_id, revision, runner_id, runtime_epoch, attempt_id, purpose)
+          VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8)`,
+        [org, owner.boxId, kind, registrationId, owner.runnerId, epoch, owner.attemptId, purpose],
+      )
+
+    await expect(insert('pending', 'legacy', null)).rejects.toMatchObject({ code: '23514' })
+    await expect(insert('pending', 'bootstrap', '')).rejects.toMatchObject({ code: '23514' })
+    await expect(insert('committed', 'bootstrap', null)).rejects.toMatchObject({ code: '23514' })
+    await expect(insert('retained', 'update', null)).rejects.toMatchObject({ code: '23514' })
+    const reference = await store.reserveBootstrapReference(owner, registration.name)
+    expect(reference).toMatchObject({ runtimeEpoch: null, registrationId, revision: 1 })
+    await expect(store.remove(org, registration.name)).rejects.toMatchObject({ status: 409 })
+
+    await store.update(org, registration.name, { credential: null })
+    await expect(store.retireRevision(org, registration.name, 1)).rejects.toMatchObject({ status: 409 })
+    await expect(
+      store.confirmBootstrapReference({ ...reference, attemptId: 'different-attempt' }, owner.runtimeEpoch),
+    ).rejects.toMatchObject({ status: 409 })
+    await store.confirmBootstrapReference(reference, owner.runtimeEpoch)
+    await store.confirmBootstrapReference(reference, owner.runtimeEpoch)
+    await expect(store.confirmBootstrapReference(reference, 'different-epoch')).rejects.toMatchObject({ status: 409 })
+    const [promoted] = await db.query('SELECT kind, runtime_epoch FROM outbound_proxy_reference WHERE box_id = $1', [
+      owner.boxId,
+    ])
+    expect(promoted).toEqual({ kind: 'committed', runtime_epoch: owner.runtimeEpoch })
+    await insert('retained', 'update', owner.runtimeEpoch)
+    await db.query("DELETE FROM outbound_proxy_reference WHERE kind = 'committed'")
+    await expect(store.retireRevision(org, registration.name, 1)).rejects.toMatchObject({ status: 409 })
+  })
 
   it('returns only redacted metadata and scopes all operations to the organization', async () => {
     const created = await create()

@@ -116,6 +116,42 @@ export class BoxRepository extends BaseRepository<Box> {
     return persistedOutbound(await new OutboundPolicyStore(this.dataSource).read(id, organizationId))
   }
 
+  /** Keep the previous assignment while an outbound reference can still belong to it. */
+  async cleanupPreviousRunner(
+    assignment: Pick<Box, 'id' | 'organizationId' | 'runnerId' | 'prevRunnerId'>,
+    destroyLegacy: (runnerId: string) => Promise<void>,
+  ): Promise<void> {
+    const { id, organizationId, runnerId, prevRunnerId } = assignment
+    if (!runnerId || !prevRunnerId || runnerId === prevRunnerId) return
+
+    await this.manager.transaction(async (manager) => {
+      await manager.query("SET LOCAL lock_timeout = '5s'")
+      const [current] = await manager.query(
+        `SELECT "outboundControl" -> 'managed' AS managed FROM box
+        WHERE id = $1 AND "organizationId" = $2 AND "runnerId" = $3 AND "prevRunnerId" = $4 AND state = $5
+        FOR UPDATE`,
+        [id, organizationId, runnerId, prevRunnerId, BoxState.STARTED],
+      )
+      if (!current) return
+
+      const [reference] = await manager.query(
+        `SELECT 1 FROM outbound_proxy_reference
+        WHERE organization_id = $1 AND box_id = $2 AND runner_id = $3 LIMIT 1`,
+        [organizationId, id, prevRunnerId],
+      )
+      if (reference || current.managed) {
+        await manager.query(
+          `UPDATE box SET "outboundControlDueAt" = LEAST("outboundControlDueAt", now()) WHERE id = $1`,
+          [id],
+        )
+        return
+      }
+
+      await destroyLegacy(prevRunnerId)
+      await manager.query('UPDATE box SET "prevRunnerId" = NULL, "updatedAt" = now() WHERE id = $1', [id])
+    })
+  }
+
   async outboundStatus(id: string, organizationId: string, control: (box: Box) => Promise<OutboundControl>) {
     return new OutboundPolicyCoordinator(new OutboundPolicyStore(this.dataSource), control).status(id, organizationId)
   }

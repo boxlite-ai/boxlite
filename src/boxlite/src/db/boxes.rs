@@ -367,7 +367,11 @@ impl BoxStore {
                 BoxliteError::Database("Failed to encode protected outbound revision".into())
             })?;
         let changed = db_err!(self.db.conn().execute(
-            "UPDATE box_state SET json = json_set(+                CASE WHEN ?1 IS NULL THEN json ELSE json_set(json, '$.outbound_policy', json(?1), +                  '$.outbound_control', json(?2)) END, '$.protected_boot', json(?3)) WHERE id = ?4",
+            "UPDATE box_state SET json = json_set(
+                CASE WHEN ?1 IS NULL THEN json ELSE json_set(
+                    json, '$.outbound_policy', json(?1), '$.outbound_control', json(?2)
+                ) END, '$.protected_boot', json(?3)
+             ) WHERE id = ?4",
             params![policy, control, record, box_id],
         ))?;
         if changed == 0 {

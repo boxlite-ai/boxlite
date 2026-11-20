@@ -14,6 +14,7 @@ import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { BoxRepository } from '../../repositories/box.repository'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
+import { ManagedOutboundBootstrap } from '../../services/managed-outbound-bootstrap'
 
 @Injectable()
 export class BoxStopAction extends BoxAction {
@@ -22,12 +23,22 @@ export class BoxStopAction extends BoxAction {
     protected runnerAdapterFactory: RunnerAdapterFactory,
     protected boxRepository: BoxRepository,
     protected redisLockProvider: RedisLockProvider,
+    private readonly outboundBootstrap?: ManagedOutboundBootstrap,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
 
   @WithSpan()
   async run(box: Box, lockCode: LockCode, force?: boolean): Promise<SyncState> {
+    if (await this.outboundBootstrap?.isProtected(box)) {
+      const runner = box.runnerId ? await this.runnerService.findOne(box.runnerId) : undefined
+      if (!runner || runner.state !== RunnerState.READY) return DONT_SYNC_AGAIN
+      const adapter = await this.runnerAdapterFactory.create(runner)
+      if (await this.outboundBootstrap.retire(box, adapter, 'stop', force)) {
+        await this.updateBoxState(box, BoxState.STOPPED, lockCode)
+      }
+      return DONT_SYNC_AGAIN
+    }
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN

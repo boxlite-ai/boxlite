@@ -12,6 +12,8 @@ import { RunnerAdapterV2 } from './runnerAdapter.v2'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import type { ManagedCommand, ManagedReceipt } from './protected-outbound'
+import type { ProtectedBootControl } from './protected-runner'
 
 export interface RunnerBoxInfo {
   state: BoxState
@@ -43,7 +45,9 @@ export interface StartBoxResponse {
 export interface RunnerAdapter {
   init(runner: Runner): Promise<void>
 
-  supportsProtectedBootstrap?(): Promise<boolean>
+  supportsProtectedBootstrap?(recovery?: boolean, volumeRestart?: boolean): Promise<boolean>
+  readonly protectedBootstrap?: ProtectedBootControl
+  managedOutbound?(boxId: string, epoch: string, command: ManagedCommand): Promise<ManagedReceipt>
 
   healthCheck(signal?: AbortSignal): Promise<void>
 

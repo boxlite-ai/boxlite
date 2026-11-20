@@ -2,6 +2,7 @@ package boxlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -114,6 +115,45 @@ func TestNewRestDoubleCloseSafe(t *testing.T) {
 	if err := rt.Close(); err != nil {
 		t.Fatalf("second Close() returned error: %v", err)
 	}
+}
+
+func TestRestCreateOmitsOutboundProxyFromLegacyGoRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/boxes" {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Network map[string]any `json:"network"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode create request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		want := map[string]any{"mode": "enabled", "allow_net": []any{"packages.example.com"}}
+		if !reflect.DeepEqual(body.Network, want) {
+			t.Errorf("unexpected network request: %+v", body.Network)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"box_id":"box1","status":"stopped","cpus":1,"memory_mib":256,
+			"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z","image":"alpine:latest"}`)
+	}))
+	defer server.Close()
+	rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	box, err := rt.Create(ctx, "alpine:latest", WithNetwork(NetworkSpec{Outbound: OutboundNetworkSpec{
+		Mode: NetworkModeEnabled, AllowNet: []string{"packages.example.com"},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
 }
 
 func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
