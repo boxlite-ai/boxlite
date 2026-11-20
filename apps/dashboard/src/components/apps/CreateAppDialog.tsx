@@ -74,12 +74,12 @@ export function CreateAppDialog({
           ) : (
             // Each environment gets its own address when it is created, so there is none to preview yet.
             <div className="text-body text-muted-foreground">
-              {name ? 'Gets its own URL when you create it.' : 'Lowercase letters, digits and dashes.'}
+              Lowercase letters, digits and dashes. This name does not set your app’s address.
             </div>
           )}
           <p className="mt-2 text-body text-muted-foreground">
-            That is all you set. Creating it only reserves the name and URL: nothing runs until your coding agent
-            deploys, creating the runtime, database, sign-in and storage it needs.
+            BoxLite assigns an address with a generated ID. Create the app, then use your coding agent to deploy it.
+            Nothing runs until the first deployment.
           </p>
         </div>
 

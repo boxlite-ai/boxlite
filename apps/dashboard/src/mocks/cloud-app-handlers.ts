@@ -6,12 +6,13 @@ import type { AppDetail, AppRelease } from '@/lib/apps/types'
 import { MOCK_ORGANIZATION_ID } from './fixtures'
 
 function draftApp(name: string): AppDetail {
+  const url = `https://app-${crypto.randomUUID().replaceAll('-', '')}.apps.example`
   return {
     id: name,
     appId: `app_mock_${name}`,
     name,
     slug: name,
-    url: `https://${name}.apps.example`,
+    url,
     visibility: 'private',
     status: 'draft',
     lastDeploy: null,
@@ -47,7 +48,7 @@ function draftApp(name: string): AppDetail {
       protect: [],
       enforced: false,
       methods: [],
-      loginUrl: `https://${name}.apps.example/__boxlite/auth/login`,
+      loginUrl: `${url}/__boxlite/auth/login`,
       users: 0,
       note: null,
     },
