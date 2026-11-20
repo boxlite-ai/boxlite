@@ -12,6 +12,8 @@ The plugin preserves your choice rather than switching backends when authenticat
 
 ## Install
 
+For versioned marketplace ZIPs, use the [GHCR download and verification guide](https://github.com/boxlite-ai/boxlite/blob/main/scripts/plugins/README.md#download-and-verify).
+
 Extract the standalone marketplace ZIP, then use its absolute directory:
 
 ```sh

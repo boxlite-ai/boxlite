@@ -33,50 +33,83 @@ The packager uses an exact inventory, fixed ZIP metadata and ordering, and exclu
 The review kit is a handoff archive, not the ZIP to upload as an OpenAI plugin.
 Claude's directory reads a published GitHub plugin folder; a local marketplace ZIP does not substitute for that repository.
 
-## Publish versioned GitHub Releases
+## Publish versioned packages to GHCR
 
-The [Release BoxLite plugin workflow](../../.github/workflows/release-plugins.yml) publishes all five files listed above as GitHub Release assets.
-Its independent tag format is `boxlite-plugin-vVERSION`, for example `boxlite-plugin-v0.2.1`; runtime/SDK tags do not publish plugins.
-PRs only build and validate a preview, using read-only repository permissions.
+[Build BoxLite plugin packages](../../.github/workflows/build-plugins.yml) validates both host packages and uploads a seven-day Actions artifact.
+[Publish BoxLite plugin packages](../../.github/workflows/publish-plugins.yml) runs from `main` after a successful tag build.
+It verifies the canonical build, the live tag, and the exact run attempt before taking the registry credential.
 
 ```text
-plugin version + matching tag -> tests and native validator -> draft with five assets -> published Release
+plugin tag -> read-only build -> verified artifact -> main-only publisher -> GHCR
 ```
 
-1. Update `plugins/boxlite/plugin.json`, both host manifests, and the `version` in `scripts/plugins/review/{cases,checklist}.json` together.
-2. Update versioned filenames in docs and package tests, then run `make plugin:boxlite:check:cc plugin:boxlite:review-kit`.
-3. Commit the version change and push an unused matching tag to the intended release commit.
+### First release setup
 
-For example, after preparing version `0.2.1` at the current commit:
+Complete this setup after the workflows merge and before recreating `boxlite-plugin-v0.2.0`.
+
+1. Disable the legacy Release BoxLite plugin workflow with `gh workflow disable 423888825`. Drain its queued and running jobs before tagging.
+2. Create the GitHub Actions environment `boxlite-plugin-ghcr` with a deployment rule for the `main` branch only. Set `GHCR_PUBLISH_USER` and the environment secret `GHCR_PUBLISH_TOKEN` for a dedicated registry writer with a classic `write:packages` token.
+3. Have a package administrator reserve `ghcr.io/boxlite-ai/boxlite-plugin` privately under organization package-creation controls. For example, publish a metadata-only `bootstrap` tag with ORAS using an authorized login.
+4. Give the publisher access to this package and keep repository Actions tokens out of its write permissions. Verify the writer can publish and the source workflow token cannot write before enabling public downloads.
+
+The workflow requires the package to exist before publishing a version. To keep the account as the only writer, manage access on the package and keep repository permission inheritance disabled.
+
+GHCR starts new packages private. Make the package public after the first verified version so reviewers can pull anonymously. [GitHub package access](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
+
+Check that the repository’s Latest Release contains the runtime `install.sh` before and after the cutover. If its pointer is displaced, restore the intended runtime release first.
+
+### Release a plugin version
+
+Update the version in all three manifests and `scripts/plugins/review/{cases,checklist}.json`. Update version-specific examples and run the package checks.
+
+After the change merges, tag the intended commit on `main` and push the tag. For example, if the manifests contain version `0.2.0`:
 
 ```sh
-git tag boxlite-plugin-v0.2.1
-git push origin boxlite-plugin-v0.2.1
+make plugin:boxlite:check:cc plugin:boxlite:review-kit
+git tag boxlite-plugin-v0.2.0
+git push origin boxlite-plugin-v0.2.0
 ```
 
-The tag push builds from that commit, installs the pinned Claude validator, validates both host manifests, and verifies archive checksums.
-The publish job rechecks those hashes and the remote tag's commit before uploading; only this job has `contents: write`.
-It uses the repository `GITHUB_TOKEN`, needs no cloud/model credentials, and does not mark the plugin as the repository's Latest release.
-
-Before the first plugin release, explicitly mark the intended runtime release as Latest in GitHub.
-GitHub can otherwise ignore `--latest=false` and automatically select the plugin; see the [upstream report](https://github.com/orgs/community/discussions/151811).
-Verify `/releases/latest` still names a runtime release after publishing.
-
-Download the ZIPs and checksums from the matching entry in [GitHub Releases](https://github.com/boxlite-ai/boxlite/releases).
-Release assets remain available independently of the seven-day Actions artifact used for job handoff and PR previews.
-Those temporary artifacts include version, run ID and attempt in their names, so reruns cannot overwrite earlier previews.
-
-Existing releases, including drafts, cause publication to fail without replacing their assets.
-If an upload fails, inspect the incomplete draft before explicitly deleting it and retrying; never delete a published version to reuse its number.
-
-After this workflow is present on `main`, a failed tag run can also be retried manually with:
+The publisher stores all five files in one OCI artifact at `ghcr.io/boxlite-ai/boxlite-plugin:0.2.0`.
+Retry a failed build by rerunning the read-only workflow on the matching tag:
 
 ```sh
-gh workflow run release-plugins.yml --ref boxlite-plugin-v0.2.1
+gh workflow run build-plugins.yml --ref boxlite-plugin-v0.2.0
 ```
 
-A manual run on a branch, or a tag that disagrees with the plugin manifest, fails before publication.
-Publishing these build artifacts does not submit to OpenAI/Claude or complete the private release-readiness checklist.
+After an interrupted push, a retry can attest an identical artifact without replacing it. A different manifest at the same version stops the run.
+
+Use the new build workflow on tags created after the migration. Historical GitHub Release links, if any, retain their original files.
+
+### Download and verify
+
+Resolve the tag, verify that the digest was attested by the publisher on `main`, and check that the manifest's version matches. Use [ORAS](https://oras.land/docs/installation/), GitHub CLI, and `jq`.
+
+```sh
+(
+  set -eu
+  image=ghcr.io/boxlite-ai/boxlite-plugin
+  version=0.2.0
+  digest="$(oras resolve "$image:$version")"
+  reference="$image@$digest"
+  gh attestation verify "oci://$reference" --repo boxlite-ai/boxlite \
+    --signer-workflow boxlite-ai/boxlite/.github/workflows/publish-plugins.yml \
+    --source-ref refs/heads/main
+  oras manifest fetch "$reference" |
+    jq -e --arg version "$version" '.annotations["org.opencontainers.image.version"] == $version'
+  oras pull "$reference" --output "boxlite-plugin-$version"
+  cd "boxlite-plugin-$version"
+  sha256sum --check SHA256SUMS "boxlite-review-kit-$version.zip.sha256"
+)
+```
+
+Run the commands in order and stop if a verification fails. On macOS, use `shasum -a 256 -c` for the checksum command.
+
+If the version tag moves, find retained digests, including untagged entries. [Package Versions](https://github.com/orgs/boxlite-ai/packages/container/boxlite-plugin/versions)
+
+Resume the verification with a candidate digest and use it only when its attestation and version annotation match.
+
+Publishing packages preserves the existing OpenAI submission and Claude directory review steps.
 
 ## Real acceptance
 

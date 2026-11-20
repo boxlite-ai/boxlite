@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { before, test } from 'node:test'
@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url'
 import { load } from 'js-yaml'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
-const workflow = load(readFileSync(join(root, '.github/workflows/release-plugins.yml'), 'utf8'))
-const packageScript = workflow.jobs.build.steps.find((step) => step.id === 'package').run
-const publishScript = workflow.jobs.publish.steps.find((step) => step.run).run
+const build = load(readFileSync(join(root, '.github/workflows/build-plugins.yml'), 'utf8'))
+const publisher = load(readFileSync(join(root, '.github/workflows/publish-plugins.yml'), 'utf8'))
+const packageScript = build.jobs.build.steps.find((step) => step.id === 'package').run
+const verifyScript = publisher.jobs.verify.steps.find((step) => step.id === 'source').run
+const publishScript = publisher.jobs.publish.steps.find((step) => step.id === 'registry').run
 const { version } = JSON.parse(readFileSync(join(root, 'plugins/boxlite/plugin.json'), 'utf8'))
 const tag = `boxlite-plugin-v${version}`
 const files = [
@@ -69,7 +71,7 @@ for (const [event, refType, ref, allowed] of [
   })
 }
 
-function publish(t, fault) {
+function execute(t, script, fault = 'none', overrides = {}) {
   const path = directory(t)
   const bin = join(path, 'bin')
   mkdirSync(bin)
@@ -77,35 +79,68 @@ function publish(t, fault) {
   writeFileSync(join(path, 'private-evidence.json'), 'must never upload')
   if (fault === 'corrupt-package') writeFileSync(join(path, files[0]), 'damaged archive')
   const log = join(path, 'calls.jsonl')
-  const summary = join(path, 'summary')
+  const output = join(path, 'output')
   writeFileSync(
-    join(bin, 'gh'),
+    join(bin, 'fixture'),
     `#!/usr/bin/env node
 const fs = require('node:fs')
+const command = require('node:path').basename(process.argv[1])
 const args = process.argv.slice(2)
-fs.appendFileSync(process.env.CALL_LOG, JSON.stringify(args) + '\\n')
+fs.appendFileSync(process.env.CALL_LOG, JSON.stringify([command, ...args]) + '\\n')
 const fault = process.env.RELEASE_FAULT
-if (args[0] === 'api') {
-  if (args.some((arg) => arg.includes('releases?'))) {
-    if (fault === 'api-error') process.exit(1)
-    if (fault === 'existing') console.log('boxlite-plugin-v' + process.env.PLUGIN_VERSION)
-  } else {
-    console.log(fault === 'moved-tag' ? 'different-commit' : process.env.GITHUB_SHA)
+const digest = 'sha256:' + 'a'.repeat(64)
+if (command === 'gh' && args[0] === 'api') {
+  const endpoint = args[1]
+  if (fault === 'api-error') process.exit(1)
+  if (endpoint.endsWith('/workflows/build-plugins.yml')) console.log('17')
+  else if (endpoint.endsWith('/workflows/423888825')) console.log(fault === 'legacy-active' ? 'active' : 'disabled_manually')
+  else if (endpoint.includes('/commits/tags%2F')) {
+    const sha = fault === 'moved-tag' ? 'b'.repeat(40) : process.env.SOURCE_SHA
+    console.log(args.includes('--jq') ? sha : JSON.stringify({
+      sha, commit: { committer: { date: process.env.CREATED } },
+    }))
+  } else if (endpoint.includes('/compare/')) console.log(fault === 'unmerged' ? 'diverged' : 'ahead')
+  else if (endpoint.includes('/artifacts?name=')) {
+    const name = new URLSearchParams(endpoint.split('?')[1]).get('name')
+    console.log(JSON.stringify({
+      total_count: fault === 'ambiguous-artifact' ? 2 : 1,
+      artifacts: [{ id: 1234, name: fault === 'stale-artifact' ? name.replace(/-2$/, '-1') : name,
+        expired: fault === 'expired-artifact' }],
+    }))
+  } else process.exit(2)
+} else if (command === 'curl') {
+  if (args.includes('https://ghcr.io/token')) {
+    if (fault === 'auth-error') process.exit(1)
+    console.log(JSON.stringify({ token: 'registry-fixture' }))
+  } else if (args.at(-1).includes('/tags/list')) {
+    if (fault === 'uninitialized-package') process.exit(22)
+  } else if (args.includes('--head')) {
+    console.log(fault === 'lookup-error' ? '503' :
+      ['same-digest', 'conflicting-version'].includes(fault) ? '200' : '404')
+  } else process.exit(2)
+} else if (command === 'oras') {
+  if (args[0] === 'push' && args.includes('--oci-layout')) {
+    if (!args.slice(-5).every((file) => fs.existsSync(file.split(':')[0]))) process.exit(2)
+  } else if (args[0] === 'login') {
+    assertPassword()
+  } else if (args[0] === 'cp') {
+    if (fault === 'upload-error') process.exit(1)
+  } else if (args[0] === 'resolve') {
+    console.log(!args.includes('--oci-layout') && ['conflicting-version', 'changed-digest'].includes(fault)
+      ? 'sha256:' + 'b'.repeat(64) : digest)
+  } else process.exit(2)
+} else process.exit(2)
+
+function assertPassword() {
+  if (!args.includes('--password-stdin') || fs.readFileSync(0, 'utf8').trim() !== 'fixture-token') {
+    process.exit(2)
   }
-} else if (args[1] === 'create') {
-  if (fault === 'upload-error') process.exit(1)
-  if (!args.slice(-5).every((file) => fs.existsSync(file))) process.exit(2)
-} else if (args[1] === 'edit') {
-  if (fault === 'publish-error') process.exit(1)
-} else if (args[1] === 'view') {
-  console.log('https://example.invalid/release')
-} else {
-  process.exit(2)
 }
 `,
     { mode: 0o700 },
   )
-  const run = spawnSync('bash', ['-c', publishScript], {
+  for (const command of ['gh', 'curl', 'oras']) symlinkSync('fixture', join(bin, command))
+  const run = spawnSync('bash', ['-c', script], {
     cwd: path,
     encoding: 'utf8',
     timeout: 10_000,
@@ -114,39 +149,95 @@ if (args[0] === 'api') {
       PATH: bin + ':' + process.env.PATH,
       RELEASE_FAULT: fault,
       CALL_LOG: log,
-      PLUGIN_VERSION: version,
-      GH_REPO: 'fixture/repo',
-      GH_TOKEN: 'fixture-token',
-      GITHUB_SHA: 'a'.repeat(40),
+      VERSION: version,
+      CREATED: '2026-11-20T00:00:00Z',
+      SOURCE_TAG: tag,
+      SOURCE_SHA: 'a'.repeat(40),
+      BUILD_WORKFLOW: '17',
+      BUILD_PATH: '.github/workflows/build-plugins.yml',
+      BUILD_ID: '555',
+      BUILD_ATTEMPT: '2',
+      GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+      GITHUB_SERVER_URL: 'https://github.com',
+      GHCR_USER: 'fixture-user',
+      GHCR_TOKEN: 'fixture-token',
       RUNNER_TEMP: path,
-      GITHUB_STEP_SUMMARY: summary,
+      GITHUB_OUTPUT: output,
+      ...overrides,
     },
   })
   assert.equal(run.error, undefined)
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : []
-  const writes = calls.filter((args) => args[0] === 'release' && ['create', 'edit'].includes(args[1]))
-  return { run, calls, writes, summary }
+  const copies = calls.filter(([command, subcommand]) => command === 'oras' && subcommand === 'cp')
+  return { run, calls, copies, output: existsSync(output) ? readFileSync(output, 'utf8') : '' }
 }
 
-test('plugin release uploads exactly the five validated files before publishing', (t) => {
-  const { run, calls, writes, summary } = publish(t, 'none')
+test('plugin build is read-only and publication uses only the verified attempt', (t) => {
+  assert.deepEqual(build.permissions, { contents: 'read' })
+  assert.deepEqual(Object.keys(build.jobs), ['build'])
+  assert.deepEqual(publisher.on.workflow_run.workflows, [build.name])
+  assert.match(publisher.jobs.verify.if, /workflow_run.conclusion == 'success'/)
+  assert.match(publisher.jobs.verify.if, /workflow_run.head_repository.full_name == github.repository/)
+  assert.match(publisher.jobs.verify.if, /github.ref == 'refs\/heads\/main'/)
+  assert.doesNotMatch(publisher.jobs.verify.if, /pull_request/)
+  assert.equal(publisher.jobs.publish.needs, 'verify')
+  assert.equal(publisher.jobs.publish.environment, 'boxlite-plugin-ghcr')
+  assert.equal(publisher.jobs.publish.permissions.packages, undefined)
+  assert.match(publisher.jobs.publish.steps[0].with['artifact-ids'], /needs.verify.outputs.artifact_id/)
+  assert.equal(publisher.jobs.publish.steps[0].with['merge-multiple'], true)
+
+  const { run, calls, output } = execute(t, verifyScript)
   assert.equal(run.status, 0, run.stderr)
-  assert.equal(writes.length, 2)
-  assert.deepEqual(writes[0].slice(0, 3), ['release', 'create', tag])
-  assert.deepEqual(writes[0].slice(-5), files)
-  assert.ok(writes[0].includes('--draft') && writes[0].includes('--verify-tag'))
-  assert.deepEqual(writes[1], ['release', 'edit', tag, '--draft=false', '--latest=false'])
-  assert.ok(calls.every((args) => !args.includes('--clobber')))
-  assert.equal(readFileSync(summary, 'utf8'), 'https://example.invalid/release\n')
+  assert.equal(output, `version=${version}\nartifact_id=1234\ncreated=2026-11-20T00:00:00Z\n`)
+  assert.ok(calls.some((args) => args.includes(
+    `repos/boxlite-ai/boxlite/actions/runs/555/artifacts?name=boxlite-plugins-${version}-555-2`,
+  )))
 })
 
-for (const fault of ['existing', 'api-error', 'moved-tag', 'corrupt-package', 'upload-error', 'publish-error']) {
-  test(`plugin release stops without success reporting on ${fault}`, (t) => {
-    const { run, writes, summary } = publish(t, fault)
-    assert.equal(run.status, 1, run.stderr)
-    const expectedWrites = fault === 'upload-error' ? 1 : fault === 'publish-error' ? 2 : 0
-    assert.equal(writes.length, expectedWrites)
-    assert.equal(existsSync(summary), false)
-    if (fault === 'upload-error') assert.equal(writes[0][1], 'create')
+for (const fault of ['legacy-active', 'api-error', 'moved-tag', 'unmerged', 'stale-artifact', 'expired-artifact', 'ambiguous-artifact']) {
+  test(`plugin verifier rejects ${fault}`, (t) => {
+    const { run, calls, output } = execute(t, verifyScript, fault)
+    assert.notEqual(run.status, 0)
+    assert.equal(output, '')
+    assert.ok(calls.every(([command]) => command === 'gh'))
+  })
+}
+
+test('plugin verifier rejects a same-name workflow with a different identity', (t) => {
+  const { run, output } = execute(t, verifyScript, 'none', { BUILD_WORKFLOW: '18' })
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /canonical plugin builder/)
+  assert.equal(output, '')
+})
+
+for (const [fault, expectedCopies] of [['none', 1], ['same-digest', 0]]) {
+  test(`plugin publisher verifies five OCI layers and emits the digest on ${fault}`, (t) => {
+    const { run, calls, copies, output } = execute(t, publishScript, fault)
+    assert.equal(run.status, 0, run.stderr)
+    const layout = calls.find(([command, subcommand]) => command === 'oras' && subcommand === 'push')
+    assert.ok(layout.includes('--oci-layout'))
+    assert.ok(layout.includes('org.opencontainers.image.created=2026-11-20T00:00:00Z'))
+    assert.deepEqual(layout.slice(-5).map((file) => file.split(':')[0]), files)
+    assert.equal(copies.length, expectedCopies)
+    if (expectedCopies) assert.equal(copies[0].at(-1), `ghcr.io/boxlite-ai/boxlite-plugin:${version}`)
+    assert.equal(output, `image=ghcr.io/boxlite-ai/boxlite-plugin\ndigest=sha256:${'a'.repeat(64)}\n`)
+  })
+}
+
+for (const [fault, expectedCopies] of [
+  ['moved-tag', 0],
+  ['corrupt-package', 0],
+  ['auth-error', 0],
+  ['uninitialized-package', 0],
+  ['lookup-error', 0],
+  ['conflicting-version', 0],
+  ['upload-error', 1],
+  ['changed-digest', 1],
+]) {
+  test(`plugin publisher fails without an attestation digest on ${fault}`, (t) => {
+    const { run, copies, output } = execute(t, publishScript, fault)
+    assert.notEqual(run.status, 0)
+    assert.equal(copies.length, expectedCopies)
+    assert.equal(output, '')
   })
 }

@@ -462,11 +462,13 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 
 ## Plugin release artifacts
 
-[release-plugins.yml](release-plugins.yml) builds Codex and Claude packages on plugin PRs and publishes GitHub Release assets for `boxlite-plugin-vVERSION` tags.
-Make builders validate the shared version, test package boundaries, run the pinned Claude validator, and produce the plugin, marketplace, review kit and checksum files.
+The build workflow validates the Codex and Claude packages and saves five files for previews and publication. [Build workflow](build-plugins.yml)
 
-PR builds cannot publish; tagged builds must match the manifest version and remote commit.
-Publication creates a draft, uploads every asset, then publishes without replacing existing versions or the repository's Latest release.
-The [plugin publishing guide](../../scripts/plugins/README.md#publish-versioned-github-releases) covers version updates, downloads and recovery from incomplete drafts.
+The publishing workflow verifies the tag from `main` and publishes one versioned GHCR artifact. [Publishing workflow](publish-plugins.yml)
 
-Run `make test:apps:infra` to exercise the workflow’s version and publication guards with the real package builder.
+The publisher downloads the exact artifact ID for the validated build attempt. A main-only environment supplies the registry credential.
+
+Same-version runs serialize. An identical digest can resume attestation, and a conflicting digest stops publication.
+
+The [plugin publishing guide](../../scripts/plugins/README.md#publish-versioned-packages-to-ghcr) covers migration, registry access, retries, and downloads.
+Run `make test:apps:infra` to exercise the workflow guards with real plugin packages.
