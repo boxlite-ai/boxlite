@@ -129,6 +129,14 @@ struct AppState {
     /// Signed-in browsers of the web console, which present a session cookie
     /// instead of the API key. Empty unless `--api-key` is set.
     browser_sessions: web_console::BrowserSessions,
+    agent_turns: tokio::sync::Mutex<HashMap<String, AgentReservation>>,
+}
+
+const AGENT_STOPPING: usize = usize::MAX;
+
+struct AgentReservation {
+    count: usize,
+    generation: u64,
 }
 
 /// Scope of a terminal record: the box a client addresses plus the execution.
@@ -280,6 +288,7 @@ impl AppState {
     pub(in crate::commands::serve) async fn forget_box(&self, box_id: &str) {
         self.lifecycle.write().await.remove(box_id);
         self.last_activity.write().await.remove(box_id);
+        self.agent_turns.lock().await.remove(box_id);
         self.forget_recovered(box_id).await;
     }
 
@@ -999,6 +1008,20 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
         ) {
             LifecycleAction::Leave => {}
             LifecycleAction::Stop => {
+                // Reserve this box without holding the shared map over I/O.
+                {
+                    let mut turns = state.agent_turns.lock().await;
+                    if turns.contains_key(&box_id) {
+                        continue;
+                    }
+                    turns.insert(
+                        box_id.clone(),
+                        AgentReservation {
+                            count: AGENT_STOPPING,
+                            generation: 0,
+                        },
+                    );
+                }
                 tracing::info!(
                     box_id = %box_id,
                     idle_secs = idle.as_secs(),
@@ -1024,6 +1047,13 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
                     Err(_) => {
                         tracing::warn!(box_id = %box_id, "AutoStop timed out fetching box")
                     }
+                }
+                let mut turns = state.agent_turns.lock().await;
+                if turns
+                    .get(&box_id)
+                    .is_some_and(|turn| turn.count == AGENT_STOPPING)
+                {
+                    turns.remove(&box_id);
                 }
             }
             LifecycleAction::Delete => {
@@ -1911,8 +1941,8 @@ async fn get_or_attach_main_session(
 
 fn build_router(state: Arc<AppState>) -> Router {
     use handlers::{
-        advanced, boxes, config, executions, files, images, me, metrics, network, snapshots, ssh,
-        volumes,
+        advanced, agents, boxes, config, executions, files, images, me, metrics, network,
+        snapshots, ssh, volumes,
     };
 
     Router::new()
@@ -1963,6 +1993,15 @@ fn build_router(state: Arc<AppState>) -> Router {
                 .delete(boxes::remove_box)
                 .head(boxes::head_box),
         )
+        .route("/v1/boxes/{box_id}/agents", post(agents::create))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}", get(agents::get))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/close", post(agents::close))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns", post(agents::send))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/events", get(agents::events))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/requests/{request_id}/respond", post(agents::respond))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}", get(agents::get_turn))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/steer", post(agents::steer))
+        .route("/v1/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/interrupt", post(agents::interrupt))
         // Box lifecycle
         .route("/v1/boxes/{box_id}/network/inbound", put(network::set_inbound))
         .route("/v1/boxes/{box_id}/network/outbound", put(network::set_outbound))
@@ -2110,6 +2149,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
         browser_sessions: Default::default(),
+        agent_turns: tokio::sync::Mutex::new(HashMap::new()),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -2495,6 +2535,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -3327,6 +3368,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (control_status, control_error) =
             upload_v3_archive(state.clone(), serde_json::json!({})).await;
@@ -3953,6 +3995,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let mut archive = tar::Builder::new(Vec::new());
         for bytes in [b"first".as_slice(), b"second".as_slice()] {
@@ -4009,6 +4052,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (url, server) = serve_router(state).await;
         let remote =
@@ -4078,6 +4122,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -4145,6 +4190,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -4204,6 +4250,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4250,6 +4297,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4305,6 +4353,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4369,6 +4418,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
         let client = reqwest::Client::new();
@@ -4481,6 +4531,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4528,6 +4579,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4572,6 +4624,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4616,6 +4669,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         // The canned box's `last_updated` is a fixed date in the past, so its
         // time at rest grows as the calendar does. A century-long window
@@ -4668,6 +4722,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -4728,6 +4783,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4777,6 +4833,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5063,6 +5120,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
 
         // The box's main command, and an ordinary exec running beside it.

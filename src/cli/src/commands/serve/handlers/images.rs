@@ -198,6 +198,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         }))
     }
 

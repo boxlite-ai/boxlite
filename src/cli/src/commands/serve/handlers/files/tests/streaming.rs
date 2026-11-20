@@ -37,6 +37,7 @@ async fn file_upstream(files: axum::routing::MethodRouter) -> (GuestUpstream, Ar
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
         browser_sessions: Default::default(),
+        agent_turns: tokio::sync::Mutex::new(HashMap::new()),
     });
     (GuestUpstream { url, task }, state)
 }

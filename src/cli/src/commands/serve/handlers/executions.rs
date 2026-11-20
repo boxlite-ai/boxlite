@@ -1020,6 +1020,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
         // The stub's channels must stay alive for the length of the test.
@@ -1107,6 +1108,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
         let (exec, stdout_tx, stderr_tx, stdin_rx, result_tx) =
