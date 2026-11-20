@@ -46,10 +46,10 @@ type HealthcheckServiceConfig struct {
 	// Empty means the host has no data disk: the identity is then never
 	// advertised even when the environment names one.
 	DataDiskDevicePath string
-	// VerifyDataDiskBacking replaces the platform default in tests. nil selects
+	// VerifyHomeOnDataDisk replaces the platform default in tests. nil selects
 	// the platform default, which off Linux never passes: verification is a
 	// Linux-host concern and desktop builds stay out of the decision.
-	VerifyDataDiskBacking func(homeDir, devicePath string) error
+	VerifyHomeOnDataDisk func(homeDir, devicePath string) error
 }
 
 type Service struct {
@@ -66,17 +66,17 @@ type Service struct {
 	// dataDiskRef is the cloud disk identity the environment assembles; nil
 	// unless project, zone and disk name are all set, so a runner without the
 	// infra-injected env never sends a partial identity. The healthcheck
-	// advertises it only while the backing check passes (see
+	// advertises it only while the home-on-data-disk gate passes (see
 	// resolveDataDiskRef), so env presence alone never puts it on the wire.
 	dataDiskRef *apiclient.RunnerDataDiskRef
-	// Backing-gate inputs and hook, resolved once at construction.
-	boxliteHomeDir        string
-	dataDiskDevicePath    string
-	verifyDataDiskBacking func(homeDir, devicePath string) error
-	// backingSkipLogged keeps the not-advertised reason to one log per process:
+	// Gate inputs and hook, resolved once at construction.
+	boxliteHomeDir       string
+	dataDiskDevicePath   string
+	verifyHomeOnDataDisk func(homeDir, devicePath string) error
+	// gateSkipLogged keeps the not-advertised reason to one log per process:
 	// for a legacy host this is the steady state, and a per-tick repeat would
 	// only restate it.
-	backingSkipLogged bool
+	gateSkipLogged bool
 }
 
 func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
@@ -100,26 +100,26 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 		dataDiskRef.SetDiskType(cfg.RunnerDataDiskType)
 	}
 
-	verify := cfg.VerifyDataDiskBacking
+	verify := cfg.VerifyHomeOnDataDisk
 	if verify == nil {
-		verify = verifyDataDiskBacking
+		verify = verifyHomeOnDataDisk
 	}
 
 	return &Service{
-		log:                   logger.With(slog.String("component", "healthcheck")),
-		client:                apiClient,
-		interval:              cfg.Interval,
-		timeout:               cfg.Timeout,
-		collector:             cfg.Collector,
-		domain:                cfg.Domain,
-		apiPort:               cfg.ApiPort,
-		proxyPort:             cfg.ProxyPort,
-		tlsEnabled:            cfg.TlsEnabled,
-		boxlite:               cfg.Boxlite,
-		dataDiskRef:           dataDiskRef,
-		boxliteHomeDir:        cfg.BoxliteHomeDir,
-		dataDiskDevicePath:    cfg.DataDiskDevicePath,
-		verifyDataDiskBacking: verify,
+		log:                  logger.With(slog.String("component", "healthcheck")),
+		client:               apiClient,
+		interval:             cfg.Interval,
+		timeout:              cfg.Timeout,
+		collector:            cfg.Collector,
+		domain:               cfg.Domain,
+		apiPort:              cfg.ApiPort,
+		proxyPort:            cfg.ProxyPort,
+		tlsEnabled:           cfg.TlsEnabled,
+		boxlite:              cfg.Boxlite,
+		dataDiskRef:          dataDiskRef,
+		boxliteHomeDir:       cfg.BoxliteHomeDir,
+		dataDiskDevicePath:   cfg.DataDiskDevicePath,
+		verifyHomeOnDataDisk: verify,
 	}, nil
 }
 
@@ -146,8 +146,8 @@ func (s *Service) Start(ctx context.Context) {
 
 // resolveDataDiskRef re-derives the advertised identity on every healthcheck.
 // The environment triple names a disk infra believes this host has; the
-// backing check verifies the belief: the device node must exist and the
-// filesystem holding the home directory must be carried by it. A host created
+// gate verifies the belief: the device node must exist and the filesystem
+// holding the home directory must be carried by it. A host created
 // before the data disk carries the converged environment but keeps box state
 // on its root filesystem — advertising there would hand the control plane the
 // identity of a disk that is not the one holding state, and its expansion
@@ -158,22 +158,22 @@ func (s *Service) resolveDataDiskRef() *apiclient.RunnerDataDiskRef {
 	if s.dataDiskRef == nil || s.dataDiskDevicePath == "" {
 		return nil
 	}
-	if err := s.verifyDataDiskBacking(s.boxliteHomeDir, s.dataDiskDevicePath); err != nil {
-		s.logOnceBackingSkip(err)
+	if err := s.verifyHomeOnDataDisk(s.boxliteHomeDir, s.dataDiskDevicePath); err != nil {
+		s.logOnceGateSkip(err)
 		return nil
 	}
 	return s.dataDiskRef
 }
 
-// logOnceBackingSkip emits the not-advertised reason once per process: a
+// logOnceGateSkip emits the not-advertised reason once per process: a
 // legacy host's steady state is a permanent skip, and a per-tick repeat would
 // only restate the same fact.
-func (s *Service) logOnceBackingSkip(reason error) {
-	if s.backingSkipLogged {
+func (s *Service) logOnceGateSkip(reason error) {
+	if s.gateSkipLogged {
 		return
 	}
-	s.backingSkipLogged = true
-	s.log.DebugContext(context.Background(), "Cloud data-disk identity not advertised: backing check failed",
+	s.gateSkipLogged = true
+	s.log.DebugContext(context.Background(), "Cloud data-disk identity not advertised: gate check failed",
 		"error", reason.Error())
 }
 

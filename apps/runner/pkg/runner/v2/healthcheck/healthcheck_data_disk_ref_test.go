@@ -98,12 +98,12 @@ func TestServiceDataDiskRefAssemblyContract(t *testing.T) {
 				GCPZone:            tc.zone,
 				RunnerDataDiskName: tc.diskName,
 				RunnerDataDiskType: tc.diskType,
-				// Every case here assumes the disk backs the home; the backing
+				// Every case here assumes the device carries the home; the
 				// gate itself gets its own test. A hook is injected because the
 				// platform default off Linux never passes.
-				BoxliteHomeDir:        "/var/lib/boxlite",
-				DataDiskDevicePath:    "/dev/disk/by-id/google-boxlite-data",
-				VerifyDataDiskBacking: func(string, string) error { return nil },
+				BoxliteHomeDir:       "/var/lib/boxlite",
+				DataDiskDevicePath:   "/dev/disk/by-id/google-boxlite-data",
+				VerifyHomeOnDataDisk: func(string, string) error { return nil },
 			})
 			if err != nil {
 				t.Fatalf("NewService failed: %v", err)
