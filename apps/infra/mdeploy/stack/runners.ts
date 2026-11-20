@@ -32,7 +32,12 @@ import type { Placement } from './network.ts'
 import type { RunnerArtifact } from './runner-binary.ts'
 import { instanceFor } from 'naming'
 
-export type RunnerSize = 'small' | 'medium' | 'large'
+export const AWS_RUNNER_SIZES = ['small', 'medium', 'large'] as const
+export const GCP_ONLY_RUNNER_SIZES = ['xlarge', '2xlarge'] as const
+export type RunnerSize = (typeof AWS_RUNNER_SIZES)[number] | (typeof GCP_ONLY_RUNNER_SIZES)[number]
+
+export const isAwsRunnerSize = (size: RunnerSize): size is (typeof AWS_RUNNER_SIZES)[number] =>
+  AWS_RUNNER_SIZES.some((supported) => supported === size)
 
 /** One host, as the control plane will know it. */
 export type RunnerSlot = {

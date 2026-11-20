@@ -83,6 +83,7 @@ export const gcpStackProviders = ({
   otelOpenapiEnabled = false,
   clickStackConsumer = null,
   notificationChannels = [],
+  runnerMachines,
 }: {
   stage: string
   region: string
@@ -115,6 +116,7 @@ export const gcpStackProviders = ({
   /** Who may read the ClickHouse reader password; see `clickstack.ts`. */
   clickStackConsumer?: string | null
   notificationChannels?: string[]
+  runnerMachines?: Parameters<typeof gcpRunnerProvider>[0]['runnerMachines']
 }): StackProviders => {
   const zone = zoneIn(region, declaredZone)
 
@@ -240,6 +242,7 @@ export const gcpStackProviders = ({
         adminApiKey,
         regionId,
         dependsOn,
+        runnerMachines,
       }),
     alarms: ({ subjects }) => gcpAlarmProvider({ subjects, project, notificationChannels }),
   }

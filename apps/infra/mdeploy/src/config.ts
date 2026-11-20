@@ -33,7 +33,7 @@ import type { AlarmRequest, AlarmThreshold } from '../stack/alarms.ts'
 import type { CacheRequest, CacheSize } from '../stack/cache.ts'
 import type { ClickHouseMode, ClickHouseRequest } from '../stack/clickhouse.ts'
 import type { DatabaseRequest, DatabaseSize } from '../stack/database.ts'
-import type { RunnerRequest, RunnerSize } from '../stack/runners.ts'
+import { AWS_RUNNER_SIZES, GCP_ONLY_RUNNER_SIZES, isAwsRunnerSize, type RunnerRequest } from '../stack/runners.ts'
 import type { StorageRequest } from '../stack/storage.ts'
 
 export class DeployConfigError extends Error {
@@ -93,7 +93,7 @@ const VOLUME_PREFIX = 'boxlite-volume'
 
 const DATABASE_SIZES: DatabaseSize[] = ['small', 'standard', 'medium']
 const CACHE_SIZES: CacheSize[] = ['small', 'medium']
-const RUNNER_SIZES: RunnerSize[] = ['small', 'medium', 'large']
+const RUNNER_SIZES = [...AWS_RUNNER_SIZES, ...GCP_ONLY_RUNNER_SIZES] as const
 const CLICKHOUSE_MODES: ClickHouseMode[] = ['self-hosted', 'managed', 'disabled']
 
 /** RDS keeps at most 35 days of automated backups; below one means none. */
@@ -334,5 +334,9 @@ export const loadDeployConfig = ({
         'repository-wide defaults to fall back on — copy the block from .mstage.config.example.json',
     )
   }
-  return { ...parseDeployConfig(where, JSON.stringify(declared.deploy)), path: mstage.path, root: mstage.root }
+  const config = parseDeployConfig(where, JSON.stringify(declared.deploy))
+  if (declared.home === 'aws' && !isAwsRunnerSize(config.runners.size)) {
+    throw new DeployConfigError(`${where}.runners.size "${config.runners.size}" is only supported on GCP`)
+  }
+  return { ...config, path: mstage.path, root: mstage.root }
 }

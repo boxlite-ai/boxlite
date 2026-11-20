@@ -78,8 +78,19 @@ the secret does not. Use `.env.example` for the names and defaults.
 
 ## Runner sizing
 
-`deploy.runners` in the stage declaration requires `size` (`small`, `medium` or `large`) and
-`rootDiskGb`. GCP also accepts optional `dataDiskGb` for a new runner's separate data disk:
+`deploy.runners` in the stage declaration requires `size` and `rootDiskGb`. Both clouds accept
+`small`, `medium` and `large`. GCP also accepts `xlarge`, `2xlarge`, and optional `dataDiskGb`
+for a new runner's separate data disk.
+
+| GCP size | vCPUs | Initial machine type | Alternate machine type |
+| --- | ---: | --- | --- |
+| `small` | 4 | `n4-standard-4` | — |
+| `medium` | 8 | `n4-standard-8` | — |
+| `large` | 16 | `n4-standard-16` | `n4d-standard-16` |
+| `xlarge` | 32 | `n4-standard-32` | `n4d-standard-32` |
+| `2xlarge` | 64 | `n4-standard-64` | `n4d-standard-64` |
+
+For example, this GCP runner starts with 16 vCPUs and a 2 TiB data disk.
 
 ```json
 {

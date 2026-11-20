@@ -108,10 +108,14 @@ Both jobs bind the target Environment; approve the preparation batch after both 
 Approval covers jobs currently waiting: a queued or later job can require another review.
 
 The matrix permits two concurrent legs with separate artifact locks and keeps a successful sibling running when another fails.
-Deploy waits for the complete preparation matrix to succeed; commit routes do not depend on matrix output ordering.
+Deploy waits for the complete preparation matrix to succeed. Commit routes work in any matrix output order.
+
 Rerunning a preparation leg repeats its checks and reuses existing artifacts.
 A failed import or build stops deployment.
-Apply is never automatically retried; inspect failed applies and any retained state lock before rerunning.
+
+A full GCP apply can [retry a new Runner on N4D](gcp/runners.md#machine-capacity) after a confirmed N4
+capacity failure. Inspect other failed applies and any retained state lock before rerunning.
+
 The release pipeline's separate E2E workflow retains its own Environment gate.
 
 ### Caller attribution

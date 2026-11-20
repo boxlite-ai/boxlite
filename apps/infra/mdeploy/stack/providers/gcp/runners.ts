@@ -55,7 +55,21 @@ import { volumeConditionFor } from './storage.ts'
  * AMD-based ones other than N4D, and a host on one of those accepts work and
  * fails every box.
  */
-export const MACHINE = { small: 'n4-standard-4', medium: 'n4-standard-8', large: 'n4-standard-16' } as const
+export const MACHINE = {
+  small: 'n4-standard-4',
+  medium: 'n4-standard-8',
+  large: 'n4-standard-16',
+  xlarge: 'n4-standard-32',
+  '2xlarge': 'n4-standard-64',
+} as const
+
+export const ALTERNATE_MACHINE = {
+  large: 'n4d-standard-16',
+  xlarge: 'n4d-standard-32',
+  '2xlarge': 'n4d-standard-64',
+} as const
+
+export type AlternateRunnerMachine = (typeof ALTERNATE_MACHINE)[keyof typeof ALTERNATE_MACHINE]
 
 /**
  * The only disk type N4 takes.
@@ -80,10 +94,13 @@ export const DISK_TYPE = 'hyperdisk-balanced'
  * because a default is computed once at create and a disk grown later keeps it.
  * Overriding capacity does not change these performance presets.
  */
+const STANDARD_DATA_DISK = { sizeGb: 200, iops: 3_600, throughputMiBps: 290 } as const
 export const DATA_DISK = {
-  small: { sizeGb: 200, iops: 3_600, throughputMiBps: 240 },
-  medium: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
-  large: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
+  small: { ...STANDARD_DATA_DISK, throughputMiBps: 240 },
+  medium: STANDARD_DATA_DISK,
+  large: STANDARD_DATA_DISK,
+  xlarge: STANDARD_DATA_DISK,
+  '2xlarge': STANDARD_DATA_DISK,
 } as const
 
 /** What the data disk is attached as, so a host finds it at `/dev/disk/by-id/google-<this>`. */
@@ -208,6 +225,7 @@ export const gcpRunnerProvider =
     adminApiKey,
     regionId,
     dependsOn,
+    runnerMachines,
   }: {
     project: string
     /** A zone. An instance is zonal even where its subnet is not. */
@@ -222,6 +240,7 @@ export const gcpRunnerProvider =
     /** The region those rows go in — the same one the API seeded its own into. */
     regionId: string
     dependsOn: any[]
+    runnerMachines?: ReadonlyMap<string, AlternateRunnerMachine>
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
     const labels = request.fleet.map(({ slot }) => runnerLabelValue(slot.controlPlaneRunnerName))
@@ -495,7 +514,7 @@ udevadm trigger --name-match=kvm || true`,
           name: slot.nameTag,
           project,
           zone,
-          machineType: MACHINE[request.size],
+          machineType: runnerMachines?.get(slot.resourceName) ?? MACHINE[request.size],
           // Explicitly, or the device is absent on a machine that can host it.
           advancedMachineFeatures: { enableNestedVirtualization: request.nestedVirtualization },
           bootDisk: {

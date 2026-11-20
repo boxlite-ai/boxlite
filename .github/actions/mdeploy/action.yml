@@ -231,9 +231,9 @@ runs:
           exit 1
         fi
 
-    # Never retried. A run killed mid-apply can leave the per-stage lock held,
-    # and a second attempt then fails on the lock rather than on the cause
-    # worth reading. Clearing it by hand is a first-class command:
+    # mdeploy can recover a confirmed GCP Runner capacity failure with a
+    # checked alternate plan. An interrupted run can leave the stage lock held.
+    # Inspect state before clearing it:
     # `npm run mstage state unlock -- --stage <stage>`.
     - name: Apply
       working-directory: apps/infra

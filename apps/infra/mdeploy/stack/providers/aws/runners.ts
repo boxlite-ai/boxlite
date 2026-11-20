@@ -32,8 +32,7 @@
  */
 
 import type { Placement } from '../../network.ts'
-import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
-import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE } from '../../runners.ts'
+import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, isAwsRunnerSize, type RunnerProvider, type RunnerRequest, type Runners } from '../../runners.ts'
 import { renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
 import {
   REGISTER_RUNNERS_COMMAND,
@@ -118,6 +117,10 @@ export const awsRunnerProvider =
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
+    const size = request.size
+    if (!isAwsRunnerSize(size)) {
+      throw new Error(`AWS runner size "${size}" is only supported on GCP`)
+    }
     if (request.dataDiskGb !== undefined) {
       throw new Error('AWS runners do not support dataDiskGb; configure rootDiskGb instead')
     }
@@ -230,7 +233,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           slot.resourceName,
           {
             ami: ami.id,
-            instanceType: INSTANCE[request.size],
+            instanceType: INSTANCE[size],
             // Public subnet, and the security group the network arranged is
             // what makes the address egress-only.
             subnetId: placement.subnets[0],

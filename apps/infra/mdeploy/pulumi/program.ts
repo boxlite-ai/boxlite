@@ -25,6 +25,8 @@
 import { readStackEnvironment } from '../src/stack-env.ts'
 import { gcpRunnerArtifactsBucket, resolveRunnerBinary } from '../stack/runner-binary.ts'
 import type { deployStack } from '../stack/index.ts'
+import type { RunnerSize, RunnerSlot } from '../stack/runners.ts'
+import type { AlternateRunnerMachine } from '../stack/providers/gcp/runners.ts'
 
 export class PulumiProgramError extends Error {
   constructor(message: string) {
@@ -174,6 +176,8 @@ export type ProgramInput = {
   environment: NodeJS.ProcessEnv
   /** Where `mdeploy.config.json` is found. Defaults to the process's own directory. */
   cwd?: string
+  runnerMachines?: ReadonlyMap<string, AlternateRunnerMachine>
+  onRunnerFleet?: (size: RunnerSize, fleet: readonly RunnerSlot[], runnerRegion: string) => void
   loadModules?: ModuleLoader
   /**
    * The stack, injected for the same reason `loadModules` is: what this
@@ -201,6 +205,8 @@ export const gcpProgram =
     zone = null,
     environment,
     cwd,
+    runnerMachines,
+    onRunnerFleet,
     loadModules: load = loadModules,
     deployStackWith,
   }: ProgramInput) =>
@@ -257,6 +263,9 @@ export const gcpProgram =
       staging: { cloud: 'gcp', bucket: artifactsBucket },
     })
 
+    onRunnerFleet?.(
+      config.runners.size, stackEnvironment.runnerFleet, stackEnvironment.apiEnvironment.DEFAULT_REGION_ID ?? 'us',
+    )
     const outputs = deployStack({
       providers: gcpStackProviders({
         stage,
@@ -277,6 +286,7 @@ export const gcpProgram =
         managedClickHouse: stackEnvironment.managedClickHouse,
         otelOpenapiEnabled: stackEnvironment.otelOpenapiEnabled,
         clickStackConsumer: stackEnvironment.clickStackConsumer,
+        runnerMachines,
       }),
       config,
       inputs: {

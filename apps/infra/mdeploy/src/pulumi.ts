@@ -18,6 +18,14 @@
  */
 
 import { gcpProgram, type ProgramOutputs } from '../pulumi/program.ts'
+import { zoneIn } from '../stack/providers/gcp/index.ts'
+import {
+  deployWithRunnerCapacityFallback,
+  gcpRunnerAbsence,
+  recordRunnerCandidates,
+  runnerCapacityContext,
+  verifyGcpRunnerIdentities,
+} from './gcp-runner-capacity.ts'
 import { publicHostsFor } from '../stack/api.ts'
 import { userDomainFrom } from './stack-env.ts'
 import {
@@ -42,7 +50,29 @@ const NARRATION: Record<Intent, string> = {
   remove: 'removing',
   refresh: 'reconciling the state of',
 }
-type OperationOptions = { onOutput?: (output: string) => void; target?: string[]; targetDependents?: boolean }
+type ResourceStep = {
+  urn: string
+  type: string
+  op: string
+  old?: unknown
+  new?: { inputs?: Record<string, unknown> }
+}
+
+export type ApplyEngineEvent = {
+  resourcePreEvent?: { metadata: ResourceStep }
+  resOpFailedEvent?: { metadata: ResourceStep }
+  diagnosticEvent?: { severity: string; urn?: string; message: string }
+  summaryEvent?: { maybeCorrupt: boolean }
+}
+
+type OperationOptions = {
+  onOutput?: (output: string) => void
+  onEvent?: (event: ApplyEngineEvent) => void
+  target?: string[]
+  targetDependents?: boolean
+  plan?: string
+  signal?: AbortSignal
+}
 const ACT: Record<Intent, (stack: PulumiStack, options: OperationOptions) => Promise<unknown>> = {
   deploy: (stack, options) => stack.up(options),
   diff: (stack, options) => stack.preview(options),
@@ -105,7 +135,7 @@ export type PulumiStack = {
   preview: (options: OperationOptions) => Promise<unknown>
   destroy: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
   refresh: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
-  exportStack: () => Promise<{ deployment?: { resources?: DeployedResource[] } }>
+  exportStack: () => Promise<{ deployment?: { resources?: DeployedResource[]; pending_operations?: unknown[] } }>
 }
 
 export type StackFactory = (input: {
@@ -256,17 +286,38 @@ export const pulumiDeploy = async ({
     })
   }
 
+  const recoverCapacity = intent === 'deploy' && components === 'api+runner'
+  const recovery = runnerCapacityContext({ app, stage, project, zone: zoneIn(scope.region, scope.zone ?? null) })
+  const program = gcpProgram({
+    app,
+    stage,
+    region: scope.region,
+    project,
+    zone: scope.zone,
+    environment,
+    cwd: config.root,
+    ...(recoverCapacity && {
+      runnerMachines: recovery.runnerMachines,
+      onRunnerFleet: (size, fleet, runnerRegion) => {
+        recordRunnerCandidates(recovery, size, fleet)
+        recovery.runnerRegion = runnerRegion
+      },
+    }),
+  })
   const stack = await createStackWith({
     projectName: app,
     stackName: stage,
-    program: gcpProgram({ app, stage, region: scope.region, project, zone: scope.zone, environment, cwd: config.root }),
+    program: async () => {
+      await recovery.beforeApply?.()
+      return program()
+    },
     /*
      * The whole stage environment, not only the credentials and the passphrase.
      * The engine spawns a provider plugin per provider, and those are the
      * processes that read `CLOUDFLARE_API_TOKEN` — narrowing this to what the
      * CLI itself needs would leave the DNS record unwritable.
      */
-    envVars: environment,
+    envVars: recoverCapacity ? { ...environment, PULUMI_EXPERIMENTAL: 'true' } : environment,
     backendUrl: `gs://${state.bucket}`,
     ...(components === 'api+runner' ? {} : { selectOnly: true }),
   })
@@ -302,7 +353,19 @@ export const pulumiDeploy = async ({
     }
   }
   try {
-    await ACT[intent](stack, { onOutput, ...(targets ? { target: targets, targetDependents: false } : {}) })
+    if (recoverCapacity) {
+      await deployWithRunnerCapacityFallback({
+        stack, recovery, onOutput, log,
+        assertAbsent: gcpRunnerAbsence(recovery.scope, credentials),
+        verifyRecovered: (runners, signal) => {
+          if (!domain) throw new Error('The stage API host is unavailable')
+          const { api } = publicHostsFor({ domain, dashboardDomain: environment.DASHBOARD_DOMAIN ?? null })
+          return verifyGcpRunnerIdentities(stack, recovery, api, runners, signal)
+        },
+      })
+    } else {
+      await ACT[intent](stack, { onOutput, ...(targets ? { target: targets, targetDependents: false } : {}) })
+    }
     return 0
   } catch (error) {
     // The engine already printed what failed; this says which stage it was, so

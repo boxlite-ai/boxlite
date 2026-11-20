@@ -31,6 +31,7 @@ export type DeployedResource = {
   urn: string
   type: string
   delete?: boolean
+  outputs?: Record<string, unknown>
   inputs?: {
     labels?: Record<string, string>
     instanceFilter?: {

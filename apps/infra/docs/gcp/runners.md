@@ -63,6 +63,46 @@ create the fleet assignment. `runner:update` refuses the old whole-fleet layout 
 assignment. If an earlier rollout is still in progress, let it finish or investigate it before retrying.
 The five-minute window controls rollout pacing; it does not continuously test box creation or tunnel health.
 
+## Machine capacity
+
+A full GCP deploy creates new `large`, `xlarge` and `2xlarge` runners on N4 first.
+The driver checks the current Pulumi apply for a confirmed capacity failure on each failed create.
+It can then try the matching N4D type once in the same zone.
+
+See [runner sizing](../configuration.md#runner-sizing) for machine types and disk settings.
+
+```mermaid
+sequenceDiagram
+    participant D as mdeploy
+    participant P as Pulumi
+    participant G as Compute Engine
+    participant A as BoxLite API
+    D->>P: Apply the full stage with new N4 runners
+    P->>G: Insert named N4 VMs
+    P-->>D: Report eligible capacity failures
+    D->>P: Check checkpoint and pending operations
+    D->>G: Check alternate type and failed VM names
+    D->>P: Preview and apply the verified N4D creates once
+    D->>P: Check and complete deferred fleet operations
+    D->>A: Authenticate each recovered Runner
+```
+
+mdeploy checks the checkpoint and Compute Engine for the failed names, then applies a saved
+plan containing only their N4D VM creates. A later ordinary deploy retains the selected machine
+type, VM identity and data disk. For example, if one `xlarge` Runner starts on N4 and its sibling
+fails for capacity, only the failed Runner is eligible for an N4D create.
+
+Permission and quota errors, ambiguous diagnostics, pending operations or an unexpected plan
+stop recovery and preserve the original deployment error. After the alternate creates succeed,
+mdeploy can finish deferred Runner OS Policy and registration writes through a separate checked
+plan. Any remaining unrelated work requires a normal deployment rerun.
+
+Recovery succeeds once each recovered Runner authenticates as the expected name and region.
+A mismatched registration stops recovery and preserves the existing row.
+
+Confirm the actual machine type, data disk mount, authenticated Runner and a nested test box
+during the [rollout checks](#verify-and-recover).
+
 ## Data disk
 
 Each host gets its own Hyperdisk Balanced disk, `<app>-<stage>-runner-data[-N]`, attached as `boxlite-data`:

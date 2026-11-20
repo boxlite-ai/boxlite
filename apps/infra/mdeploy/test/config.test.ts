@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
-import { DeployConfigError, parseDeployConfig } from '../src/config.ts'
+import { DeployConfigError, loadDeployConfig, parseDeployConfig } from '../src/config.ts'
 
 const valid = {
   database: { name: 'boxlite', size: 'small', highlyAvailable: false, backupRetentionDays: 7, protected: false },
@@ -43,6 +45,19 @@ test('runner configuration accepts an optional data disk while preserving requir
     assert.throws(() => parse({ runners }), new RegExp(`must set ${required}`))
   }
   assert.throws(() => parse({ runners: { ...valid.runners, dataDiskSize: 2048 } }), /does not take dataDiskSize/)
+})
+
+test('the new Runner sizes load only for GCP stages', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'mdeploy-runner-sizes-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const declaration = JSON.parse(readFileSync(new URL('../../.mstage.config.example.json', import.meta.url), 'utf8'))
+  writeFileSync(join(directory, 'mstage.env.json'), readFileSync(new URL('../../mstage.env.json', import.meta.url)))
+  for (const size of ['xlarge', '2xlarge'] as const) {
+    for (const stage of ['dev', 'dev2']) declaration.stages[stage].deploy.runners.size = size
+    writeFileSync(join(directory, '.mstage.config.json'), JSON.stringify(declaration))
+    assert.equal(loadDeployConfig({ cwd: directory, environment: {}, stage: 'dev2' }).runners.size, size)
+    assert.throws(() => loadDeployConfig({ cwd: directory, environment: {}, stage: 'dev' }), /only supported on GCP/)
+  }
 })
 
 test('the defaults have to be complete, because nothing else supplies them', () => {

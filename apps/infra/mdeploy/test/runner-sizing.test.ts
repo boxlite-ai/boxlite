@@ -100,7 +100,10 @@ test('GCP keeps existing machine types while supplying the requested size for ne
   const provider = gcpProvider(output)
   for (const [size, machineType] of [
     ['small', 'n4-standard-4'],
+    ['medium', 'n4-standard-8'],
     ['large', 'n4-standard-16'],
+    ['xlarge', 'n4-standard-32'],
+    ['2xlarge', 'n4-standard-64'],
   ] as const) {
     provider(requestFor(size))
     const host = resources.get('Runner')!
@@ -122,7 +125,7 @@ test('GCP honors an explicit data disk capacity and retains the default and disk
   assert.equal(disk.args.provisionedThroughput, 290)
   assert.deepEqual(disk.options.ignoreChanges, ['size', 'provisionedIops', 'provisionedThroughput'])
   assert.equal(disk.options.protect, true)
-  for (const size of ['small', 'medium', 'large'] as const) {
+  for (const size of ['small', 'medium', 'large', 'xlarge', '2xlarge'] as const) {
     provider(requestFor(size))
     assert.equal(resources.get('RunnerData')!.args.size, 200)
   }
@@ -138,6 +141,10 @@ test('AWS refuses a GCP data disk size before creating resources', (t) => {
   const request = { ...requestFor(), dataDiskGb: 2048 }
   assert.throws(() => provider(request), /AWS runners do not support dataDiskGb; configure rootDiskGb instead/)
   assert.equal(resources.size, 0)
+  for (const size of ['xlarge', '2xlarge'] as const) {
+    assert.throws(() => provider(requestFor(size)), /only supported on GCP/)
+    assert.equal(resources.size, 0)
+  }
   provider(requestFor())
   assert.equal(resources.get('Runner')!.args.rootBlockDevice.volumeSize, 100)
 })

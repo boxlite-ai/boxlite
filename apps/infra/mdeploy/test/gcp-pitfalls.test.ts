@@ -45,6 +45,7 @@ import {
   DATA_DISK_DEVICE,
   DISK_TYPE as RUNNER_DISK,
   MACHINE as RUNNER_MACHINE,
+  ALTERNATE_MACHINE as ALTERNATE_RUNNER_MACHINE,
   PREPARE_HOME,
 } from '../stack/providers/gcp/runners.ts'
 import { RUNNER_HOME } from '../stack/runner-boot.ts'
@@ -1179,8 +1180,13 @@ test('every runner size states a data disk GCP will create and its machine can u
     'n4-standard-4': { iops: 30_000, throughputMiBps: 240 },
     'n4-standard-8': { iops: 30_000, throughputMiBps: 480 },
     'n4-standard-16': { iops: 80_000, throughputMiBps: 1_200 },
+    'n4-standard-32': { iops: 100_000, throughputMiBps: 1_600 },
+    'n4-standard-64': { iops: 160_000, throughputMiBps: 2_400 },
+    'n4d-standard-16': { iops: 80_000, throughputMiBps: 1_200 },
+    'n4d-standard-32': { iops: 100_000, throughputMiBps: 1_600 },
+    'n4d-standard-64': { iops: 160_000, throughputMiBps: 2_400 },
   }
-  for (const [size, machine] of Object.entries(RUNNER_MACHINE)) {
+  for (const [size, machine] of [...Object.entries(RUNNER_MACHINE), ...Object.entries(ALTERNATE_RUNNER_MACHINE)]) {
     const disk = DATA_DISK[size as keyof typeof DATA_DISK]
     assert.ok(disk, `${size} has no data disk`)
     const cap = CAP[machine]
