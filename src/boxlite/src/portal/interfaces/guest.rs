@@ -2,8 +2,8 @@
 
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
-    guest_init_response,
+    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, SyncClockRequest, ThawRequest,
+    VirtiofsSource, Volume, guest_init_response,
 };
 use tonic::transport::Channel;
 
@@ -113,6 +113,24 @@ impl GuestInterface {
     pub async fn thaw(&mut self) -> BoxliteResult<u32> {
         let response = self.client.thaw(ThawRequest {}).await?.into_inner();
         Ok(response.thawed_count)
+    }
+
+    /// Correct CLOCK_REALTIME from UTC sampled by the host just before sending.
+    ///
+    /// The Linux/native shim pushes initially and checks every 2s, pushing on
+    /// a >=6s check gap, >=60s since success, no success, or host clock rollback.
+    /// It survives detached creator exit and needs no D-Bus. This host-only
+    /// operation leaves the RTC and monotonic clock unchanged.
+    /// Success means absolute drift <=100ms (no adjustment) or an accepted
+    /// clock setting in either direction; 100ms is not a precision guarantee.
+    /// Invalid timestamps, clock-read/set failures, and an agent without this
+    /// method surface as errors.
+    pub async fn sync_clock(&mut self, unix_sec: i64, nanos: i32) -> BoxliteResult<()> {
+        let _response = self
+            .client
+            .sync_clock(SyncClockRequest { unix_sec, nanos })
+            .await?;
+        Ok(())
     }
 }
 

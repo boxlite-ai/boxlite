@@ -50,6 +50,16 @@ service Guest {
   // Thaw previously quiesced filesystems (FITHAW ioctl).
   // Must be called after SIGCONT to unblock writes.
   rpc Thaw(ThawRequest) returns (ThawResponse);
+
+  // Correct CLOCK_REALTIME from host UTC only when absolute drift exceeds 100ms.
+  // Linux/native shim: initial push, then checks every 2s; pushes on a >=6s
+  // check gap, >=60s since success, no prior success, or host clock rollback.
+  // Runs for detached Boxes without D-Bus; the host samples after connecting,
+  // immediately before sending. Host-only: no RTC or monotonic clock changes.
+  // Success means drift <=100ms or clock_settime succeeded, in either direction.
+  // 100ms is an adjustment threshold, not an end-to-end precision guarantee.
+  // Invalid timestamps and clock-read/set failures are returned as errors.
+  rpc SyncClock(SyncClockRequest) returns (SyncClockResponse);
 }
 
 // Persistent SSH desired state and live listener control.
@@ -238,6 +248,15 @@ message ThawResponse {
   // Number of filesystems successfully thawed
   uint32 thawed_count = 1;
 }
+
+message SyncClockRequest {
+  // Seconds since the Unix epoch (UTC), sampled on the host.
+  int64 unix_sec = 1;
+  // Nanosecond part of the same instant (0-999999999).
+  int32 nanos = 2;
+}
+
+message SyncClockResponse {}
 
 // ============================================================================
 // SSH runtime configuration
