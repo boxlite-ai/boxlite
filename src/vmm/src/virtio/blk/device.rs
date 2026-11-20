@@ -131,7 +131,8 @@ impl VirtioBlk {
             .as_mut()
             .ok_or(DeviceError::NeedsReset("block device is not active"))?;
         let ActiveState { ctx, inflight, .. } = active;
-        let memory = ctx.memory.as_ref();
+        let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
+        let memory: &GuestMemoryMmap = &snapshot;
         let notify = ctx.queues.drain(0, |chain| {
             let head = chain.head_index();
             match request::parse(chain, memory, &disk_info, negotiated)? {
@@ -174,7 +175,8 @@ impl VirtioBlk {
             completed,
             ..
         } = active;
-        let memory = ctx.memory.as_ref();
+        let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
+        let memory: &GuestMemoryMmap = &snapshot;
         let mut notify = false;
         loop {
             backend.completions(completed);

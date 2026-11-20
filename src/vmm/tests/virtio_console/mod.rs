@@ -192,11 +192,16 @@ impl Guest {
 
     fn activation_with(&self, queues: Vec<Queue>, event_idx: bool) -> ActivationContext {
         let maxima = vec![MAX_SIZE; queues.len()];
-        let queues =
-            VirtQueues::prepare(queues, &maxima, event_idx, false, Arc::clone(&self.memory))
-                .unwrap();
+        let queues = VirtQueues::prepare(
+            queues,
+            &maxima,
+            event_idx,
+            false,
+            Arc::clone(&self.memory).into(),
+        )
+        .unwrap();
         ActivationContext {
-            memory: Arc::clone(&self.memory),
+            memory: Arc::clone(&self.memory).into(),
             queues,
             interrupt: self.interrupt.clone(),
             events: Arc::new(Registrar),

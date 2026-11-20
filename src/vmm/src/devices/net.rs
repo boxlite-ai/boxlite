@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
 };
 use virtio_queue::desc::split::Descriptor;
-use vm_memory::{Bytes, GuestMemory, Permissions};
+use vm_memory::{Bytes, GuestAddressSpace, GuestMemory, Permissions};
 
 const RX: usize = 0;
 const TX: usize = 1;
@@ -280,6 +280,7 @@ impl Active {
                     let end = offset + d.len() as usize;
                     self.ctx
                         .memory
+                        .memory()
                         .read_slice(&mut bytes[offset..end], d.addr())
                         .map_err(|e| fault("read TX buffer", e))?;
                     offset = end;
@@ -349,6 +350,7 @@ impl Active {
                         if end > written {
                             self.ctx
                                 .memory
+                                .memory()
                                 .write_slice(&self.rx.bytes[written..end], d.addr())
                                 .map_err(|e| fault("write RX buffer", e))?;
                         }

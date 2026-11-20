@@ -26,7 +26,7 @@
 use std::{fmt, io, sync::Arc};
 
 use self::{queue::VirtQueues, worker::VirtioWorkers};
-use crate::{events::EventSender, memory::GuestMemoryMmap};
+use crate::{events::EventSender, memory::GuestMemoryView};
 
 pub(crate) mod blk;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -88,8 +88,8 @@ pub(crate) enum SnapshotSupport {
     )
 )]
 pub(crate) struct DeviceContext<'a> {
-    /// The guest RAM every host-side user shares.
-    pub(crate) memory: &'a Arc<GuestMemoryMmap>,
+    /// The guest memory view every host-side user shares.
+    pub(crate) memory: &'a GuestMemoryView,
     /// The VM's virtio workers.
     pub(crate) workers: &'a VirtioWorkers,
     /// Device control channels registered during VM construction.
@@ -201,8 +201,9 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
 
 /// The resources a transport gives a device when the driver activates it.
 pub(crate) struct ActivationContext {
-    /// The guest memory the queues address.
-    pub(crate) memory: Arc<GuestMemoryMmap>,
+    /// The guest memory view the queues address. Load one snapshot per unit
+    /// of work, drop it before returning, and never keep one across events.
+    pub(crate) memory: GuestMemoryView,
     /// The prepared queues, one slot per `DeviceSpec::queue_max` entry, in
     /// queue-number order.
     ///
