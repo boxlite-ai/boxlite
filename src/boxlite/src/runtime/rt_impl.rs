@@ -1512,9 +1512,59 @@ impl RuntimeImpl {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn reconcile_cloud_guard(&self) -> BoxliteResult<()> {
+        use crate::net::gvproxy::CloudGuardRuntime;
+        use crate::runtime::options::NetworkSpec;
+        use crate::util::PidFileReader;
+
+        let Some(profile) = CloudGuardRuntime::from_host()? else {
+            return Ok(());
+        };
+        let persisted = self.box_manager.all_boxes(true)?;
+        // Runtime construction is synchronous, including inside SDK executors.
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?
+                        .block_on(async {
+                            profile.check_readiness().await?;
+                            let known = persisted.iter().map(|(config, _)| config.id.as_str()).collect();
+                            crate::jailer::require_known_box_cgroups(&known)?;
+                            for (config, _) in &persisted {
+                                if matches!(config.options.network, NetworkSpec::Disabled) {
+                                    continue;
+                                }
+                                let layout = self.layout.box_layout(config.id.as_str(), false)?;
+                                let identity = PidFileReader::at(&layout.pid_file_path()).process_identity();
+                                if let Err(error) = profile
+                                    .verify_existing(&config.id, &layout.net_backend_socket_path(), identity)
+                                    .await
+                                {
+                                    CloudGuardRuntime::isolate_rejected(&config.id, identity, &error).await?;
+                                    if identity != crate::util::ProcessIdentity::Absent {
+                                        tracing::warn!(box_id = %config.id, %error, "Stopped Box without verified Cloud guard");
+                                    }
+                                }
+                            }
+                            Ok(())
+                        })
+                })
+                .join()
+                .map_err(|_| BoxliteError::Internal("Cloud guard startup worker failed".into()))?
+        })
+    }
+
     /// Recover boxes from persistent storage on runtime startup.
     fn recover_boxes(&self) -> BoxliteResult<()> {
         use crate::util::{PidFileReader, ProcessIdentity};
+
+        #[cfg(target_os = "linux")]
+        self.reconcile_cloud_guard()?;
+        #[cfg(not(target_os = "linux"))]
+        crate::net::gvproxy::CloudGuardRuntime::from_host()?;
 
         // Check for system reboot and reset active boxes
         self.box_manager.check_and_handle_reboot()?;

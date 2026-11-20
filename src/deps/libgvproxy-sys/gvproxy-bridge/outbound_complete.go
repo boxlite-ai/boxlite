@@ -130,11 +130,14 @@ func decodeGvproxyStartup(input []byte) (GvproxyConfig, outboundPolicy, error) {
 		return config, outboundPolicy{}, err
 	}
 	if version.Outbound == nil {
-		err := json.Unmarshal(input, &config)
+		if err := json.Unmarshal(input, &config); err != nil {
+			return config, outboundPolicy{}, err
+		}
 		mode := "enabled"
 		if config.OutboundDisabled {
 			mode = "disabled"
 		}
+		err := config.prepareGuard()
 		return config, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, err
 	}
 	var envelope struct {
@@ -153,7 +156,8 @@ func decodeGvproxyStartup(input []byte) (GvproxyConfig, outboundPolicy, error) {
 	}
 	config = envelope.Config
 	config.OutboundRevision = envelope.Outbound.Snapshot.Revision
-	return config, policy, nil
+	err = config.prepareGuard()
+	return config, policy, err
 }
 
 func (snapshot *outboundSnapshot) completeSnapshot() completeOutboundSnapshot {

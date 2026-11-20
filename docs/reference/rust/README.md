@@ -1039,13 +1039,24 @@ Guest egress policy — unchanged by the outbound/inbound split.
 ```rust
 pub enum NetworkSpec {
     Enabled {
-        allow_net: Vec<String>, // empty = full access
+        allow_net: Vec<String>, // empty Box allowlist
     },
     Disabled,                   // no guest network interface at all
 }
 ```
 
-`allow_net` supports exact hosts, wildcard hosts, IPv4 addresses, and IPv4 CIDRs; create and `update_outbound` reject anything else. It restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. A host matched by a configured `Secret` is additionally reachable on port 443 without a rule of its own, so `allow_net` is not the only egress gate. The connection is dialed by name, and under a non-empty allowlist an answer in a private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it. `Disabled` removes the guest network interface entirely.
+`allow_net` restricts both TCP and UDP egress. Create and `update_outbound`
+accept exact hosts, wildcard hosts, IPv4 addresses, and IPv4 CIDRs.
+Hostname rules use TLS SNI or HTTP Host inspection over TCP, so UDP needs
+a matching IP or CIDR rule when an allowlist is present.
+
+A configured `Secret` can permit TCP port 443 without a matching Box rule.
+With a non-empty allowlist, Local hostname routing requires a matching IP or
+CIDR rule for private, loopback, or CGNAT answers. Host protection, including
+the [Cloud platform guard](../../concepts/networking.md#cloud-platform-guard),
+applies even with an empty allowlist.
+
+`Disabled` removes the guest network interface entirely.
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses

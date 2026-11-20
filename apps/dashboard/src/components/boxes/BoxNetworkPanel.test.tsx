@@ -70,9 +70,9 @@ describe('BoxNetworkPanel', () => {
     expect(row('inbound')).toBe('inboundenabled')
   })
 
-  it('labels an enabled empty allowlist unrestricted', () => {
+  it('labels an enabled empty Box allowlist', () => {
     render(network(NetworkMode.DISABLED, NetworkMode.ENABLED))
-    expect(row('outbound')).toBe('outboundunrestricted')
+    expect(row('outbound')).toBe('outboundno box allowlist')
   })
 
   it('does not present saved rules as active when outbound is disabled', () => {

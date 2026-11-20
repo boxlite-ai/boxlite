@@ -1,0 +1,139 @@
+--- a/pkg/services/dns/dns.go
++++ b/pkg/services/dns/dns.go
+@@ -14,7 +14,14 @@
+ 	log "github.com/sirupsen/logrus"
+ )
+ 
++// Resolver provides upstream answers for a registered DNS service.
++type Resolver interface {
++	ResolveDNS(context.Context, dns.Question) ([]dns.RR, int)
++}
++
+ type dnsHandler struct {
++	ctx       context.Context
++	resolver  Resolver
+ 	zones     []types.Zone
+ 	zonesLock sync.RWMutex
+ }
+@@ -93,6 +100,19 @@
+ 			return
+ 		}
+ 
++		if h.resolver != nil {
++			switch q.Qtype {
++			case dns.TypeA, dns.TypeCNAME, dns.TypeMX, dns.TypeNS, dns.TypeSRV, dns.TypeTXT:
++				answers, rcode := h.resolver.ResolveDNS(h.ctx, q)
++				m.Answer = append(m.Answer, answers...)
++				m.Rcode = rcode
++				if rcode != dns.RcodeSuccess {
++					return
++				}
++			}
++			continue
++		}
++
+ 		resolver := net.Resolver{
+ 			PreferGo: false,
+ 		}
+@@ -213,7 +233,11 @@
+ }
+ 
+ func New(udpConn net.PacketConn, tcpLn net.Listener, zones []types.Zone) (*Server, error) {
+-	handler := &dnsHandler{zones: zones}
++	return NewWithResolver(context.Background(), udpConn, tcpLn, zones, nil)
++}
++
++func NewWithResolver(ctx context.Context, udpConn net.PacketConn, tcpLn net.Listener, zones []types.Zone, resolver Resolver) (*Server, error) {
++	handler := &dnsHandler{ctx: ctx, resolver: resolver, zones: zones}
+ 	return &Server{udpConn: udpConn, tcpLn: tcpLn, handler: handler}, nil
+ }
+ 
+--- a/pkg/virtualnetwork/services.go
++++ b/pkg/virtualnetwork/services.go
+@@ -1,6 +1,7 @@
+ package virtualnetwork
+ 
+ import (
++	"context"
+ 	"net"
+ 	"net/http"
+ 	"strings"
+@@ -20,7 +21,7 @@
+ 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+ )
+ 
+-func addServices(configuration *types.Configuration, s *stack.Stack, ipPool *tap.IPPool) (http.Handler, error) {
++func addServices(ctx context.Context, configuration *types.Configuration, s *stack.Stack, ipPool *tap.IPPool, resolver dns.Resolver) (http.Handler, error) {
+ 	var natLock sync.Mutex
+ 	translation := parseNATTable(configuration)
+ 
+@@ -29,7 +30,7 @@
+ 	udpForwarder := forwarder.UDP(s, translation, &natLock)
+ 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
+ 
+-	dnsMux, err := dnsServer(configuration, s)
++	dnsMux, err := dnsServer(ctx, configuration, s, resolver)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -58,7 +59,7 @@
+ 	return translation
+ }
+ 
+-func dnsServer(configuration *types.Configuration, s *stack.Stack) (http.Handler, error) {
++func dnsServer(ctx context.Context, configuration *types.Configuration, s *stack.Stack, resolver dns.Resolver) (http.Handler, error) {
+ 	udpConn, err := gonet.DialUDP(s, &tcpip.FullAddress{
+ 		NIC:  1,
+ 		Addr: tcpip.AddrFrom4Slice(net.ParseIP(configuration.GatewayIP).To4()),
+@@ -77,7 +78,7 @@
+ 		return nil, err
+ 	}
+ 
+-	server, err := dns.New(udpConn, tcpLn, configuration.DNS)
++	server, err := dns.NewWithResolver(ctx, udpConn, tcpLn, configuration.DNS, resolver)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+--- a/pkg/virtualnetwork/virtualnetwork.go
++++ b/pkg/virtualnetwork/virtualnetwork.go
+@@ -1,11 +1,13 @@
+ package virtualnetwork
+ 
+ import (
++	"context"
+ 	"math"
+ 	"net"
+ 	"net/http"
+ 	"os"
+ 
++	"github.com/containers/gvisor-tap-vsock/pkg/services/dns"
+ 	"github.com/containers/gvisor-tap-vsock/pkg/tap"
+ 	"github.com/containers/gvisor-tap-vsock/pkg/types"
+ 	"github.com/pkg/errors"
+@@ -28,6 +30,17 @@
+ }
+ 
+ func New(configuration *types.Configuration) (*VirtualNetwork, error) {
++	return newNetwork(context.Background(), configuration, nil)
++}
++
++func NewWithDNSResolver(ctx context.Context, configuration *types.Configuration, resolver dns.Resolver) (*VirtualNetwork, error) {
++	if resolver == nil {
++		return nil, errors.New("DNS resolver is required")
++	}
++	return newNetwork(ctx, configuration, resolver)
++}
++
++func newNetwork(ctx context.Context, configuration *types.Configuration, resolver dns.Resolver) (*VirtualNetwork, error) {
+ 	_, subnet, err := net.ParseCIDR(configuration.Subnet)
+ 	if err != nil {
+ 		return nil, errors.Wrap(err, "cannot parse subnet cidr")
+@@ -72,7 +85,7 @@
+ 		return nil, errors.Wrap(err, "cannot create network stack")
+ 	}
+ 
+-	mux, err := addServices(configuration, stack, ipPool)
++	mux, err := addServices(ctx, configuration, stack, ipPool, resolver)
+ 	if err != nil {
+ 		return nil, errors.Wrap(err, "cannot add network services")
+ 	}

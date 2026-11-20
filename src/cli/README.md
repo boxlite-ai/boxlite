@@ -285,16 +285,20 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 ```bash
 boxlite network inbound mybox enabled
 boxlite network outbound mybox enabled --allow-net '*.example.com'
-boxlite network outbound mybox enabled  # default empty list: unrestricted
+boxlite network outbound mybox enabled  # clears the Box allowlist
 boxlite network outbound mybox disabled
 boxlite inspect mybox
 ```
 
 The box and mode are required. Repeat `--allow-net` for multiple outbound rules.
-Omit `--allow-net` for the default empty list; `''` is rejected, as at create.
-Inbound accepts no list; disabled outbound accepts no `--allow-net`. Each command replaces
-one direction without retaining earlier rules. See [networking](../../docs/guides/networking.md#updating-a-running-box)
-for runtime support, connection lifetime and persistence.
+An empty rule such as `''` is invalid.
+
+Each command replaces the selected direction. Omitting `--allow-net` clears
+the Box allowlist while host protection still applies. Inbound and disabled
+outbound modes accept no allowlist.
+
+See [networking](../../docs/guides/networking.md#updating-a-running-box) for
+runtime support, connection lifetime, and persistence.
 
 ### Guest SSH
 

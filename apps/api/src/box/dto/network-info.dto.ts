@@ -18,7 +18,7 @@ export class OutboundNetworkResponseDto {
   mode: NetworkMode
 
   @ApiProperty({
-    description: 'Outbound allowlist in force; empty means unrestricted egress',
+    description: 'Box-level outbound allowlist. Host protection applies even when it is empty.',
     type: [String],
     example: ['api.openai.com', '10.0.0.0/8'],
   })

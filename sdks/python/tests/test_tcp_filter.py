@@ -172,15 +172,15 @@ class TCPFilterTestBase:
 
 
 # ---------------------------------------------------------------------------
-# 1. Default (full access) — no filtering active
+# 1. Default with an empty Box allowlist
 # ---------------------------------------------------------------------------
 
 
-class TestDefaultFullAccess(TCPFilterTestBase):
-    """When no allow_net is set, all traffic should pass freely."""
+class TestDefaultEmptyAllowlist(TCPFilterTestBase):
+    """Control destinations remain reachable with an empty Box allowlist."""
 
-    async def test_http_to_any_host(self):
-        """HTTP to any host should work."""
+    async def test_http_to_public_host(self):
+        """HTTP to the public control host should work."""
         async with self.make_box() as box:
             result = await box.exec(
                 "wget",
@@ -194,11 +194,11 @@ class TestDefaultFullAccess(TCPFilterTestBase):
             assert len(result.stdout) > 0
 
     async def test_direct_ip_connection(self):
-        """Direct IP connection should work with full access."""
+        """Direct IP connection to the control address should work."""
         async with self.make_box() as box:
             result = await self.tcp_probe(box, self.live_targets.allowed_ip)
             assert "EXIT:0" in result.stdout, (
-                f"direct IP TCP should work with full access, got: {result.stdout}"
+                f"direct IP TCP should reach the control, got: {result.stdout}"
             )
 
 
@@ -210,8 +210,7 @@ class TestDefaultFullAccess(TCPFilterTestBase):
 class TestHostnameAllowlist(TCPFilterTestBase):
     """allow_net with hostnames is enforced on SNI/Host when the gateway dials.
 
-    DNS is not filtered: every name resolves, allowed or not. The control is
-    whether the connection is made.
+    The Box allowlist governs connections independently of DNS.
     """
 
     async def test_blocked_host_resolves_but_does_not_connect(self):
@@ -230,7 +229,7 @@ class TestHostnameAllowlist(TCPFilterTestBase):
             dns = await box.exec("nslookup", self.live_targets.blocked_host, timeout=10)
             # Both halves: a failed lookup also has no "0.0.0.0" in it.
             assert dns.exit_code == 0 and "Address" in dns.stdout, (
-                f"DNS is unrestricted now; an unlisted name must resolve, "
+                f"the Box allowlist must allow the DNS query, "
                 f"got exit={dns.exit_code} stdout={dns.stdout!r}"
             )
             assert "0.0.0.0" not in dns.stdout, "the sinkhole answer is gone"
@@ -475,8 +474,8 @@ class TestDisabledNetwork(TCPFilterTestBase):
 class TestEdgeCases(TCPFilterTestBase):
     """Edge cases and boundary conditions."""
 
-    async def test_empty_allowlist_allows_all(self):
-        """Empty allow_net = full access.
+    async def test_empty_allowlist_permits_direct_ip(self):
+        """The empty Box allowlist permits the direct-IP control connection.
 
         Asserted with a direct-IP connection, which is exactly what a non-empty
         allowlist forbids and what a name lookup cannot distinguish now that

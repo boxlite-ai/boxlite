@@ -40,7 +40,8 @@ Retries check candidates individually and share one bounded setup deadline; canc
 
 Transport failure does not select a different route implicitly.
 
-The local host alias keeps its existing direct NAT behavior.
+Local host alias connections use direct NAT when Box and host rules permit them.
+The Cloud platform guard denies connections to the alias.
 A future remote transport must reject that alias unless it defines an explicit safe mapping; translated loopback is not the proxy server's equivalent destination.
 
 ### TCP transport implementation
@@ -51,7 +52,10 @@ The selected `connectFunc` receives this target after the applicable checks.
 Its error is returned without selecting the direct socket dialer; an unset connector selects the existing direct transport.
 Configure resolver and transport seams before installing the forwarder.
 
-Initial unrestricted TCP also installs this boundary; unrestricted UDP delegates to the upstream forwarder.
+TCP uses this boundary even with an empty Box allowlist. UDP uses checked
+admission when extended rules, host-protected ranges, or the Cloud guard apply.
+Other legacy UDP delegates to the upstream forwarder after the Box policy check.
+
 Address setup and controlled hostname resolution each use a bounded setup context, including candidate retries and MITM redials.
 The connector carries the captured policy revision; revisioned publication uses the control resources below.
 
@@ -62,7 +66,9 @@ For HTTP/2 fixture concurrency, `http2.Transport` owns connection pooling and st
 ## Configuration boundary
 
 The current policy shape is `{ "mode": "enabled" | "disabled", "allow_net": [...] }`.
-An omitted `allow_net` has the existing empty-list meaning; disabled mode rejects a nonempty allowlist.
+An omitted `allow_net` supplies an empty Box allowlist. Host protection
+still applies, and disabled mode rejects a nonempty allowlist.
+
 This foundation preserves the current rule grammar and does not increase rule limits or enable IPv6 forwarding.
 
 Configuration contains user policy only.
@@ -184,13 +190,15 @@ In the extended policy, direct and resolved targets both run mandatory address c
 Link-local, unspecified, IPv4 0/8, multicast, IPv4 limited broadcast, and trusted platform-denied addresses are refused.
 Name-resolved candidates also exclude the Box subnet.
 
-Cloud defaults block loopback, private, CGNAT, and IPv6 ULA regardless of Box allows.
-Local direct access to those ranges follows user rules.
-For a local resolved candidate in those ranges, a nonempty allow list must include an IP rule matching the candidate address and port.
+The Cloud guard denies loopback, private and CGNAT IPv4 destinations and native
+IPv6 egress. On Local, direct IPv4 access to those ranges follows Box and host
+rules. With a nonempty Box allowlist, a resolved candidate in those ranges
+requires a matching IP rule for its address and port.
 
 User address rules evaluate the pre-NAT target.
-Platform policy also checks the translated dial destination, so Cloud refuses translated loopback even when the pre-NAT address passes.
-The local alias can map to host loopback when the pre-NAT policy permits it.
+Platform policy also checks the translated dial destination, so the Cloud
+guard denies translated loopback even when the pre-NAT address passes.
+The Local alias maps to host loopback when Box and host policy allow it.
 
 Trusted UDP admission checks both addresses before endpoint creation and dials the exact approved literal.
 See [Extended UDP enforcement](#extended-udp-enforcement).
@@ -199,7 +207,9 @@ Platform rollout validates deployment address sets and trusted exceptions.
 
 Enabled mode exempts DNS on the registered gateway TCP/UDP 53 endpoints, DHCP on the registered UDP 67 endpoint, and required ARP/NDP link control.
 Other traffic to the gateway or guest IP and forwarded host aliases follows the normal policy.
+
 Disabled mode continues to block forwarding and registered DNS/DHCP delivery.
+On guarded Cloud Runners, those services also stop when the guard expires.
 
 ### Creation and replacement
 

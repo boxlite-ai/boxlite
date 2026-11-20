@@ -2,14 +2,10 @@ package main
 
 // egress_dialer.go — checked destinations and the selected TCP transport.
 //
-// A hostname rule authorizes a NAME, never an address the guest chose. Once
-// SNI/Host inspection (forked_tcp.go) has matched the name, the gateway
-// resolves it itself through the host resolver and dials what it gets; the
-// guest's destination IP cannot select the upstream socket. The hostname is
-// the authorization input: a guest that edits /etc/hosts or hard-codes an
-// attacker's address while presenting an allowed SNI still lands on the real
-// host, and a destination whose address changes after the box started is
-// reached at whatever it resolves to now.
+// When SNI/Host inspection matches a hostname rule, the gateway resolves
+// that name through its configured resolver and checks each answer before
+// dialing. This uses the current addresses regardless of the guest's
+// destination IP or /etc/hosts configuration.
 //
 // Address-authorized flows retain the guest's pre-NAT policy address and
 // dial the translated address. Both paths enter the same transport boundary.
@@ -25,8 +21,8 @@ import (
 	logrus "github.com/sirupsen/logrus"
 )
 
-// resolveFunc is the host-resolver seam: hostname → addresses. Production
-// uses systemResolve; tests inject a deterministic one.
+// resolveFunc resolves hostnames through the selected profile. Local uses
+// systemResolve and Cloud uses its operator-approved endpoints.
 type resolveFunc func(ctx context.Context, host string) ([]net.IP, error)
 
 // dialFunc is the socket seam, shaped like net.Dialer.DialContext.
@@ -60,6 +56,7 @@ type upstreamDial func(ctx context.Context) (net.Conn, error)
 // egressDialer owns controlled resolution and one selected transport. Configure
 // its seams before publishing it to forwarders; flows retain that instance.
 type egressDialer struct {
+	guard     platformGuard
 	filter    *AllowNetFilter // an IP/CIDR rule may re-admit an address unroutableEgress refuses
 	boxSubnet *net.IPNet      // the virtual network itself is never a by-name destination
 	resolve   resolveFunc
@@ -80,12 +77,11 @@ func newEgressDialer(filter *AllowNetFilter, subnet string) (*egressDialer, erro
 	}, nil
 }
 
-// hostResolver is the host's own resolver (cgo / getaddrinfo, not Go's), the
-// same one gvisor-tap-vsock forwards guest queries through, so what the guest
-// was told and what the gateway dials come from one source.
+// hostResolver uses the Local host's system resolution. Local gvproxy uses
+// the same host DNS configuration for guest queries and hostname routing.
 var hostResolver = &net.Resolver{PreferGo: false}
 
-// systemResolve is the production resolver every by-name path goes through. A
+// systemResolve is the default Local production resolver. A
 // var, not a func, so a test can substitute it before anything is constructed
 // and observe a lookup made at box creation — the shape of the bug this design
 // removed (see TestStartupPerformsNoDNSLookups).
@@ -112,6 +108,8 @@ func (d *egressDialer) byName(target egressTarget) upstreamDial {
 // the NAT-translated host alias), dialed exactly as the guest addressed it.
 func (d *egressDialer) byAddress(target egressTarget) upstreamDial {
 	return func(ctx context.Context) (net.Conn, error) {
+		ctx, unbind := d.guard.bindContext(ctx)
+		defer unbind()
 		ctx, cancel := context.WithTimeout(ctx, upstreamDialTimeout)
 		defer cancel()
 		return d.dialTarget(ctx, "tcp", target)
@@ -125,23 +123,35 @@ func (d *egressDialer) dialTarget(ctx context.Context, network string, target eg
 	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
 		return nil, context.DeadlineExceeded
 	}
-	target.Protocol = "tcp"
-	if d.connect != nil {
-		return d.connect(ctx, target)
+	if !d.guard.active() || d.guard.denies(target.ConnectionIP) {
+		return nil, fmt.Errorf("egress destination denied by platform")
 	}
-	return d.dial(ctx, network, target.address())
+	target.Protocol = "tcp"
+	var conn net.Conn
+	var err error
+	if d.connect != nil {
+		conn, err = d.connect(ctx, target)
+	} else {
+		conn, err = d.dial(ctx, network, target.address())
+	}
+	if err != nil {
+		return conn, err
+	}
+	return d.guard.track(conn)
 }
 
-// DialHost resolves hostname on the host, drops addresses the box must not
-// reach, and dials the survivors in order until one connects. IPv4 only: the
-// guest network is IPv4-only (gvisor-tap-vsock virtualnetwork.go), and the
-// gateway process is not, so an unforced dial could open IPv6 egress that no
-// allow_net rule can express.
+// DialHost uses the configured resolver and tries permitted IPv4 answers in
+// order until one connects. The guest network and allow_net rules use IPv4.
 func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.Conn, error) {
 	return d.dialHost(ctx, target, nil)
 }
 
 func (d *egressDialer) dialHost(ctx context.Context, target egressTarget, check func(netip.Addr) outboundReason) (net.Conn, error) {
+	if !d.guard.active() {
+		return nil, net.ErrClosed
+	}
+	ctx, unbind := d.guard.bindContext(ctx)
+	defer unbind()
 	// One bound for the whole operation: the host lookup plus every candidate
 	// dial. It lives here rather than at the call site because the MITM path
 	// hands this dial to http.Transport, whose DialContext carries only the
@@ -221,9 +231,14 @@ func (d *egressDialer) candidates(ctx context.Context, hostname string, check fu
 		if ip4 == nil {
 			continue
 		}
+		address := netip.AddrFrom4([4]byte(ip4))
+		if d.guard.denies(address) {
+			logrus.WithField("reason", outboundPlatformDeny).Debug("platform protected DNS candidate denied")
+			continue
+		}
 		var reason string
 		if check != nil {
-			if decision := check(netip.AddrFrom4([4]byte(ip4))); decision != outboundAllowed {
+			if decision := check(address); decision != outboundAllowed {
 				reason = string(decision)
 			}
 		} else {
@@ -253,31 +268,20 @@ func (s *outboundSnapshot) egressAddressFacts(ip netip.Addr, candidate bool) out
 	reason, restricted := unroutableEgress(ip.AsSlice())
 	local := reason == "loopback" || reason == "private" || reason == "cgnat"
 	return outboundAddressFacts{
-		address:         ip,
-		platformDenied:  (restricted && (!local || s.cloud)) || (candidate && s.dialer.boxSubnet.Contains(ip.AsSlice())),
+		address: ip,
+		platformDenied: s.dialer.guard.denies(ip) || (restricted && !local) ||
+			(candidate && s.dialer.boxSubnet.Contains(ip.AsSlice())),
 		restrictedLocal: candidate && local,
 	}
 }
 
-// refuses decides whether a resolved address may be dialed on the guest's
-// behalf.
+// refuses applies the legacy Box policy to a resolved address. The platform
+// guard checks every candidate before this policy.
 //
-// The box's own subnet is never dialable by name: a name pointing at the
-// gateway or the host alias would turn a hostname rule into a route back into
-// the virtual network.
-//
-// Link-local is refused for every box, with or without an allow_net and
-// whatever the rules say. The guest-addressed path blocks 169.254.0.0/16
-// outright before any rule is consulted (forked_tcp.go, and Ec2MetadataAccess
-// is never enabled), so a by-name dial must not be the one way to IMDS — not
-// in secrets-only mode where there is no filter to consult, and not through an
-// explicit CIDR rule either.
-//
-// The remaining classes unroutableEgress lists are refused only under an
-// allow_net, since a box without one has unrestricted egress and reaches those
-// addresses directly anyway, and an explicit IP or CIDR rule re-admits them:
-// listing 10.0.0.0/8 next to db.example.internal is how a private destination
-// is meant to be granted.
+// The Box subnet and link-local destinations are denied even with an explicit
+// IP or CIDR rule. With a non-empty allowlist, other restricted destinations
+// also require a matching IP or CIDR rule. For example, adding 10.0.0.0/8
+// alongside db.example.internal can allow a private answer on Local.
 func (d *egressDialer) refuses(ip net.IP) (reason string, refused bool) {
 	if d.boxSubnet.Contains(ip) {
 		return "box-subnet", true

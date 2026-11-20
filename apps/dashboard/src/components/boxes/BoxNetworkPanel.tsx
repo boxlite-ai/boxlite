@@ -38,11 +38,11 @@ export type BoxNetworkPanelProps = {
   onCreateTunnel: () => void
 }
 
-/** Display the effective policy without treating CIDRs as hostnames. */
+/** Display the reported Box policy and its exact destination rules. */
 function OutboundPolicy({ outbound }: { outbound?: NetworkInfo['outbound'] }) {
   if (outbound?.mode === NetworkMode.DISABLED) return <>disabled</>
   if (outbound?.mode !== NetworkMode.ENABLED) return <>unknown</>
-  if (outbound.allow_net.length === 0) return <>Unrestricted</>
+  if (outbound.allow_net.length === 0) return <>No Box allowlist</>
   return (
     <details className="group min-w-0">
       <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring">
