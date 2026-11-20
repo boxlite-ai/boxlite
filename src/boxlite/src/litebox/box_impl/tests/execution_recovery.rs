@@ -376,6 +376,50 @@ async fn stop_terminates_recovered_frozen_shim() {
 }
 
 #[tokio::test]
+async fn stop_rejects_unverified_recovered_unknown_shim() {
+    let (_home, runtime, mut child, id, pid) =
+        recovered_frozen_standin(BoxStatus::Unknown, true).await;
+    let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+    let layout = runtime.layout.box_layout(id.as_str(), false).unwrap();
+    let pid_file = layout.pid_file_path();
+    let record = std::fs::read(&pid_file).unwrap();
+
+    let result = handle.stop().await;
+
+    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+    assert_eq!(std::fs::read(&pid_file).unwrap(), record);
+    assert!(child.0.try_wait().unwrap().is_none());
+    let persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!(
+        (persisted.status, persisted.pid),
+        (BoxStatus::Unknown, Some(pid))
+    );
+}
+
+#[tokio::test]
+async fn stop_terminates_verified_recovered_unknown_shim() {
+    let (_home, runtime, _child, id, pid) =
+        recovered_frozen_standin(BoxStatus::Unknown, false).await;
+    let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+    let persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!(
+        (persisted.status, persisted.pid),
+        (BoxStatus::Unknown, Some(pid))
+    );
+
+    handle.stop().await.unwrap();
+
+    assert!(!is_process_alive(pid));
+    let layout = runtime.layout.box_layout(id.as_str(), false).unwrap();
+    assert!(!layout.pid_file_path().exists());
+    let persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!(
+        (persisted.status, persisted.pid),
+        (BoxStatus::Stopped, None)
+    );
+}
+
+#[tokio::test]
 async fn sync_shutdown_terminates_recovered_frozen_shim() {
     let (_home, runtime, _child, id, pid) =
         recovered_frozen_standin(BoxStatus::Paused, false).await;

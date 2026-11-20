@@ -884,7 +884,7 @@ impl BoxImpl {
             let state = self.state.read();
             (state.status, state.pid)
         };
-        if status == BoxStatus::Paused {
+        if matches!(status, BoxStatus::Paused | BoxStatus::Unknown) {
             ShimHandler::stop_verified(self.id(), pid, &self.layout.pid_file_path())?;
         }
 
