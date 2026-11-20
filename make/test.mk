@@ -304,11 +304,15 @@ _ensure-kvm:
 
 # Run the ignored hardware tests explicitly and bound a stalled guest with a timeout.
 # Both crates run even when one fails, so one report shows every result.
+VMM_KVM_TESTS_TIMEOUT ?= 600s
+VMM_KVM_SNAPSHOT_TESTS := lifecycle::tests::execution::kvm_ snapshot::tests::execution::kvm_ snapshot::tests::restore::kvm_
+VMM_LINUX_SNAPSHOT_TESTS := snapshot::tests::restore::kvm_linux_
+
 test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
 	@status=0; \
 	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
-	timeout 60s cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: snapshot::restore::tests:: control::tests::execution:: || status=1; \
+	timeout $(VMM_KVM_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: $(VMM_KVM_SNAPSHOT_TESTS) --skip $(VMM_LINUX_SNAPSHOT_TESTS) || status=1; \
 	exit $$status
 
 # make vmm:boot produces this kernel by default.
@@ -342,7 +346,7 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # init restarts, once through the public Vm::new as the M1 smoke test.
 test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
-	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
+	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 --nocapture boot::tests:: $(VMM_LINUX_SNAPSHOT_TESTS) --skip boot::tests::guest_mounts::
 
 # Exercise the production guest mount adapter inside a real initramfs guest.
 PHONY_TARGETS += test\:integration\:vmm\:mounts

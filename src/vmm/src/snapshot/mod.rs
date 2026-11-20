@@ -3,8 +3,9 @@
 
 pub(crate) mod export;
 pub(crate) mod image;
+pub(crate) mod restore;
 pub(crate) mod state;
 
 #[cfg(test)]
-#[path = "../../tests/snapshot/execution.rs"]
-mod execution_tests;
+#[path = "../../tests/snapshot/import.rs"]
+mod tests;
