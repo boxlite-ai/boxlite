@@ -35,7 +35,7 @@ boxlite-vmm
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
-| `control`, `lifecycle` | `VmControl` exposes status, pause, resume and stop across threads. `Lifecycle` coordinates the one-shot run, pause epochs and shared stop latch. |
+| `control`, `lifecycle` | `VmControl` exposes status, pause, resume, export and stop across threads. `Lifecycle` coordinates the one-shot run, pause epochs, the control mailbox and the shared stop latch. |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -510,6 +510,27 @@ other clones from submitting another request. Stop and terminal events release
 parked vCPUs. Pending pause or resume calls and `wait_paused` return
 `TerminalOutcome` when the VM is stopping or has exited. New pause and
 resume calls in those states return `InvalidState`.
+
+### Exporting a paused VM
+
+On Linux x86_64, call `control.export(state_path, memory_path)` from a
+control thread while a device-less VM is paused. Other hosts return
+`ControlReason::Unsupported`. Other handles can observe the pause during
+capture and I/O. A competing resume or export returns `InvalidState`.
+
+Export creates two files with mode `0600` and keeps them after both flushes
+succeed. An existing target, including reuse of the state path for memory,
+returns `Error::Snapshot` with `AlreadyExists`. On failure, export removes
+its new files whose paths still match the open files' device and inode.
+Capture and I/O failures leave a live VM paused. A terminal event before
+commit returns `TerminalOutcome`.
+
+The state file starts with a 32-byte little-endian header with the magic
+`BXLVMST1`, followed by Postcard machine state with vCPU records in ID order.
+The memory file contains exactly the header's declared RAM byte count.
+Raw RAM starts at offset zero and follows guest physical address order,
+skipping the `[3 GiB, 4 GiB)` PCI hole. Machine state targets the same host
+and KVM environment.
 
 `Vm::run` runs on x86_64, against any backend that implements
 `boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend. Before

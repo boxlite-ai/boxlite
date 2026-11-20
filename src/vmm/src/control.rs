@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::{
     error::Result,
@@ -42,9 +42,39 @@ impl VmControl {
         self.lifecycle.resume()
     }
 
+    /// Exports a paused device-less VM on Linux x86_64 to new state and raw RAM files.
+    /// Both files are created with mode `0600` and kept only if the export succeeds.
+    pub fn export(
+        &self,
+        state_path: impl AsRef<Path>,
+        memory_path: impl AsRef<Path>,
+    ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            let reply = self
+                .lifecycle
+                .submit_export(state_path.as_ref(), memory_path.as_ref())?;
+            reply
+                .recv()
+                .unwrap_or_else(|_| Err(crate::lifecycle::export_terminated()))
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            let _ = (state_path, memory_path);
+            Err(crate::Error::Control {
+                operation: "export",
+                reason: crate::ControlReason::Unsupported,
+            })
+        }
+    }
+
     /// Waits for the current pause epoch, including a reserved initial pause.
     /// A zero timeout checks the current condition while holding the lock.
     pub fn wait_paused(&self, timeout: Duration) -> Result<()> {
         self.lifecycle.wait_paused(timeout)
     }
 }
+
+#[cfg(all(test, not(all(target_os = "linux", target_arch = "x86_64"))))]
+#[path = "../tests/snapshot/image.rs"]
+mod snapshot_tests;

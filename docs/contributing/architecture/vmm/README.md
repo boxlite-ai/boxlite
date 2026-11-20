@@ -541,6 +541,26 @@ It builds an empty chipset and starts no console worker. Configuring disks,
 filesystem, vsock, network, or virtio console returns `Error::Control` with
 `ControlReason::UnsupportedDevice` before KVM setup.
 
+### Snapshot export
+
+`VmControl::export(state_path, memory_path)` reserves the control slot for
+a paused device-less VM on Linux x86_64. Parked vCPU owners capture on their
+own threads after pending I/O completes. The driver collects every reply
+before releasing the slot, including when capture fails. It orders the
+records by vCPU ID and captures the platform state before opening either file.
+
+The state file has a 32-byte little-endian header containing the eight-byte
+magic `BXLVMST1`, `u32` version `1`, `u32` vCPU count, `u64` RAM length, and
+`u64` machine-state length. Postcard-encoded vCPU and platform state follow.
+The memory file contains raw RAM from offset zero in `ram.ranges()` order,
+skipping `[3 GiB, 4 GiB)`. Its length equals the header's RAM length.
+
+The driver creates both files exclusively with mode `0600`, checks for stop
+between chunks of up to 1 MiB, and commits only after both flushes succeed.
+A terminal event before commit yields `TerminalOutcome`. Cleanup checks the
+device and inode against each open file before unlinking its path. Existing
+targets return `AlreadyExists` and retain their contents. [Rust create-new contract](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.create_new)
+
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED
     share, and it keeps travelling that way (`src/guest/src/service/container.rs:406-488`).
