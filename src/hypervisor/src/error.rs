@@ -62,6 +62,14 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// Keeps the host cause intact at the VM state transfer boundary.
+    #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+    pub(crate) fn vm_state(operation: &'static str, source: io::Error) -> Self {
+        Self::VmState { operation, source }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -195,7 +203,7 @@ mod tests {
             // EACCES on both Linux and macOS.
             let source = io::Error::from_raw_os_error(13);
             let kind = source.kind();
-            let error = Error::VmState { operation, source };
+            let error = Error::vm_state(operation, source);
             let cause = error
                 .source()
                 .and_then(|source| source.downcast_ref::<io::Error>())
@@ -213,10 +221,7 @@ mod tests {
     #[test]
     fn vm_state_errors_identify_save_and_restore() {
         for operation in ["save", "restore"] {
-            let error = Error::VmState {
-                operation,
-                source: io::Error::from_raw_os_error(13),
-            };
+            let error = Error::vm_state(operation, io::Error::from_raw_os_error(13));
             assert_eq!(error.to_string(), format!("failed to {operation} VM state"));
         }
     }

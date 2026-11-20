@@ -173,3 +173,93 @@ fn fpu_postcard_rejects_non_abi_lengths() {
         assert!(postcard::from_bytes::<Fpu>(&bytes).is_err(), "length {len}");
     }
 }
+
+#[test]
+fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
+    use crate::{MemoryRegion, Vcpu, VcpuExit, VcpuHandle, Vm, X86Vcpu, X86Vm};
+    struct Backend;
+    struct Cpu;
+    #[derive(Clone)]
+    struct Handle;
+    impl VcpuHandle for Handle {
+        fn kick(&self) -> crate::Result<()> {
+            panic!("unexpected kick")
+        }
+    }
+    impl Vcpu for Cpu {
+        type Handle = Handle;
+        fn run(&mut self) -> crate::Result<VcpuExit<'_>> {
+            panic!("unexpected guest entry")
+        }
+        fn complete_pending_io(&mut self) -> crate::Result<()> {
+            panic!("unexpected I/O completion")
+        }
+        fn handle(&self) -> Handle {
+            Handle
+        }
+    }
+    impl X86Vcpu for Cpu {
+        fn set_cpu_features(
+            &mut self,
+            _: &[crate::X86CpuidEntry],
+            _: &[crate::X86Msr],
+        ) -> crate::Result<()> {
+            panic!("unexpected boot features")
+        }
+        fn set_boot_registers(&mut self, _: &crate::X86BootRegisters) -> crate::Result<()> {
+            panic!("unexpected boot registers")
+        }
+    }
+    impl Vm for Backend {
+        type Vcpu = Cpu;
+        unsafe fn map_memory(&self, _: &MemoryRegion) -> crate::Result<()> {
+            panic!("unexpected map")
+        }
+        fn unmap_memory(&self, _: &MemoryRegion) -> crate::Result<()> {
+            panic!("unexpected unmap")
+        }
+        fn set_irq_line(&self, _: u32, _: bool) -> crate::Result<()> {
+            panic!("unexpected IRQ")
+        }
+        fn create_vcpu(&self, _: u32) -> crate::Result<Cpu> {
+            panic!("unexpected vCPU creation")
+        }
+    }
+    impl X86Vm for Backend {
+        fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+            panic!("unexpected boot CPUID")
+        }
+    }
+    let platform = X86VmState {
+        irqchips: [
+            X86IrqchipState::pic(0, Default::default()),
+            X86IrqchipState::pic(1, Default::default()),
+            X86IrqchipState::ioapic(Default::default()),
+        ],
+        pit: None,
+        clock: Default::default(),
+    };
+    for error in [
+        Backend.save_state().unwrap_err(),
+        Backend.restore_state(&platform).unwrap_err(),
+    ] {
+        assert!(matches!(error, crate::Error::CreateVm(ref source)
+            if source.kind() == std::io::ErrorKind::Unsupported && source.raw_os_error().is_none()));
+    }
+    for (operation, error) in [
+        (
+            "save CPU state (unsupported backend)",
+            Cpu.save_state().unwrap_err(),
+        ),
+        (
+            "restore CPU state (unsupported backend)",
+            Cpu.restore_state(&cpu()).unwrap_err(),
+        ),
+    ] {
+        assert!(
+            matches!(error, crate::Error::ConfigureVcpu { id: 0, operation: actual, ref source }
+            if actual == operation && source.kind() == std::io::ErrorKind::Unsupported
+                && source.raw_os_error().is_none())
+        );
+    }
+}
