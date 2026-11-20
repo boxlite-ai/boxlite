@@ -2,12 +2,12 @@
 import { randomUUID } from 'node:crypto'
 import { CapacityPolicy } from './capacity'
 import { ExecutionJournal } from './execution/journal'
-import { ExecutionScope, object, positive, scopeKey } from './execution/model'
+import { ExecutionScope, object, positive, retryCapacity, scopeKey } from './execution/model'
 import { GitHubRequestError } from './github'
 import { DEFAULT_RESOURCE_LABEL, selectRunnerLabels } from './resource-labels'
 import { ActionsScaleSets, ScaleSetRemoved, ScaleSetSession } from './scale-set-client'
 import { LeaseLost, StateCorrupt, StateRecord } from './state/database'
-import { ExecutionLease, ListenerState, MAX_STATE_CHECKS, StateCheck } from './state/store'
+import { ExecutionLease, ListenerState, StateChange, StateCheck } from './state/store'
 
 /** One owner-wide limit for account setup and message processing. Network waits release their permit. */
 export class ScaleSetWork {
@@ -246,21 +246,26 @@ export class ScaleSetController {
       await this.journal.release(this.lease, candidate.key, absent.record.version)
     }
   }
-  /** An unconfirmed request can reuse only an original, still-undispatched worker. */
-  private async retrySlots(id: number, assigned: number, held: number): Promise<StateCheck[]> {
+  private async retrySlots(id: number, assigned: number, held: number) {
+    const key = scopeKey(this.scope)
+    const { activity } = await this.journal.scope(this.lease, key)
     let after = '',
-      allocated = 0
-    const slots: StateCheck[] = []
+      allocated = 0,
+      reserved = 0
     do {
-      const page = await this.journal.workers(this.lease, scopeKey(this.scope), after)
-      for (const { record, value } of page.rows) {
-        if (value.supply?.scaleSet !== id || value.closing || value.box.phase === 'absent') continue
-        allocated++
-        if (value.box.phase === 'none' && slots.length < held) slots.push({ key: record.key, version: record.version })
+      const page = await this.journal.workers(this.lease, key, after)
+      for (const { value } of page.rows) {
+        if (value.supply?.scaleSet !== id) continue
+        const capacity = retryCapacity(value)
+        if (capacity !== 'unavailable') allocated++
+        if (capacity === 'reserved') reserved++
       }
       after = page.after
-    } while (after && (allocated < assigned + held || slots.length < held))
-    return slots.slice(0, Math.max(0, allocated - assigned))
+    } while (after && (allocated < assigned + held || reserved < held))
+    return {
+      available: Math.min(reserved, Math.max(0, allocated - assigned)),
+      activity,
+    }
   }
   private async offerPolicy(id: number, outstanding: number, signal: AbortSignal): Promise<CapacityPolicy> {
     const policy = await this.host.policy(signal)
@@ -364,7 +369,8 @@ export class ScaleSetController {
         message: number | null,
         origin: string | null,
         held: number,
-        checks?: StateCheck[],
+        checks?: readonly StateCheck[],
+        retryActivity?: StateRecord,
       ) => {
         const old = readRecord(row)
         const pending = Array.from(pendingRequests, ([id, phase]) => ({ id, phase }))
@@ -377,11 +383,14 @@ export class ScaleSetController {
           old.message !== message ||
           old.session !== origin
         ) {
-          ;[row] = await this.state.commit(
-            this.lease,
-            [{ key, expected: row.version, payload: { ...old, assigned, held, pending, message, session: origin } }],
-            checks,
-          )
+          const changes: StateChange[] = [
+            { key, expected: row.version, payload: { ...old, assigned, held, pending, message, session: origin } },
+          ]
+          // Lock the set before its scope, the same order as Box admission.
+          if (retryActivity)
+            changes.push({ key: retryActivity.key, expected: retryActivity.version, payload: retryActivity.payload })
+          const saved = await this.state.commit(this.lease, changes, checks)
+          row = saved.find((record) => record.key === key)!
         } else await this.journal.check(this.lease)
         lane.target = { id: start.id, labels, assigned, held, check: { key, version: row.version } }
         this.host.wake()
@@ -511,30 +520,20 @@ export class ScaleSetController {
             let covered = held === existing.size
             if (covered && unresolved.length) {
               const slots = await this.retrySlots(start.id, assigned, held)
-              held = Math.min(held, slots.length)
+              held = Math.min(held, slots.available)
               covered = held === existing.size
               if (covered) {
                 const policy = await this.host.policy(signal)
-                const policyChecks = policy.checks ?? []
-                const batchSize = MAX_STATE_CHECKS - policyChecks.length
-                if (
-                  batchSize > 0 &&
-                  (await this.journal.permitsChargedRetry(this.lease, scopeKey(this.scope), policy))
-                ) {
-                  for (let offset = 0; offset < unresolved.length; offset += batchSize) {
-                    const requests = unresolved.slice(offset, offset + batchSize)
-                    const proofs = slots.slice(offset, offset + requests.length)
-                    const prior = readRecord(row)
-                    await save(assigned, prior.message, prior.session, held, [...policyChecks, ...proofs])
-                    const accepted = await start.session.acquire(requests, signal)
-                    for (const id of requests) pendingRequests.set(String(id), 'verify')
-                    for (const id of accepted) pendingRequests.set(String(id), 'accepted')
-                    if (accepted.length !== requests.length) {
-                      const next = await verifyAcquisitions(assigned, held)
-                      assigned = next.assigned
-                      held = next.held
-                      if (held < pendingRequests.size) break
-                    }
+                if (await this.journal.permitsChargedRetry(this.lease, scopeKey(this.scope), policy)) {
+                  const prior = readRecord(row)
+                  await save(assigned, prior.message, prior.session, held, policy.checks ?? [], slots.activity)
+                  const accepted = await start.session.acquire(unresolved, signal)
+                  for (const id of unresolved) pendingRequests.set(String(id), 'verify')
+                  for (const id of accepted) pendingRequests.set(String(id), 'accepted')
+                  if (accepted.length !== unresolved.length) {
+                    const next = await verifyAcquisitions(assigned, held)
+                    assigned = next.assigned
+                    held = next.held
                   }
                 }
               }
