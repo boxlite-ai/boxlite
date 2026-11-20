@@ -134,6 +134,29 @@ describe('BoxliteWsProxyService', () => {
     )
   })
 
+  it.each(['', 'not-a-uuid', '9521e865-87b5-4ad9-8ed7-818ee4f182d4'])(
+    'rejects any replay key %p before authentication, tickets, or guest effects',
+    async (key) => {
+      const harness = buildAuthHarness()
+      const req = authRequest('blk_live_test')
+      req.headers['idempotency-key'] = key
+      const socket = { write: jest.fn(), destroy: jest.fn() }
+      const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+      const consume = jest.spyOn(harness.attachTickets, 'consume')
+
+      await (harness.service as unknown as BoxliteWsProxyService).upgrade(req, socket as never, Buffer.alloc(0))
+
+      expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('400 Bad Request'))
+      expect(socket.destroy).toHaveBeenCalled()
+      expect(harness.apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+      expect(consume).not.toHaveBeenCalled()
+      expect(harness.boxService.findOneByIdOrName).not.toHaveBeenCalled()
+      expect(harness.autoResume.ensureReady).not.toHaveBeenCalled()
+      expect(harness.audit.createLog).not.toHaveBeenCalled()
+      expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+    },
+  )
+
   it('does not upgrade the websocket when strict AutoResume fails', async () => {
     const harness = buildAuthHarness()
     const { service, apiKeyService, organizationUserService, autoResume } = harness

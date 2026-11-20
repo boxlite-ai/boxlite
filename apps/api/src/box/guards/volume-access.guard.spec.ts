@@ -2,6 +2,10 @@ import { ExecutionContext, NotFoundException } from '@nestjs/common'
 import { EntityNotFoundError } from 'typeorm'
 import { VolumeAccessGuard } from './volume-access.guard'
 import { VolumeService } from '../services/volume.service'
+import { randomUUID } from 'node:crypto'
+import { Request } from 'express'
+import { BoxRequestReplayService, ReplayResponse } from '../../boxlite-rest/box-request-replay.service'
+import { replayIdentity, REPLAY_ONLY, REPLAY_RESOURCE } from '../../boxlite-rest/request-replay-policy'
 
 describe('VolumeAccessGuard', () => {
   const volumeId = 'volume-1'
@@ -82,5 +86,101 @@ describe('VolumeAccessGuard', () => {
     })
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(NotFoundException)
+  })
+
+  function replayGuard(completed?: ReplayResponse, error: Error = new EntityNotFoundError('Volume', { id: volumeId })) {
+    const key = randomUUID()
+    const request = {
+      method: 'DELETE',
+      originalUrl: `/api/v1/volumes/${volumeId}`,
+      path: `/api/v1/volumes/${volumeId}`,
+      route: { path: '/api/v1/volumes/:volumeId' },
+      params: { volumeId },
+      query: {},
+      headers: { 'idempotency-key': key },
+      rawHeaders: ['Idempotency-Key', key],
+      user: { organizationId: 'org-1', userId: 'user-1' },
+    }
+    const peekCompleted = jest.fn().mockResolvedValue(completed)
+    const getOrganizationId = jest.fn().mockRejectedValue(error)
+    const guard = new VolumeAccessGuard(
+      { getOrganizationId } as unknown as VolumeService,
+      { peekCompleted } as unknown as BoxRequestReplayService,
+    )
+    const context = { switchToHttp: () => ({ getRequest: () => request }) } as ExecutionContext
+    return { guard, context, request, peekCompleted, getOrganizationId, key }
+  }
+
+  it('uses completed trusted ownership only for the exact current request', async () => {
+    const completed = { status: 204, body: '', resource: { id: volumeId, organizationId: 'org-1' } }
+    const { guard, context, request, peekCompleted, key } = replayGuard(completed)
+    const identity = replayIdentity(request as unknown as Request)
+    await expect(guard.canActivate(context)).resolves.toBe(true)
+    expect(peekCompleted).toHaveBeenCalledWith('org-1', 'user-1', identity.operation, key, identity.fingerprint)
+    expect(Reflect.get(request, REPLAY_ONLY)).toBe(true)
+    expect(Reflect.get(request, REPLAY_RESOURCE)).toEqual(completed.resource)
+  })
+
+  it('never replays an absent volume without a key or through a read route', async () => {
+    for (const keyed of [false, true]) {
+      const { guard, context, request, peekCompleted } = replayGuard()
+      if (!keyed) {
+        request.headers = {} as typeof request.headers
+        request.rawHeaders = []
+      } else request.method = 'GET'
+      await expect(guard.canActivate(context)).rejects.toBeInstanceOf(NotFoundException)
+      expect(peekCompleted).not.toHaveBeenCalled()
+    }
+  })
+
+  it('authorizes a named volume from current ownership rather than stored replay evidence', async () => {
+    const { guard, context, request, peekCompleted, getOrganizationId } = replayGuard()
+    const named = request as unknown as Request
+    named.params = { name: 'named-volume' }
+    getOrganizationId.mockResolvedValue('org-1')
+    await expect(guard.canActivate(context)).resolves.toBe(true)
+    expect(getOrganizationId).toHaveBeenCalledWith({ name: 'named-volume', organizationId: 'org-1' })
+    expect(peekCompleted).not.toHaveBeenCalled()
+    expect(Reflect.get(request, REPLAY_RESOURCE)).toBeUndefined()
+  })
+
+  it.each([
+    undefined,
+    { status: 204, body: '' },
+    { status: 204, body: '', resource: { id: 'another-volume', organizationId: 'org-1' } },
+    { status: 204, body: '', resource: { id: volumeId, organizationId: 'another-org' } },
+  ])('denies absent or mismatched trusted ownership: %p', async (completed) => {
+    const { guard, context, request } = replayGuard(completed)
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(NotFoundException)
+    expect(Reflect.get(request, REPLAY_ONLY)).toBeUndefined()
+  })
+
+  it('does not consult replay storage for database failures', async () => {
+    const { guard, context, peekCompleted } = replayGuard(
+      { status: 204, body: '', resource: { id: volumeId, organizationId: 'org-1' } },
+      new Error('database unavailable'),
+    )
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(NotFoundException)
+    expect(peekCompleted).not.toHaveBeenCalled()
+  })
+
+  it('records ownership only after the current resource belongs to the organization', async () => {
+    const { guard, context, request, getOrganizationId, peekCompleted } = replayGuard()
+    getOrganizationId.mockResolvedValueOnce('org-1')
+    await expect(guard.canActivate(context)).resolves.toBe(true)
+    expect(Reflect.get(request, REPLAY_RESOURCE)).toEqual({ id: volumeId, organizationId: 'org-1' })
+    expect(peekCompleted).not.toHaveBeenCalled()
+  })
+
+  it('never replaces a cross-organization denial with completed evidence', async () => {
+    const { guard, context, request, getOrganizationId, peekCompleted } = replayGuard({
+      status: 204,
+      body: '',
+      resource: { id: volumeId, organizationId: 'org-1' },
+    })
+    getOrganizationId.mockResolvedValueOnce('another-org')
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(NotFoundException)
+    expect(Reflect.get(request, REPLAY_RESOURCE)).toBeUndefined()
+    expect(peekCompleted).not.toHaveBeenCalled()
   })
 })

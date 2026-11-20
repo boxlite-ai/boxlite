@@ -31,6 +31,7 @@ import { BoxliteRegistryController } from './boxlite-registry.controller'
 import { RegistriesService } from '../registry/services/registries.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decorator'
+import { RequestReplayPolicy } from './request-replay-policy'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -89,7 +90,7 @@ describe('BoxLite REST routing', () => {
   }
 
   async function startApp(controllers: any[], providers: any[]) {
-    const moduleRef = await Test.createTestingModule({ controllers, providers })
+    const moduleRef = await Test.createTestingModule({ controllers, providers: [RequestReplayPolicy, ...providers] })
       // The proxy controller is here only for its routes. Mock whatever it
       // injects, so a constructor dependency added later (#1723 added
       // TunnelService) cannot stop these routing tests from building.

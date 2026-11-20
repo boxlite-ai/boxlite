@@ -34,9 +34,10 @@ import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
+import { BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { ImageAdmissionService } from '../../image/services/image-admission.service'
+import { ImageAdmissionService, type ColdPullTicket } from '../../image/services/image-admission.service'
 import { ImagePreparationService } from '../../image/services/image-preparation.service'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
@@ -466,8 +467,14 @@ export class BoxService {
       // before the insert: it has no way to give a slot back, so a create its
       // own input or placement refuses must not spend one. Only the box limit
       // and a name collision, which the insert itself settles, come after it.
+      // The limit is one of those, so a create it refuses hands its unit back
+      // — with the ticket the spend returned, so the refund can only touch
+      // the window that was actually charged. The replay layer marks the
+      // rejection retryable, and retries must not drain the organization's
+      // cold-pull window without a box to show for it.
+      let coldPullTicket: ColdPullTicket | undefined
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
-        await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        coldPullTicket = await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
         const insert = () =>
           options.onPersist
             ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
@@ -478,6 +485,11 @@ export class BoxService {
               box.name = name
               return insert()
             })
+      }).catch(async (error: unknown) => {
+        if (error instanceof BoxCreationLimitExceededError && coldPullTicket) {
+          await this.imageAdmissionService.refundColdPullBudget(organization, resolvedImage, coldPullTicket)
+        }
+        throw error
       })
 
       recordBoxRequested('box.create', insertedBox, ctx)

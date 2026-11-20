@@ -10,6 +10,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
+import { BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
 import { BoxEvents } from '../constants/box-events.constants'
 import Redis from 'ioredis'
 import { Repository } from 'typeorm'
@@ -22,6 +23,8 @@ import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
 import { OrganizationService } from '../../organization/services/organization.service'
+import { CreateBoxDto } from '../dto/create-box.dto'
+import { Organization } from '../../organization/entities/organization.entity'
 
 /** Records every reason as it came, which is what a failure it cannot explain gets. */
 const passThroughPullFailures = () => ({ reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) }) as any
@@ -670,9 +673,9 @@ describe('BoxService inbound defaults', () => {
    */
   describe('cold-pull budget', () => {
     function withRealAdmission(resolved: object, overrides: Record<string, unknown> = {}) {
-      const redis = { incr: jest.fn().mockResolvedValue(1), expire: jest.fn(), ttl: jest.fn() }
+      const redis = { eval: jest.fn().mockResolvedValue([1, 'gen-1', 60000]) }
       const images = { exists: jest.fn().mockResolvedValue(true), count: jest.fn().mockResolvedValue(0) }
-      const { service } = makeCreateService({
+      const { service, boxRepository } = makeCreateService({
         imageAdmissionService: new ImageAdmissionService(
           redis as unknown as Redis,
           images as unknown as Repository<Image>,
@@ -681,7 +684,7 @@ describe('BoxService inbound defaults', () => {
         imageResolverService: { resolve: jest.fn().mockResolvedValue(resolved) },
         ...overrides,
       })
-      return { service, redis }
+      return { service, redis, boxRepository }
     }
 
     let allowlistBefore: string | undefined
@@ -708,7 +711,7 @@ describe('BoxService inbound defaults', () => {
         Context.user(),
       )
 
-      expect(redis.incr).not.toHaveBeenCalled()
+      expect(redis.eval).not.toHaveBeenCalled()
     })
 
     /**
@@ -730,7 +733,7 @@ describe('BoxService inbound defaults', () => {
         ),
       ).rejects.toThrow(/limit of 20 images/)
 
-      expect(redis.incr).not.toHaveBeenCalled()
+      expect(redis.eval).not.toHaveBeenCalled()
     })
 
     /** A volume the create names but cannot have refuses it after resolution. */
@@ -752,7 +755,7 @@ describe('BoxService inbound defaults', () => {
         ),
       ).rejects.toThrow(/no such volume/)
 
-      expect(redis.incr).not.toHaveBeenCalled()
+      expect(redis.eval).not.toHaveBeenCalled()
     })
 
     it.each([
@@ -769,7 +772,7 @@ describe('BoxService inbound defaults', () => {
         ),
       ).rejects.toThrow(BadRequestError)
 
-      expect(redis.incr).not.toHaveBeenCalled()
+      expect(redis.eval).not.toHaveBeenCalled()
     })
 
     it('spends none on a create no runner can take', async () => {
@@ -786,13 +789,12 @@ describe('BoxService inbound defaults', () => {
         ),
       ).rejects.toThrow(/no runner/)
 
-      expect(redis.incr).not.toHaveBeenCalled()
+      expect(redis.eval).not.toHaveBeenCalled()
     })
 
     it('inserts no box when the budget refuses the create', async () => {
-      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
-      redis.incr.mockResolvedValue(7)
-      redis.ttl.mockResolvedValue(30)
+      const { service, redis, boxRepository } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+      redis.eval.mockResolvedValue([7, 'gen-1', 30000])
 
       await expect(
         service.create(
@@ -802,7 +804,44 @@ describe('BoxService inbound defaults', () => {
         ),
       ).rejects.toThrow(/Too many image pulls/)
 
-      expect((service as any).boxRepository.insert).not.toHaveBeenCalled()
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    })
+
+    it('refunds the charged generation when the box limit refuses insertion', async () => {
+      const { service, redis, boxRepository } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+      redis.eval.mockResolvedValueOnce([1, 'gen-7', 60000]).mockResolvedValueOnce(0)
+      boxRepository.insert.mockRejectedValue(new BoxCreationLimitExceededError(3, 3))
+
+      await expect(
+        service.create(
+          plainToInstance(CreateBoxDto, { name: 'over-limit-box', image: 'quay.io/acme/app:v1' }),
+          plainToInstance(Organization, { id: 'org-1' }),
+          Context.user(),
+        ),
+      ).rejects.toThrow(BoxCreationLimitExceededError)
+
+      expect(redis.eval.mock.calls[1].slice(1)).toEqual([
+        2,
+        'image:coldpull:org-1',
+        'image:coldpull:org-1:gen',
+        'gen-7',
+        1,
+      ])
+    })
+
+    it('does not refund when spending fails before returning a ticket', async () => {
+      const { service, redis, boxRepository } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+      redis.eval.mockRejectedValueOnce(new Error('connection dropped'))
+
+      await expect(
+        service.create(
+          plainToInstance(CreateBoxDto, { name: 'broken-pipe-box', image: 'quay.io/acme/app:v1' }),
+          plainToInstance(Organization, { id: 'org-1' }),
+          Context.user(),
+        ),
+      ).rejects.toThrow('connection dropped')
+      expect(redis.eval).toHaveBeenCalledTimes(1)
+      expect(boxRepository.insert).not.toHaveBeenCalled()
     })
 
     it('spends one on a ref the catalog has not seen', async () => {
@@ -814,7 +853,7 @@ describe('BoxService inbound defaults', () => {
         Context.user(),
       )
 
-      expect(redis.incr).toHaveBeenCalledTimes(1)
+      expect(redis.eval).toHaveBeenCalledTimes(1)
     })
   })
 

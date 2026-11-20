@@ -10,6 +10,7 @@ import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA, ROUTE_ARGS_METADATA
 import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { hasNoEffect } from '../common/replay-no-effect'
 import { Context } from '../common/context/context'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -46,12 +47,12 @@ function makeHarness() {
     prepare: jest.fn().mockResolvedValue({ isPublic: true, token: null }),
     revoke: jest.fn().mockResolvedValue(undefined),
   }
-  const controller = new (BoxliteProxyController as any)(
-    boxService,
-    runnerService,
-    autoResume,
-    tunnelService,
-  ) as BoxliteProxyController
+  const controller = new BoxliteProxyController(
+    boxService as never,
+    runnerService as never,
+    autoResume as never,
+    tunnelService as never,
+  )
   return { controller, boxService, autoResume, tunnelService }
 }
 
@@ -140,8 +141,8 @@ describe('BoxliteProxyController', () => {
     const proxyHandler = jest.fn()
     jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
     const { controller, boxService } = makeHarness()
-    const req = { url: '/api/v1/boxes/public-box/exec' }
-    const res = {}
+    const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST' }
+    const res = new EventEmitter()
     const next = jest.fn()
 
     await controller.proxyExec(activeAuth as never, 'public-box', req as never, res as never, next)
@@ -153,6 +154,24 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
+  it('marks an admission refusal before auto-resume and dispatch as no-effect', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService, autoResume } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'stopped',
+      desiredState: 'stopped',
+    })
+    const error = await controller
+      .proxyExec(activeAuth as never, 'public-box', { method: 'POST' } as never, new EventEmitter() as never, jest.fn())
+      .catch((error: unknown) => error)
+    expect(error).toMatchObject({ status: 409 })
+    expect(hasNoEffect(error)).toBe(true)
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
+  })
   it('lists a stopped box without resuming it or extending its idle lifetime', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller, boxService, autoResume } = makeHarness()
@@ -407,9 +426,11 @@ describe('BoxliteProxyController', () => {
     const { controller, autoResume } = makeHarness()
     autoResume.ensureReady.mockRejectedValue(new Error('start failed'))
 
-    await expect(
-      controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn()),
-    ).rejects.toThrow('start failed')
+    const error = await controller
+      .proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
+      .catch((error: unknown) => error)
+    expect(error).toMatchObject({ message: 'start failed' })
+    expect(hasNoEffect(error)).toBe(false)
     expect(proxyHandler).not.toHaveBeenCalled()
   })
 

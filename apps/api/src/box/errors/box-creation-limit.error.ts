@@ -4,6 +4,7 @@
  */
 
 import { HttpException, HttpStatus } from '@nestjs/common'
+import { noEffect } from '../../common/replay-no-effect'
 
 export const BOX_CREATION_LIMIT_EXCEEDED_CODE = 'resource_exhausted'
 export const BOX_CREATION_ADMISSION_UNAVAILABLE_CODE = 'upstream_unavailable'
@@ -18,6 +19,7 @@ export class BoxCreationLimitExceededError extends HttpException {
       HttpStatus.TOO_MANY_REQUESTS,
     )
     this.name = 'BoxCreationLimitExceededError'
+    noEffect(this)
   }
 }
 

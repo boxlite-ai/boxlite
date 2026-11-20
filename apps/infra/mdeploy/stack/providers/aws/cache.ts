@@ -25,6 +25,7 @@ export const awsCacheProvider =
       vpc: network.vpc,
       cluster: request.clustered,
       instance: INSTANCE[request.size],
+      parameters: { 'maxmemory-policy': 'noeviction' },
       transform: {
         cluster: (args: any) => {
           /*

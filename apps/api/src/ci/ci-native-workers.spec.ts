@@ -463,7 +463,10 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     const { host, config, row } = await prepared()
     let started = 0
     const admission = new ImageAdmissionService(
-      { incr: async () => ++started, expire: async () => 1, ttl: async () => 60 } as any,
+      {
+        eval: async (script: string) =>
+          String(script).includes("redis.call('INCR', KEYS[1])") ? [++started, 'gen-1', 60000] : started - 1,
+      } as any,
       {} as any,
       {} as any,
     )

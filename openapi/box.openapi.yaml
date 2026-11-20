@@ -14,6 +14,17 @@
 
 ---
 openapi: 3.1.1
+x-boxlite-hosted-request-replay:
+  discovery: capabilities.idempotency_operations
+  lifetime: PT24H
+  implementations: [hosted]
+  excluded: [uploadFiles, downloadFiles, prepareTunnel, attachBox, attachExecution]
+  description: >-
+    Finite JSON and empty-response writes registered by the hosted API are
+    protected when a key is supplied. Reads and organization invitations use
+    their own contracts. Unserved snapshot, clone, export and import operations
+    are not advertised. The shared specification does not grant this capability
+    to boxlite serve or the reference server.
 info:
   title: BoxLite Box API
   version: 0.1.0
@@ -223,6 +234,8 @@ paths:
       summary: Create a managed persistent volume
       description: Creates a volume and waits until its backing object storage is ready.
       tags: [Volumes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: false
         content:
@@ -279,6 +292,7 @@ paths:
       summary: Remove a managed persistent volume
       tags: [Volumes]
       parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
         - name: force
           in: query
           description: Treat an already deleting or missing volume as successfully removed
@@ -513,6 +527,8 @@ paths:
         Never starts or resumes the box or its main command, and does not count
         as activity. Requires write:boxes permission on hosted servers.
       tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "200":
           description: SSH enabled or already enabled
@@ -538,7 +554,8 @@ paths:
       summary: Configure guest SSH
       description: |
         Replaces the guest's complete SSH configuration; every accepted call
-        fully restarts the listener, so it must not be retried automatically.
+        fully restarts the listener. Retry only with the same key and input on
+        a hosted deployment advertising configureSsh in idempotency_operations.
         May start a `configured` or resume a `stopped` box on the image's
         default command; in those two states an explicit `cmd`/`entrypoint`
         requires a prior start (a running box with an explicit command is
@@ -546,6 +563,8 @@ paths:
         invalid configuration is rejected without changing the listener
         already running.
       tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -598,6 +617,8 @@ paths:
         saved SSH intent. Never starts or resumes the VM or its main command,
         and does not count as activity.
       tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "200":
           description: SSH disabled or already disabled on a running box
@@ -921,6 +942,8 @@ paths:
         client observes an `{"type":"exit","exit_code":...}` text frame
         followed by a normal close.
       tags: [Execution]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: Execution killed and evicted.
@@ -1106,6 +1129,8 @@ paths:
         Resizes the pseudo-terminal for a TTY-enabled execution.
         Only applicable to executions started with `tty: true`.
       tags: [Execution]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1310,6 +1335,7 @@ paths:
         while the port is revoked and serves again once it is reopened.
       tags: [Network]
       parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
         - name: port
           in: query
           required: true
@@ -1345,6 +1371,8 @@ paths:
         Servers that support this advertise
         `capabilities.inbound_update_enabled` in `GET /config`.
       tags: [Network]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1386,6 +1414,8 @@ paths:
         rollback can leave live and stored policy different; retry the full
         replacement. GET box reports the last persisted policy.
       tags: [Network]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1445,6 +1475,8 @@ paths:
         Error codes: `platform_domain_not_configured`, `subdomain_too_short`,
         `domain_count_limit_reached` (400), `subdomain_taken` (409).
       tags: [Domains]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1505,6 +1537,8 @@ paths:
         Custom-domain errors: `subscription_required` (403),
         `subscription_not_ready` and `domain_not_ready` (409).
       tags: [Domains]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1543,6 +1577,8 @@ paths:
         The port's own URL stays public until revokeTunnel.
         Safe to repeat for an owned name; a name not owned by the caller is 404.
       tags: [Domains]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The domain routes nowhere
@@ -1654,6 +1690,8 @@ paths:
         refused. A local capture returns ready after export; cloud capture
         returns creating and becomes ready only after upload succeeds.
       tags: [Checkpoints]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1724,6 +1762,7 @@ paths:
         retains deleting state and quota until a successful retry.
       tags: [Checkpoints]
       parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
         - name: force
           in: query
           description: Ignore absence only; never bypass active use
@@ -1770,6 +1809,8 @@ paths:
         A server refuses with `InvalidStateError` while a box can still boot
         from the image.
       tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The image is no longer held
@@ -1794,6 +1835,8 @@ paths:
         existing boxes are unchanged, and nothing is pulled. A local runtime
         without a catalog answers UnsupportedError.
       tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1827,6 +1870,8 @@ paths:
         upstream registry and existing boxes remain unchanged. An absent image
         or alias answers NotFoundError. Local runtimes answer UnsupportedError.
       tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The alias was deleted
@@ -1866,6 +1911,8 @@ paths:
         for the same pair is refused with `AlreadyExistsError`. A server that
         cannot pull private images answers `UnsupportedError`.
       tags: [Registries]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -1912,6 +1959,8 @@ paths:
         `InvalidStateError`, naming the boxes, while a box still pulls through
         the login.
       tags: [Registries]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "204":
           description: The login is gone, and its password destroyed
@@ -2084,12 +2133,19 @@ components:
     idempotencyKey:
       name: Idempotency-Key
       in: header
+      x-boxlite-hosted-capability: idempotency_operations
       description: |
-        Optional client-provided UUID for safe request retries.
-        If the server has already processed a request with this key,
-        it returns the original response without re-executing.
-        Same key with different payload returns 422.
-        Keys expire after the duration advertised in `GET /v1/config`.
+        Optional client-provided UUID. Hosted deployments advertising this
+        operation in capabilities.idempotency_operations replay the original
+        successful status, body, Content-Type and Location for the same caller,
+        key and business input. Retention is PT24H from first use, without extension.
+        Concurrent attempts return 409 idempotency_in_progress; changed input
+        returns 422 idempotency_payload_mismatch; an uncertain outcome returns
+        422 idempotency_outcome_unknown and must not be automatically dispatched
+        again using a new key. Missing, expired or lost records end the guarantee.
+        Omission preserves the operation's ordinary behavior and sends no header.
+        This header does not declare support in boxlite serve or the reference
+        server; inspect GET /v1/config on the target deployment first.
       schema:
         type: string
         format: uuid
@@ -2318,8 +2374,14 @@ components:
               example: true
             idempotency_key_lifetime:
               type: string
-              description: How long idempotency keys are retained (ISO 8601 duration)
+              description: Retention from first use (ISO 8601 duration); hosted request replay advertises PT24H
               example: PT24H
+            idempotency_operations:
+              type: array
+              description: Hosted operationIds generated from registered routes and the replay policy; absent means no advertised support
+              items:
+                type: string
+              example: [createBox, startExecution, configureSsh]
 
     # =======================================================================
     # Authentication

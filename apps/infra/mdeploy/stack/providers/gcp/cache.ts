@@ -44,6 +44,7 @@ export const gcpCacheProvider =
         project,
         region,
         memorySizeGb: MEMORY_GB[request.size],
+        redisConfigs: { 'maxmemory-policy': 'noeviction' },
         // Standard keeps a replica in a second zone; basic is one node. A cache
         // that is lost is refilled, so this follows the request rather than
         // defaulting to the safer answer.
