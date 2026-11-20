@@ -37,8 +37,6 @@ const MIN_PRIVILEGED_CONTAINER_GUEST_VERSION: crate::portal::interfaces::guest::
 /// capabilities above: an earlier guest drops the field and starts the workload
 /// with no `/dev/kvm` while the caller believes nesting was granted.
 const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
-const MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion =
-    (0, 13, 2);
 
 pub struct GuestInitTask;
 
@@ -181,9 +179,7 @@ async fn run_guest_init(
             .await?;
     }
     if requires_safe_volume_sub_path(&bootstrap.container.mounts) {
-        guest_interface
-            .require_min_version(MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION)
-            .await?;
+        guest_interface.require_safe_volume_sub_path().await?;
     }
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
@@ -302,23 +298,12 @@ mod tests {
                 file_name: "app.conf".to_string(),
             }),
         ]));
-
-        let error = crate::portal::interfaces::guest::ensure_guest_version(
-            "0.13.1",
-            MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION,
-        )
-        .expect_err("the pre-kind guest must be rejected");
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        crate::portal::interfaces::guest::ensure_guest_version(
-            "0.13.2",
-            MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION,
-        )
-        .expect("the first safe guest passes the gate");
     }
 
     #[derive(Clone)]
     struct VersionedGuest {
         version: &'static str,
+        safe_managed_volume_sub_path: bool,
         guest_init_calls: Arc<std::sync::Mutex<usize>>,
         container_init_calls: Arc<std::sync::Mutex<usize>>,
     }
@@ -343,6 +328,7 @@ mod tests {
         ) -> Result<tonic::Response<boxlite_shared::PingResponse>, tonic::Status> {
             Ok(tonic::Response::new(boxlite_shared::PingResponse {
                 version: self.version.to_string(),
+                safe_managed_volume_sub_path: self.safe_managed_volume_sub_path,
             }))
         }
 
@@ -435,11 +421,15 @@ mod tests {
         }
     }
 
-    async fn run_with_guest_version(version: &'static str) -> (BoxliteResult<()>, usize, usize) {
+    async fn run_with_guest_version(
+        version: &'static str,
+        safe_managed_volume_sub_path: bool,
+    ) -> (BoxliteResult<()>, usize, usize) {
         let guest_init_calls = Arc::new(std::sync::Mutex::new(0));
         let container_init_calls = Arc::new(std::sync::Mutex::new(0));
         let guest = VersionedGuest {
             version,
+            safe_managed_volume_sub_path,
             guest_init_calls: Arc::clone(&guest_init_calls),
             container_init_calls: Arc::clone(&container_init_calls),
         };
@@ -472,12 +462,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_guest_init_enforces_the_safe_guest_version_before_any_init() {
-        let (result, guest_calls, container_calls) = run_with_guest_version("0.13.1").await;
+    async fn run_guest_init_requires_safe_subpath_capability_before_any_init() {
+        let (result, guest_calls, container_calls) = run_with_guest_version("0.14.0", false).await;
         assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
         assert_eq!((guest_calls, container_calls), (0, 0));
 
-        let (result, guest_calls, container_calls) = run_with_guest_version("0.13.2").await;
+        let (result, guest_calls, container_calls) = run_with_guest_version("0.14.0", true).await;
         result.unwrap();
         assert_eq!((guest_calls, container_calls), (1, 1));
     }

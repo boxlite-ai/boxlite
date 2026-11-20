@@ -218,6 +218,7 @@ message PingRequest {}
 
 message PingResponse {
   string version = 1;  // Guest agent version
+  bool safe_managed_volume_sub_path = 2;  // Supports pinned managed-volume subdirectories
 }
 
 message ShutdownRequest {}
