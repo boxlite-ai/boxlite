@@ -243,6 +243,55 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(removed).toBe(true)
       observed.mockRestore()
     })
+    it('keeps unlimited domains out of the minimum when a finite domain is full', async () => {
+      const policy = {
+        limits: [
+          { domain: 'account' as const, maximum: null },
+          { domain: 'organization' as const, maximum: 1 },
+        ],
+      }
+      expect(await journal.remainingCapacity(lease, key, policy)).toBe(1)
+      await journal.reserve(lease, key, null, policy, { labels: ['boxlite'], scaleSet: 9 })
+      expect(await journal.remainingCapacity(lease, key, policy)).toBe(0)
+      expect(await journal.permitsChargedRetry(lease, key, policy)).toBe(true)
+    })
+    it.each([
+      [null, undefined],
+      [null, { labels: ['boxlite'] }],
+      [demand, { labels: ['boxlite'], scaleSet: 9 }],
+      [{ ...demand, repository: 0 }, undefined],
+      [{ ...demand, run: 0 }, undefined],
+      [{ ...demand, job: 0 }, undefined],
+    ] as const)('refuses ambiguous or unidentified job and scale-set admissions %j', async (notice, supply) => {
+      await expect(
+        journal.reserve(lease, key, notice, limits, supply && { ...supply, labels: [...supply.labels] }),
+      ).rejects.toThrow('Invalid CI admission request')
+      expect(await journal.used(definition.organization)).toBe(0)
+    })
+    it('charges only a member repository against an organization runner group', async () => {
+      const organizationScope: ExecutionScope = {
+        ...definition,
+        installation: {
+          ...definition.installation,
+          account: { ...definition.installation.account, type: 'Organization' },
+        },
+        runners: {
+          kind: 'organization',
+          account: { id: 7, login: 'owner' },
+          group: 4,
+          repositories: [21],
+          allowPrivate: true,
+          allowPublic: false,
+        },
+      }
+      const org = await journal.define(lease, organizationScope)
+      await expect(journal.reserve(lease, org, { ...demand, repository: 22 }, limits)).rejects.toThrow(
+        'outside its execution scope',
+      )
+      expect(await journal.used(definition.organization)).toBe(0)
+      expect(await journal.reserve(lease, org, demand, limits)).toBeDefined()
+      expect(await journal.used(definition.organization)).toBe(1)
+    })
     it('does not bind counted supply reservations to the triggering job', async () => {
       const capacity = testCapacity({ account: 2, tenant: 2 })
       const reserve = () => journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] })

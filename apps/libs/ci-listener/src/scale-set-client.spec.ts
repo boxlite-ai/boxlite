@@ -127,7 +127,7 @@ describe('GitHub Actions scale set transport', () => {
         json({
           messageId: 1,
           messageType: 'RunnerScaleSetJobMessages',
-          body: JSON.stringify([{ messageType: 'JobAssigned', runnerRequestId: -1 }]),
+          body: JSON.stringify([{ messageType: 'JobAssigned', runnerRequestId: 0.5 }]),
         }),
       { reason: 'job-request-id', httpStatus: 200, valueType: 'number' },
     ],
@@ -179,6 +179,45 @@ describe('GitHub Actions scale set transport', () => {
     requests.mockResolvedValueOnce(json({ count: 1, value: [18] }))
     await expect(active.acquire([17])).rejects.toThrow()
   })
+  it('round-trips signed request IDs through available and settled messages and acquisition', async () => {
+    const client = new ActionsScaleSets(scope, registration)
+    admin()
+    requests.mockResolvedValueOnce(session())
+    const active = await client.open(42, 'owner')
+    const tokens = ['-0', '-1', '-9007199254740993', '-9007199254740992', '-9223372036854775808', '9223372036854775807']
+    const expected = [0, -1, ...tokens.slice(2)]
+    const events = tokens.flatMap((id) => [
+      `{"messageType":"JobAvailable","runnerRequestId":${id},"ownerName":"example","repositoryName":"repo","requestLabels":["boxlite"]}`,
+      `{"messageType":"JobAssigned","runnerRequestId":${id}}`,
+    ])
+    requests.mockResolvedValueOnce(
+      json({ messageId: 7, messageType: 'RunnerScaleSetJobMessages', body: '[' + events.join(',') + ']' }),
+    )
+    const message = await active.poll(8)
+    expect(message?.settledRequests).toEqual(expected)
+    const offered = message!.available.map((job) => job.id)
+    expect(offered).toEqual(expected)
+    const wireIds = '[' + expected.join(',') + ']'
+    requests.mockResolvedValueOnce(new Response('{"count":6,"value":' + wireIds + '}'))
+    await expect(active.acquire(offered)).resolves.toEqual(expected)
+    expect(requests.mock.calls.at(-1)[1].body).toBe(wireIds)
+    requests.mockResolvedValueOnce(json({ count: 1, value: [tokens[4]] }))
+    await expect(active.acquire([tokens[4]])).rejects.toThrow()
+    await expect(active.acquire([Number.MAX_SAFE_INTEGER + 1])).rejects.toThrow()
+    await expect(active.acquire(['-01'])).rejects.toThrow()
+  })
+  it.each(['-9223372036854775809', '9223372036854775808', '1.00000000000000001', '1e1', '"9223372036854775807"'])(
+    'rejects malformed signed request ID token %s',
+    async (token) => {
+      const client = new ActionsScaleSets(scope, registration)
+      admin()
+      requests.mockResolvedValueOnce(session())
+      const active = await client.open(42, 'owner')
+      const body = `[{"messageType":"JobStarted","runnerRequestId":${token}}]`
+      requests.mockResolvedValueOnce(json({ messageId: 7, messageType: 'RunnerScaleSetJobMessages', body }))
+      await expect(active.poll(1)).rejects.toMatchObject({ status: 200, details: { reason: 'job-request-id' } })
+    },
+  )
   it('propagates the rate reset and does not refresh a session on quota exhaustion', async () => {
     const client = new ActionsScaleSets(scope, registration)
     admin()

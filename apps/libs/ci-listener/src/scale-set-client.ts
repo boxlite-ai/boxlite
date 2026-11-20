@@ -29,33 +29,45 @@ const serviceUrl = (raw: unknown): URL => {
 const secret = (value: unknown): string =>
   typeof value === 'string' && /^[\x21-\x7e]{1,32768}$/.test(value) ? value : invalid()
 
-// The service represents request IDs as signed int64 JSON numbers.
+// GitHub transmits signed int64 JSON numbers; the journal stores their canonical decimal digits.
 type RequestId = number | string
-const requestId = (value: unknown): RequestId =>
-  positive(value) ||
-  (typeof value === 'string' && /^[1-9]\d{15,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n)
-    ? value
-    : invalid()
-function decode(text: string): unknown {
-  return JSON.parse(text, (_key, value: unknown, context?: { source: string }) =>
-    typeof value === 'number' && !Number.isSafeInteger(value) && /^\d+$/.test(context?.source ?? '')
-      ? context!.source
-      : value,
-  )
+export function isRequestIdText(text: unknown): text is string {
+  if (typeof text !== 'string' || !/^(?:0|-?[1-9]\d{0,18})$/.test(text)) return false
+  const id = BigInt(text)
+  return id >= -9_223_372_036_854_775_808n && id <= 9_223_372_036_854_775_807n
+}
+class WireRequestId {
+  constructor(
+    readonly value: number,
+    readonly source: string,
+  ) {}
+}
+function decode(text: string, acquisition = false): unknown {
+  return JSON.parse(text, function (this: unknown, key, value: unknown, context?: { source: string }) {
+    // Capture numeric tokens before they are confused with quoted strings or rounded Numbers.
+    if (typeof value === 'number' && (key === 'runnerRequestId' || (acquisition && Array.isArray(this))))
+      return new WireRequestId(value, context?.source ?? '')
+    return value
+  })
+}
+function readRequestId(token: unknown): RequestId {
+  if (token instanceof WireRequestId) {
+    if (token.source === '-0') return 0
+    if (isRequestIdText(token.source)) return Number.isSafeInteger(token.value) ? token.value : token.source
+  }
+  throw new PollMessageError('job-request-id', token instanceof WireRequestId ? token.value : token)
+}
+function requestIdText(id: RequestId): string {
+  if (typeof id === 'number' && Number.isSafeInteger(id)) return String(id)
+  return isRequestIdText(id) ? id : invalid()
 }
 interface Call {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   body?: string
   headers?: Record<string, string>
   poll?: boolean
+  acquisition?: boolean
   signal?: AbortSignal
-}
-function pollRequestId(value: unknown): RequestId {
-  try {
-    return requestId(value)
-  } catch {
-    throw new PollMessageError('job-request-id', value)
-  }
 }
 function pollMessage(raw: unknown): SetMessage {
   if (!object(raw) || !natural(raw.messageId))
@@ -76,7 +88,7 @@ function pollMessage(raw: unknown): SetMessage {
     if (!object(event) || typeof event.messageType !== 'string')
       throw new PollMessageError('event-type', object(event) ? event.messageType : event)
     if (['JobAssigned', 'JobStarted', 'JobCompleted'].includes(event.messageType) && event.runnerRequestId != null)
-      settledRequests.push(pollRequestId(event.runnerRequestId))
+      settledRequests.push(readRequestId(event.runnerRequestId))
     if (event.messageType === 'JobStarted' || event.messageType === 'JobCompleted') {
       if (
         positive(event.runnerId) &&
@@ -95,7 +107,7 @@ function pollMessage(raw: unknown): SetMessage {
     )
       throw new PollMessageError('job-available', event.requestLabels)
     available.push({
-      id: pollRequestId(event.runnerRequestId),
+      id: readRequestId(event.runnerRequestId),
       owner: event.ownerName,
       repository: event.repositoryName,
       labels: event.requestLabels,
@@ -151,7 +163,7 @@ async function request(url: URL, authorization: string, call: Call = {}): Promis
     readingBody = true
     const body = await readGitHubBody(response)
     decoding = true
-    const raw = decode(body)
+    const raw = decode(body, call.acquisition)
     return call.poll ? pollMessage(raw) : raw
   } catch (error) {
     if (method === 'GET' && call.signal?.aborted) throw call.signal.reason
@@ -457,19 +469,19 @@ export class ScaleSetSession {
     })
   }
   async acquire(ids: RequestId[], signal?: AbortSignal): Promise<RequestId[]> {
-    const unique = new Set(ids.map((id) => String(requestId(id))))
+    const unique = new Set(ids.map(requestIdText))
     if (!unique.size) return []
     const response = await this.withToken(
       () =>
         this.client.service(
           sets + '/' + this.set + '/acquirejobs',
-          { method: 'POST', body: '[' + [...unique].join(',') + ']', signal },
+          { method: 'POST', body: '[' + [...unique].join(',') + ']', acquisition: true, signal },
           undefined,
           this.data.token,
         ),
       signal,
     )
-    const result = list(response).map(requestId)
+    const result = list(response).map(readRequestId)
     if (!result.every((id) => unique.delete(String(id)))) return invalid()
     return result
   }

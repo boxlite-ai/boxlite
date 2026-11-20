@@ -87,6 +87,55 @@ describe('CI shared GitHub JIT runners', () => {
       expect(await remaining()).toBeNull()
     },
   )
+  it.each([
+    [404, false],
+    [500, 'http'],
+    [{ id: 92, name }, 'identity'],
+    [{ id: 91, name: other }, 'identity'],
+    [{ id: 91, name, status: 'offline', busy: false }, false],
+    [{ id: 91, name, status: 'online', busy: true }, false],
+  ] as const)('checks the exact runner before retirement when GitHub replies %j', async (response, expected) => {
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/actions/runners/91') && method === 'GET'
+        ? typeof response === 'number'
+          ? new Response(null, { status: response })
+          : response
+        : previous(url, method)
+    const retirement = registry().retireKnownIdle({ id: 91, name }, remaining)
+    if (expected === 'http') await expect(retirement).rejects.toMatchObject({ status: 500 })
+    else if (expected === 'identity') await expect(retirement).rejects.toThrow('Original scale set runner changed')
+    else await expect(retirement).resolves.toBe(false)
+    expect(journal).not.toHaveBeenCalled()
+    expect(calls.some((call) => call.method === 'DELETE')).toBe(false)
+  })
+  it.each([
+    { id: 0, name },
+    { id: 91, name: 'unrelated' },
+  ])('rejects malformed retirement identity %j before HTTP', async (identity) => {
+    await expect(registry().retireKnownIdle(identity, remaining)).rejects.toThrow('Known original runner required')
+    expect(calls).toHaveLength(0)
+  })
+  it('retains ownership after a 204 while the same runner is still in the scale set', async () => {
+    onlineIdle()
+    const member = jest.fn(async () => ({ id: 91, name }))
+    await expect(registry().retireKnownIdle({ id: 91, name }, member)).rejects.toThrow(
+      'retirement is not yet confirmed',
+    )
+    expect(member).toHaveBeenCalledTimes(1)
+    expect(calls.filter((call) => call.method === 'DELETE')).toHaveLength(1)
+  })
+  it.each([
+    [0, [repository]],
+    [2, [repository]],
+  ])('rejects an inconsistent repository inventory of %i', async (total, repositories) => {
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/runner-groups/4/repositories')
+        ? { total_count: total, repositories }
+        : previous(url, method)
+    await expect(registry(orgScope).authority(true)).rejects.toThrow('Incomplete GitHub runner authorization inventory')
+  })
   it.each([200, 201, 202, 404, 403, 500])('rejects HTTP %i as idle retirement acknowledgement', async (status) => {
     onlineIdle()
     const previous = reply

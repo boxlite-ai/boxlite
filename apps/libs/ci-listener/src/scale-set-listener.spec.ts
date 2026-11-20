@@ -16,6 +16,7 @@ import { Listener, ListenerHost } from './listener'
 import { ScaleSetController, ScaleSetWork } from './scale-set-controller'
 import { ActionsScaleSets } from './scale-set-client'
 import { SqliteStateDatabase } from './state/sqlite'
+import { StateCorrupt } from './state/database'
 import { ExecutionLease, ListenerState, StateCheck } from './state/store'
 import { ListenerInbox, verifyWebhook } from './webhook'
 import { ConfirmedWorkerAbsent, WorkerExecutor, WorkerState } from './worker'
@@ -56,21 +57,25 @@ class ActionsFixture {
   }
   private waiter?: () => void
   publish(id: number, assigned: number, offers: number[] = [], extra: object[] = []) {
+    const events = [
+      ...extra,
+      ...offers.map((runnerRequestId) => ({
+        messageType: 'JobAvailable',
+        runnerRequestId,
+        ownerName: 'owner',
+        repositoryName: 'repo',
+        requestLabels: this.labels,
+      })),
+    ]
+    this.publishRaw(id, assigned, JSON.stringify(events))
+  }
+  publishRaw(id: number, assigned: number, body: string) {
     this.target = assigned
     this.messages.push({
       messageId: id,
       messageType: 'RunnerScaleSetJobMessages',
       statistics: { totalAssignedJobs: assigned },
-      body: JSON.stringify([
-        ...extra,
-        ...offers.map((runnerRequestId) => ({
-          messageType: 'JobAvailable',
-          runnerRequestId,
-          ownerName: 'owner',
-          repositoryName: 'repo',
-          requestLabels: this.labels,
-        })),
-      ]),
+      body,
     })
     this.waiter?.()
   }
@@ -255,13 +260,16 @@ const scenarios = [
   'keeps the second hold after a delayed start confirms the first assignment',
   'releases a rejected redelivery for another offer',
   'uses the free slot after a partially accepted retry',
+  'reconciles a partial acquisition after an idle poll reduces holds',
   'acquires a reoffered request excluded from a partial reply',
   'requires spare quota to reacquire one of several ambiguous requests',
   'preserves an uncertain acquisition still counted by Actions',
   'holds accepted quota through idle polls and an owner restart',
   'reuses a held slot after cancellation between statistics samples',
   'returns an undispatched reservation for a deleted set',
-  'restores a scope containing more than 64 valid specifications',
+  'rotates idle sessions through every page of restored specifications',
+  'credits work only to the original JIT runner',
+  'rejects conflicting persisted request identities on restore',
   'opens a healthy specification while 64 sessions back off',
   'releases a confirmed request that settled while disconnected',
   'preserves a confirmed acquisition reported by the new session',
@@ -281,6 +289,7 @@ const scenarios = [
   'leaves the remaining quota for already assigned demand',
   'starts an organization worker with the custom resource label',
   'discovers a custom resource label from a standalone PAT repository scan',
+  'consumes signed request IDs across offers and a journal restart',
 ] as const
 for (const storage of ['sqlite', 'postgres'])
   (storage === 'postgres' && !process.env.DB_HOST ? describe.skip : describe)('scale set listener ' + storage, () => {
@@ -544,13 +553,59 @@ for (const storage of ['sqlite', 'postgres'])
             expect([...fixture.throttledSets.values()]).toEqual(Array(64).fill(1))
             return
           }
-          if (scenario === 'restores a scope containing more than 64 valid specifications') {
+          if (scenario === 'rejects conflicting persisted request identities on restore') {
+            const owner = (await state.acquire(randomUUID(), 30000))!
+            const key = await journal.define(owner, scope)
+            const setName = 'boxlite-' + randomUUID().replaceAll('-', '')
+            await state.commit(owner, [
+              {
+                key: 'scale-set/' + key.slice(6) + '/boxlite',
+                expected: null,
+                payload: {
+                  name: setName,
+                  set: 9,
+                  assigned: 0,
+                  held: 2,
+                  message: null,
+                  session: null,
+                  pending: [
+                    { id: '123', phase: 'requested' },
+                    { id: '123', phase: 'accepted' },
+                  ],
+                },
+              },
+            ])
+            const controller = new ScaleSetController(
+              state,
+              owner,
+              decodeScope(scope),
+              ['boxlite'],
+              journal,
+              new ScaleSetWork(),
+              {
+                service: new ActionsScaleSets('https://github.com/owner/repo', async () => 'local-token'),
+                authority: async () => new Set(['repo']),
+                creationReady: () => true,
+                charged: () => 0,
+                policy: async () => ({ limits: [] }),
+                report: jest.fn(),
+                wake: jest.fn(),
+              },
+              new AbortController().signal,
+            )
+            stop = () => controller.close()
+            await expect(controller.restore()).rejects.toBeInstanceOf(StateCorrupt)
+            expect(fixture.requests).toEqual([])
+            return
+          }
+          if (scenario === 'rotates idle sessions through every page of restored specifications') {
             const owner = (await state.acquire(randomUUID(), 600))!
             const key = await journal.define(owner, scope)
-            for (let n = 1; n <= 65; n++) {
+            const labels = Array.from({ length: 101 }, (_, index) => 'boxlite-1vcpu-1gbmem-' + (index + 1) + 'gbdisk')
+            for (const label of labels) {
               await state.commit(owner, [
                 {
-                  key: 'scale-set/' + key.slice(6) + '/boxlite-1vcpu-1gbmem-' + n + 'gbdisk',
+                  key: 'scale-set/' + key.slice(6) + '/' + label,
                   expected: null,
                   payload: {
                     name: 'boxlite-' + randomUUID().replaceAll('-', ''),
@@ -564,9 +619,17 @@ for (const storage of ['sqlite', 'postgres'])
                 },
               ])
             }
+            for (let i = 0; i < 64; i++) fixture.idle()
             stop = start()
-            await until(() => fixture.sessions.length > 0 || errors.some((error) => error.includes('StateCorrupt')))
-            expect(fixture.sessions.length).toBeGreaterThan(0)
+            const opened = () =>
+              new Set(
+                observe.mock.calls
+                  .map(([event]) => event)
+                  .filter((event) => event.event === 'ci-scale-set-session-opened')
+                  .map((event) => event.label),
+              )
+            await until(() => opened().size === labels.length + 1)
+            expect(opened()).toEqual(new Set(['boxlite', ...labels]))
             return
           }
           if (scenario === 'returns an undispatched reservation for a deleted set') {
@@ -999,6 +1062,27 @@ for (const storage of ['sqlite', 'postgres'])
             expect(await journal.used('tenant')).toBe(2)
             return
           }
+          if (scenario === 'reconciles a partial acquisition after an idle poll reduces holds') {
+            maximum = 3
+            fixture.publish(1, 0, [31, 32])
+            await until(() => fixture.acknowledged.includes(1))
+            expect(await journal.used('tenant')).toBe(2)
+            fixture.acquiredCount = 1
+            fixture.idle()
+            await until(async () => (await journal.used('tenant')) === 1)
+            fixture.rejectAcquisition.add(31)
+            fixture.publish(2, 0, [31, 33])
+            await until(() => fixture.acknowledged.includes(2))
+            expect(fixture.acquired).toEqual([
+              [31, 32],
+              [31, 33],
+            ])
+            await until(async () => (await journal.used('tenant')) === 1)
+            fixture.publish(3, 1, [], [{ messageType: 'JobAssigned', runnerRequestId: 33 }])
+            await until(() => fixture.acknowledged.includes(3) && delivered.size === 1)
+            expect(await journal.used('tenant')).toBe(1)
+            return
+          }
           if (scenario === 'releases a rejected redelivery for another offer') {
             maximum = 1
             fixture.loseBeforeAcquire = true
@@ -1075,6 +1159,56 @@ for (const storage of ['sqlite', 'postgres'])
             expect(await journal.used('tenant')).toBe(1)
             return
           }
+          if (scenario === 'consumes signed request IDs across offers and a journal restart') {
+            const ids = ['-9223372036854775808', '9223372036854775807']
+            const offer =
+              '[' +
+              ids
+                .map(
+                  (id) =>
+                    `{"messageType":"JobAvailable","runnerRequestId":${id},"ownerName":"owner","repositoryName":"repo","requestLabels":["boxlite"]}`,
+                )
+                .join(',') +
+              ']'
+            const acquired: string[] = []
+            fetch.mockImplementation((input, options = {}) => {
+              if (!new URL(String(input)).pathname.endsWith('/acquirejobs')) return fixture.fetch(input, options)
+              const body = String(options.body)
+              acquired.push(body)
+              return Promise.resolve(new Response('{"count":2,"value":' + body + '}'))
+            })
+            fixture.acquiredCount = 2
+            fixture.publishRaw(1, 0, offer)
+            await until(
+              () =>
+                fixture.acknowledged.includes(1) || report.mock.calls.some(([, , detail]) => detail?.stage === 'poll'),
+            )
+            expect(fixture.acknowledged).toContain(1)
+            expect(acquired).toEqual(['[' + ids.join(',') + ']'])
+            fixture.publishRaw(2, 0, offer)
+            await until(() => fixture.acknowledged.includes(2))
+            expect(acquired).toHaveLength(1)
+            expect(fixture.sessions).toHaveLength(1)
+            await stop()
+            fixture.initialAcquired = 2
+            stop = start()
+            await until(() => fixture.sessions.length === 2)
+            fixture.publishRaw(3, 0, offer)
+            await until(() => fixture.acknowledged.includes(3))
+            expect(acquired).toHaveLength(1)
+            fixture.acquiredCount = 0
+            const completed = ids.map((id) => `{"messageType":"JobCompleted","runnerRequestId":${id}}`)
+            fixture.publishRaw(4, 0, '[' + completed.join(',') + ']')
+            await until(() => fixture.acknowledged.includes(4))
+            await until(async () => (await journal.used('tenant')) === 0)
+            expect(fixture.sessions).toHaveLength(2)
+            expect(report).not.toHaveBeenCalledWith(
+              expect.anything(),
+              'scale-set-session',
+              expect.objectContaining({ stage: 'poll' }),
+            )
+            return
+          }
           if (scenario === 'holds accepted quota through idle polls and an owner restart') {
             fixture.acquiredCount = undefined
             maximum = 1
@@ -1139,6 +1273,29 @@ for (const storage of ['sqlite', 'postgres'])
             fixture.publish(1, 0, [123, 124])
             await until(() => fixture.acknowledged.includes(1))
             expect(fixture.acquired).toEqual([[123]])
+            expect(await journal.used('tenant')).toBe(1)
+            return
+          }
+          if (scenario === 'credits work only to the original JIT runner') {
+            fixture.publish(1, 1)
+            await until(() => delivered.size === 1)
+            const [runner] = fixture.runners.values()
+            const allocationKey = 'worker/' + runner.name.slice(7)
+            const started = { messageType: 'JobStarted', runnerName: runner.name, runnerId: runner.id }
+            fixture.publish(
+              2,
+              1,
+              [],
+              [
+                { ...started, runnerId: runner.id + 1 },
+                { ...started, runnerName: 'ci-jit-' + '0'.repeat(32) },
+              ],
+            )
+            await until(() => fixture.acknowledged.includes(2))
+            expect((await journal.allocation(policyOwner!, allocationKey))!.value.runner.worked).not.toBe(true)
+            fixture.publish(3, 1, [], [started, { ...started, messageType: 'JobCompleted' }])
+            await until(() => fixture.acknowledged.includes(3))
+            expect((await journal.allocation(policyOwner!, allocationKey))!.value.runner.worked).toBe(true)
             expect(await journal.used('tenant')).toBe(1)
             return
           }

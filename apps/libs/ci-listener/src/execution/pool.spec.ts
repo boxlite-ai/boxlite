@@ -7,10 +7,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JitRegistration, RunnerIdentity } from '../runners'
-import { StateCorrupt } from '../state/database'
+import { Json, LeaseLost, StateConflict, StateCorrupt } from '../state/database'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { SqliteStateDatabase } from '../state/sqlite'
-import { ConfirmedWorkerAbsent, WorkerState } from '../worker'
+import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected, WorkerState } from '../worker'
 import { ExecutionJournal } from './journal'
 import { ExecutionScope } from './model'
 import { PoolBackend, WorkerPool } from './pool'
@@ -347,6 +347,160 @@ describe('CI shared worker lifecycle', () => {
     expect(await journal.reserve(lease, key, { ...demand, job: 56 }, limits)).toBeUndefined()
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
   })
+  it.each([true, false])(
+    'checks the original create effect before releasing a missing Box: matches=%s',
+    async (matches) => {
+      loseBox = true
+      materializeBox = false
+      await expect(tick()).rejects.toThrow('lost Box response')
+      const original = await allocation()
+      const effect = matches ? original.value.effect!.id : randomUUID()
+      jest
+        .mocked(backend.workers.get)
+        .mockRejectedValueOnce(new ConfirmedWorkerAbsent({ boxId: 'original-box', effect }))
+        .mockRejectedValueOnce(new ConfirmedWorkerAbsent())
+      if (matches) {
+        await reconcile()
+        expect(events).toContainEqual(expect.objectContaining({ event: 'ci-worker-box-absent', boxId: 'original-box' }))
+        expect(await journal.used(definition.organization)).toBe(0)
+      } else {
+        await expect(reconcile()).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
+        expect((await allocation()).value.box.phase).toBe('requested')
+        expect(await journal.used(definition.organization)).toBe(1)
+      }
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    },
+  )
+  it.each([503, undefined])('backs off creation after host-confirmed rejection with status %s', async (status) => {
+    jest.mocked(backend.workers.create).mockImplementationOnce(async ({ name }) => {
+      const { value } = await byName(name)
+      throw new ConfirmedWorkerCreationRejected(value.effect!.id, 'before-persistence', status)
+    })
+    await tick()
+    expect(await journal.used(definition.organization)).toBe(0)
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: 'ci-worker-create-rejected',
+        reason: 'before-persistence',
+        ...(status === undefined ? {} : { platformStatus: status }),
+      }),
+    )
+    expect(pool.creationReady('boxlite')).toBe(false)
+    await tick()
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+  })
+  it.each([new LeaseLost(), new StateCorrupt(), new StateConflict()])(
+    'propagates %p before admitting any worker',
+    async (cause) => {
+      jest.mocked(backend.admit).mockRejectedValueOnce(cause)
+      await expect(tick()).rejects.toBe(cause)
+      expect(await journal.used(definition.organization)).toBe(0)
+      expect(backend.workers.create).not.toHaveBeenCalled()
+    },
+  )
+  it('withdraws a running idle retirement before DELETE when fresh demand arrives', async () => {
+    await tick()
+    const original = await allocation()
+    let started!: () => void, release!: () => void
+    const startRetirement = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const allowDeletion = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const open = backend.runners.bind(backend)
+    const remove = jest.fn()
+    backend.runners = async (...args) => {
+      const session = await open(...args)
+      session.registry.retireIdle = async (runner, _signal, verify) => {
+        await args[0]({ kind: 'remove', ...runner })
+        started()
+        await allowDeletion
+        verify!()
+        remove(runner)
+        return true
+      }
+      return session
+    }
+    const queue = new WorkQueue(1, jest.fn())
+    const queued = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    const [check] = await state.read(['journal/format'], lease)
+    const signal = new AbortController().signal
+    try {
+      await queued.balanceScaleSets(lease, [], limits, signal, check)
+      await startRetirement
+      expect((await allocation()).value.effect?.kind).toBe('runner-retire')
+      const target = {
+        id: 9,
+        labels: ['boxlite'],
+        assigned: 1,
+        held: 0,
+        check,
+        delivery: { covered: 0, waitingForDispatch: true, offline: false },
+      }
+      await queued.balanceScaleSets(lease, [target], limits, signal)
+      release()
+      await queue.close()
+      const retained = await allocation()
+      expect(retained.value.effect).toEqual(original.value.effect)
+      expect(retained.value.closing).toBe(false)
+      expect(remove).not.toHaveBeenCalled()
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(await journal.used(definition.organization)).toBe(1)
+    } finally {
+      release()
+      await queue.close()
+      await queued.close()
+    }
+  })
+  it('detects a sibling reservation made after its own commit and reuses both slots on the next pass', async () => {
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    const supply = { labels: ['boxlite'], scaleSet: 9 }
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: supply.labels,
+      assigned: 2,
+      held: 0,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: false },
+    }
+    const balance = () => pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+    const reserve = journal.reserve.bind(journal)
+    jest.spyOn(journal, 'reserve').mockImplementationOnce(async (...args) => {
+      const first = await reserve(...args)
+      await reserve(lease, key, null, capacity, supply)
+      return first
+    })
+    await expect(balance()).rejects.toBeInstanceOf(StateConflict)
+    expect(await journal.used(definition.organization)).toBe(2)
+    const workers = journal.workers.bind(journal)
+    jest.spyOn(journal, 'workers').mockImplementation((epoch, scope, after) => workers(epoch, scope, after, 1))
+    await balance()
+    expect(backend.workers.create).toHaveBeenCalledTimes(2)
+    expect(await journal.used(definition.organization)).toBe(2)
+    expect(runners.size).toBe(2)
+  })
+  it.each([
+    { job: { repository: 0, run: 33, job: 55 } },
+    { job: { repository: 21, run: 0, job: 55 } },
+    { job: { repository: 21, run: 33, job: 0 } },
+    { job: false },
+    { job: demand },
+    { supply: { labels: ['boxlite'], scaleSet: 0 } },
+    { supply: { labels: ['boxlite'] } },
+    { runner: { phase: 'known', id: 91, worked: false } },
+    { runner: { phase: 'none', id: null, worked: true } },
+    { job: demand, supply: { labels: ['boxlite'] }, runner: { phase: 'known', id: 91, worked: true } },
+  ])('rejects corrupt persisted worker identity before recovery: %j', async (damage) => {
+    await tick()
+    const row = await allocation()
+    const payload = { ...row.value, ...damage } as unknown as Json
+    await state.commit(lease, [{ key: row.record.key, expected: row.record.version, payload }])
+    await expect(reconcile()).rejects.toBeInstanceOf(StateCorrupt)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+  })
   it('recovers a positively identified unknown registration only for cleanup', async () => {
     loseRunner = true
     await expect(tick()).rejects.toThrow('lost JIT response')
@@ -403,6 +557,31 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.stop).not.toHaveBeenCalled()
     await finishBox()
     expect((await rows()).allocations.size).toBe(0)
+  })
+  it('settles uncertain JIT delivery from observed work without uploading the configuration again', async () => {
+    loseDelivery = true
+    await expect(tick()).rejects.toThrow('lost upload acknowledgement')
+    const row = await allocation()
+    boxes.get(row.value.name)!.recoverableJit = true
+    backend.workers.recoverJit = jest.fn(async () => 'delivered' as const)
+    await journal.advance(lease, row.record.key, row.record.version, { runner: { ...row.value.runner, worked: true } })
+    await reconcile()
+    expect((await allocation()).value.delivery).toBe('done')
+    expect(backend.workers.recoverJit).not.toHaveBeenCalled()
+    expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+  })
+  it.each([true, false])('rechecks an uncertain retirement before stopping its Box: present=%s', async (present) => {
+    await tick()
+    const row = await allocation()
+    await journal.advance(lease, row.record.key, row.record.version, {
+      effect: { id: randomUUID(), kind: 'runner-retire' },
+    })
+    if (!present) runners.delete(row.value.name)
+    await reconcile()
+    const current = await allocation()
+    expect(current.value.closing).toBe(!present)
+    if (present) expect(backend.workers.stop).not.toHaveBeenCalled()
+    else expect(backend.workers.stop).toHaveBeenCalledWith(row.value.name)
   })
   it('refuses to act on a replacement Box ID', async () => {
     await tick()

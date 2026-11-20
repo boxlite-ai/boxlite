@@ -274,6 +274,89 @@ describe('CI shared execution authority', () => {
     )
     expect(recover).toHaveBeenCalledTimes(1)
   })
+  it.each([null, {}, { token: 7 }])(
+    'rejects a malformed registration response %j before exchanging it',
+    async (result) => {
+      const fetch = global.fetch
+      const exchange = jest.fn()
+      global.fetch = jest.fn(async (input, options) => {
+        const path = new URL(String(input)).pathname
+        if (path.endsWith('/registration-token')) return new Response(JSON.stringify(result))
+        if (path === '/actions/runner-registration') exchange()
+        return fetch(input, options)
+      })
+      await expect(backend.scaleSets.currentStatistics(9, new AbortController().signal)).rejects.toThrow(
+        'Invalid runner registration token',
+      )
+      expect(exchange).not.toHaveBeenCalled()
+    },
+  )
+  it('rejects JIT delivery for a different reservation before sending the configuration', async () => {
+    await expect(backend.workers.deliverJit('ci-jit-' + 'f'.repeat(32), 'c2VjcmV0')).rejects.toThrow(
+      'Original scale set required',
+    )
+    expect(host.workers.deliverJit).not.toHaveBeenCalled()
+  })
+  it.each([undefined, 10])('refuses runner credentials for an unproven scale set %s', async (set) => {
+    await expect(backend.runners(jest.fn(), undefined, ['boxlite'], name, set)).rejects.toThrow(
+      'Original scale set required',
+    )
+    expect(calls).toHaveLength(0)
+  })
+  it.each(['unrecorded', 'different-runner', 'original'] as const)(
+    'checks the recorded retirement when the runner is absent: %s',
+    async (scenario) => {
+      const owned = backend.scaleSets.registry(9, jest.fn())
+      const lookup = jest.spyOn(owned, 'lookup').mockResolvedValue(null)
+      jest.spyOn(backend.scaleSets, 'registry').mockReturnValue(owned)
+      const journal = new ExecutionJournal(state)
+      const key = 'worker/' + name.slice(7)
+      const row = (await journal.allocation(lease, key))!
+      if (scenario !== 'unrecorded') {
+        const creating = await journal.advance(lease, key, row.record.version, {
+          box: { phase: 'requested', id: null },
+          effect: { kind: 'box-create', id: randomUUID() },
+        })
+        const registering = await journal.advance(lease, key, creating.record.version, {
+          box: { phase: 'known', id: 'original-box' },
+          runner: { phase: 'requested', id: null },
+          effect: { kind: 'runner-register', id: randomUUID() },
+        })
+        await journal.advance(lease, key, registering.record.version, {
+          runner: { phase: 'known', id: 91 },
+          effect: { kind: 'runner-retire', id: randomUUID() },
+        })
+      }
+      const guard = jest.fn()
+      const credential = await backend.runners(guard, undefined, ['boxlite'], name, 9)
+      const id = scenario === 'different-runner' ? 92 : 91
+      await expect(credential.registry.retireIdle!({ id, name })).resolves.toBe(scenario === 'original')
+      expect(lookup).toHaveBeenCalledWith({ id, name }, undefined)
+      expect(guard).not.toHaveBeenCalled()
+      await credential.close()
+    },
+  )
+  it('checks scale-set membership after unregistering the original idle runner', async () => {
+    const owned = backend.scaleSets.registry(9, jest.fn())
+    const identity = { id: 91, name }
+    const lookup = jest.spyOn(owned, 'lookup').mockResolvedValueOnce(identity).mockResolvedValueOnce(null)
+    jest.spyOn(backend.scaleSets, 'registry').mockReturnValue(owned)
+    const fetch = global.fetch
+    global.fetch = jest.fn(async (input, options) =>
+      new URL(String(input)).pathname.endsWith('/actions/runners/91') && (options?.method ?? 'GET') === 'GET'
+        ? new Response(JSON.stringify({ ...identity, status: 'online', busy: false }))
+        : fetch(input, options),
+    )
+    const guard = jest.fn()
+    const credential = await backend.runners(guard, undefined, ['boxlite'], name, 9)
+    await expect(credential.registry.retireIdle!(identity)).resolves.toBe(true)
+    expect(lookup).toHaveBeenCalledTimes(2)
+    expect(guard).toHaveBeenCalledWith({ kind: 'remove', ...identity })
+    expect(
+      calls.filter(({ method }) => method === 'DELETE').some(({ path }) => path.endsWith('/actions/runners/91')),
+    ).toBe(true)
+    await credential.close()
+  })
   const useOrganization = async () => {
     await backend.close()
     if (source.kind !== 'app') throw new Error('Invalid test setup')
