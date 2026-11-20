@@ -269,7 +269,7 @@ pub(crate) struct GuestRam {
     memory: GuestMemoryView,
     /// The boot RAM map. `GuestRam` registers and releases exactly these
     /// regions, whatever later views add or remove.
-    boot: Arc<GuestMemoryMmap>,
+    boot_memory: Arc<GuestMemoryMmap>,
     /// Regions `0..mapped`, in ascending address order, may still have
     /// mappings with the host VM.
     mapped: usize,
@@ -292,10 +292,10 @@ impl GuestRam {
                 bytes,
                 source: io::Error::other(source),
             })?;
-        let boot = Arc::new(memory);
+        let boot_memory = Arc::new(memory);
         Ok(Self {
-            memory: GuestMemoryView::from(Arc::clone(&boot)),
-            boot,
+            memory: GuestMemoryView::from(Arc::clone(&boot_memory)),
+            boot_memory,
             mapped: 0,
         })
     }
@@ -307,7 +307,7 @@ impl GuestRam {
 
     /// The map used by the boot loader and host VM registrations.
     pub(crate) fn boot_memory(&self) -> &Arc<GuestMemoryMmap> {
-        &self.boot
+        &self.boot_memory
     }
 
     /// The guest RAM ranges this instance backs, in ascending guest order.
@@ -393,7 +393,7 @@ impl Drop for GuestRam {
         if self.mapped > 0 {
             // The host VM may still reference the range; leaking beats freeing
             // memory the guest can still write.
-            std::mem::forget(Arc::clone(&self.boot));
+            std::mem::forget(Arc::clone(&self.boot_memory));
         }
     }
 }
