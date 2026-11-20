@@ -2142,6 +2142,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
 
 #[cfg(test)]
 mod tests {
+    mod agents;
     use super::*;
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;

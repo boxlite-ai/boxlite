@@ -39,6 +39,9 @@ impl AgentBackend for TestBackend {
     fn adapter(&self) -> &str {
         "test"
     }
+    fn implementation(&self) -> &str {
+        "test"
+    }
     fn id(&self) -> &str {
         "agent-1"
     }

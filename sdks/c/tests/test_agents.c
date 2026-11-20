@@ -1,10 +1,13 @@
 #include "boxlite.h"
 #include <arpa/inet.h>
 #include <assert.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -17,6 +20,7 @@ typedef struct GetRequest {
 
 typedef struct AgentRequest {
   int done;
+  struct CAgent *agent;
   BoxliteErrorCode error_code;
   pthread_t caller;
 } AgentRequest;
@@ -24,10 +28,11 @@ typedef struct AgentRequest {
 static void on_agent_created(struct CAgent *agent, const CBoxliteError *error,
                              void *data) {
   AgentRequest *request = data;
-  assert(agent == NULL);
-  assert(error != NULL);
+  assert(agent != NULL);
+  assert(error == NULL);
   assert(pthread_equal(pthread_self(), request->caller));
-  request->error_code = error->code;
+  request->agent = agent;
+  request->error_code = Ok;
   request->done = 1;
 }
 
@@ -41,6 +46,49 @@ static void write_all(int fd, const char *data) {
     data += written;
     remaining -= (size_t)written;
   }
+}
+
+static int accept_request(int listener, const char *line, const char *body) {
+  int client = accept(listener, NULL, NULL);
+  assert(client >= 0);
+  char request[4096] = {0};
+  size_t used = 0;
+  char *head_end = NULL;
+  while ((head_end = strstr(request, "\r\n\r\n")) == NULL) {
+    assert(used < sizeof(request) - 1);
+    ssize_t count = read(client, request + used, sizeof(request) - used - 1);
+    assert(count > 0);
+    used += (size_t)count;
+  }
+  assert(strncmp(request, line, strlen(line)) == 0);
+  if (body != NULL) {
+    const char *header = request;
+    size_t body_len = 0;
+    while ((header = strstr(header, "\r\n")) != NULL && header < head_end) {
+      header += 2;
+      if (strncasecmp(header, "content-length:", 15) == 0) {
+        char *end = NULL;
+        errno = 0;
+        unsigned long length = strtoul(header + 15, &end, 10);
+        assert(errno == 0 && end != header + 15);
+        assert(end[0] == '\r' && end[1] == '\n');
+        assert(length < sizeof(request));
+        body_len = (size_t)length;
+        break;
+      }
+    }
+    assert(body_len == strlen(body));
+    size_t body_start = (size_t)(head_end + 4 - request);
+    assert(body_len < sizeof(request) - body_start);
+    while (used < body_start + body_len) {
+      ssize_t count =
+          read(client, request + used, body_start + body_len - used);
+      assert(count > 0);
+      used += (size_t)count;
+    }
+    assert(memcmp(request + body_start, body, body_len) == 0);
+  }
+  return client;
 }
 
 static pid_t start_box_server(uint16_t *port) {
@@ -59,27 +107,8 @@ static pid_t start_box_server(uint16_t *port) {
   assert(child >= 0);
   if (child == 0) {
     alarm(15);
-    int client = accept(listener, NULL, NULL);
-    if (client < 0) {
-      _exit(11);
-    }
-    char request[4096] = {0};
-    size_t used = 0;
-    while (strstr(request, "\r\n\r\n") == NULL) {
-      ssize_t count = read(client, request + used, sizeof(request) - used - 1);
-      if (count <= 0) {
-        _exit(12);
-      }
-      used += (size_t)count;
-      if (used >= sizeof(request)) {
-        _exit(12);
-      }
-      request[used] = '\0';
-    }
-    const char *expected = "GET /v1/boxes/agent-box HTTP/1.1\r\n";
-    if (strncmp(request, expected, strlen(expected)) != 0) {
-      _exit(13);
-    }
+    int client =
+        accept_request(listener, "GET /v1/boxes/agent-box HTTP/1.1\r\n", NULL);
     write_all(client,
               "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
               "Connection: close\r\n\r\n"
@@ -87,6 +116,21 @@ static pid_t start_box_server(uint16_t *port) {
               "\"created_at\":\"2026-07-14T00:00:00Z\","
               "\"updated_at\":\"2026-07-14T00:00:00Z\",\"pid\":42,"
               "\"image\":\"alpine:latest\",\"cpus\":1,\"memory_mib\":512}");
+    close(client);
+    client =
+        accept_request(listener, "POST /v1/boxes/agent-box/agents HTTP/1.1\r\n",
+                       "{\"agent\":\"opencode\"}");
+    write_all(
+        client,
+        "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n"
+        "Connection: close\r\n\r\n"
+        "{\"id\":\"ses_c_rest\",\"agent\":\"opencode\","
+        "\"state\":{\"id\":\"ses_c_rest\",\"status\":\"ready\","
+        "\"cursor\":null,\"active_turn_id\":null,\"queued_turn_ids\":[],"
+        "\"requests\":[],\"steering\":[]},\"config\":{\"tools\":[],\"mcp\":[]},"
+        "\"capabilities\":{\"operations\":[],\"input_kinds\":[],"
+        "\"max_queued_turns\":null,\"max_pending_steering\":null,"
+        "\"idempotency_retention_seconds\":null}}");
     close(client);
     close(listener);
     _exit(0);
@@ -155,7 +199,13 @@ static void test_live_box_namespace(void) {
   for (int attempt = 0; attempt < 20 && !agent_request.done; attempt++) {
     assert(boxlite_runtime_drain(runtime, 500, &error) >= 0);
   }
-  assert(agent_request.done && agent_request.error_code == Unsupported);
+  assert(agent_request.done && agent_request.error_code == Ok);
+  assert(agent_request.agent != NULL);
+  char *state = NULL;
+  assert(boxlite_agent_state(agent_request.agent, &state, &error) == Ok);
+  assert(state != NULL && strstr(state, "\"id\":\"ses_c_rest\"") != NULL);
+  boxlite_free_string(state);
+  boxlite_agent_free(agent_request.agent);
   boxlite_agents_free(agents);
   boxlite_box_free(request.box);
   boxlite_runtime_free(runtime);
