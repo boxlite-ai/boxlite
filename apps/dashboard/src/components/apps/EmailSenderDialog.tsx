@@ -22,9 +22,9 @@ import { ToolButton } from './SubNav'
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-[12px] text-muted-foreground">{label}</span>
+      <span className="text-meta text-muted-foreground">{label}</span>
       {children}
-      {hint && <span className="text-[12px] text-muted-foreground">{hint}</span>}
+      {hint && <span className="text-meta text-muted-foreground">{hint}</span>}
     </label>
   )
 }
@@ -107,13 +107,13 @@ export function EmailSenderDialog({
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className={cn(DIALOG_FRAME, 'max-w-[540px] font-mono text-body')}
+        className={cn(DIALOG_FRAME, 'max-w-[540px] font-sans text-body')}
         data-testid="email-sender-dialog"
       >
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">Email code sign-in</DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">Email code sign-in</DialogTitle>
         </DialogHeader>
-        <p className="text-[12px] text-muted-foreground">
+        <p className="text-meta text-muted-foreground">
           Visitors type their email address and get a 6-digit code. It is sent from your own mail account: copy the SMTP
           settings from your mail provider.
         </p>
@@ -153,7 +153,7 @@ export function EmailSenderDialog({
             </Field>
           ) : (
             <div className="flex flex-col gap-1.5">
-              <span className="text-[12px] text-muted-foreground">Password</span>
+              <span className="text-meta text-muted-foreground">Password</span>
               <span className="flex items-center gap-3">
                 <span className="text-foreground">Password saved</span>
                 <ToolButton requiresWrite onClick={() => setReplacing(true)}>
@@ -200,7 +200,7 @@ export function EmailSenderDialog({
             )}
           </span>
           <span className="flex items-center gap-2">
-            <span className="text-[12px] text-muted-foreground">
+            <span className="text-meta text-muted-foreground">
               {missing
                 ? 'Enter the server and the from address.'
                 : changed && sender.configured

@@ -57,7 +57,7 @@ const exportUrl = (app: AppDetail, query: Record<string, string>) =>
 
 /** An anchor that looks like a ToolButton, for downloads the browser saves itself. */
 const DOWNLOAD_LINK =
-  'inline-flex h-[28px] items-center border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground'
+  'inline-flex h-[28px] items-center border border-border px-[10px] font-sans text-meta text-muted-foreground transition-colors hover:border-brand hover:text-foreground'
 
 const looksJson = (text: string) => /^[[{]/.test(text) && /[\]}]$/.test(text)
 
@@ -69,7 +69,7 @@ function Cell({ value }: { value: QueryResult['rows'][number][number] }) {
   if (typeof value === 'string' && looksJson(text) && text.length > 40) {
     return open ? (
       <button type="button" onClick={() => setOpen(false)} className="text-left">
-        <pre className="max-w-[480px] whitespace-pre-wrap break-words text-[12px] text-foreground">
+        <pre className="max-w-[480px] whitespace-pre-wrap break-words text-meta text-foreground">
           {(() => {
             try {
               return JSON.stringify(JSON.parse(text), null, 2)
@@ -126,7 +126,7 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
   return (
     <Screen title="Connection">
       {/* One panel, headed like Volumes: what the database is, how the app reaches it, the rest behind Details. */}
-      <section className="border border-border bg-card font-mono">
+      <section className="border border-border bg-card font-sans">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-[22px] py-4">
           <h3 className="text-em font-semibold text-foreground">{db.engine}</h3>
           <StatusBadge label={db.status === 'ready' ? 'Ready' : 'Unknown'} color={statusColor} />
@@ -167,7 +167,7 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 border-t border-border px-[22px] py-3 text-[12px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-3 border-t border-border px-[22px] py-3 text-meta text-muted-foreground">
           <span>
             To work on it from a laptop, your agent connects through BoxLite; no password is written anywhere.
           </span>
@@ -189,7 +189,7 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
 
 function Label({ children }: { children: string }) {
   return (
-    <span className="text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+    <span className="text-label uppercase tracking-[1.5px] text-muted-foreground">
       <span className="text-brand">▸</span> {children}
     </span>
   )
@@ -363,7 +363,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
       padded={false}
     >
       <div className="flex flex-wrap items-center gap-1 pb-3">
-        <span className="mr-2 text-[10px] uppercase tracking-[1px] text-muted-foreground">Snippets</span>
+        <span className="mr-2 text-label uppercase tracking-[1px] text-muted-foreground">Snippets</span>
         {SNIPPETS.map((snippet) => (
           <FilterChip key={snippet.label} selected={query === snippet.sql} onClick={() => setQuery(snippet.sql)}>
             {snippet.label}
@@ -371,7 +371,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
         ))}
         {history.length > 0 && (
           <>
-            <span className="ml-4 mr-2 text-[10px] uppercase tracking-[1px] text-muted-foreground">Recent</span>
+            <span className="ml-4 mr-2 text-label uppercase tracking-[1px] text-muted-foreground">Recent</span>
             {history.map((q, i) => (
               <FilterChip key={i} onClick={() => setQuery(q)} title={q}>
                 {q.length > 28 ? `${q.slice(0, 28)}…` : q}
@@ -382,7 +382,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
       </div>
 
       <div className="grid grid-cols-[44px_minmax(0,1fr)] border border-border bg-background">
-        <div className="select-none border-r border-border/60 py-3 text-right text-[12px] leading-[20px] text-muted-foreground/60">
+        <div className="select-none border-r border-border/60 py-3 text-right text-meta leading-[20px] text-muted-foreground/60">
           {Array.from({ length: lines }).map((_, i) => (
             <div key={i} className="pr-2">
               {i + 1}
@@ -401,12 +401,12 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
           }}
           spellCheck={false}
           rows={lines}
-          className="resize-none bg-transparent px-3 py-3 font-mono text-[13px] leading-[20px] text-foreground outline-none"
+          className="resize-none bg-transparent px-3 py-3 font-mono text-body leading-[20px] text-foreground outline-none"
         />
       </div>
 
-      <div className="flex h-10 items-center gap-3 text-[12px] text-muted-foreground">
-        <span className="text-[11px] uppercase tracking-[2px] text-foreground">
+      <div className="flex h-10 items-center gap-3 text-meta text-muted-foreground">
+        <span className="text-meta uppercase tracking-[2px] text-foreground">
           <span className="text-brand">▸</span> Results
         </span>
         {error ? (
@@ -444,7 +444,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
       </div>
       {error && (
         <p
-          className="whitespace-pre-wrap border border-destructive/40 bg-destructive/[0.04] px-3 py-2 text-[13px] text-destructive"
+          className="whitespace-pre-wrap border border-destructive/40 bg-destructive/[0.04] px-3 py-2 text-body text-destructive"
           data-testid="sql-error"
         >
           {error}
@@ -454,7 +454,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
         <div className={cn('overflow-x-auto transition-opacity', ran && ran !== query && 'opacity-50')}>
           <table className="w-full text-left">
             <thead>
-              <tr className="border-b border-border text-[12px] text-muted-foreground">
+              <tr className="border-b border-border text-meta text-muted-foreground">
                 <th className="w-[44px] px-3 py-2 font-normal">#</th>
                 {data.columns.map((column, i) => (
                   <th key={`${column}-${i}`} className="px-3 py-2 font-normal">
@@ -595,7 +595,7 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
       }
       padded={false}
     >
-      <p className="pb-3 text-[12px] text-muted-foreground" data-testid="restore-window">
+      <p className="pb-3 text-meta text-muted-foreground" data-testid="restore-window">
         A backup names a point in the database&apos;s history; restoring rewinds {app.environment}&apos;s database to
         it. The database keeps {windowHours} hours of history, so a backup can be restored for {windowHours} hours after
         it was taken. Deployments that run migrations also mark the point before them, for rolling a deployment back
@@ -626,7 +626,7 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
                   </ToolButton>
                 ) : (
                   <span
-                    className="text-[12px] text-muted-foreground"
+                    className="text-meta text-muted-foreground"
                     title={`Older than the database's ${windowHours}-hour history`}
                   >
                     outside the {windowHours} h window
@@ -676,14 +676,14 @@ function TableSheet({
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         onOpenAutoFocus={(e) => e.preventDefault()}
-        className="w-[760px] max-w-[90vw] gap-4 p-6 font-mono sm:max-w-[760px]"
+        className="w-[760px] max-w-[90vw] gap-4 p-6 font-sans sm:max-w-[760px]"
       >
         <SheetHeader>
-          <SheetTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">
+          <SheetTitle className="font-display text-section font-semibold">
             {table.schema}.{table.name}
           </SheetTitle>
         </SheetHeader>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-body text-muted-foreground">
           <SearchField value={filter} onChange={setFilter} placeholder={`Search ${table.name}…`} />
           <span className="ml-auto flex gap-1">
             <ToolButton
@@ -703,7 +703,7 @@ function TableSheet({
             </AppDownload>
           </span>
         </div>
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-meta text-muted-foreground">
           <span>
             {!data
               ? ''
@@ -721,23 +721,23 @@ function TableSheet({
           </span>
         </div>
         {error ? (
-          <div className="py-6 text-[13px] text-destructive">
+          <div className="py-6 text-body text-destructive">
             {error instanceof Error ? error.message : String(error)}
           </div>
         ) : !data ? (
-          <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
+          <div className="flex items-center gap-2 py-8 text-body text-muted-foreground">
             <Spinner className="size-4" /> Loading rows…
           </div>
         ) : (
           <div className={cn('overflow-auto transition-opacity', isFetching && 'opacity-50')}>
-            <table className="w-full text-left text-[13px]">
+            <table className="w-full text-left text-body">
               <thead>
-                <tr className="border-b border-border text-[12px] text-muted-foreground">
+                <tr className="border-b border-border text-meta text-muted-foreground">
                   {data.columns.map((column, i) => (
                     <th key={`${column}-${i}`} className="whitespace-nowrap px-3 py-2 font-normal">
                       <span className="block text-foreground">{column}</span>
                       {data.types?.[i] && (
-                        <span className="block text-[10px] text-muted-foreground">{data.types[i]}</span>
+                        <span className="block text-label text-muted-foreground">{data.types[i]}</span>
                       )}
                     </th>
                   ))}
@@ -798,7 +798,7 @@ export function DatabaseTab({
             {error instanceof Error ? error.message : String(error)}
           </EmptyNote>
         ) : (
-          <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
+          <div className="flex items-center gap-2 py-8 text-body text-muted-foreground">
             <Spinner className="size-4" /> Connecting to the database (a sleeping database takes a few seconds)…
           </div>
         )}

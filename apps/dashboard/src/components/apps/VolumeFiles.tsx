@@ -30,7 +30,7 @@ const join = (dir: string, name: string) => `${dir === '/' ? '' : dir}/${name}`
 function Breadcrumb({ volume, path, onOpen }: { volume: string; path: string; onOpen: (path: string) => void }) {
   const parts = path.split('/').filter(Boolean)
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-1 font-mono text-[13px]">
+    <span className="flex min-w-0 flex-wrap items-center gap-1 font-mono text-body">
       <button type="button" className="text-foreground hover:underline" onClick={() => onOpen('/')}>
         {volume}
       </button>
@@ -163,12 +163,12 @@ export function VolumeFilesSheet({
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         onOpenAutoFocus={(e) => e.preventDefault()}
-        className="w-[600px] max-w-[90vw] gap-4 p-6 font-mono sm:max-w-[600px]"
+        className="w-[600px] max-w-[90vw] gap-4 p-6 font-sans sm:max-w-[600px]"
         data-testid={`volume-files-${volume.name}`}
       >
         <SheetHeader className="gap-1">
-          <SheetTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">{volume.name}</SheetTitle>
-          <span className="text-[13px] text-muted-foreground">
+          <SheetTitle className="font-display text-section font-semibold">{volume.name}</SheetTitle>
+          <span className="text-body text-muted-foreground">
             {[volume.sizeBytes !== null ? formatBytes(volume.sizeBytes) : null, `mounted at ${volume.mountPath}`]
               .filter(Boolean)
               .join(' · ')}
@@ -205,7 +205,7 @@ export function VolumeFilesSheet({
         {error ? (
           <EmptyNote title={unavailable(error).title}>{unavailable(error).detail}</EmptyNote>
         ) : isLoading || !data ? (
-          <div className="flex items-center gap-2 py-6 text-[13px] text-muted-foreground">
+          <div className="flex items-center gap-2 py-6 text-body text-muted-foreground">
             <Spinner className="size-4" /> Reading {volume.name} (a sleeping app wakes first)…
           </div>
         ) : entries.length === 0 ? (
@@ -240,7 +240,7 @@ export function VolumeFilesSheet({
                   ) : (
                     <>
                       <span
-                        className="shrink-0 text-[12px] text-muted-foreground group-hover:hidden"
+                        className="shrink-0 text-meta text-muted-foreground group-hover:hidden"
                         title={entry.modified_at}
                       >
                         {formatBytes(entry.size)} · {relTime(entry.modified_at)}
@@ -249,7 +249,7 @@ export function VolumeFilesSheet({
                         <AppDownload
                           path={fileUrl(entry)}
                           filename={entry.name}
-                          className="inline-flex h-[28px] items-center border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+                          className="inline-flex h-[28px] items-center border border-border px-[10px] font-sans text-meta text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
                         >
                           Download
                         </AppDownload>

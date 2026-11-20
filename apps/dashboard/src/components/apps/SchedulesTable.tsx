@@ -54,7 +54,7 @@ export function SchedulesTable({ app }: { app: AppDetail }) {
           <GridRow key={s.name} grid={GRID} className="min-h-[48px] py-0">
             <span className="flex min-w-0 items-baseline gap-2" title={`POST ${s.target}`}>
               <span className="font-semibold text-foreground">{s.name}</span>
-              <span className="truncate text-[12px] text-muted-foreground">{s.target.replace(/^[^:]+:/, '')}</span>
+              <span className="truncate text-meta text-muted-foreground">{s.target.replace(/^[^:]+:/, '')}</span>
             </span>
             <span className="truncate text-muted-foreground" title={s.cron}>
               {describeCron(s.cron)}
@@ -64,7 +64,7 @@ export function SchedulesTable({ app }: { app: AppDetail }) {
             </span>
             <span className="flex min-w-0 items-center gap-2" title={s.lastRun ? utcAndLocal(s.lastRun) : undefined}>
               <StatusBadge label={last.label} color={last.color} caps />
-              {s.lastRun && <span className="truncate text-[12px] text-muted-foreground">{relTime(s.lastRun)}</span>}
+              {s.lastRun && <span className="truncate text-meta text-muted-foreground">{relTime(s.lastRun)}</span>}
             </span>
             <HoverActions>
               <ToolButton

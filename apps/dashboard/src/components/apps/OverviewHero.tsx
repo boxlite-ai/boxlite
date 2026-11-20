@@ -65,7 +65,7 @@ export function LiveCard({
               <span key={i} className="size-[7px] rounded-full bg-border" />
             ))}
           </span>
-          <span className="ml-2 flex min-w-0 flex-1 items-center gap-2 bg-background/60 px-2 py-[3px] font-mono text-[12px]">
+          <span className="ml-2 flex min-w-0 flex-1 items-center gap-2 bg-background/60 px-2 py-[3px] font-mono text-meta">
             <span className="size-[6px] shrink-0" style={{ background: asleep ? STATUS.stopped : STATUS.running }} />
             <span className="min-w-0 truncate text-muted-foreground" title={app.url}>
               {host(app.url)}
@@ -94,9 +94,9 @@ export function LiveCard({
             />
           </button>
         ) : (
-          <div className="flex aspect-[16/10] w-full flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_50%_45%,hsl(var(--brand)/0.10),transparent_60%)]">
+          <div className="flex aspect-[16/10] w-full flex-col items-center justify-center gap-3 bg-secondary/30">
             <IsoCube size={44} tone={failing ? 'muted' : 'brand'} />
-            <span className="font-mono text-[12px] text-muted-foreground">
+            <span className="font-sans text-meta text-muted-foreground">
               {failing ? 'Not serving right now' : 'A picture appears after the next deployment'}
             </span>
           </div>
@@ -104,7 +104,7 @@ export function LiveCard({
       </figure>
 
       <div className="flex min-w-0 flex-col gap-3 px-7 py-6">
-        <span className="font-mono text-[10px] uppercase tracking-[2px] text-muted-foreground">
+        <span className="font-sans text-label uppercase tracking-[2px] text-muted-foreground">
           <span className={failing ? 'text-destructive' : 'text-brand'}>▸</span>{' '}
           {failing ? 'Live · not healthy' : asleep ? 'Live · asleep until the next visit' : 'Live now'}
         </span>
@@ -113,18 +113,18 @@ export function LiveCard({
             <button
               type="button"
               onClick={() => onGoTo('deployments', undefined, { deployment: String(active.number) })}
-              className="line-clamp-2 text-left font-display text-[20px] font-semibold leading-snug tracking-[-0.3px] text-foreground hover:underline"
+              className="line-clamp-2 text-left font-display text-section font-semibold leading-snug tracking-[-0.3px] text-foreground hover:underline"
             >
               {active.summary}
             </button>
-            <span className="font-mono text-[13px] text-muted-foreground">
+            <span className="font-sans text-body text-muted-foreground">
               {active.id} · deployed{' '}
               <span title={new Date(active.createdAt).toLocaleString('en-US')}>{relTime(active.createdAt)}</span> by{' '}
               {actorName(active.by)}
             </span>
           </>
         ) : (
-          <span className="font-display text-[24px] font-semibold text-foreground">Nothing live yet</span>
+          <span className="font-display text-section font-semibold text-foreground">Nothing live yet</span>
         )}
         {app.deploying && !app.activeRelease && (
           <button type="button" className="text-left" onClick={() => onGoTo('deployments')}>
@@ -132,12 +132,12 @@ export function LiveCard({
           </button>
         )}
         {preview && preview.releaseId !== app.activeRelease && (
-          <span className="font-mono text-[12px] text-warning">
+          <span className="font-sans text-meta text-warning">
             Picture from {preview.releaseId}, captured {relTime(preview.capturedAt)}
           </span>
         )}
         {app.previewAttempt?.failed && !app.previewAttempt.taking && (
-          <span className="font-mono text-[12px] text-muted-foreground">
+          <span className="font-sans text-meta text-muted-foreground">
             New picture failed {relTime(app.previewAttempt.failed.at)}: {app.previewAttempt.failed.reason}
           </span>
         )}
@@ -235,11 +235,11 @@ function MetaGrid({ app }: { app: AppDetail }) {
     ...(app.database ? [{ label: 'Database', value: app.database.engine }] : []),
   ]
   return (
-    <dl className="mt-auto grid grid-cols-2 gap-x-8 gap-y-4 border-t border-border/60 pt-5 font-mono">
+    <dl className="mt-auto grid grid-cols-2 gap-x-8 gap-y-4 border-t border-border/60 pt-5 font-sans">
       {rows.map((r) => (
         <div key={r.label} className="flex min-w-0 flex-col gap-0.5">
-          <dt className="text-[10px] uppercase tracking-[1.5px] text-muted-foreground">{r.label}</dt>
-          <dd className="min-w-0 truncate text-[13px] text-foreground" title={r.title}>
+          <dt className="text-label uppercase tracking-[1.5px] text-muted-foreground">{r.label}</dt>
+          <dd className="min-w-0 truncate font-mono text-body text-foreground" title={r.title}>
             {r.value}
           </dd>
         </div>

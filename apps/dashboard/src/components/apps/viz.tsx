@@ -21,7 +21,7 @@ export function Tag({
   return (
     <span
       className={cn(
-        'inline-flex w-fit items-center whitespace-nowrap border px-[6px] py-[2px] font-mono text-[9px] uppercase leading-none tracking-[1px]',
+        'inline-flex w-fit items-center whitespace-nowrap border px-[6px] py-[2px] font-sans text-label uppercase leading-none tracking-[1px]',
         tone === 'neutral' && 'border-border text-muted-foreground',
         tone === 'brand' && 'border-brand/50 text-brand',
         tone === 'good' && 'border-success/50 text-success',

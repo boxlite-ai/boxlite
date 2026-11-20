@@ -48,9 +48,9 @@ const SETUP: Record<string, { url: string; text: string; id?: string }> = {
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-[12px] text-muted-foreground">{label}</span>
+      <span className="text-meta text-muted-foreground">{label}</span>
       {children}
-      {hint && <span className="text-[12px] text-muted-foreground">{hint}</span>}
+      {hint && <span className="text-meta text-muted-foreground">{hint}</span>}
     </label>
   )
 }
@@ -111,23 +111,23 @@ export function OAuthClientDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[540px] font-mono text-body')}>
+      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[540px] font-sans text-body')}>
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">{meta.label} sign-in</DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">{meta.label} sign-in</DialogTitle>
         </DialogHeader>
 
         {method.managedAvailable && (
           <div className="flex items-center justify-between gap-4 border-y border-border/60 py-3">
             <div>
               <div className="text-foreground">Use BoxLite-managed keys</div>
-              <div className="text-[12px] text-muted-foreground">No OAuth app to create.</div>
+              <div className="text-meta text-muted-foreground">No OAuth app to create.</div>
             </div>
             <Switch checked={shared} onCheckedChange={setShared} />
           </div>
         )}
 
         {shared ? (
-          <div className="flex gap-2 text-[12px] text-warning">
+          <div className="flex gap-2 text-meta text-warning">
             <AlertTriangle className="mt-[1px] size-[14px] shrink-0" />
             <span>
               People see BoxLite, not your app, on the {meta.label} consent screen. Use your own OAuth app before real
@@ -136,7 +136,7 @@ export function OAuthClientDialog({
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2 text-[12px]">
+            <div className="flex flex-col gap-2 text-meta">
               {meta.url && (
                 <a
                   href={meta.url}
@@ -168,7 +168,7 @@ export function OAuthClientDialog({
             </Field>
             {ownNow && !replacing ? (
               <div className="flex flex-col gap-1.5">
-                <span className="text-[12px] text-muted-foreground">{apple ? 'Private key' : 'Client secret'}</span>
+                <span className="text-meta text-muted-foreground">{apple ? 'Private key' : 'Client secret'}</span>
                 <span className="flex items-center gap-3">
                   <span className="text-foreground">{apple ? 'Key saved' : 'Secret saved'}</span>
                   <ToolButton requiresWrite onClick={() => setReplacing(true)}>
@@ -207,7 +207,7 @@ export function OAuthClientDialog({
                     placeholder={'-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----'}
                     rows={4}
                     spellCheck={false}
-                    className="w-full resize-none border border-input bg-transparent px-3 py-2 font-mono text-[12px] text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="w-full resize-none border border-input bg-transparent px-3 py-2 font-mono text-meta text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   />
                 </Field>
               </>
@@ -227,7 +227,7 @@ export function OAuthClientDialog({
         )}
 
         <DialogFooter className="items-center gap-2 sm:justify-between">
-          <span className="text-[12px] text-muted-foreground">
+          <span className="text-meta text-muted-foreground">
             {missing
               ? method.managedAvailable
                 ? 'Enter the client ID and secret, or use BoxLite-managed keys.'

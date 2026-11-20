@@ -74,7 +74,7 @@ function ServiceRow({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && setOpen((v) => !v)}
-        className={`group grid ${GRID} min-h-[48px] cursor-pointer items-center px-2 font-mono text-body outline-none transition-colors hover:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`}
+        className={`group grid ${GRID} min-h-[48px] cursor-pointer items-center px-4 font-mono text-body outline-none transition-colors hover:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`}
       >
         <span className="flex min-w-0 items-center gap-2">
           <ChevronRight
@@ -106,7 +106,7 @@ function ServiceRow({
             )}
           </div>
           {troubled && (
-            <pre className="max-h-[180px] overflow-auto bg-destructive/[0.05] px-3 py-2 font-mono text-[12px] leading-[1.6] text-destructive">
+            <pre className="max-h-[180px] overflow-auto bg-destructive/[0.05] px-3 py-2 font-mono text-meta leading-[1.6] text-destructive">
               {service.recentErrors.join('\n')}
             </pre>
           )}

@@ -53,15 +53,15 @@ export function EnvironmentSwitcher({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="inline-flex h-[30px] items-center gap-1.5 border border-dashed border-border px-[10px] font-mono text-body text-muted-foreground transition-colors hover:border-brand hover:text-foreground data-[state=open]:border-brand data-[state=open]:text-foreground"
+            className="inline-flex h-[30px] items-center gap-1.5 border border-dashed border-border px-[10px] font-sans text-body text-muted-foreground transition-colors hover:border-brand hover:text-foreground data-[state=open]:border-brand data-[state=open]:text-foreground"
           >
             <GitBranch className="size-3.5 shrink-0" />
             {current}
             <ChevronDown className="size-4" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-[19rem] font-mono text-[13px]">
-          <div className="px-2 py-1.5 text-[12px] text-muted-foreground">Environments</div>
+        <DropdownMenuContent align="start" className="min-w-[19rem] font-sans text-body">
+          <div className="px-2 py-1.5 text-meta text-muted-foreground">Environments</div>
           {envs.map((env) => {
             const status = appStatusOf(env.status)
             return (
@@ -76,12 +76,12 @@ export function EnvironmentSwitcher({
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="flex items-center justify-between gap-3">
                     <span className="text-foreground">{env.name}</span>
-                    <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                    <span className="flex items-center gap-1.5 text-meta text-muted-foreground">
                       <span className="inline-block size-[6px]" style={{ background: status.color }} />
                       {env.lastDeploy ? `${env.lastDeploy.releaseId} · ${status.label}` : status.label}
                     </span>
                   </span>
-                  <span className="truncate text-[12px] text-muted-foreground">
+                  <span className="truncate text-meta text-muted-foreground">
                     {env.url.replace(/^https?:\/\//, '')}
                   </span>
                 </span>
@@ -96,7 +96,7 @@ export function EnvironmentSwitcher({
             New environment
           </DropdownMenuItem>
           {current === 'main' ? (
-            <div className="px-2 py-1.5 pl-9 text-[12px] text-muted-foreground">main is deleted only with the app</div>
+            <div className="px-2 py-1.5 pl-9 text-meta text-muted-foreground">main is deleted only with the app</div>
           ) : (
             <DropdownMenuItem
               disabled={!canDelete}
@@ -170,14 +170,12 @@ function NewEnvironmentDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[520px] font-mono text-body')}>
+      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[520px] font-sans text-body')}>
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">
-            New environment for {appName}
-          </DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">New environment for {appName}</DialogTitle>
         </DialogHeader>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] text-muted-foreground">Name</span>
+          <span className="text-meta text-muted-foreground">Name</span>
           <Input
             autoFocus
             value={name}
@@ -187,7 +185,7 @@ function NewEnvironmentDialog({
             aria-invalid={!!error}
             className="font-mono"
           />
-          <span className={cn('text-[12px]', error ? 'text-destructive' : 'text-muted-foreground')}>
+          <span className={cn('text-meta', error ? 'text-destructive' : 'text-muted-foreground')}>
             {error ?? 'Its own URL, assigned when created · its own Box'}
           </span>
         </label>
@@ -210,11 +208,11 @@ function NewEnvironmentDialog({
               )}
             >
               <span className="text-foreground">{source.label}</span>
-              <span className="text-[12px] text-muted-foreground">{source.hint}</span>
+              <span className="text-meta text-muted-foreground">{source.hint}</span>
             </button>
           ))}
         </div>
-        <span className="text-[12px] text-muted-foreground">
+        <span className="text-meta text-muted-foreground">
           Files are never copied, and variables are your agent&apos;s to set. The new environment starts with nothing
           deployed; hand it to your agent from its Overview.
         </span>

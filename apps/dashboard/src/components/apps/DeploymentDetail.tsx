@@ -53,14 +53,14 @@ function StepRow({ step }: { step: TimelineStep }) {
   return (
     <div
       className={cn(
-        `grid ${STEP_GRID} min-h-[40px] items-center border-b border-border/60 px-2 font-mono text-body`,
+        `grid ${STEP_GRID} min-h-[40px] items-center border-b border-border/60 px-4 font-sans text-body`,
         running && 'bg-warning/[0.04]',
       )}
       data-testid={`step-${step.name}`}
     >
       <span className="text-foreground">{capitalize(step.name)}</span>
       {running ? (
-        <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-[0.5px] text-warning">
+        <span className="inline-flex items-center gap-1.5 text-meta uppercase tracking-[0.5px] text-warning">
           <Spinner className="size-[11px]" /> Running
         </span>
       ) : (
@@ -85,7 +85,7 @@ function StepRow({ step }: { step: TimelineStep }) {
 function Failure({ detail, f }: { detail: Detail; f: NonNullable<Detail['failure']> }) {
   return (
     <section
-      className="border border-destructive/40 bg-destructive/[0.04] px-5 py-4 font-mono"
+      className="border border-destructive/40 bg-destructive/[0.04] px-5 py-4 font-sans"
       data-testid="deployment-failure"
     >
       <StatusBadge
@@ -93,7 +93,7 @@ function Failure({ detail, f }: { detail: Detail; f: NonNullable<Detail['failure
         color={STATUS.error}
         className="text-body font-semibold"
       />
-      <div className="mt-2 flex flex-col gap-1 pl-[15px] text-[13px]">
+      <div className="mt-2 flex flex-col gap-1 pl-[15px] text-body">
         {/* The fix itself is written for the agent (commands, config fields): it is in the instructions below. */}
         <span className="text-foreground">
           <span className="text-muted-foreground">Fix · </span>
@@ -111,7 +111,7 @@ function Failure({ detail, f }: { detail: Detail; f: NonNullable<Detail['failure
         <span className="text-muted-foreground">Cause · {f.cause.replace(/_/g, ' ')}</span>
       </div>
       {f.evidence.length > 0 && (
-        <pre className="ml-[15px] mt-3 max-h-[160px] overflow-auto bg-card/60 px-3 py-2 text-[12px] leading-[1.6] text-muted-foreground">
+        <pre className="ml-[15px] mt-3 max-h-[160px] overflow-auto bg-card/60 px-3 py-2 text-meta leading-[1.6] text-muted-foreground">
           {f.evidence.join('\n')}
         </pre>
       )}
@@ -140,15 +140,15 @@ function Failure({ detail, f }: { detail: Detail; f: NonNullable<Detail['failure
 function Changes({ detail }: { detail: Detail }) {
   const { infrastructure, configuration, code } = detail.changeSet
   if (!infrastructure.length && !configuration.length && !code)
-    return <p className="text-[13px] text-muted-foreground">Nothing changed.</p>
+    return <p className="text-body text-muted-foreground">Nothing changed.</p>
   const list = (title: string, items: string[]) =>
     items.length > 0 && (
       <div className="flex flex-col gap-1">
-        <span className="text-[10px] uppercase tracking-[1px] text-muted-foreground">{title}</span>
+        <span className="text-label uppercase tracking-[1px] text-muted-foreground">{title}</span>
         {items.map((item) => (
           <span
             key={item}
-            className={cn('text-[13px]', item.startsWith('Removed') ? 'text-destructive' : 'text-foreground')}
+            className={cn('text-body', item.startsWith('Removed') ? 'text-destructive' : 'text-foreground')}
           >
             {item}
           </span>
@@ -156,18 +156,18 @@ function Changes({ detail }: { detail: Detail }) {
       </div>
     )
   return (
-    <div className="grid gap-6 font-mono md:grid-cols-3">
+    <div className="grid gap-6 font-sans md:grid-cols-3">
       {list('Services & data', infrastructure)}
       {list('Settings', configuration)}
       {code && (
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-[1px] text-muted-foreground">Code</span>
-          <span className="text-[13px] text-foreground" data-testid="code-changes">
+          <span className="text-label uppercase tracking-[1px] text-muted-foreground">Code</span>
+          <span className="text-body text-foreground" data-testid="code-changes">
             <span className="text-success">+{code.added} added</span> ·{' '}
             <span className="text-warning">~{code.changed} changed</span> ·{' '}
             <span className="text-destructive">−{code.removed} removed</span>
           </span>
-          <span className="text-[12px] text-muted-foreground">
+          <span className="text-meta text-muted-foreground">
             {code.files} files uploaded{code.comparedWith ? `, compared with #${code.comparedWith}` : ', first upload'}
           </span>
         </div>
@@ -188,7 +188,7 @@ function Log({ detail }: { detail: Detail }) {
   return (
     <pre
       ref={ref}
-      className="max-h-[520px] overflow-auto bg-card/60 px-4 py-3 font-mono text-[12px] leading-[1.75]"
+      className="max-h-[520px] overflow-auto bg-card/60 px-4 py-3 font-mono text-meta leading-[1.75]"
       data-testid="deployment-log"
     >
       {detail.log.map((l) => (
@@ -230,7 +230,7 @@ export function DeploymentDetail({
     <button
       type="button"
       onClick={onBack}
-      className="self-start font-mono text-[12px] text-muted-foreground hover:text-foreground"
+      className="self-start font-sans text-meta text-muted-foreground hover:text-foreground"
     >
       ← All deployments
     </button>
@@ -247,7 +247,7 @@ export function DeploymentDetail({
     return (
       <div className="flex flex-col gap-4">
         {back}
-        <div className="flex items-center gap-2 font-mono text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 font-sans text-body text-muted-foreground">
           <Spinner className="size-4" /> Loading #{number}…
         </div>
       </div>
@@ -268,7 +268,7 @@ export function DeploymentDetail({
             <h2 className="font-mono text-em font-semibold text-foreground">{detail.id}</h2>
             <StatusBadge label={status.label} color={status.color} caps />
             {detail.current && <Tag tone="brand">Current</Tag>}
-            <span className="min-w-0 truncate font-mono text-body text-foreground">{detail.summary}</span>
+            <span className="min-w-0 truncate font-sans text-body text-foreground">{detail.summary}</span>
             <span className="ml-auto flex flex-wrap gap-1">
               {detail.rollback.possible && (
                 <ToolButton requiresWrite onClick={() => onRollback(detail)}>
@@ -279,22 +279,22 @@ export function DeploymentDetail({
               {detail.hasSource && (
                 <AppDownload
                   path={source}
-                  className="inline-flex h-[28px] items-center border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+                  className="inline-flex h-[28px] items-center border border-border px-[10px] font-sans text-meta text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
                 >
                   Download source
                 </AppDownload>
               )}
             </span>
           </div>
-          <div className="flex flex-col gap-5 px-[22px] py-[18px] font-mono">
-            <span className="text-[13px] text-muted-foreground">
+          <div className="flex flex-col gap-5 px-[22px] py-[18px] font-sans">
+            <span className="text-body text-muted-foreground">
               {detail.rollbackTo !== null ? `Rolled back to #${detail.rollbackTo}` : 'Deployed'}{' '}
               <span title={new Date(detail.createdAt).toLocaleString('en-US')}>{relTime(detail.createdAt)}</span> by{' '}
               {actorName(detail.by, { short: true })}
               {took ? ` · ${detail.finishedAt ? 'took' : 'running for'} ${took}` : ''}
             </span>
             <div className="flex flex-col gap-2">
-              <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+              <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
                 <span className="text-brand">▸</span> What changed
               </span>
               <Changes detail={detail} />
@@ -308,7 +308,7 @@ export function DeploymentDetail({
       <section>
         <SectionTitle title="Steps" count={detail.timeline.length || undefined} />
         {detail.timeline.length === 0 ? (
-          <p className="font-mono text-[13px] text-muted-foreground">
+          <p className="font-sans text-body text-muted-foreground">
             Queued: it starts when the deployment before it finishes.
           </p>
         ) : (

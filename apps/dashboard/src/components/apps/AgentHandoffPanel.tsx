@@ -28,11 +28,11 @@ export function AgentHandoffPanel({ app }: { app: AppDetail }) {
       />
       {(draft || open) && (
         <div className="flex flex-col gap-2">
-          <p className="font-mono text-meta text-muted-foreground">
+          <p className="font-sans text-meta text-muted-foreground">
             Copy the instructions into your coding agent, then tell it what to {draft ? 'build' : 'change'}.
           </p>
           <PromptBlock text={app.handoffPrompt} compact={!draft} />
-          <p className="font-mono text-meta text-muted-foreground">
+          <p className="font-sans text-meta text-muted-foreground">
             Use an organization key from{' '}
             <Link to={RoutePath.KEYS} className="underline">
               API Keys
