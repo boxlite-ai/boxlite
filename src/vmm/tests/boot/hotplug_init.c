@@ -58,7 +58,7 @@ __attribute__((used,noreturn)) void run(void) {
     word now = wait_for(grown, base, 30);
     print("HOTPLUG_GROWN ", 14); number(now);
     if (!grown(now, base)) finish(3);
-    /* Use more RAM than boot RAM holds, so the hotplugged blocks must work. */
+    /* Exercise allocation after the new RAM comes online. */
     long address = call(9, 0, use_bytes, 3, 0x22, -1, 0);
     check(address, 4);
     word *memory = (word *)address;
