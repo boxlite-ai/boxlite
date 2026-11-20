@@ -75,6 +75,28 @@ func TestIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	t.Run("temporary database URL supports pool options", func(t *testing.T) {
+		parsed, err := urlpkg.Parse(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := parsed.Query()
+		query.Set("pool_max_conns", "8")
+		parsed.RawQuery = query.Encode()
+		name, dsn := testdb.Create(t, ctx, admin, parsed.String(), false)
+		pool, err := pgxpool.New(ctx, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		var actual string
+		if err := pool.QueryRow(ctx, "SELECT current_database()").Scan(&actual); err != nil || actual != name {
+			t.Fatalf("connected to %q, %v; want temporary database %q", actual, err, name)
+		}
+		if pool.Config().MaxConns != 8 {
+			t.Fatalf("maximum pool connections = %d; want 8", pool.Config().MaxConns)
+		}
+	})
 	t.Run("temporary database URL ignores conflicting query parameters", func(t *testing.T) {
 		for _, param := range []string{"dbname", "database"} {
 			t.Run(param, func(t *testing.T) {

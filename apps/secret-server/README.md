@@ -249,6 +249,7 @@ with a failed migration unlock is discarded.
 
 The test helper verifies the database name before tests run, even if the URL includes
 database query parameters. Canary enrollment reads back the persisted ciphertext.
+The test database URL also accepts pgxpool options such as `pool_max_conns`.
 
 Go reports statement coverage; Codecov also distinguishes partially covered source
 lines, so a passing statement percentage does not imply passing patch coverage.

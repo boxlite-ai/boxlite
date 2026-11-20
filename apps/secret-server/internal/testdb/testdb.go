@@ -53,7 +53,11 @@ func Create(t *testing.T, ctx context.Context, admin *pgxpool.Pool, dsn string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn, err := pgx.Connect(ctx, temporaryURL)
+	config, err := pgxpool.ParseConfig(temporaryURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.ConnectConfig(ctx, config.ConnConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
