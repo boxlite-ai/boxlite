@@ -89,6 +89,16 @@ export function swapMessageAndObject(
 
 type LogConfig = ReturnType<typeof TypedConfigService.prototype.get<'log'>>
 
+export function getPinoRequestOptions(autoLogging: boolean, level: string) {
+  return {
+    autoLogging,
+    level,
+    redact: ['req.headers.authorization', 'req.body.turnstileToken'],
+    hooks: { logMethod: swapMessageAndObject },
+    quietReqLogger: true,
+  }
+}
+
 /*
  * Get the pino transport based on the configuration
  * @param isProduction - whether the application is in production mode

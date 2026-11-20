@@ -5,11 +5,12 @@
  */
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
-import { ArrayNotEmpty, IsArray, IsEnum, IsString } from 'class-validator'
+import { IsArray, IsIn, IsString } from 'class-validator'
 import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
+import { BASE_RESOURCE_PERMISSIONS, ProxyPermissionsDto } from './proxy-permissions.dto'
 
 @ApiSchema({ name: 'CreateOrganizationRole' })
-export class CreateOrganizationRoleDto {
+export class CreateOrganizationRoleDto extends ProxyPermissionsDto {
   @ApiProperty({
     description: 'The name of the role',
     example: 'Maintainer',
@@ -27,12 +28,11 @@ export class CreateOrganizationRoleDto {
 
   @ApiProperty({
     description: 'The list of permissions assigned to the role',
-    enum: OrganizationResourcePermission,
+    enum: BASE_RESOURCE_PERMISSIONS,
     isArray: true,
     required: true,
   })
   @IsArray()
-  @ArrayNotEmpty()
-  @IsEnum(OrganizationResourcePermission, { each: true })
+  @IsIn(BASE_RESOURCE_PERMISSIONS, { each: true })
   permissions: OrganizationResourcePermission[]
 }

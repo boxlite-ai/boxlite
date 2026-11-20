@@ -52,6 +52,7 @@ export class OrganizationRoleController {
         name: req.body?.name,
         description: req.body?.description,
         permissions: req.body?.permissions,
+        proxyPermissions: req.body?.proxyPermissions,
       }),
     },
   })
@@ -112,6 +113,7 @@ export class OrganizationRoleController {
         name: req.body?.name,
         description: req.body?.description,
         permissions: req.body?.permissions,
+        proxyPermissions: req.body?.proxyPermissions,
       }),
     },
   })

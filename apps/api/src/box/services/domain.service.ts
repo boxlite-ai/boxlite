@@ -30,7 +30,14 @@ import {
  * The controller spec derives this list from registered routes to keep that
  * naming policy consistent when a collection is added.
  */
-export const REST_COLLECTION_NAMES: readonly string[] = ['boxes', 'checkpoints', 'domains', 'images', 'volumes']
+export const REST_COLLECTION_NAMES: readonly string[] = [
+  'boxes',
+  'checkpoints',
+  'domains',
+  'images',
+  'proxies',
+  'volumes',
+]
 
 /**
  * Names under the app domain that would read as the platform's own or whose
@@ -107,9 +114,8 @@ export class DomainService {
   }
 
   /**
-   * Lowercase and validate the name a caller picked. Length against the
-   * configured minimum is a claim-time rule, checked by `claim` for new names
-   * only, so a name held before the minimum rose stays bindable.
+   * Normalize a platform label and validate its syntax. `claim` applies the
+   * current reservations and minimum length when allocating a name.
    */
   parseSubdomain(raw: string): string {
     const subdomain = raw.trim().toLowerCase()
@@ -118,7 +124,7 @@ export class DomainService {
         `Invalid subdomain "${raw}": use 1-${DNS_LABEL_MAX_LENGTH} lowercase letters, digits and hyphens, not starting or ending with a hyphen`,
       )
     }
-    if (LEGACY_PORT_PREFIX.test(subdomain) || RESERVED_PLATFORM_SUBDOMAINS.has(subdomain)) {
+    if (LEGACY_PORT_PREFIX.test(subdomain)) {
       throw new BadRequestError(`Subdomain "${subdomain}" is reserved`)
     }
     return subdomain
@@ -135,11 +141,14 @@ export class DomainService {
     return this.dataSource.transaction(async (manager) => {
       const limit = await this.lockOrganizationLimit(manager, organizationId)
       const held = await manager.findOne(Domain, { where: { hostname } })
-      if (held) {
-        if (held.organizationId !== organizationId) {
-          throw new SubdomainTakenError(hostname)
-        }
+      if (held?.organizationId === organizationId) {
         return { hostname, url: this.urlFor(hostname), target: this.targetOf(held) }
+      }
+      if (RESERVED_PLATFORM_SUBDOMAINS.has(subdomain)) {
+        throw new BadRequestError(`Subdomain "${subdomain}" is reserved`)
+      }
+      if (held) {
+        throw new SubdomainTakenError(hostname)
       }
       const minLength = this.configService.getOrThrow('domain.platformSubdomainMinLength')
       if (subdomain.length < minLength) {

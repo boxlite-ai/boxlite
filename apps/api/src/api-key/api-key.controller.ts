@@ -54,6 +54,7 @@ export class ApiKeyController {
       body: (req: TypedRequest<CreateApiKeyDto>) => ({
         name: req.body?.name,
         permissions: req.body?.permissions,
+        proxyPermissions: req.body?.proxyPermissions,
         expiresAt: req.body?.expiresAt,
       }),
     },
@@ -63,13 +64,14 @@ export class ApiKeyController {
     @Body() createApiKeyDto: CreateApiKeyDto,
     @UserContext() ctx: Context,
   ): Promise<ApiKeyResponseDto> {
-    this.validateRequestedApiKeyPermissions(authContext, createApiKeyDto.permissions)
+    const permissions = [...createApiKeyDto.permissions, ...(createApiKeyDto.proxyPermissions ?? [])]
+    this.validateRequestedApiKeyPermissions(authContext, permissions)
 
     const { apiKey, value } = await this.apiKeyService.createApiKey(
       authContext.organizationId,
       authContext.userId,
       createApiKeyDto.name,
-      createApiKeyDto.permissions,
+      permissions,
       ctx,
       createApiKeyDto.expiresAt,
     )

@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsArray, IsDate, IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator'
+import { IsArray, IsDate, IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator'
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
+import { BASE_RESOURCE_PERMISSIONS, ProxyPermissionsDto } from '../../organization/dto/proxy-permissions.dto'
 import { Type } from 'class-transformer'
 
 @ApiSchema({ name: 'CreateApiKey' })
-export class CreateApiKeyDto {
+export class CreateApiKeyDto extends ProxyPermissionsDto {
   @ApiProperty({
     description: 'The name of the API key',
     example: 'My API Key',
@@ -22,12 +23,12 @@ export class CreateApiKeyDto {
 
   @ApiProperty({
     description: 'The list of organization resource permissions explicitly assigned to the API key',
-    enum: OrganizationResourcePermission,
+    enum: BASE_RESOURCE_PERMISSIONS,
     isArray: true,
     required: true,
   })
   @IsArray()
-  @IsEnum(OrganizationResourcePermission, { each: true })
+  @IsIn(BASE_RESOURCE_PERMISSIONS, { each: true })
   permissions: OrganizationResourcePermission[]
 
   @ApiPropertyOptional({

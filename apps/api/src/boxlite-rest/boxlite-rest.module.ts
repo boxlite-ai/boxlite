@@ -5,6 +5,7 @@
  */
 
 import { Module } from '@nestjs/common'
+import { DataSource } from 'typeorm'
 import { CiWebhookController } from '../ci/ci-webhook.controller'
 import { CiWebhookService } from '../ci/ci-webhook.service'
 import { CiConnectController } from '../ci/ci-connect.controller'
@@ -19,6 +20,8 @@ import { CiNativeWorkers } from '../ci/ci-native-workers'
 import { CiGitHubService } from '../ci/ci-github.service'
 import { CiSecretsService } from '../ci/ci-secrets.service'
 import { BoxModule } from '../box/box.module'
+import { ProxyCredentialCipher } from '../box/outbound-proxy/proxy-credential-cipher'
+import { ProxyRegistryStore } from '../box/outbound-proxy/proxy-registry.store'
 import { AuthModule } from '../auth/auth.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
 import { OrganizationModule } from '../organization/organization.module'
@@ -32,6 +35,7 @@ import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { ImageModule } from '../image/image.module'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
+import { BoxliteOutboundProxyController } from './boxlite-outbound-proxy.controller'
 import { RegistryModule } from '../registry/registry.module'
 import { BoxliteMemberController } from './boxlite-member.controller'
 import { BoxliteInvitationController } from './boxlite-invitation.controller'
@@ -65,11 +69,24 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     BoxliteProxyController,
     BoxliteVolumeController,
     BoxliteRegistryController,
+    BoxliteOutboundProxyController,
     BoxliteImageController,
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
   providers: [
+    {
+      provide: ProxyRegistryStore,
+      inject: [DataSource],
+      useFactory: (source: DataSource) => {
+        const enabled = process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true'
+        return new ProxyRegistryStore(
+          source,
+          new ProxyCredentialCipher(enabled ? process.env.OUTBOUND_PROXY_REGISTRY_KEYS : undefined),
+          enabled,
+        )
+      },
+    },
     BoxliteWsProxyService,
     CommerceBoxLimitService,
     CiConnectService,

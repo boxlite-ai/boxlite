@@ -16,6 +16,10 @@
 
 export interface CreateApiKey {
     /**
+     * Outbound proxy permissions
+     */
+    'proxyPermissions'?: Array<CreateApiKeyProxyPermissionsEnum>;
+    /**
      * The name of the API key
      */
     'name': string;
@@ -29,6 +33,13 @@ export interface CreateApiKey {
     'expiresAt'?: Date | null;
 }
 
+export const CreateApiKeyProxyPermissionsEnum = {
+    WRITE_PROXIES: 'write:proxies',
+    DELETE_PROXIES: 'delete:proxies',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type CreateApiKeyProxyPermissionsEnum = typeof CreateApiKeyProxyPermissionsEnum[keyof typeof CreateApiKeyProxyPermissionsEnum];
 export const CreateApiKeyPermissionsEnum = {
     WRITE_REGISTRIES: 'write:registries',
     DELETE_REGISTRIES: 'delete:registries',

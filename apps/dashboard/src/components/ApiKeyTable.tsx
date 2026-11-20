@@ -91,7 +91,7 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilt
                       {key.value}
                     </span>
                     <span>
-                      <ApiKeyPermissionsSummary permissions={key.permissions} />
+                      <ApiKeyPermissionsSummary permissions={[...key.permissions, ...(key.proxyPermissions ?? [])]} />
                     </span>
                     <span className="font-mono text-meta text-muted-foreground">
                       {getRelativeTimeString(key.createdAt).relativeTimeString}

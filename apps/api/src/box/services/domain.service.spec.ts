@@ -103,12 +103,9 @@ describe('DomainService.parseSubdomain', () => {
   )
 
   // `3000-abc.apps.example` would also parse as a legacy `<port>-<box>` host.
-  it.each(['3000-abc', '1-x', 'www', 'api', 'proxy', 'boxes', 'volumes', 'checkpoints'])(
-    'rejects %s as reserved',
-    (value) => {
-      expect(() => service.parseSubdomain(value)).toThrow('reserved')
-    },
-  )
+  it.each(['3000-abc', '1-x'])('rejects %s as reserved', (value) => {
+    expect(() => service.parseSubdomain(value)).toThrow('reserved')
+  })
 
   it('does not apply the minimum length: a held short name must stay bindable', () => {
     expect(service.parseSubdomain('ab')).toBe('ab')
@@ -116,6 +113,13 @@ describe('DomainService.parseSubdomain', () => {
 })
 
 describe('DomainService.claim', () => {
+  it.each(['www', 'api', 'proxy', 'boxes', 'volumes', 'checkpoints', 'proxies'])('reserves %s', async (name) => {
+    const { service, manager, query } = makeService()
+    await expect(service.claim(ORG, name)).rejects.toThrow('reserved')
+    expect(manager.count).not.toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO "domain"'), expect.any(Array))
+  })
+
   it('requests a short name and returns an unbound full hostname', async () => {
     const { service, query } = makeService()
     await expect(service.claim(ORG, ' Demo1 ')).resolves.toEqual({

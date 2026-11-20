@@ -12,6 +12,7 @@ import {
   Injectable,
 } from '@nestjs/common'
 import { json, type NextFunction, type Request, type RequestHandler, type Response, urlencoded } from 'express'
+import { isProxyCredentialWrite, parseProxyCredentialWrite } from '../box/outbound-proxy/proxy-registry-body'
 import { MCP_ROUTE } from './mcp-auth-metadata'
 
 /**
@@ -30,9 +31,12 @@ const MCP_PATH = new RegExp(`^${MCP_ROUTE}/?$`, 'i')
  * authenticated. Call before `app.init()`.
  */
 export function useApiBodyParsers(app: INestApplication): void {
+  app.use((req: Request, res: Response, next: NextFunction) =>
+    isProxyCredentialWrite(req.method, req.path) ? parseProxyCredentialWrite(req, res, next) : next(),
+  )
   for (const parse of [json(), urlencoded({ extended: true })]) {
     app.use((req: Request, res: Response, next: NextFunction) =>
-      MCP_PATH.test(req.path) ? next() : parse(req, res, next),
+      MCP_PATH.test(req.path) || isProxyCredentialWrite(req.method, req.path) ? next() : parse(req, res, next),
     )
   }
 }

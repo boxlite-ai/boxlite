@@ -21,6 +21,8 @@ var _ MappedNullable = &CreateOrganizationRole{}
 
 // CreateOrganizationRole struct for CreateOrganizationRole
 type CreateOrganizationRole struct {
+	// Outbound proxy permissions
+	ProxyPermissions []string `json:"proxyPermissions,omitempty"`
 	// The name of the role
 	Name string `json:"name"`
 	// The description of the role
@@ -50,6 +52,38 @@ func NewCreateOrganizationRole(name string, description string, permissions []st
 func NewCreateOrganizationRoleWithDefaults() *CreateOrganizationRole {
 	this := CreateOrganizationRole{}
 	return &this
+}
+
+// GetProxyPermissions returns the ProxyPermissions field value if set, zero value otherwise.
+func (o *CreateOrganizationRole) GetProxyPermissions() []string {
+	if o == nil || IsNil(o.ProxyPermissions) {
+		var ret []string
+		return ret
+	}
+	return o.ProxyPermissions
+}
+
+// GetProxyPermissionsOk returns a tuple with the ProxyPermissions field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateOrganizationRole) GetProxyPermissionsOk() ([]string, bool) {
+	if o == nil || IsNil(o.ProxyPermissions) {
+		return nil, false
+	}
+	return o.ProxyPermissions, true
+}
+
+// HasProxyPermissions returns a boolean if a field has been set.
+func (o *CreateOrganizationRole) HasProxyPermissions() bool {
+	if o != nil && !IsNil(o.ProxyPermissions) {
+		return true
+	}
+
+	return false
+}
+
+// SetProxyPermissions gets a reference to the given []string and assigns it to the ProxyPermissions field.
+func (o *CreateOrganizationRole) SetProxyPermissions(v []string) {
+	o.ProxyPermissions = v
 }
 
 // GetName returns the Name field value
@@ -134,6 +168,9 @@ func (o CreateOrganizationRole) MarshalJSON() ([]byte, error) {
 
 func (o CreateOrganizationRole) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.ProxyPermissions) {
+		toSerialize["proxyPermissions"] = o.ProxyPermissions
+	}
 	toSerialize["name"] = o.Name
 	toSerialize["description"] = o.Description
 	toSerialize["permissions"] = o.Permissions
@@ -182,6 +219,7 @@ func (o *CreateOrganizationRole) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "proxyPermissions")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "description")
 		delete(additionalProperties, "permissions")

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { isProxyCredentialWrite } from '../box/outbound-proxy/proxy-registry-body'
+
 /** A JSON Schema object, as OpenAPI 3.x and MCP tool inputs carry it. */
 export type JsonSchema = Record<string, unknown>
 
@@ -104,7 +106,9 @@ export class McpCatalog {
         if (typeof operationId !== 'string' || this.operations.has(operationId) || !admit(operationId)) {
           continue
         }
-        const op = toOperation(operationId, method, toRoute(path), shared, operation, resolve)
+        const route = toRoute(path)
+        if (isProxyCredentialWrite(method, route)) continue
+        const op = toOperation(operationId, method, route, shared, operation, resolve)
         if (this.sources.served(op)) {
           this.operations.set(operationId, op)
         }

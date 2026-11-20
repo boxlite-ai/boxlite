@@ -1,5 +1,6 @@
 import { CreateApiKeyPermissionsEnum as Permission } from '@boxlite-ai/api-client'
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
+import { ResourcePermission } from './resource-permissions'
 
 /** Labels describe enforced operations, rather than assuming write implies read or delete. */
 export const API_KEY_PERMISSION_LABELS: Record<string, string> = {
@@ -16,6 +17,8 @@ export const API_KEY_PERMISSION_LABELS: Record<string, string> = {
   'delete:registries': 'Delete registry credentials',
   'read:members': 'View members',
   'write:members': 'Manage members and invitations',
+  'write:proxies': 'Create and update outbound proxies',
+  'delete:proxies': 'Delete outbound proxies',
 }
 export const API_KEY_PERMISSION_HELP: Record<string, string> = {
   'write:boxes': 'Operate boxes across this organization, including terminal access.',
@@ -23,9 +26,14 @@ export const API_KEY_PERMISSION_HELP: Record<string, string> = {
   'write:images': 'Includes creating and deleting image aliases.',
   'write:members': 'Includes member and invitation management, and API key revocation.',
 }
-export const API_KEY_PERMISSION_GROUPS = ['Boxes', 'Volumes', 'Images', 'Registries', 'Members'].map(
-  (name) => CREATE_API_KEY_PERMISSIONS_GROUPS.find((group) => group.name === name)!,
-)
+export const API_KEY_PERMISSION_GROUPS = [
+  'Boxes',
+  'Volumes',
+  'Images',
+  'Registries',
+  'Members',
+  'Outbound proxies',
+].map((name) => CREATE_API_KEY_PERMISSIONS_GROUPS.find((group) => group.name === name)!)
 export const IMPLICIT_BOX_READ = 'Reading boxes is included and cannot be disabled here.'
 
 export function apiKeyPermissionSummary(permissions: readonly string[]): string {
@@ -55,7 +63,12 @@ export function apiKeyExpirationDate(expiresAt?: string | Date | null): string {
 }
 
 /** Presets are exact capability bundles, never a partial intersection with available scopes. */
-export const API_KEY_ACCESS_PRESETS: { id: string; label: string; description: string; permissions: Permission[] }[] = [
+export const API_KEY_ACCESS_PRESETS: {
+  id: string
+  label: string
+  description: string
+  permissions: ResourcePermission[]
+}[] = [
   {
     id: 'operate',
     label: 'Operate boxes',
