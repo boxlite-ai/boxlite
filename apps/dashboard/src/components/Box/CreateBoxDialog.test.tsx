@@ -220,6 +220,64 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(cpuInput().value).toBe('1.5')
   })
 
+  it('keeps CPU steps meaningful between recommended nodes and an organization ceiling', async () => {
+    state.org = makeOrg({ maxCpuPerBox: 1.75 })
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '1.126'))
+    await act(async () => button('increase').click())
+    expect(cpuInput().value).toBe('1.75')
+    expect(button('increase').disabled).toBe(true)
+    await act(async () => button('decrease').click())
+    expect(cpuInput().value).toBe('1')
+    await act(async () => typeInto(cpuInput(), '0.126'))
+    await act(async () => button('decrease').click())
+    expect(cpuInput().value).toBe('0.125')
+    expect(button('decrease').disabled).toBe(true)
+  })
+
+  it('clears the saved Custom draft when the dialog is reopened', async () => {
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '1.5'))
+    await act(async () => button('Matchbox').click())
+    await act(async () => root?.render(withQueries(<CreateBoxDialog open={false} onOpenChange={() => {}} />)))
+    await rerenderOpen()
+    await act(async () => button('Larger or custom box').click())
+    expect(cpuInput().value).toBe('1')
+  })
+
+  it('does not restore another organization’s Custom draft', async () => {
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '1.5'))
+    await act(async () => button('Matchbox').click())
+    state.org = { ...makeOrg({ maxCpuPerBox: 4 }), id: 'org-other' }
+    await rerenderOpen()
+    await act(async () => button('Larger or custom box').click())
+    expect(cpuInput().value).toBe('0.125')
+  })
+
+  it('removes an incomplete volume mount so creation is not blocked', async () => {
+    await rerenderOpen()
+    await act(async () => button('+ Mount a volume').click())
+    expect(button('Create Box').disabled).toBe(true)
+    await act(async () => button('Remove mount').click())
+    expect(document.querySelector('input[aria-label="Mount path"]')).toBeNull()
+    expect(button('Create Box').disabled).toBe(false)
+    await submit()
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ volumes: undefined }))
+  })
+
+  it('shows zero per-resource costs and no paid breakdown without billing', async () => {
+    state.config = {}
+    await renderOpen()
+    expect(document.body.textContent).toContain('No usage charges')
+    const resourceFields = [...document.querySelectorAll('input[aria-label="value"]')].map(
+      (input) => input.parentElement?.parentElement,
+    )
+    expect(resourceFields).toHaveLength(3)
+    for (const field of resourceFields) expect(field?.textContent).toContain('$0.00 / hr')
+    expect([...document.querySelectorAll('button')].some((item) => item.textContent === 'Price breakdown')).toBe(false)
+  })
+
   it('shows the effective capped configuration and price on a preset', async () => {
     state.org = makeOrg({ maxCpuPerBox: 2, maxMemoryPerBox: 4, maxDiskPerBox: 10 })
     await rerenderOpen()
@@ -765,6 +823,49 @@ describe('CreateBoxDialog per-org resource cap', () => {
       await submit()
 
       expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: 'quay.io/acme/app:v1' }))
+    })
+
+    it('resizes the image menu and clears full-reference help when the field expands', async () => {
+      let width = 350
+      let available = 100
+      const observers: { callback: () => void; disconnect: ReturnType<typeof vi.fn>; target?: Element }[] = []
+      const previous = globalThis.ResizeObserver
+      globalThis.ResizeObserver = class {
+        callback: () => void
+        disconnect = vi.fn()
+        constructor(callback: ResizeObserverCallback) {
+          this.callback = () => callback([], this as unknown as ResizeObserver)
+          observers.push(this)
+        }
+        target?: Element
+        observe(target: Element) {
+          this.target = target
+        }
+        unobserve() {}
+      } as unknown as typeof ResizeObserver
+      try {
+        vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(() => width)
+        vi.spyOn(HTMLInputElement.prototype, 'clientWidth', 'get').mockImplementation(() => available)
+        vi.spyOn(HTMLInputElement.prototype, 'scrollWidth', 'get').mockReturnValue(200)
+        await renderOpen()
+        await act(async () => typeInto(imageInput()!, 'registry.example.com/team/image:v1'))
+        const description = imageInput()!.getAttribute('aria-describedby')
+        expect(description && document.getElementById(description)).toBeTruthy()
+        await openDropdown('Browse images')
+        expect(document.querySelector<HTMLElement>('[role="menu"]')?.style.width).toBe('350px')
+        width = 600
+        available = 500
+        const fieldObservers = observers.filter((observer) => observer.target === imageInput()!.parentElement)
+        await act(async () => fieldObservers.at(-1)!.callback())
+        expect(document.querySelector<HTMLElement>('[role="menu"]')?.style.width).toBe('600px')
+        expect(imageInput()!.getAttribute('aria-describedby')).toBeNull()
+        await act(async () => root?.unmount())
+        root = null
+        expect(fieldObservers.length).toBeGreaterThan(0)
+        for (const observer of fieldObservers) expect(observer.disconnect).toHaveBeenCalledOnce()
+      } finally {
+        globalThis.ResizeObserver = previous
+      }
     })
 
     it('fits the image menu to the whole field and keeps a long reference intact', async () => {
