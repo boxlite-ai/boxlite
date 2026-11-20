@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,7 +37,6 @@ import { appStatusOf, capitalize, VISIBILITY_LABEL, VISIBILITY_ORDER } from '@/l
 import { useOpenApp } from '@/lib/apps/open'
 import type { AppDetail, AppRelease, AppTab, AppVisibility } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
-import { cn } from '@/lib/utils'
 import { useState, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -252,7 +252,7 @@ function AppDetails() {
   const isNotFound = isError && httpStatusOf(error) === 404
 
   return (
-    <div className="flex min-h-[calc(100svh-60px)] w-full flex-col px-4 pb-10 pt-4 sm:px-6 lg:px-[40px]">
+    <div className="resource-page min-w-0 flex-1">
       <div className="flex items-center gap-[9px] font-sans text-meta text-muted-foreground">
         <button type="button" onClick={() => navigate(RoutePath.APPS)} className="hover:text-foreground">
           App hosting
@@ -327,7 +327,7 @@ function AppDetails() {
 
           {/* Content tabs share the Console underline navigation. */}
           <Tabs value={tab} onValueChange={(next) => goTo(next as AppTab)} className="mb-7 gap-0">
-            <TabsList variant="underline" className="max-w-full overflow-x-auto">
+            <TabsList variant="underline" className="max-w-full overflow-x-auto overflow-y-hidden">
               {TABS.map((candidate) => (
                 <TabsTrigger
                   key={candidate.id}
@@ -398,10 +398,6 @@ function AppDetails() {
   )
 }
 
-// The bordered control used in the box details header (stop, ⋮, refresh).
-const HEADER_BUTTON =
-  'inline-flex h-[34px] items-center gap-2 border border-border px-[15px] font-sans text-body font-medium text-foreground outline-none transition-colors hover:bg-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50 data-[state=open]:bg-background'
-
 function Header({
   app,
   busy,
@@ -434,10 +430,10 @@ function Header({
   const latest = app.releases[0]
   const failedNewer = latest && latest.status === 'failed' && app.activeRelease ? latest : null
   return (
-    // Laid out like box details: name, status, then bordered controls on the right, a dashed rule under it all.
-    <div className="mb-5 mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-dashed border-border pb-4">
+    // Laid out like box details: name, status, then bordered controls on the right, a divider under it all.
+    <div className="mb-5 mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-border pb-4">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-        <h1 className="font-display text-section font-semibold text-foreground">{app.name}</h1>
+        <h1 className="resource-title break-all">{app.name}</h1>
         <span className="font-sans text-em text-border">/</span>
         {environment}
         {/* Before the first release the progress line says it all. */}
@@ -458,9 +454,9 @@ function Header({
         <AccessMenu app={app} busy={busy} onPublish={onPublish} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" aria-label="More" className={cn(HEADER_BUTTON, 'w-[34px] justify-center px-0')}>
+            <Button type="button" aria-label="More" variant="outline" size="icon">
               <MoreVertical className="size-4" />
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-[15rem] font-sans">
             <div className="px-2 py-1.5 text-meta text-muted-foreground">Environment · {app.environment}</div>
@@ -503,14 +499,13 @@ function Header({
         </DropdownMenu>
         {/* Only a live release can be opened; before that the URL answers "nothing deployed". */}
         {app.activeRelease && (
-          <button
+          <Button
             type="button"
             onClick={() => void openApp(app.id, app.environment)}
             // The same primary button on every tab: opening the app is always one click.
-            className="inline-flex h-[34px] items-center gap-2 bg-primary px-[15px] font-sans text-body font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-brand/35"
           >
             Open app <ArrowUpRight className="size-3.5" />
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -537,10 +532,10 @@ function AccessMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" disabled={busy || !canWrite} className={cn(HEADER_BUTTON, 'text-muted-foreground')}>
+        <Button type="button" variant="outline" disabled={busy || !canWrite}>
           Access: <span className="text-foreground">{capitalize(VISIBILITY_LABEL[app.visibility])}</span>
           <ChevronDown className="size-3.5" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-[20rem] font-sans">
         <div className="px-2 py-1.5 text-meta text-muted-foreground">

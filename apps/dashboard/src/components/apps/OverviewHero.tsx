@@ -6,6 +6,7 @@
 import { ArrowUpRight, RefreshCw } from '@/components/ui/icon'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useAppsScope } from '@/lib/apps/client'
+import { AppHostingIllustration } from './AppHostingIllustration'
 import { AppImage } from '@/lib/apps/download'
 import { handleApiError } from '@/lib/error-handling'
 import { useQueryClient } from '@tanstack/react-query'
@@ -18,26 +19,13 @@ import { toast } from 'sonner'
 import { DeployProgress } from './DeployProgress'
 import { CopyIconButton } from './spec'
 
-// The top of the Overview: what is live, the app as visitors see it in a browser frame with its
+// The top of the Overview: what is live, the app as visitors see it in a preview panel with its
 // address, next to the deployment that put it there. Every fact appears once; the header already
 // says the app's state.
 
 const host = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
-/** The isometric cube of boxlite.ai, as an outline (the site's blEdge cube). */
-function IsoCube({ size = 22, tone = 'brand' }: { size?: number; tone?: 'brand' | 'muted' }) {
-  const stroke = tone === 'brand' ? 'hsl(var(--brand))' : 'hsl(var(--muted-foreground))'
-  const fill = tone === 'brand' ? '0,176,240' : '150,158,170'
-  return (
-    <svg width={size} height={size * 1.1} viewBox="-11 -7 22 24" aria-hidden="true" className="shrink-0">
-      <path d="M0,-6 L10,0 L0,6 L-10,0 Z" fill={`rgba(${fill},.25)`} stroke={stroke} strokeWidth="1.1" />
-      <path d="M10,0 L10,10 L0,16 L0,6 Z" fill={`rgba(${fill},.12)`} stroke={stroke} strokeWidth="1.1" />
-      <path d="M-10,0 L-10,10 L0,16 L0,6 Z" fill={`rgba(${fill},.05)`} stroke={stroke} strokeWidth="1.1" />
-    </svg>
-  )
-}
-
-/** The app as visitors see it: its last screenshot in a browser frame whose address bar is the URL. */
+/** The app as visitors see it: its last screenshot alongside its address and deployment. */
 export function LiveCard({
   app,
   active,
@@ -54,18 +42,14 @@ export function LiveCard({
   // A failing app gets no screenshot: the last good picture would say all is well.
   const preview = app.preview && !failing ? app.preview : null
   const asleep = app.status === 'sleeping'
+  const [loadedPreview, setLoadedPreview] = useState<string | null>(null)
   return (
     // One card: the app as visitors see it on the left, what is live and its facts on the right.
     <section className="grid border border-border bg-card lg:grid-cols-[minmax(0,500px)_minmax(0,1fr)]">
       <figure className="min-w-0 border-b border-border lg:border-b-0 lg:border-r">
-        {/* The browser frame: the address once, here, with copy and open. */}
+        {/* The address appears once with copy and open actions. */}
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-          <span className="flex gap-[5px]" aria-hidden="true">
-            {[0, 1, 2].map((i) => (
-              <span key={i} className="size-[7px] rounded-full bg-border" />
-            ))}
-          </span>
-          <span className="ml-2 flex min-w-0 flex-1 items-center gap-2 bg-background/60 px-2 py-[3px] font-mono text-meta">
+          <span className="flex min-w-0 flex-1 items-center gap-2 py-1 font-mono text-meta">
             <span className="size-[6px] shrink-0" style={{ background: asleep ? STATUS.stopped : STATUS.running }} />
             <span className="min-w-0 truncate text-muted-foreground" title={app.url}>
               {host(app.url)}
@@ -85,19 +69,31 @@ export function LiveCard({
           )}
         </div>
         {preview ? (
-          <button type="button" onClick={open} title={`Open ${app.name}`} className="block w-full">
+          <button
+            type="button"
+            onClick={open}
+            title={`Open ${app.name}`}
+            className="relative block aspect-[16/10] w-full overflow-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <AppHostingIllustration compact className="absolute inset-0 size-full" />
             <AppImage
               path={preview.src}
               alt={`${app.name} at ${preview.releaseId}`}
-              className={cn('aspect-[16/10] w-full object-cover object-top', asleep && 'opacity-60 grayscale-[35%]')}
+              onLoad={() => setLoadedPreview(preview.src)}
+              onError={() => setLoadedPreview(null)}
+              className={cn(
+                'absolute inset-0 size-full object-cover object-top',
+                loadedPreview !== preview.src && 'opacity-0',
+                asleep && 'grayscale',
+              )}
               loading="lazy"
             />
           </button>
         ) : (
-          <div className="flex aspect-[16/10] w-full flex-col items-center justify-center gap-3 bg-secondary/30">
-            <IsoCube size={44} tone={failing ? 'muted' : 'brand'} />
-            <span className="font-sans text-meta text-muted-foreground">
-              {failing ? 'Not serving right now' : 'A picture appears after the next deployment'}
+          <div className="relative flex aspect-[16/10] w-full flex-col items-center justify-end overflow-hidden bg-muted/20 pb-5">
+            <AppHostingIllustration compact className="absolute inset-0 size-full" />
+            <span className="relative bg-background/80 px-3 py-1 font-sans text-meta text-muted-foreground">
+              {failing ? 'Not serving right now' : 'No preview captured yet'}
             </span>
           </div>
         )}
@@ -105,7 +101,6 @@ export function LiveCard({
 
       <div className="flex min-w-0 flex-col gap-3 px-7 py-6">
         <span className="font-sans text-label uppercase tracking-[2px] text-muted-foreground">
-          <span className={failing ? 'text-destructive' : 'text-brand'}>▸</span>{' '}
           {failing ? 'Live · not healthy' : asleep ? 'Live · asleep until the next visit' : 'Live now'}
         </span>
         {active ? (

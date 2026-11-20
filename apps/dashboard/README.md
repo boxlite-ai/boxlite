@@ -54,7 +54,11 @@ App hosting uses the Console's shared resource headings, buttons and type scale.
 UI text uses Inter; code, URLs, paths and technical values use Commit Mono.
 Applications appear in a responsive card grid. Each card opens its detail page;
 the open-app and menu actions are independent. Screenshots use a neutral app
-glyph until loaded, including when the preview request fails.
+BoxLite illustration until loaded, including when the preview request fails.
+App names identify applications; their platform address is assigned automatically
+using an environment identifier, not the app name. Mock addresses also use generated IDs.
+Detail actions use shared Console buttons, and secondary screens use keyboard-accessible
+segmented tabs. The early-access illustration follows the idea → code → hosted app flow.
 
 App hosting uses the same OIDC session,
 organization switcher and resource permissions. Its management requests go to
