@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useState } from 'react'
 import { MoreButton, StatusBadge } from './spec'
 import { Link, generatePath } from 'react-router-dom'
+import { AppHostingIllustration } from './AppHostingIllustration'
 import { RoutePath } from '@/enums/RoutePath'
 
 const GRID = 'grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3'
@@ -197,10 +198,7 @@ function AppPreview({ app }: { app: AppSummary }) {
   const [loaded, setLoaded] = useState(false)
   return (
     <div className="relative flex aspect-video items-center justify-center overflow-hidden border-b border-border bg-muted/20">
-      <AgentApp
-        aria-hidden="true"
-        className={cn('size-12 text-muted-foreground/50', app.status === 'live' && 'text-brand/70')}
-      />
+      <AppHostingIllustration compact className="absolute inset-0 size-full" />
       {app.previewSrc && (
         <AppImage
           path={app.previewSrc}

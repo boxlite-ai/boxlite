@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -51,14 +52,11 @@ export function EnvironmentSwitcher({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className="inline-flex h-[30px] items-center gap-1.5 border border-dashed border-border px-[10px] font-sans text-body text-muted-foreground transition-colors hover:border-brand hover:text-foreground data-[state=open]:border-brand data-[state=open]:text-foreground"
-          >
+          <Button type="button" variant="outline" aria-label="Switch environment">
             <GitBranch className="size-3.5 shrink-0" />
             {current}
             <ChevronDown className="size-4" />
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-[19rem] font-sans text-body">
           <div className="px-2 py-1.5 text-meta text-muted-foreground">Environments</div>
