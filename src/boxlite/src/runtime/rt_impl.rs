@@ -1,23 +1,28 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
 use crate::images::{ImageDiskManager, ImageManager};
+use crate::litebox::box_impl::live_checkpoint::{
+    ensure_no_pending_checkpoint, recover_pending_checkpoint,
+};
 use crate::litebox::box_impl::{BoxEvent, BoxRun};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockGuard, LockManager, Locker};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
+use crate::runtime::checkpoints::CheckpointRequest;
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
-use crate::util::{PidFileReader, ProcessIdentity};
+use crate::util::{PidFileReader, PidRecord, ProcessIdentity};
 use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use tokio::sync::OnceCell;
@@ -251,6 +256,14 @@ impl RuntimeImpl {
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::initialize_recovering(options, experimental_features, Self::recover_boxes)
+    }
+
+    pub(crate) fn initialize_recovering(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+        recover: impl FnOnce(&Self) -> BoxliteResult<()>,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
             return Err(BoxliteError::Internal(format!(
@@ -385,7 +398,7 @@ impl RuntimeImpl {
         tracing::debug!("initialized runtime");
 
         // Recover boxes from database
-        inner.recover_boxes()?;
+        recover(&inner)?;
 
         Ok(inner)
     }
@@ -614,6 +627,13 @@ impl RuntimeImpl {
     /// If another handle to the same box exists, they share the same BoxImpl
     /// (and thus the same LiveState if initialized).
     pub async fn get(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
+        Ok(self.get_box_impl(id_or_name).await?.map(litebox_from_impl))
+    }
+
+    async fn get_box_impl(
+        self: &Arc<Self>,
+        id_or_name: &str,
+    ) -> BoxliteResult<Option<SharedBoxImpl>> {
         tracing::trace!(id_or_name = %id_or_name, "RuntimeInnerImpl::get called");
 
         // Check in-memory cache first (for boxes created but not yet persisted)
@@ -626,7 +646,7 @@ impl RuntimeImpl {
                 && let Some(strong) = weak.upgrade()
             {
                 tracing::trace!(box_id = %box_id, "Found box in cache by ID");
-                return Ok(Some(litebox_from_impl(strong)));
+                return Ok(Some(strong));
             }
 
             // Try as name
@@ -634,7 +654,7 @@ impl RuntimeImpl {
                 && let Some(strong) = weak.upgrade()
             {
                 tracing::trace!(name = %id_or_name, "Found box in cache by name");
-                return Ok(Some(litebox_from_impl(strong)));
+                return Ok(Some(strong));
             }
         }
 
@@ -655,7 +675,7 @@ impl RuntimeImpl {
 
             let (box_impl, _) = self.get_or_create_box_impl(config, state);
             tracing::trace!(id_or_name = %id_or_name, "LiteBox created successfully");
-            return Ok(Some(litebox_from_impl(box_impl)));
+            return Ok(Some(box_impl));
         }
 
         tracing::trace!(id_or_name = %id_or_name, "Box not found");
@@ -960,6 +980,11 @@ impl RuntimeImpl {
                     continue;
                 }
             };
+            if let Err(error) = ensure_no_pending_checkpoint(&config.box_home) {
+                self.sync_cleanup_pending.store(true, Ordering::Release);
+                tracing::warn!(box_id = %config.id, %error, "Sync shutdown deferred");
+                continue;
+            }
             let frozen = state.status == BoxStatus::Paused;
             if !frozen && state.status != BoxStatus::Running {
                 continue;
@@ -1181,6 +1206,7 @@ impl RuntimeImpl {
         };
 
         if let Some(box_impl) = box_impl {
+            ensure_no_pending_checkpoint(&box_impl.config.box_home)?;
             // Box exists in-memory only (not yet started/persisted)
             let state = box_impl.state.read();
             if state.status.is_active() && !force {
@@ -1247,6 +1273,7 @@ impl RuntimeImpl {
         state: BoxState,
         lock_id: crate::lock::LockId,
     ) -> BoxliteResult<()> {
+        ensure_no_pending_checkpoint(&config.box_home)?;
         let mut state = state;
         if state.status.is_active() || state.pid.is_some() {
             if force {
@@ -1483,13 +1510,53 @@ impl RuntimeImpl {
     }
 
     fn recover_boxes_with_boot_id(&self, current_boot_id: Option<&str>) -> BoxliteResult<()> {
+        self.recover_boxes_with_checkpoint_settle(current_boot_id, |_, _, _, _| {
+            Err(BoxliteError::Unsupported(
+                "shim VMM does not support live checkpoint settlement".into(),
+            ))
+        })
+    }
+
+    pub(crate) fn recover_boxes_with_checkpoint_settle(
+        &self,
+        current_boot_id: Option<&str>,
+        mut settle: impl FnMut(&BoxID, &Path, PidRecord, &CheckpointRequest<'_>) -> BoxliteResult<()>,
+    ) -> BoxliteResult<()> {
         use std::collections::HashSet;
+
+        // A pending checkpoint owns this run's identity and disk artifacts.
+        // Recover it before any phase can reset the row or delete its files.
+        let mut checkpoint_boxes = HashMap::new();
+        for (config, state) in self.box_manager.all_boxes(true)? {
+            let layout = self.layout.box_layout(config.id.as_str(), false)?;
+            let pid_file = layout.pid_file_path();
+            match recover_pending_checkpoint(
+                self,
+                &config,
+                &state,
+                &pid_file,
+                current_boot_id,
+                |request, record| settle(&config.id, &pid_file, record, request),
+            ) {
+                Ok(false) => {}
+                Ok(true) => {
+                    checkpoint_boxes.insert(config.id, false);
+                }
+                Err(error) => {
+                    tracing::warn!(box_id = %config.id, %error, "Live checkpoint recovery deferred");
+                    checkpoint_boxes.insert(config.id, true);
+                }
+            }
+        }
 
         // A boot ID read can succeed after frozen boxes already exist in this session.
         // Defer reboot reset for persistent frozen records with a live PID file.
         // Ephemeral cleanup requires clearing any PID from a previous boot first.
         self.box_manager
             .check_and_handle_reboot_with(current_boot_id, |config, state| {
+                if checkpoint_boxes.contains_key(&config.id) {
+                    return true;
+                }
                 if state.status == BoxStatus::Paused
                     && !config.options.removes_on_stop()
                     && let Ok(box_layout) = self.layout.box_layout(config.id.as_str(), false)
@@ -1529,6 +1596,9 @@ impl RuntimeImpl {
         let mut boxes_to_remove = Vec::new();
         let mut deferred_ephemeral = HashSet::new();
         for (config, state) in &persisted {
+            if checkpoint_boxes.get(&config.id) == Some(&true) {
+                continue;
+            }
             let should_remove = if config.options.removes_on_stop() {
                 let pid_file = self
                     .layout
@@ -1607,7 +1677,9 @@ impl RuntimeImpl {
                 && let Ok(entries) = std::fs::read_dir(&boxes_dir)
             {
                 for entry in entries.flatten() {
-                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                        && ensure_no_pending_checkpoint(&entry.path()).is_ok()
+                    {
                         crate::litebox::local_snapshot::recover_pending_snapshot(&entry.path());
                     }
                 }
@@ -1641,7 +1713,7 @@ impl RuntimeImpl {
                 self.disk_lock_manager.allocate_and_retrieve(lock_id)?;
                 state.set_lock_id(lock_id);
             }
-            if deferred_ephemeral.contains(box_id) {
+            if checkpoint_boxes.get(box_id) == Some(&true) || deferred_ephemeral.contains(box_id) {
                 if state.lock_id != original_lock_id {
                     self.box_manager.save_box(box_id, &state)?;
                 }
@@ -1854,6 +1926,10 @@ impl RuntimeImpl {
 
         for orphan_id in orphaned {
             let orphan_dir = boxes_dir.join(orphan_id);
+            if let Err(error) = ensure_no_pending_checkpoint(&orphan_dir) {
+                tracing::warn!(box_id = %orphan_id, %error, "Orphan cleanup deferred");
+                continue;
+            }
             tracing::warn!(
                 box_id = %orphan_id,
                 path = %orphan_dir.display(),
@@ -2010,6 +2086,17 @@ impl std::fmt::Debug for RuntimeImpl {
 /// `RuntimeImpl` methods use `self: &Arc<Self>` for back-references from `BoxImpl`.
 /// Trait methods use `&self`. This newtype holds the Arc as a field to bridge the gap.
 pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
+
+impl LocalRuntime {
+    pub(crate) async fn capture_live(&self, source: &str) -> BoxliteResult<std::path::PathBuf> {
+        let box_impl = self
+            .0
+            .get_box_impl(source)
+            .await?
+            .ok_or_else(|| BoxliteError::NotFound(source.into()))?;
+        box_impl.capture_live().await
+    }
+}
 
 fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
     // Local runtimes support auto_delete as a remove-on-stop policy, but AutoStop
