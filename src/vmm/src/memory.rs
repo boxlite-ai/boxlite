@@ -45,7 +45,12 @@ impl RamLayout {
     /// The RAM start, size and any hole endpoints must be guest-page aligned.
     pub(crate) fn ranges(&self, size: u64) -> io::Result<Vec<(GuestAddress, usize)>> {
         assert!(self.start.is_multiple_of(GUEST_PAGE_SIZE));
-        assert!(size.is_multiple_of(GUEST_PAGE_SIZE));
+        if !size.is_multiple_of(GUEST_PAGE_SIZE) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "guest RAM size is not page-aligned",
+            ));
+        }
         let (low_len, high) = if let Some((hole_start, hole_end)) = self.hole {
             assert!(hole_start.is_multiple_of(GUEST_PAGE_SIZE));
             assert!(hole_end.is_multiple_of(GUEST_PAGE_SIZE));

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use boxlite_hypervisor::Vm as HostVm;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use crate::snapshot::export;
 use crate::{
     VmControl,
     chipset::{Chipset, ChipsetBuilder},
@@ -366,6 +368,8 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 {
                     vcpus.sender.send(Event::VcpuFailed(error.into()));
                 }
+                #[cfg(target_os = "linux")]
+                export::drive(vcpus.lifecycle, vcpus.host_vm, &self.ram, self.vcpu_count);
             }
         });
         match event {

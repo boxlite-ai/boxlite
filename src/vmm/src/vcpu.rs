@@ -13,6 +13,8 @@ use std::{
 
 use boxlite_hypervisor::{Vcpu, VcpuExit, X86BootRegisters, X86Vcpu, X86Vm};
 
+#[cfg(target_os = "linux")]
+use crate::snapshot::state::VcpuRecord;
 use crate::{
     chipset::Chipset,
     cpu_features::{BOOT_MSRS, vcpu_cpuid},
@@ -132,4 +134,10 @@ impl<H: X86Vm> Workers<'_, H> {
 fn catch_panic<T>(id: u8, f: impl FnOnce() -> Result<T>) -> Result<T> {
     panic::catch_unwind(AssertUnwindSafe(f))
         .unwrap_or_else(|_| Err(Error::VcpuPanicked { vcpu: id.into() }))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn capture(vcpu: &mut impl X86Vcpu, id: u8) -> Result<VcpuRecord> {
+    let state = vcpu.save_state()?;
+    Ok(VcpuRecord { id, state })
 }
