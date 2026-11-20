@@ -36,6 +36,11 @@ export interface Allocation {
   closing: boolean
   effect: { id: string; kind: EffectKind } | null
 }
+/** Capacity this worker can back when an outstanding scale set request is redelivered. */
+export function retryCapacity(value: Allocation): 'unavailable' | 'reserved' | 'dispatched' {
+  if (!value.supply?.scaleSet || value.closing || value.box.phase === 'absent') return 'unavailable'
+  return value.box.phase === 'none' ? 'reserved' : 'dispatched'
+}
 export const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 export const positive = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0

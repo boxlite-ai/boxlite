@@ -431,7 +431,9 @@ An idle poll with pending acquisitions reconciles them against statistics for th
 
 A completed long poll can carry an older capacity estimate. The listener rechecks the current policy and charges shared quota before acquiring offers.
 
-A retry checks the current policy and the original undispatched reservations before acquiring again. If a scope drain released those reservations, the set must obtain new quota. Held reservations start a Box only when GitHub confirms assigned demand.
+A retry checks the current policy and the scope’s allocation version in the transaction that records the retry intent. If a Box starts, begins closing, or becomes absent after the worker count was read, the listener rechecks capacity before retrying the request.
+
+If a scope drain released those reservations, the set must obtain new quota. Held reservations start a Box only when GitHub confirms assigned demand.
 
 ```mermaid
 sequenceDiagram

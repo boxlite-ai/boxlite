@@ -262,6 +262,8 @@ const scenarios = [
   'recovers idle retirement after a lost DELETE reply',
   'replaces the retired runner when demand returns after a lost DELETE reply',
   'rejects a charged retry against a stale quota record',
+  'rejects a charged retry when its assigned Box becomes absent',
+  'rejects a charged retry when its assigned Box starts closing',
   'requires an original set reservation when a drained request is reoffered',
   'retries a charged slot with 98 policy checks',
   'rechecks shrinking quota after a long poll',
@@ -416,6 +418,72 @@ for (const storage of ['sqlite', 'postgres'])
         let stop: (() => Promise<void>) | undefined
         try {
           await journal.initialize()
+          if (
+            scenario === 'rejects a charged retry when its assigned Box becomes absent' ||
+            scenario === 'rejects a charged retry when its assigned Box starts closing'
+          ) {
+            const owner = (await state.acquire(randomUUID(), 30000))!
+            const key = await journal.define(owner, scope)
+            const peer = await journal.define(owner, { ...scope, binding: 'peer', organization: 'peer' })
+            const policy = { limits: [{ domain: 'global' as const, maximum: 2 }] }
+            const supply = { labels: ['boxlite'], scaleSet: 9 }
+            const slot = (await journal.reserve(owner, key, null, policy, supply))!
+            const dispatched = await journal.advance(owner, slot.record.key, slot.record.version, {
+              effect: { id: randomUUID(), kind: 'box-create' },
+              box: { phase: 'requested', id: null },
+            })
+            const assigned = await journal.advance(owner, slot.record.key, dispatched.record.version, {
+              box: { phase: 'known', id: 'assigned-box' },
+            })
+            fixture.target = 1
+            fixture.loseBeforeAcquire = true
+            const controller = new ScaleSetController(
+              state,
+              owner,
+              decodeScope(scope),
+              ['boxlite'],
+              journal,
+              new ScaleSetWork(),
+              {
+                service: new ActionsScaleSets('https://github.com/owner/repo', async () => 'local-token'),
+                authority: async () => new Set(['repo']),
+                charged: () => 1,
+                creationReady: () => true,
+                policy: async () => policy,
+                report: (error) => errors.push(String(error)),
+                wake: () => {},
+              },
+              new AbortController().signal,
+            )
+            stop = () => controller.close()
+            await controller.restore()
+            await until(() => fixture.requests.includes('GET /messages'))
+            fixture.publish(1, 1, [123])
+            await until(() => fixture.sessions.length === 2)
+            expect(await journal.used('tenant')).toBe(2)
+            const becomesAbsent = scenario.endsWith('becomes absent')
+            const commit = state.commit.bind(state)
+            let intervened = false
+            jest.spyOn(state, 'commit').mockImplementation(async (lease, changes, checks) => {
+              if (!intervened && checks !== undefined && changes[0].key.startsWith('scale-set/')) {
+                intervened = true
+                await journal.advance(
+                  owner,
+                  assigned.record.key,
+                  assigned.record.version,
+                  becomesAbsent ? { box: { phase: 'absent', id: 'assigned-box' } } : { closing: true },
+                )
+                if (becomesAbsent) await journal.reserve(owner, peer, null, policy, { ...supply, scaleSet: 8 })
+              }
+              return commit(lease, changes, checks)
+            })
+            fixture.publish(1, 1, [123])
+            await until(() => fixture.acknowledged.includes(1) || fixture.sessions.length > 2)
+            expect(intervened).toBe(true)
+            expect(await journal.used('peer')).toBe(becomesAbsent ? 1 : 0)
+            expect(fixture.acquired).toEqual([])
+            return
+          }
           if (scenario === 'opens a healthy specification while 64 sessions back off') {
             const owner = (await state.acquire(randomUUID(), 600))!
             const key = await journal.define(owner, scope)
