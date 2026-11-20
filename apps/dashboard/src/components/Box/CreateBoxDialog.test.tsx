@@ -149,29 +149,18 @@ describe('CreateBoxDialog per-org resource cap', () => {
     vi.restoreAllMocks()
   })
 
-  // Volumes and Lifecycle live behind one "Advanced" disclosure; these tests
-  // are about the controls, so they open it first.
-  async function openAdvanced() {
-    const toggle = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      /^[▸▾]\s*Advanced/.test((b.textContent ?? '').trim()),
-    )
-    if (toggle && toggle.getAttribute('aria-expanded') !== 'true') {
-      await act(async () => toggle.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-      await flush()
-    }
-  }
-
   async function renderOpen() {
     const host = document.createElement('div')
     document.body.appendChild(host)
     await rerenderOpen(host)
-    await openAdvanced()
-    // Reveal the CPU/Memory/Disk steppers: Size defaults to the "Small" chip,
+    // Reveal the CPU/Memory/Disk steppers: Size defaults to the "Shoebox" chip,
     // and "Custom" is what exposes the raw fields. Scoped to the Size group —
     // Lifecycle has its own identically-labelled "Custom" chip.
     const sizeGroup = document.querySelector('[aria-label="Size"]')
     const custom = sizeGroup
-      ? [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find((b) => /^Custom/.test(b.textContent ?? ''))
+      ? [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+          /^Larger or custom box/.test(b.textContent ?? ''),
+        )
       : undefined
     await act(async () => custom?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
@@ -200,6 +189,82 @@ describe('CreateBoxDialog per-org resource cap', () => {
   function cpuInput() {
     return document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')[0]
   }
+
+  it('exposes sub-core sizes with complete estimates before opening Custom', async () => {
+    await rerenderOpen()
+    const card = document.querySelector<HTMLButtonElement>('button[aria-label="Matchbox"]')
+    expect(card).not.toBeNull()
+    expect(card?.textContent).toContain('0.125')
+    expect(card?.textContent).toContain('$0.0225')
+    await act(async () => card!.click())
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Larger or custom box"]')!.click(),
+    )
+    expect(cpuInput().value).toBe('0.125')
+  })
+
+  it('steps fractional CPU through recommended sizes without rounding typed values', async () => {
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '0.125'))
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="increase"]')!.click())
+    expect(cpuInput().value).toBe('0.25')
+    await act(async () => typeInto(cpuInput(), '0.126'))
+    expect(cpuInput().value).toBe('0.126')
+  })
+
+  it('restores a valid Custom draft after comparing a preset', async () => {
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '1.5'))
+    await act(async () => button('Matchbox').click())
+    await act(async () => button('Larger or custom box').click())
+    expect(cpuInput().value).toBe('1.5')
+  })
+
+  it('shows the effective capped configuration and price on a preset', async () => {
+    state.org = makeOrg({ maxCpuPerBox: 2, maxMemoryPerBox: 4, maxDiskPerBox: 10 })
+    await rerenderOpen()
+    const card = button('Cargo')
+    expect(card.textContent).toContain('2 vCPU')
+    expect(card.textContent).toContain('4 GiB RAM · 10 GiB disk')
+    expect(card.textContent).toContain('$0.1602')
+    expect(card.textContent).toContain('Adjusted')
+    await act(async () => card.click())
+    await submit()
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ resources: { cpu: 2, memory: 4, disk: 10 } }),
+    )
+  })
+
+  it('keeps invalid CPU blocked when Custom is selected again', async () => {
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '0.12'))
+    await act(async () => button('Larger or custom box').click())
+    expect(cpuInput().value).toBe('0.12')
+    expect(button('Create Box').disabled).toBe(true)
+  })
+
+  it('explains a Custom draft adjusted to refreshed limits', async () => {
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '3'))
+    await act(async () => button('Matchbox').click())
+    state.org = makeOrg({ maxCpuPerBox: 2 })
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.organization.detail('org-1') })
+    })
+    await act(async () => button('Larger or custom box').click())
+    expect(cpuInput().value).toBe('2')
+    expect(document.body.textContent).toContain('support@boxlite.ai')
+  })
+
+  it('exposes named image and lifecycle controls and focuses custom resources', async () => {
+    await rerenderOpen()
+    expect(button('Browse images').textContent).toContain('Browse images')
+    expect(document.querySelector('button[aria-label="Stop when idle"]')).toBeTruthy()
+    expect(document.querySelector('button[aria-label="Wake on access"]')).toBeTruthy()
+    await act(async () => button('Larger or custom box').click())
+    expect(document.activeElement).toBe(cpuInput())
+    expect(document.querySelector('input[aria-label="value"]')).toBeTruthy()
+  })
 
   function nameInput() {
     return document.querySelector<HTMLInputElement>('input[placeholder="my-new-box"]')
@@ -248,7 +313,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(document.body.textContent).toMatch(/CPU\s*4\s*vCPU/)
   })
 
-  it('does not pin the input to a dashboard-local ceiling when the org max is unset', async () => {
+  it('uses the API CPU ceiling when the org max is unset', async () => {
     state.org = makeOrg({ maxCpuPerBox: 0, maxMemoryPerBox: undefined, maxDiskPerBox: -1 })
     await renderOpen()
     const input = cpuInput()
@@ -257,8 +322,8 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
     await flush()
 
-    expect(input.value).toBe('123123')
-    expect(document.body.textContent).not.toContain('support@boxlite.ai')
+    expect(input.value).toBe('16')
+    expect(document.body.textContent).toContain('Max 16 vCPU')
   })
 
   it('preserves open form state when an org change only tightens resource caps', async () => {
@@ -310,7 +375,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await rerenderOpen()
     const sizeGroup = document.querySelector('[aria-label="Size"]')
     if (!sizeGroup) throw new Error('expected the Size group to be rendered')
-    const medium = [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Medium')
+    const medium = [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Crate',
+    )
     expect(medium).toBeTruthy()
 
     await act(async () => medium?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
@@ -319,7 +386,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(document.body.textContent).toMatch(/2 vCPU.*4 GiB.*10 GiB/)
   })
 
-  // Regression guard for the Size preset clamp: picking "Large" (4/8/50) against
+  // Regression guard for the Size preset clamp: picking "Cargo" (4/8/50) against
   // a tighter org cap must clamp immediately and say so, not leave the screen
   // showing a number the org will reject on submit.
   it('clamps a Size preset that exceeds the org cap and explains why immediately', async () => {
@@ -327,12 +394,14 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await rerenderOpen()
     const sizeGroup = document.querySelector('[aria-label="Size"]')
     if (!sizeGroup) throw new Error('expected the Size group to be rendered')
-    const large = [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Large')
+    const large = [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Cargo',
+    )
 
     await act(async () => large?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    // Large asks for 4 vCPU; the org caps at 2 — clamped, not silently dropped.
+    // Cargo asks for 4 vCPU; the org caps at 2 — clamped, not silently dropped.
     expect(document.body.textContent).toMatch(/2 vCPU.*8 GiB.*10 GiB/)
     expect(document.body.textContent).toContain('support@boxlite.ai')
     expect(document.body.textContent).toMatch(/CPU\s*2\s*vCPU/)
@@ -350,7 +419,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => decrease?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(input.value).toBe('3.9')
+    expect(input.value).toBe('2')
     expect(document.body.textContent).not.toContain('support@boxlite.ai')
   })
 
@@ -416,9 +485,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     })
 
     it.each([
-      ['Small', 1, 1024, 10],
-      ['Medium', 2, 4096, 20],
-      ['Large', 4, 8192, 50],
+      ['Shoebox', 1, 1024, 10],
+      ['Crate', 2, 4096, 20],
+      ['Cargo', 4, 8192, 50],
     ])('submits the %s preset through the REST resource mapper', async (label, cpus, memory_mib, disk_size_gb) => {
       await renderOpen()
       const button = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Size"] button')].find((button) =>
@@ -483,7 +552,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
   })
 
   function button(label: string) {
-    const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === label)
+    const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.getAttribute('aria-label') === label || b.textContent === label,
+    )
     if (!found) throw new Error(`Missing button: ${label}`)
     return found
   }
@@ -500,8 +571,8 @@ describe('CreateBoxDialog per-org resource cap', () => {
   }
 
   it.each([
-    ['Medium', 20],
-    ['Large', 50],
+    ['Crate', 20],
+    ['Cargo', 50],
   ])('submits %s unchanged while the first limits request hangs', async (label, diskSize) => {
     deferRefresh()
     await rerenderOpen()
@@ -536,7 +607,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => refresh.reject(new Error('network unavailable')))
     await flush()
     expect(document.body.textContent).toContain('Could not load limits. Limits are checked when you create.')
-    await act(async () => button('Large').click())
+    await act(async () => button('Cargo').click())
     await submit()
     expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).disk_size_gb).toBe(50)
   })
@@ -544,7 +615,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
   it('restores the selected preset when background refresh raises the limits', async () => {
     vi.useFakeTimers()
     await rerenderOpen()
-    await act(async () => button('Medium').click())
+    await act(async () => button('Crate').click())
     const name = nameInput()
     if (!name) throw new Error('expected name input to be rendered')
     await act(async () => typeInto(name, 'kept-name'))
@@ -601,10 +672,10 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(cpuInput().matches(':disabled')).toBe(false)
     await act(async () => earlier.resolve(makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })))
     await flush()
-    expect(document.body.textContent).not.toContain('Max 16 vCPU')
+    expect(document.body.textContent).not.toContain('Max 32 GiB')
     await act(async () => refresh.resolve())
     await flush()
-    await act(async () => button('Large').click())
+    await act(async () => button('Cargo').click())
     await submit()
     expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
       cpus: 2,
@@ -696,11 +767,28 @@ describe('CreateBoxDialog per-org resource cap', () => {
       expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: 'quay.io/acme/app:v1' }))
     })
 
+    it('fits the image menu to the whole field and keeps a long reference intact', async () => {
+      const ref = 'registry.example.com/team/' + 'long-repository-'.repeat(10) + 'image:release-2026-11-20'
+      state.catalogImages = [{ name: ref, curated: true, aliases: [] }]
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(350)
+      vi.spyOn(HTMLInputElement.prototype, 'clientWidth', 'get').mockReturnValue(300)
+      vi.spyOn(HTMLInputElement.prototype, 'scrollWidth', 'get').mockReturnValue(1800)
+      await renderOpen()
+      await openDropdown('Browse images')
+      expect(document.querySelector<HTMLElement>('[role="menu"]')?.style.width).toBe('350px')
+      await selectMenuItem(ref)
+      expect(imageInput()?.value).toBe(ref)
+      const description = imageInput()?.getAttribute('aria-describedby')
+      expect(description && document.getElementById(description)?.textContent).toBe(ref)
+      await submit()
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: ref }))
+    })
+
     it('offers a curated image under its short name and never a tag', async () => {
       state.catalogImages = [{ name: 'python', curated: true, aliases: [] }]
       await renderOpen()
 
-      await openDropdown('Choose a known image')
+      await openDropdown('Browse images')
 
       expect(menuItems()).toEqual(['python'])
     })
@@ -709,7 +797,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
       state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, aliases: ['v1'] }]
       await renderOpen()
 
-      await openDropdown('Choose a known image')
+      await openDropdown('Browse images')
 
       expect(menuItems()).toEqual(['quay.io/acme/app:v1'])
     })
@@ -720,7 +808,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
       state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, aliases: ['v1', 'latest'] }]
       await renderOpen()
 
-      await openDropdown('Choose a known image')
+      await openDropdown('Browse images')
 
       expect(menuItems()).toEqual(['quay.io/acme/app'])
     })
@@ -729,7 +817,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
       state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, aliases: ['v1'] }]
       await renderOpen()
 
-      await openDropdown('Choose a known image')
+      await openDropdown('Browse images')
       await selectMenuItem('quay.io/acme/app:v1')
 
       expect(imageInput()?.value).toBe('quay.io/acme/app:v1')
@@ -741,7 +829,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     it('says so rather than offering nothing when the catalog is empty', async () => {
       await renderOpen()
 
-      await openDropdown('Choose a known image')
+      await openDropdown('Browse images')
 
       expect(menuItems()).toEqual(['No images yet'])
     })
@@ -930,7 +1018,6 @@ describe('CreateBoxDialog per-org resource cap', () => {
   // the id, so that is what a click must submit.
   it('submits the volume id, never the display name', async () => {
     await rerenderOpen()
-    await openAdvanced()
 
     const addMount = [...document.querySelectorAll('button')].find((b) => /Mount a volume/.test(b.textContent ?? ''))
     await act(async () => addMount?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
@@ -951,7 +1038,6 @@ describe('CreateBoxDialog per-org resource cap', () => {
 
   it('explains a volume without restating what Disk above already says', async () => {
     await rerenderOpen()
-    await openAdvanced()
     expect(document.body.textContent).toContain('A volume persists independently of this box')
     expect(document.body.textContent).not.toContain('scratch space')
   })
@@ -1040,24 +1126,24 @@ describe('CreateBoxDialog hourly price', () => {
   it('quotes the default box from the published rates instead of $0.00', async () => {
     await renderOpen()
 
-    // Small = 1 vCPU / 1 GiB / 10 GiB → 5.04¢ + 1.44¢ + 0.18¢
+    // Shoebox = 1 vCPU / 1 GiB / 10 GiB → 5.04¢ + 1.44¢ + 0.18¢
     expect(document.body.textContent).toContain('$0.0666')
     expect(document.body.textContent).not.toContain('free in preview')
   })
 
   function breakdownToggle() {
     return [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      /Est\. price per hour/.test(b.textContent ?? ''),
+      /Price breakdown/.test(b.textContent ?? ''),
     )
   }
 
-  it('keeps expanded pricing inside the scrollable form body', async () => {
+  it('opens pricing above the fixed footer without adding form scroll', async () => {
     await renderOpen()
     await act(async () => breakdownToggle()!.click())
     await flush()
-    const breakdown = document.querySelector('#box-price-breakdown')!
+    const breakdown = document.querySelector('[role="dialog"][aria-label="Price breakdown"]')!
     expect(breakdown).not.toBeNull()
-    expect(breakdown.closest('.form-dialog-body')).not.toBeNull()
+    expect(breakdown.closest('.form-dialog-body')).toBeNull()
     expect(document.querySelector('.form-dialog-body')?.contains(document.querySelector('.form-dialog-footer'))).toBe(
       false,
     )
@@ -1070,6 +1156,17 @@ describe('CreateBoxDialog hourly price', () => {
     expect(document.body.textContent).not.toContain('vCPU·hr')
     // The total is the decision, so it stays visible while the split is folded.
     expect(document.body.textContent).toContain('$0.0666')
+  })
+
+  it('places an explicit price breakdown action beside the fixed total', async () => {
+    await renderOpen()
+    expect(document.body.textContent).not.toContain('Estimated rates for the full configuration.')
+    const footer = document.querySelector('.form-dialog-footer')
+    expect(footer?.textContent).toContain('Price breakdown')
+    const action = [...(footer?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Price breakdown')
+    expect(action).toBeTruthy()
+    await act(async () => action?.click())
+    expect(document.body.textContent).toContain('Disk · 10 GiB × $0.00018/GiB·hr')
   })
 
   it('shows what the total is made of once expanded, including the disk line whole cents would hide', async () => {
@@ -1088,9 +1185,9 @@ describe('CreateBoxDialog hourly price', () => {
 
   it('re-quotes when the size changes', async () => {
     await renderOpen()
-    await pickSize('Large')
+    await pickSize('Cargo')
 
-    // Large = 4 vCPU / 8 GiB / 50 GiB → 20.16¢ + 11.52¢ + 0.9¢
+    // Cargo = 4 vCPU / 8 GiB / 50 GiB → 20.16¢ + 11.52¢ + 0.9¢
     expect(document.body.textContent).toContain('$0.3258')
   })
 
@@ -1099,7 +1196,7 @@ describe('CreateBoxDialog hourly price', () => {
     state.pricesQuery = { data: undefined, isLoading: false }
     await renderOpen()
 
-    expect(document.body.textContent).toContain('free in preview')
+    expect(document.body.textContent).toContain('No usage charges')
   })
 
   it('never reads as free when the rates fail to load', async () => {

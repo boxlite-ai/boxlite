@@ -3,6 +3,35 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Create Box sizing
+
+New Box presents six named presets from 0.125 to 4 vCPU, retaining the existing
+1 vCPU / 1 GiB / 10 GiB default. Sub-core presets retain 1 GiB RAM and 10 GiB disk;
+the names identify configurations, not guaranteed workload suitability.
+Each card shows its effective organization-capped configuration and complete hourly
+estimate from the existing usage-price query. Adjusted cards are labelled before
+selection; unavailable rates are never presented as a free quote.
+
+**Larger or custom box** opens the inline resource editor, scrolls it into view,
+and focuses CPU. It retains three-decimal CPU input. Its +/- controls move between 0.125, 0.25,
+0.5, 1, 2, 4, 8 and 16 vCPU, respecting a lower organization ceiling. CPU, memory
+and disk show separate estimated contributions, with the total beside Create Box.
+The fixed total includes a **Price breakdown** button that opens the CPU, memory
+and disk calculation above the footer, without scrolling through the form. The
+panel follows the current configuration and supports Escape to return to its trigger.
+A valid Custom draft survives preset comparisons within the open dialog and is
+clamped to current limits when restored. Closing or changing organization clears
+that saved draft. Creation still uses the existing REST mutation and server validation.
+
+**Browse images** is the visible catalog action beside the editable image reference.
+The Image suggestions menu tracks the entire input's width, including after dialog
+resizing. Long references wrap within the menu; an overflowing selected reference is
+also shown in full below the editable input. Neither presentation changes the image
+reference sent to the API.
+
+Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
+Their existing defaults, validation and submission behavior are unchanged.
+
 ## New-account email policy
 
 First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without
