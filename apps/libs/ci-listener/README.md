@@ -431,6 +431,8 @@ An idle poll with pending acquisitions reconciles them against statistics for th
 
 A completed long poll can carry an older capacity estimate. The listener rechecks the current policy and charges shared quota before acquiring offers.
 
+Ten assigned jobs with ten reserved slots and no workers in flight dispatch ten Box creates in one pass. Each worker commits its create intent before calling the Box service. The next pass counts those starts toward the target. The same transaction advances the scope activity version using its locked, current membership count.
+
 A retry checks the current policy and the scope’s allocation version in the transaction that records the retry intent. If a Box starts, begins closing, or becomes absent after the worker count was read, the listener rechecks capacity before retrying the request.
 
 If a scope drain released those reservations, the set must obtain new quota. Held reservations start a Box only when GitHub confirms assigned demand.

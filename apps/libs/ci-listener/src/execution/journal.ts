@@ -430,14 +430,14 @@ export class ExecutionJournal {
     const changes: StateChange[] = [{ key, expected: version, payload: json(value) }]
     const released = previous.box.phase !== 'absent' && value.box.phase === 'absent'
     const capacityChanged = retryCapacity(previous) !== retryCapacity(value)
+    let refreshScopeActivity: string | undefined
     if (released || capacityChanged) {
       const target = await this.scope(lease, value.scope)
-      // A retry relies on both the assigned workers and the undispatched reservations in this scope.
-      if (capacityChanged)
-        changes.push({ key: target.activity.key, expected: target.activity.version, payload: target.activity.payload })
+      // Sibling workers each own a slot. Only acquisition retries depend on the old aggregate version.
+      if (capacityChanged) refreshScopeActivity = target.activity.key
       if (released) changes.push(...this.charge(await this.usage(Object.values(domains(target.scope)), lease), -1))
     }
-    const records = await this.state.commit(lease, changes, checks)
+    const records = await this.state.commit(lease, changes, checks, refreshScopeActivity)
     return { record: records.find((record) => record.key === key)!, value }
   }
 

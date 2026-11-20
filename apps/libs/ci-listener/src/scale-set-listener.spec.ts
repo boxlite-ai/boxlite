@@ -264,6 +264,7 @@ const scenarios = [
   'rejects a charged retry against a stale quota record',
   'rejects a charged retry when its assigned Box becomes absent',
   'rejects a charged retry when its assigned Box starts closing',
+  'rejects a charged retry when its last reserved worker starts',
   'requires an original set reservation when a drained request is reoffered',
   'retries a charged slot with 98 policy checks',
   'rechecks shrinking quota after a long poll',
@@ -420,7 +421,8 @@ for (const storage of ['sqlite', 'postgres'])
           await journal.initialize()
           if (
             scenario === 'rejects a charged retry when its assigned Box becomes absent' ||
-            scenario === 'rejects a charged retry when its assigned Box starts closing'
+            scenario === 'rejects a charged retry when its assigned Box starts closing' ||
+            scenario === 'rejects a charged retry when its last reserved worker starts'
           ) {
             const owner = (await state.acquire(randomUUID(), 30000))!
             const key = await journal.define(owner, scope)
@@ -464,18 +466,28 @@ for (const storage of ['sqlite', 'postgres'])
             const becomesAbsent = scenario.endsWith('becomes absent')
             const commit = state.commit.bind(state)
             let intervened = false
-            jest.spyOn(state, 'commit').mockImplementation(async (lease, changes, checks) => {
+            jest.spyOn(state, 'commit').mockImplementation(async (...args) => {
+              const [, changes, checks] = args
               if (!intervened && checks !== undefined && changes[0].key.startsWith('scale-set/')) {
                 intervened = true
-                await journal.advance(
-                  owner,
-                  assigned.record.key,
-                  assigned.record.version,
-                  becomesAbsent ? { box: { phase: 'absent', id: 'assigned-box' } } : { closing: true },
-                )
-                if (becomesAbsent) await journal.reserve(owner, peer, null, policy, { ...supply, scaleSet: 8 })
+                if (scenario === 'rejects a charged retry when its last reserved worker starts') {
+                  const { rows } = await journal.workers(owner, key)
+                  const reserved = rows.find((row) => row.value.box.phase === 'none')!
+                  await journal.advance(owner, reserved.record.key, reserved.record.version, {
+                    effect: { id: randomUUID(), kind: 'box-create' },
+                    box: { phase: 'requested', id: null },
+                  })
+                } else {
+                  await journal.advance(
+                    owner,
+                    assigned.record.key,
+                    assigned.record.version,
+                    becomesAbsent ? { box: { phase: 'absent', id: 'assigned-box' } } : { closing: true },
+                  )
+                  if (becomesAbsent) await journal.reserve(owner, peer, null, policy, { ...supply, scaleSet: 8 })
+                }
               }
-              return commit(lease, changes, checks)
+              return commit(...args)
             })
             fixture.publish(1, 1, [123])
             await until(() => fixture.acknowledged.includes(1) || fixture.sessions.length > 2)

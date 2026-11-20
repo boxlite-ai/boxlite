@@ -11,6 +11,8 @@ import { ListenerState, ExecutionLease } from '../state/store'
 import { SqliteStateDatabase } from '../state/sqlite'
 import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ExecutionJournal } from './journal'
+import { WorkerPool } from './pool'
+import { WorkQueue } from './work-queue'
 import { ScopeApplications } from '../app-scopes'
 import { ExecutionScope } from './model'
 
@@ -86,6 +88,89 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           pg = undefined
         }
       }
+    })
+    it('starts every assigned worker in one pass and leaves no deficit for the next pass', async () => {
+      const size = 16
+      const capacity = testCapacity({ account: size, tenant: size })
+      const labels = ['boxlite']
+      const [check] = await state.read(['journal/format'], lease)
+      const target = { id: 9, labels, held: 0, assigned: size, check }
+      const create = jest.fn(async ({ name }: { name: string }) => ({ box_id: name, status: 'created' }))
+      const backend = {
+        admit: async () => {},
+        runners: jest.fn(),
+        workers: {
+          create,
+          get: async (name: string) => ({ box_id: name, status: 'created' }),
+          stop: jest.fn(),
+          remove: jest.fn(),
+          deliverJit: jest.fn(),
+        },
+      }
+      for (let i = 0; i < size; i++) await journal.reserve(lease, key, null, capacity, { labels, scaleSet: target.id })
+      for (let pass = 0; pass < 2; pass++) {
+        const report = jest.fn()
+        const queue = new WorkQueue(32, report)
+        const pool = new WorkerPool(
+          journal,
+          key,
+          async () => backend,
+          { image: 'worker', cpus: 2, memoryMiB: 2048, labels },
+          undefined,
+          { queue, wake: () => {} },
+        )
+        try {
+          await pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+        } finally {
+          await queue.close()
+          await pool.close()
+        }
+        expect(create).toHaveBeenCalledTimes(size)
+        expect(new Set(create.mock.calls.map(([worker]) => worker.name)).size).toBe(size)
+        expect(report).not.toHaveBeenCalled()
+        expect(await journal.used(definition.organization)).toBe(size)
+      }
+    })
+    it('preserves a new reservation committed between a sibling dispatch read and write', async () => {
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      const supply = { labels: ['boxlite'], scaleSet: 9 }
+      const first = (await journal.reserve(lease, key, null, capacity, supply))!
+      const commit = state.commit.bind(state)
+      jest.spyOn(state, 'commit').mockImplementationOnce(async (...args) => {
+        expect(await journal.reserve(lease, key, null, capacity, supply)).toBeDefined()
+        return commit(...args)
+      })
+      await journal.advance(lease, first.record.key, first.record.version, {
+        effect: { id: randomUUID(), kind: 'box-create' },
+        box: { phase: 'requested', id: null },
+      })
+      const scope = await journal.scope(lease, key)
+      expect(scope.active).toBe(2)
+      expect(await journal.used(definition.organization)).toBe(2)
+      expect((await journal.workers(lease, key)).rows.map((row) => row.value.box.phase).sort()).toEqual([
+        'none',
+        'requested',
+      ])
+    })
+    it('rolls back a competing create intent for the same reservation', async () => {
+      const slot = (await journal.reserve(lease, key, null, limits, { labels: ['boxlite'], scaleSet: 9 }))!
+      const start = (id: string) =>
+        journal.advance(lease, slot.record.key, slot.record.version, {
+          effect: { id, kind: 'box-create' },
+          box: { phase: 'requested', id: null },
+        })
+      const commit = state.commit.bind(state)
+      const winner = randomUUID()
+      let acceptedVersion: string | undefined
+      jest.spyOn(state, 'commit').mockImplementationOnce(async (...args) => {
+        await start(winner)
+        acceptedVersion = (await journal.scope(lease, key)).activity.version
+        return commit(...args)
+      })
+      await expect(start(randomUUID())).rejects.toBeInstanceOf(StateConflict)
+      expect((await journal.allocation(lease, slot.record.key))!.value.effect?.id).toBe(winner)
+      expect((await journal.scope(lease, key)).activity.version).toBe(acceptedVersion)
+      expect(await journal.used(definition.organization)).toBe(1)
     })
     it('rejects a queued allocation mutation after an authoritative queue revision changes', async () => {
       const [revision] = await state.commit(lease, [{ key: 'set/9', expected: null, payload: { assigned: 1 } }])
