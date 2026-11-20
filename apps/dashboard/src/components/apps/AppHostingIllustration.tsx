@@ -4,7 +4,41 @@ import { cn } from '@/lib/utils'
 import styles from './AppHostingIllustration.module.css'
 
 /** A short idea-to-app sequence; card placeholders and reduced-motion views stay still. */
-export function AppHostingIllustration({ compact = false, className }: { compact?: boolean; className?: string }) {
+export function AppHostingIllustration({
+  compact = false,
+  draft = false,
+  className,
+}: {
+  compact?: boolean
+  draft?: boolean
+  className?: string
+}) {
+  if (draft) {
+    return (
+      <svg
+        viewBox="225 10 355 280"
+        aria-hidden="true"
+        className={cn('w-full text-muted-foreground', className)}
+        fill="none"
+      >
+        <g stroke="currentColor" strokeWidth="1" opacity="0.12">
+          <path d="m243 239 96-55 96 55-96 55-96-55Zm24-14 96 55m-48-83 96 55m-144 0 96-55m-72 69 96-55" />
+        </g>
+        <g stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+          <path d="m291 169 48 28 48-28v36l-48 28-48-28v-36Z" opacity="0.5" />
+          <path d="M339 197v36m-48-64 48-28 48 28" strokeDasharray="4 5" opacity="0.3" />
+          <path d="m291 128 48-28 48 28-48 28-48-28Z" opacity="0.6" />
+          <path d="M291 138v19m48 10v19m48-48v19" strokeDasharray="2 5" opacity="0.25" />
+        </g>
+        <g transform="rotate(-5 474 135)" stroke="currentColor" strokeWidth="1.5">
+          <path d="M416 91h117v88H416Z" fill="hsl(var(--background))" strokeDasharray="5 5" opacity="0.4" />
+          <path d="M430 108h89m-89 16h37m-37 12h24" opacity="0.2" />
+          <path d="M479 141h18m-9-9v18" opacity="0.55" />
+        </g>
+        <path d="m328 78 7 6m15-6-7 6" stroke="hsl(var(--brand))" strokeWidth="1.5" opacity="0.6" />
+      </svg>
+    )
+  }
   return (
     <svg
       viewBox={compact ? '225 10 355 280' : '0 0 640 300'}
