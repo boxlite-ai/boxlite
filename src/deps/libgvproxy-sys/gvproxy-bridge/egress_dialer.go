@@ -4,8 +4,8 @@ package main
 //
 // A hostname rule authorizes a NAME, never an address the guest chose. Once
 // SNI/Host inspection (forked_tcp.go) has matched the name, the gateway
-// resolves it itself through the host resolver and dials what it gets; the
-// guest's destination IP cannot select the upstream socket. The hostname is
+// resolves it through the captured outbound route and dials an approved
+// result. The guest's destination IP cannot select the upstream socket. The hostname is
 // the authorization input: a guest that edits /etc/hosts or hard-codes an
 // attacker's address while presenting an allowed SNI still lands on the real
 // host, and a destination whose address changes after the box started is

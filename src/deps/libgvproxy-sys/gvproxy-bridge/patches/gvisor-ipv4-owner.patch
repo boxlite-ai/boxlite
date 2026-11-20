@@ -1,0 +1,10 @@
+--- a/pkg/tcpip/network/ipv4/ipv4.go
++++ b/pkg/tcpip/network/ipv4/ipv4.go
+@@ -499,6 +499,7 @@
+ 	var n int
+ 	for {
+ 		fragPkt, more := buildNextFragment(&pf, networkHeader)
++		fragPkt.Owner = pkt.Owner
+ 		err := handler(fragPkt)
+ 		fragPkt.DecRef()
+ 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -42,31 +43,9 @@ type proxyConnectorConfig struct {
 }
 
 func newProxyConnector(cfg proxyConnectorConfig, dial dialFunc) (connectFunc, error) {
-	switch cfg.scheme {
-	case "http", "socks5":
-	case "https":
-		if cfg.serverName == "" {
-			return nil, errors.New("proxy TLS server name is required")
-		}
-	default:
-		return nil, errors.New("unsupported proxy scheme")
-	}
-	if cfg.credential != nil {
-		credential := *cfg.credential
-		if !validProxyCredential(credential.username) || !validProxyCredential(credential.password) ||
-			(cfg.scheme != "socks5" && strings.Contains(credential.username, ":")) {
-			return nil, errors.New("invalid proxy credentials")
-		}
-		cfg.credential = &credential
-	}
-	for _, prefix := range cfg.protected {
-		if !prefix.IsValid() || prefix.Addr().Is4In6() {
-			return nil, errors.New("invalid protected proxy prefix")
-		}
-	}
-	cfg.protected = append([]netip.Prefix(nil), cfg.protected...)
-	if cfg.roots != nil {
-		cfg.roots = cfg.roots.Clone()
+	cfg, err := cfg.checked()
+	if err != nil {
+		return nil, err
 	}
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
@@ -74,6 +53,36 @@ func newProxyConnector(cfg proxyConnectorConfig, dial dialFunc) (connectFunc, er
 	return func(ctx context.Context, target egressTarget) (net.Conn, error) {
 		return cfg.connect(ctx, dial, target)
 	}, nil
+}
+
+func (cfg proxyConnectorConfig) checked() (proxyConnectorConfig, error) {
+	switch cfg.scheme {
+	case "http", "socks5":
+	case "https":
+		if cfg.serverName == "" {
+			return cfg, errors.New("proxy TLS server name is required")
+		}
+	default:
+		return cfg, errors.New("unsupported proxy scheme")
+	}
+	if cfg.credential != nil {
+		credential := *cfg.credential
+		if !validProxyCredential(credential.username) || !validProxyCredential(credential.password) ||
+			(cfg.scheme != "socks5" && strings.Contains(credential.username, ":")) {
+			return cfg, errors.New("invalid proxy credentials")
+		}
+		cfg.credential = &credential
+	}
+	for _, prefix := range cfg.protected {
+		if !prefix.IsValid() || prefix.Addr().Is4In6() {
+			return cfg, errors.New("invalid protected proxy prefix")
+		}
+	}
+	cfg.protected = append([]netip.Prefix(nil), cfg.protected...)
+	if cfg.roots != nil {
+		cfg.roots = cfg.roots.Clone()
+	}
+	return cfg, nil
 }
 
 func validProxyCredential(value string) bool {
@@ -87,6 +96,18 @@ func validProxyCredential(value string) bool {
 	}
 	return true
 }
+
+type joinedCloseConn struct {
+	net.Conn
+	closeOnce func() error
+}
+
+// A caller that closes the tunnel waits for any already started close to finish.
+func withJoinedClose(conn net.Conn) net.Conn {
+	return joinedCloseConn{Conn: conn, closeOnce: sync.OnceValue(conn.Close)}
+}
+
+func (c joinedCloseConn) Close() error { return c.closeOnce() }
 
 func (cfg proxyConnectorConfig) connect(ctx context.Context, dial dialFunc, target egressTarget) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, upstreamDialTimeout)
@@ -103,13 +124,14 @@ func (cfg proxyConnectorConfig) connect(ctx context.Context, dial dialFunc, targ
 	}
 
 	endpoint := netip.AddrPortFrom(cfg.endpoint.Addr().Unmap(), cfg.endpoint.Port())
-	raw, err := dial(ctx, "tcp", endpoint.String())
+	socket, err := dial(ctx, "tcp", endpoint.String())
 	if err != nil {
-		if raw != nil {
-			_ = raw.Close()
+		if socket != nil {
+			_ = socket.Close()
 		}
 		return nil, proxySetupError(ctx, proxyUnreachable)
 	}
+	raw := withJoinedClose(socket)
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	authority := netip.AddrPortFrom(target.ConnectionIP.Unmap(), target.Port)
 	conn, err := cfg.negotiate(ctx, raw, authority)
@@ -125,7 +147,9 @@ func (cfg proxyConnectorConfig) connect(ctx context.Context, dial dialFunc, targ
 		_ = raw.Close()
 		return nil, err
 	}
-	return conn, nil
+	// Close the owned socket directly. TLS close-notify can block on a proxy
+	// that stopped reading.
+	return joinedCloseConn{Conn: conn, closeOnce: raw.Close}, nil
 }
 
 func (cfg proxyConnectorConfig) negotiate(ctx context.Context, conn net.Conn, authority netip.AddrPort) (net.Conn, error) {
