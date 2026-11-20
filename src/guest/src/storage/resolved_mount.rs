@@ -274,6 +274,33 @@ mod tests {
 
     #[test]
     fn pin_cleans_mountpoint_on_success_and_failure() {
+        const CHILD: &str = "BOXLITE_RESOLVED_MOUNT_CLEANUP_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new("unshare")
+                .args(["--user", "--map-root-user", "--mount"])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "storage::resolved_mount::tests::pin_cleans_mountpoint_on_success_and_failure",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .expect("start isolated resolved-mount cleanup test");
+            assert!(
+                status.success(),
+                "resolved-mount cleanup test failed: {status}"
+            );
+            return;
+        }
+        mount(
+            None::<&str>,
+            Path::new("/"),
+            None::<&str>,
+            MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+            None::<&str>,
+        )
+        .unwrap();
         let parent = tempfile::tempdir().unwrap();
         let payload = parent.path().join("payload");
         std::fs::create_dir_all(payload.join("subdir")).unwrap();
