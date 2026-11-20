@@ -526,6 +526,19 @@ live binding data yet, so `info()`, `get_info()`, or `list_info()` may report
 
 Lifecycle status of a box.
 
+`Paused` (`"paused"`) is the temporary guest-freeze + SIGSTOP state used by
+snapshot, clone, and disk export operations for disk-only consistency.
+A paused box counts as active and can be stopped. Execution and operations
+that would implicitly start the box return an invalid-state error.
+
+Recovery preserves `Paused` when the recorded PID matches a verified shim
+identity. A different PID or an unverifiable legacy live shim is reported as
+`Unknown`. A missing shim is reported as `Stopped`, or `Failed` if a crash
+report exists.
+
+Repeated recovery of the verified shim preserves `Paused`. A box recorded as
+`Unknown` with a PID stays `Unknown` when recovery finds a live shim.
+
 ```rust
 pub enum BoxStatus {
     /// Cannot determine state (error recovery)
@@ -542,6 +555,12 @@ pub enum BoxStatus {
 
     /// Not running, can be restarted
     Stopped,
+
+    /// Brief guest freeze + SIGSTOP during disk-only consistency operations
+    Paused,
+
+    /// Init failed; record and rootfs preserved for retry or removal
+    Failed,
 }
 ```
 
@@ -549,15 +568,15 @@ pub enum BoxStatus {
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `is_active` | `fn is_active(&self) -> bool` | True if VM process running |
+| `is_active` | `fn is_active(&self) -> bool` | True if Running or Paused |
 | `is_running` | `fn is_running(&self) -> bool` | True if Running |
 | `is_configured` | `fn is_configured(&self) -> bool` | True if Configured |
 | `is_stopped` | `fn is_stopped(&self) -> bool` | True if Stopped |
 | `is_transient` | `fn is_transient(&self) -> bool` | True if Stopping |
-| `can_start` | `fn can_start(&self) -> bool` | True if Configured or Stopped |
-| `can_stop` | `fn can_stop(&self) -> bool` | True if Running |
-| `can_remove` | `fn can_remove(&self) -> bool` | True if Configured, Stopped, or Unknown |
-| `can_run` | `fn can_run(&self) -> bool` | True if Configured, Running, or Stopped |
+| `can_start` | `fn can_start(&self) -> bool` | True if Configured, Stopped, or Failed |
+| `can_stop` | `fn can_stop(&self) -> bool` | True if Running or Paused |
+| `can_remove` | `fn can_remove(&self) -> bool` | True if Configured, Stopped, Failed, or Unknown |
+| `can_exec` | `fn can_exec(&self) -> bool` | True if Configured, Running, or Stopped |
 
 #### State machine
 
@@ -566,6 +585,21 @@ create() → Configured (persisted to DB, no VM)
 start()  → Running (VM initialized)
 stop()   → Stopped (VM terminated); a local runtime removes it unless auto_delete is Some(0)
 ```
+
+Calling `stop()` on a local `Paused` box terminates the VM without thawing or
+attaching to the guest. Before signaling the shim and waiting for exit, `stop()`
+verifies the live process against the PID file's fingerprint and checks the PID
+against the database record. If either check fails and a candidate process may
+still be alive, `stop()` returns `InvalidState` and leaves the record intact.
+
+Lifecycle paths treat a successful `stop()` return as the only evidence that
+the shim exited. The runtime has no independent liveness check for this
+decision (no `Child` handle or `pidfd` observation).
+
+For an `Unknown` box, offline disk operations (including create, clone, export,
+and snapshot restore) return `InvalidState` if the database records a PID or a
+readable PID file identifies a process that may still be alive. A database PID
+alone is sufficient, even if the process is no longer alive.
 
 ### BoxState
 

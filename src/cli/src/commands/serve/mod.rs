@@ -2711,7 +2711,7 @@ mod tests {
         );
 
         // `ActiveExecution::new` spawns a pump and a wait task per session, and
-        // they stay parked for as long as the stub's channels are open — which
+        // they keep waiting for as long as the stub's channels are open, which
         // has to be past `busy_box_ids`, since a completed execution is not
         // busy. Closing the channels lets `wait()` return; waiting on the
         // resulting `done` signal is what makes those tasks finish before the

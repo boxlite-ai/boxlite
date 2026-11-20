@@ -33,7 +33,8 @@ use crate::portal::GuestSession;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
-use crate::vmm::controller::VmmHandler;
+use crate::util::{PidFileReader, process::pid_may_be_alive};
+use crate::vmm::controller::{ShimHandler, VmmHandler};
 use crate::{BoxID, BoxInfo};
 
 mod operations;
@@ -59,6 +60,8 @@ pub(crate) struct LiveState {
     // VM process control
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
     guest_session: GuestSession,
+    #[cfg(test)]
+    test_guest_channel: Option<tonic::transport::Channel>,
 
     /// Host-side network control backend (gvproxy ServicesMux client), owned
     /// beside `guest_session`. `None` when the box was created network-disabled.
@@ -112,6 +115,8 @@ impl LiveState {
         Self {
             handler: std::sync::Mutex::new(handler),
             guest_session,
+            #[cfg(test)]
+            test_guest_channel: None,
             network: network.map(Arc::from),
             published_ports,
             metrics,
@@ -121,6 +126,22 @@ impl LiveState {
             bind_mount,
             agent_installs: tokio::sync::Mutex::new(()),
             agents_mounted: OnceCell::new(),
+        }
+    }
+
+    fn container(
+        &self,
+    ) -> impl Future<Output = BoxliteResult<crate::portal::interfaces::ContainerInterface>> + use<>
+    {
+        let session = self.guest_session.clone();
+        #[cfg(test)]
+        let channel = self.test_guest_channel.clone();
+        async move {
+            #[cfg(test)]
+            if let Some(channel) = channel {
+                return Ok(crate::portal::interfaces::ContainerInterface::new(channel));
+            }
+            session.container().await
         }
     }
 }
@@ -397,7 +418,7 @@ impl BoxImpl {
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
         let live = self.ensure_booted_locked().await?;
-        let guest_session = live.guest_session.clone();
+        let container = live.container();
         let container_start = Arc::clone(&self.container_start);
         let shutdown_token = self.shutdown_token.child_token();
         let container_id = self.container_id().to_owned();
@@ -411,7 +432,7 @@ impl BoxImpl {
         tokio::spawn(async move {
             match Self::ensure_container_started_owned(
                 container_start,
-                guest_session,
+                container,
                 container_id,
                 shutdown_token,
             )
@@ -687,10 +708,7 @@ impl BoxImpl {
         let status = self.state.read().status;
         if (existing_id.is_some() && status != BoxStatus::Running)
             || (existing_id.is_none()
-                && !matches!(
-                    status,
-                    BoxStatus::Configured | BoxStatus::Running | BoxStatus::Paused
-                ))
+                && !matches!(status, BoxStatus::Configured | BoxStatus::Running))
         {
             return Err(BoxliteError::InvalidState(format!(
                 "Cannot attach to box {}: it is {}",
@@ -733,8 +751,8 @@ impl BoxImpl {
         ))
     }
 
-    /// Live sessions in the box. Inactive boxes have none; paused boxes reject
-    /// discovery until resumed. Listing never starts or resumes a VM.
+    /// Live sessions in the box. Inactive boxes have none. Paused boxes reject
+    /// discovery. Listing never starts or resumes a VM.
     pub(crate) async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
         if self.shutdown_token.is_cancelled() || !self.state.read().status.is_active() {
             return Ok(Vec::new());
@@ -749,7 +767,13 @@ impl BoxImpl {
 
     pub(crate) async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution> {
         let live = self.existing_live_state().await?;
+        #[cfg(not(test))]
         let mut interface = live.guest_session.execution().await?;
+        #[cfg(test)]
+        let mut interface = match &live.test_guest_channel {
+            Some(channel) => crate::portal::interfaces::ExecutionInterface::new(channel.clone()),
+            None => live.guest_session.execution().await?,
+        };
         if !interface
             .list_executions()
             .await?
@@ -856,6 +880,14 @@ impl BoxImpl {
             return Ok(());
         }
 
+        let (status, pid) = {
+            let state = self.state.read();
+            (state.status, state.pid)
+        };
+        if matches!(status, BoxStatus::Paused | BoxStatus::Unknown) {
+            ShimHandler::stop_verified_async(self.id(), pid, &self.layout.pid_file_path()).await?;
+        }
+
         // Abort the box watcher (if armed) so it does not run past stop().
         // `stop()` also cancels the shutdown token the watcher selects on, but the
         // abort stops it immediately even if it is mid-probe. `abort` takes `&self`,
@@ -881,8 +913,9 @@ impl BoxImpl {
         // shim. Calling live_state() on Configured/Failed would route
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
-        let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted_locked().await {
+        if status == BoxStatus::Running
+            && let Ok(live) = self.ensure_booted_locked().await
+        {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -1296,7 +1329,13 @@ impl BoxImpl {
 
     /// Caller owns lifecycle admission, including when stop attaches for teardown.
     async fn ensure_booted_locked(&self) -> BoxliteResult<&LiveState> {
-        if self.live.initialized() && self.state.read().status != BoxStatus::Running {
+        let status = self.state.read().status;
+        if matches!(status, BoxStatus::Paused | BoxStatus::Unknown) {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot boot or attach to box in {status} state"
+            )));
+        }
+        if self.live.initialized() && status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
                  stopped VM, and cannot boot another. Drop it and call runtime.get() for a \
@@ -1358,7 +1397,7 @@ impl BoxImpl {
     async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<()> {
         Self::ensure_container_started_owned(
             Arc::clone(&self.container_start),
-            live.guest_session.clone(),
+            live.container(),
             self.container_id().to_owned(),
             self.shutdown_token.child_token(),
         )
@@ -1372,7 +1411,7 @@ impl BoxImpl {
     /// completes the `Container.Start` initializer.
     async fn ensure_container_started_owned(
         container_start: Arc<OnceCell<()>>,
-        guest_session: GuestSession,
+        container: impl Future<Output = BoxliteResult<crate::portal::interfaces::ContainerInterface>>,
         container_id: String,
         shutdown_token: CancellationToken,
     ) -> BoxliteResult<bool> {
@@ -1381,11 +1420,7 @@ impl BoxImpl {
         let mut started_here = false;
         {
             let start = container_start.get_or_try_init(|| async {
-                guest_session
-                    .container()
-                    .await?
-                    .start(&container_id)
-                    .await?;
+                container.await?.start(&container_id).await?;
                 started_here = true;
                 Ok::<(), BoxliteError>(())
             });
@@ -1595,7 +1630,8 @@ impl BoxImpl {
     ///   4. SIGCONT shim process (resume vCPUs)
     ///   5. Guest Thaw RPC (FITHAW — unblock writes)
     ///
-    /// If the VM is not running, `fut` is executed directly with no quiesce.
+    /// If the VM is not running, `fut` is executed directly unless its state
+    /// is Paused or Unknown with evidence of a shim.
     /// Guest RPCs are best-effort with timeout — failure degrades to
     /// crash-consistent (SIGSTOP-only), not operation failure.
     pub(crate) async fn with_quiesce_async<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
@@ -1605,12 +1641,37 @@ impl BoxImpl {
         self.with_operation(self.quiesce_inner(fut)).await
     }
 
+    // Called with refreshed state under lifecycle admission.
+    pub(super) fn reject_unknown_shim_for_disk_work(&self, state: &BoxState) -> BoxliteResult<()> {
+        if state.status == BoxStatus::Unknown
+            && (state.pid.is_some()
+                || PidFileReader::at(self.layout.pid_file_path())
+                    .read()
+                    .is_ok_and(|record| pid_may_be_alive(record.pid)))
+        {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot operate on disks of box {}: shim state is unknown",
+                self.id()
+            )));
+        }
+        Ok(())
+    }
+
     async fn quiesce_inner<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
         let (pid, was_running) = {
             let state = self.state.read();
+            let status = state.status;
+            // A persisted freeze label is not proof this operation froze the VM.
+            if status == BoxStatus::Paused {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Box {} is already {status}; resume or stop it before performing disk operations",
+                    self.id()
+                )));
+            }
+            self.reject_unknown_shim_for_disk_work(&state)?;
             let running = state.status.is_running();
             let pid = if running {
                 state.pid.map(|p| p as i32)

@@ -7,7 +7,7 @@
 //! Each table has queryable columns for filtering + JSON blob for full struct.
 
 use chrono::Utc;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, params, params_from_iter};
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::{
     Arc,
@@ -17,7 +17,7 @@ use std::sync::{
 use crate::BaseDiskID;
 use crate::litebox::config::BoxConfig;
 use crate::runtime::id::BoxID;
-use crate::runtime::types::BoxState;
+use crate::runtime::types::{BoxState, BoxStatus};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::{Database, db_err};
@@ -314,21 +314,23 @@ impl BoxStore {
         Ok(result)
     }
 
-    /// List active boxes (Starting, Running, Detached).
+    /// List boxes whose status is active, including frozen boxes.
     pub fn list_active(&self) -> BoxliteResult<Vec<(BoxConfig, BoxState)>> {
         let conn = self.db.conn();
+        let placeholders = ["?"; BoxStatus::ACTIVE.len()].join(", ");
 
-        let mut stmt = db_err!(conn.prepare(
+        let mut stmt = db_err!(conn.prepare(&format!(
             r#"
             SELECT c.json as config_json, s.json as state_json
             FROM box_config c
             JOIN box_state s ON c.id = s.id
-            WHERE s.status IN ('starting', 'running', 'detached')
+            WHERE s.status IN ({placeholders})
             ORDER BY c.created_at DESC, c.rowid DESC
             "#
-        ))?;
+        )))?;
 
-        let rows = db_err!(stmt.query_map([], |row| {
+        let statuses = BoxStatus::ACTIVE.iter().map(BoxStatus::as_str);
+        let rows = db_err!(stmt.query_map(params_from_iter(statuses), |row| {
             let config_json: String = row.get(0)?;
             let state_json: String = row.get(1)?;
             Ok((config_json, state_json))
@@ -353,12 +355,26 @@ impl BoxStore {
     // Reboot detection via alive table
     // ========================================================================
 
-    /// Check if this is a fresh boot (alive record is stale or missing).
+    pub(crate) fn host_boot_id() -> Option<String> {
+        get_boot_id()
+    }
+
+    /// Record the current boot ID when available.
     ///
-    /// Returns true if reboot detected (need to reset active boxes).
+    /// Returns true when it differs from a previously recorded boot ID.
     pub fn check_and_update_boot(&self) -> BoxliteResult<bool> {
-        let conn = self.db.conn();
         let current_boot_id = get_boot_id();
+        self.check_and_update_boot_with(current_boot_id.as_deref())
+    }
+
+    pub(crate) fn check_and_update_boot_with(
+        &self,
+        current_boot_id: Option<&str>,
+    ) -> BoxliteResult<bool> {
+        let Some(current_boot_id) = current_boot_id else {
+            return Ok(false);
+        };
+        let conn = self.db.conn();
 
         // Check existing alive record
         let existing: Option<String> = db_err!(
@@ -367,16 +383,7 @@ impl BoxStore {
                 .optional()
         )?;
 
-        let is_reboot = match existing {
-            None => {
-                // First run ever - not a reboot
-                false
-            }
-            Some(stored_boot_id) => {
-                // Reboot if boot ID changed
-                stored_boot_id != current_boot_id
-            }
-        };
+        let is_reboot = existing.is_some_and(|stored_boot_id| stored_boot_id != current_boot_id);
 
         // Update alive record
         let now = Utc::now().timestamp();
@@ -396,10 +403,19 @@ impl BoxStore {
     /// Called after reboot detection. VM rootfs is preserved, so boxes
     /// become Stopped (not Crashed) and can be restarted.
     pub fn reset_active_boxes_after_reboot(&self) -> BoxliteResult<Vec<BoxID>> {
-        let active = self.list_active()?;
+        self.reset_active_boxes_after_reboot_except(|_, _| false)
+    }
+
+    pub(crate) fn reset_active_boxes_after_reboot_except(
+        &self,
+        mut should_skip: impl FnMut(&BoxConfig, &BoxState) -> bool,
+    ) -> BoxliteResult<Vec<BoxID>> {
         let mut reset_ids = Vec::new();
 
-        for (config, mut state) in active {
+        for (config, mut state) in self.list_active()? {
+            if should_skip(&config, &state) {
+                continue;
+            }
             state.reset_for_reboot();
             self.update_state(config.id.as_str(), &state)?;
             reset_ids.push(config.id);
@@ -409,33 +425,35 @@ impl BoxStore {
     }
 }
 
-/// Get system boot ID (unique per boot).
+/// Get the system boot ID when the host provides one.
 ///
 /// On macOS: Uses kern.bootsessionuuid
 /// On Linux: Uses /proc/sys/kernel/random/boot_id
-fn get_boot_id() -> String {
+fn get_boot_id() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        Command::new("sysctl")
+        let output = Command::new("sysctl")
             .args(["-n", "kern.bootsessionuuid"])
             .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let boot_id = std::str::from_utf8(&output.stdout).ok()?.trim();
+        (!boot_id.is_empty()).then(|| boot_id.to_owned())
     }
 
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+        let boot_id = boot_id.trim();
+        (!boot_id.is_empty()).then(|| boot_id.to_owned())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        uuid::Uuid::new_v4().to_string()
+        None
     }
 }
 
@@ -444,9 +462,9 @@ mod tests {
     use super::*;
     use crate::litebox::config::ContainerRuntimeConfig;
     use crate::runtime::id::BoxID;
-    use crate::runtime::types::{BoxStatus, ContainerID};
+    use crate::runtime::types::ContainerID;
     use crate::vmm::VmmKind;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
     fn create_test_db() -> (BoxStore, tempfile::TempDir) {
@@ -614,23 +632,32 @@ mod tests {
 
     #[test]
     fn test_list_active() {
-        let (store, _dir) = create_test_db();
+        use BoxStatus::*;
 
-        // Create running box
-        let config1 = create_test_config(TEST_ID_1);
-        let mut state1 = BoxState::new();
-        state1.set_status(BoxStatus::Running);
-        store.save(&config1, &state1).unwrap();
+        let store = BoxStore::new(Database::open(Path::new(":memory:")).unwrap());
+        let statuses = [
+            Unknown, Configured, Running, Stopping, Stopped, Paused, Failed,
+        ];
+        let mut expected = Vec::new();
+        for (pid, status) in (1000..).zip(statuses) {
+            let config = create_test_config(status.as_str());
+            let mut state = BoxState::new();
+            state.set_status(status);
+            state.set_pid(Some(pid));
+            store.save(&config, &state).unwrap();
+            if status.is_active() {
+                expected.push((config.id, status, Some(pid)));
+            }
+        }
 
-        // Create stopped box
-        let config2 = create_test_config(TEST_ID_2);
-        let mut state2 = BoxState::new();
-        state2.set_status(BoxStatus::Stopped);
-        store.save(&config2, &state2).unwrap();
-
-        let active = store.list_active().unwrap();
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].0.id.as_str(), TEST_ID_1);
+        let mut active: Vec<_> = store
+            .list_active()
+            .unwrap()
+            .into_iter()
+            .map(|(config, state)| (config.id, state.status, state.pid))
+            .collect();
+        active.sort_unstable_by_key(|row| row.2);
+        assert_eq!(active, expected);
     }
 
     #[test]
@@ -647,24 +674,110 @@ mod tests {
     }
 
     #[test]
-    fn test_reset_active_boxes_after_reboot() {
+    fn test_missing_boot_id_leaves_alive_table_empty() {
         let (store, _dir) = create_test_db();
 
-        // Create running box
-        let config = create_test_config(TEST_ID_1);
+        assert!(!store.check_and_update_boot_with(None).unwrap());
+
+        let alive_rows: i64 = store
+            .db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM alive", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(alive_rows, 0);
+    }
+
+    #[test]
+    fn test_missing_boot_id_preserves_frozen_boxes() {
+        let (store, _dir) = create_test_db();
+        store
+            .db
+            .conn()
+            .execute(
+                "INSERT INTO alive (id, boot_id, started_at) VALUES (1, 'original-boot-id', 0)",
+                [],
+            )
+            .unwrap();
+
+        let (status, pid) = (BoxStatus::Paused, 1000);
+        let config = create_test_config(status.as_str());
         let mut state = BoxState::new();
-        state.set_status(BoxStatus::Running);
-        state.set_pid(Some(12345));
+        state.set_status(status);
+        state.set_pid(Some(pid));
         store.save(&config, &state).unwrap();
 
-        // Reset active boxes after reboot
-        let reset_ids = store.reset_active_boxes_after_reboot().unwrap();
-        assert_eq!(reset_ids.len(), 1);
-        assert_eq!(reset_ids[0].as_str(), TEST_ID_1);
+        let is_reboot = store.check_and_update_boot_with(None).unwrap();
+        assert!(
+            !is_reboot,
+            "an unavailable boot ID must not signal a reboot"
+        );
+        let alive: (String, i64) = store
+            .db
+            .conn()
+            .query_row(
+                "SELECT boot_id, started_at FROM alive WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(alive, ("original-boot-id".to_string(), 0));
 
-        // Verify state changed to Stopped (not Crashed - rootfs preserved)
-        let loaded = store.load_state(config.id.as_str()).unwrap().unwrap();
-        assert_eq!(loaded.status, BoxStatus::Stopped);
-        assert_eq!(loaded.pid, None);
+        let state = store.load_state(status.as_str()).unwrap().unwrap();
+        assert_eq!((state.status, state.pid), (status, Some(pid)));
+    }
+
+    #[test]
+    fn test_reset_active_boxes_after_reboot() {
+        use BoxStatus::*;
+
+        let store = BoxStore::new(Database::open(Path::new(":memory:")).unwrap());
+        assert!(
+            !store
+                .check_and_update_boot_with(Some("original-boot-id"))
+                .unwrap()
+        );
+        let cases = [
+            (Paused, 1001, Stopped, None),
+            (Running, 1002, Stopped, None),
+            (Stopped, 1003, Stopped, Some(1003)),
+            (Configured, 1004, Configured, Some(1004)),
+        ];
+        for (status, pid, _, _) in cases {
+            let config = create_test_config(status.as_str());
+            let mut state = BoxState::new();
+            state.set_status(status);
+            state.set_pid(Some(pid));
+            store.save(&config, &state).unwrap();
+        }
+
+        assert!(
+            store
+                .check_and_update_boot_with(Some("different-boot-id"))
+                .unwrap()
+        );
+        let boot_id: String = store
+            .db
+            .conn()
+            .query_row("SELECT boot_id FROM alive WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(boot_id, "different-boot-id");
+
+        let reset_ids = store.reset_active_boxes_after_reboot().unwrap();
+        for (status, _, expected_status, expected_pid) in cases {
+            let id = status.as_str();
+            let loaded = store.load_state(id).unwrap().unwrap();
+            assert_eq!(
+                (loaded.status, loaded.pid),
+                (expected_status, expected_pid),
+                "{status}"
+            );
+            assert_eq!(
+                reset_ids.iter().any(|reset| reset.as_str() == id),
+                expected_pid.is_none()
+            );
+        }
+        assert_eq!(reset_ids.len(), 2);
     }
 }

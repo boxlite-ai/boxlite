@@ -1,6 +1,6 @@
 use crate::cli::GlobalFlags;
 use anyhow::{Result, anyhow};
-use boxlite::{CopyOptions, LiteBox};
+use boxlite::{BoxStatus, BoxliteRuntime, CopyOptions, LiteBox};
 use clap::Args;
 use std::path::PathBuf;
 
@@ -24,10 +24,19 @@ pub struct CpArgs {
 }
 
 pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
-    let rt = global.create_runtime()?;
-
     let direction = parse_direction(&args.src, &args.dst)?;
-    args.require_supported_backend(global.targets_rest()?)?;
+    let targets_rest = global.targets_rest()?;
+    args.require_supported_backend(targets_rest)?;
+
+    #[cfg(not(test))]
+    let rt = global.create_runtime()?;
+    // The embedded unit test uses a real local runtime without starting a VM.
+    #[cfg(test)]
+    let rt = if targets_rest {
+        global.create_runtime()?
+    } else {
+        BoxliteRuntime::new_for_test(global.resolve_runtime_options()?)?
+    };
 
     let opts = CopyOptions {
         follow_symlinks: args.follow_symlinks,
@@ -35,61 +44,52 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
         ..Default::default()
     };
 
-    match direction {
-        Direction::HostToBox {
-            host,
-            box_name,
-            box_path,
-        } => {
-            let handle = require_box(&rt, &box_name).await?;
-            let was_running = handle.info().await?.status == boxlite::BoxStatus::Running;
-
-            // No explicit start(): copy_into boots the box itself when that is
-            // safe, and refuses when it is not. Starting it here would walk
-            // straight past that guard and, for a box whose init is the user's
-            // own command, run their workload a second time just to fetch a file.
-            let copied = handle.copy_into(&host, &box_path, opts).await;
-
-            // copy_into boots a stopped box before copying, so a copy that fails
-            // partway (a missing path, say) leaves it running. Restore the box to
-            // the state we found it in on both paths, surfacing the copy error
-            // first so a cleanup failure can't mask it.
-            let stopped = if was_running {
-                Ok(())
-            } else {
-                handle.stop().await
-            };
-            copied.map_err(anyhow::Error::from)?;
-            stopped?;
-            Ok(())
+    let box_name = match &direction {
+        Direction::HostToBox { box_name, .. } | Direction::BoxToHost { box_name, .. } => box_name,
+    };
+    let (handle, status) = match copy_target(&rt, box_name).await {
+        Ok(target) => target,
+        Err(error) => {
+            shutdown_without_handles(&rt).await;
+            return Err(error);
         }
-        Direction::BoxToHost {
-            box_name,
-            box_path,
-            host,
-        } => {
-            let handle = require_box(&rt, &box_name).await?;
-            let was_running = handle.info().await?.status == boxlite::BoxStatus::Running;
+    };
 
-            // Same as above: let copy_out decide whether booting is safe. This
-            // is the path that would otherwise turn
-            //   boxlite run --name job alpine sh -c 'send-payment'
-            //   boxlite cp job:/receipt .
-            // into a second payment.
-            let copied = handle.copy_out(&box_path, &host, opts).await;
-
-            // Same restore-on-failure as HostToBox: copy_out can boot a stopped
-            // box, and a partial failure must not leave it running.
-            let stopped = if was_running {
-                Ok(())
-            } else {
-                handle.stop().await
-            };
-            copied.map_err(anyhow::Error::from)?;
-            stopped?;
-            Ok(())
+    // Let the copy decide whether it can boot the box. An explicit start
+    // would bypass the guard against running the user's main command again.
+    let copied = match direction {
+        Direction::HostToBox { host, box_path, .. } => {
+            handle.copy_into(&host, &box_path, opts).await
         }
+        Direction::BoxToHost { box_path, host, .. } => {
+            handle.copy_out(&box_path, &host, opts).await
+        }
+    };
+
+    let stopped = stop_after_copy(&handle, status).await;
+    drop(handle);
+    shutdown_without_handles(&rt).await;
+    copied?;
+    stopped?;
+    Ok(())
+}
+
+async fn shutdown_without_handles(rt: &BoxliteRuntime) {
+    // With the handle gone, async shutdown cancels the runtime token without
+    // stopping a box. Drop then skips its database-wide shutdown scan.
+    let _ = rt.shutdown(None).await;
+}
+
+async fn stop_after_copy(
+    handle: &LiteBox,
+    initial_status: BoxStatus,
+) -> boxlite::BoxliteResult<()> {
+    // Copy may have booted the box even if it failed. Clean up based on the
+    // initial status so an unavailable status endpoint can't prevent stopping it.
+    if matches!(initial_status, BoxStatus::Configured | BoxStatus::Stopped) {
+        handle.stop().await?;
     }
+    Ok(())
 }
 
 impl CpArgs {
@@ -159,16 +159,333 @@ fn non_empty(path: &str, role: &str) -> Result<String> {
     }
 }
 
-async fn require_box(rt: &boxlite::BoxliteRuntime, name: &str) -> Result<LiteBox> {
-    match rt.get(name).await? {
-        Some(b) => Ok(b),
-        None => Err(anyhow!("box '{}' not found", name)),
+async fn copy_target(rt: &BoxliteRuntime, box_name: &str) -> Result<(LiteBox, BoxStatus)> {
+    let handle = rt
+        .get(box_name)
+        .await?
+        .ok_or_else(|| anyhow!("box '{box_name}' not found"))?;
+    let status = handle.info().await?.status;
+    if status == BoxStatus::Paused {
+        anyhow::bail!("cp is not allowed on paused boxes: box '{box_name}' is {status}");
     }
+    Ok((handle, status))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{Json, Router, extract::Request, http::StatusCode, response::IntoResponse};
+    use std::sync::{Arc, Mutex};
+
+    const BOX_ID: &str = "cp-box";
+    const PID: u32 = 1234;
+    const PAYLOAD: &str = "copied file\n";
+
+    #[derive(Default)]
+    struct CleanupFailures {
+        status_after_copy: bool,
+        stop_response: bool,
+    }
+
+    async fn copy_against_stub(
+        initial: BoxStatus,
+        upload: bool,
+        boot_on_copy: bool,
+        copy_succeeds: bool,
+        failures: CleanupFailures,
+    ) -> (
+        Result<()>,
+        (BoxStatus, Option<u32>),
+        Vec<String>,
+        Option<String>,
+    ) {
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(PAYLOAD.len() as u64);
+        tar.append_data(&mut header, "file.txt", PAYLOAD.as_bytes())
+            .unwrap();
+        let archive = tar.into_inner().unwrap();
+        let pid = (initial.is_active() || initial == BoxStatus::Unknown).then_some(PID);
+        let state = Arc::new(Mutex::new((initial, pid, Vec::new())));
+        let recorded = state.clone();
+        let app = Router::new().fallback(move |request: Request| {
+            let recorded = recorded.clone();
+            let archive = archive.clone();
+            async move {
+                let mut state = recorded.lock().unwrap();
+                let Some(route) = request.uri().path().strip_prefix("/v1/boxes/cp-box") else {
+                    return StatusCode::NOT_FOUND.into_response();
+                };
+                let method = request.method().as_str();
+                if (method, route) != ("GET", "") {
+                    state.2.push(format!("{method} {route}"));
+                }
+                match (method, route) {
+                    ("GET" | "PUT", "/files") => {
+                        if boot_on_copy {
+                            state.0 = BoxStatus::Running;
+                            state.1 = Some(PID);
+                        }
+                        if !copy_succeeds {
+                            return (StatusCode::CONFLICT, "backend refused copy").into_response();
+                        }
+                        return archive.into_response();
+                    }
+                    ("POST", "/stop") => {
+                        state.0 = BoxStatus::Stopped;
+                        state.1 = None;
+                        if failures.stop_response {
+                            return (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Json(serde_json::json!({"message": "stop response failed"})),
+                            )
+                                .into_response();
+                        }
+                    }
+                    ("GET", "") if failures.status_after_copy && !state.2.is_empty() => {
+                        state.2.push("GET box status".to_string());
+                        return (StatusCode::SERVICE_UNAVAILABLE, "box status unavailable")
+                            .into_response();
+                    }
+                    ("GET", "") => {}
+                    _ => return StatusCode::NOT_FOUND.into_response(),
+                }
+                Json(serde_json::json!({
+                    "box_id": BOX_ID,
+                    "status": state.0.as_str(),
+                    "pid": state.1,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "image": "alpine:latest",
+                    "cpus": 1,
+                    "memory_mib": 512,
+                }))
+                .into_response()
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let home = tempfile::tempdir().unwrap();
+        let host_path = home.path().join("file.txt");
+        let host = host_path.to_str().unwrap();
+        let guest = format!("{BOX_ID}:/file.txt");
+        let (src, dst) = if upload {
+            std::fs::write(&host_path, PAYLOAD).unwrap();
+            (host, guest.as_str())
+        } else {
+            (guest.as_str(), host)
+        };
+        let cli = crate::cli::try_parse_from([
+            "boxlite",
+            "--home",
+            home.path().to_str().unwrap(),
+            "--url",
+            &url,
+            "--path-prefix",
+            "",
+            "cp",
+            src,
+            dst,
+        ])
+        .unwrap();
+        let crate::cli::Commands::Cp(args) = cli.command else {
+            panic!("expected cp command");
+        };
+        let result = execute(args, &cli.global).await;
+        server.abort();
+        let mut state = state.lock().unwrap();
+        (
+            result,
+            (state.0, state.1),
+            std::mem::take(&mut state.2),
+            std::fs::read_to_string(host_path).ok(),
+        )
+    }
+
+    #[rstest::rstest]
+    #[case::paused_upload(BoxStatus::Paused, true)]
+    #[case::paused_download(BoxStatus::Paused, false)]
+    #[tokio::test]
+    async fn frozen_box_copy_leaves_vm_untouched(#[case] status: BoxStatus, #[case] upload: bool) {
+        let (result, final_state, operations, contents) =
+            copy_against_stub(status, upload, false, false, CleanupFailures::default()).await;
+        let error = result.unwrap_err();
+        assert_eq!(
+            operations,
+            Vec::<String>::new(),
+            "cp must not copy, start, or stop a frozen box"
+        );
+        assert_eq!(final_state, (status, Some(PID)));
+        assert_eq!(contents.as_deref(), upload.then_some(PAYLOAD));
+        assert!(
+            error
+                .to_string()
+                .contains("cp is not allowed on paused boxes"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_paused_copy_preserves_shim_and_persisted_status() {
+        let home = tempfile::tempdir().unwrap();
+        let mut cli = crate::cli::try_parse_from([
+            "boxlite",
+            "--home",
+            home.path().to_str().unwrap(),
+            "cp",
+            "cp-box:/file.txt",
+            home.path().join("file.txt").to_str().unwrap(),
+        ])
+        .unwrap();
+        cli.global.url = None;
+        cli.global.profile = None;
+        let crate::cli::Commands::Cp(args) = cli.command else {
+            panic!("expected cp command");
+        };
+
+        let rt =
+            BoxliteRuntime::new_for_test(cli.global.resolve_runtime_options().unwrap()).unwrap();
+        let handle = rt
+            .create(
+                boxlite::BoxOptions {
+                    detach: false,
+                    auto_delete: Some(0),
+                    ..Default::default()
+                },
+                Some(BOX_ID.into()),
+            )
+            .await
+            .unwrap();
+        let id = handle.id().clone();
+        drop(handle);
+        drop(rt);
+
+        let mut shim = tokio::process::Command::new("sleep")
+            .arg("300")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = shim.id().unwrap();
+        let start_time = boxlite::util::process_start_time(pid).unwrap();
+        let box_home = home.path().join("boxes").join(id.as_str());
+        std::fs::create_dir_all(&box_home).unwrap();
+        std::fs::write(box_home.join("shim.pid"), format!("{pid}\n{start_time}\n")).unwrap();
+
+        // Use the runtime-created record and locks, then emulate a paused shim.
+        let sql = |statement: &str| {
+            let output = std::process::Command::new("sqlite3")
+                .arg(home.path().join("db/boxlite.db"))
+                .arg(statement)
+                .output()
+                .expect("run sqlite3 on the test database");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        sql(&format!(
+            "UPDATE box_state SET status = 'paused', pid = {pid}, \
+             json = json_set(json, '$.status', 'paused', '$.pid', {pid}) WHERE id = '{id}'"
+        ));
+
+        let error = execute(args, &cli.global).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cp is not allowed on paused boxes"),
+            "{error}"
+        );
+        let shim_status = shim.try_wait();
+        let persisted_status = sql(&format!("SELECT status FROM box_state WHERE id = '{id}'"));
+        assert!(
+            matches!(shim_status, Ok(None)),
+            "cp stopped the paused shim: {shim_status:?}, database status: {persisted_status:?}"
+        );
+        assert_eq!(persisted_status.trim(), "paused");
+        shim.kill().await.unwrap();
+    }
+
+    #[rstest::rstest]
+    #[case::unknown(BoxStatus::Unknown, false)]
+    #[case::running(BoxStatus::Running, false)]
+    #[case::stopped(BoxStatus::Stopped, true)]
+    #[tokio::test]
+    async fn copy_refused_without_boot_cleans_up_by_initial_status(
+        #[case] status: BoxStatus,
+        #[case] should_stop: bool,
+    ) {
+        let (result, final_state, operations, contents) =
+            copy_against_stub(status, false, false, false, CleanupFailures::default()).await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("backend refused copy")
+        );
+        if should_stop {
+            assert_eq!(operations, ["GET /files", "POST /stop"]);
+            assert_eq!(final_state, (BoxStatus::Stopped, None));
+        } else {
+            assert_eq!(operations, ["GET /files"]);
+            assert_eq!(final_state, (status, Some(PID)));
+        }
+        assert!(contents.is_none());
+    }
+
+    #[rstest::rstest]
+    #[case::successful(BoxStatus::Configured, true)]
+    #[case::failed(BoxStatus::Stopped, false)]
+    #[tokio::test]
+    async fn copy_that_boots_box_still_stops_it(#[case] status: BoxStatus, #[case] succeeds: bool) {
+        let (result, final_state, operations, contents) =
+            copy_against_stub(status, false, true, succeeds, CleanupFailures::default()).await;
+        if succeeds {
+            result.unwrap();
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("backend refused copy")
+            );
+        }
+        assert_eq!(contents.as_deref(), succeeds.then_some(PAYLOAD));
+        assert_eq!(operations, ["GET /files", "POST /stop"]);
+        assert_eq!(final_state, (BoxStatus::Stopped, None));
+    }
+
+    #[rstest::rstest]
+    #[case::success(true, false, None)]
+    #[case::stop_failed(true, true, Some("internal error: stop response failed"))]
+    #[case::both_failed(false, true, Some("invalid state: backend refused copy"))]
+    #[tokio::test]
+    async fn upload_cleanup_does_not_query_status(
+        #[case] copy_succeeds: bool,
+        #[case] stop_response: bool,
+        #[case] expected_error: Option<&str>,
+    ) {
+        let (result, final_state, operations, _) = copy_against_stub(
+            BoxStatus::Stopped,
+            true,
+            true,
+            copy_succeeds,
+            CleanupFailures {
+                status_after_copy: true,
+                stop_response,
+            },
+        )
+        .await;
+        assert_eq!(operations, ["PUT /files", "POST /stop"], "{result:?}");
+        assert_eq!(final_state, (BoxStatus::Stopped, None));
+        assert_eq!(
+            result.err().map(|error| error.to_string()).as_deref(),
+            expected_error
+        );
+    }
 
     fn args() -> CpArgs {
         CpArgs {
