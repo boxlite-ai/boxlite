@@ -929,6 +929,12 @@ Run `make test:apps:dashboard FILTER='sends the dashboard activity source'` to c
 source header on authenticated requests. This target filters test names;
 omit `FILTER` to run all Dashboard unit tests.
 
+## Authenticated rate limits
+
+Shared organization quotas and custom limits use the validated organization or the
+organization bound to a verified API key. JWT requests before organization authorization
+use a user quota. Organization headers alone cannot select a new counter or custom limits.
+
 ## Admin organization metadata
 
 System administrators read registration fields on the existing organization routes.
