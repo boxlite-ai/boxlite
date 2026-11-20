@@ -78,6 +78,7 @@ function Stepper({
   max,
   onExceed,
   fractional = false,
+  wholeMiB = false,
   onValidityChange,
 }: {
   value: number
@@ -85,6 +86,7 @@ function Stepper({
   min?: number
   max?: number
   onExceed?: () => void
+  wholeMiB?: boolean
   fractional?: boolean
   onValidityChange?: (valid: boolean) => void
 }) {
@@ -106,7 +108,11 @@ function Stepper({
   const handleTyped = (raw: string) => {
     if (fractional) {
       const n = Number(raw)
-      const valid = /^\d+(?:\.\d{0,3})?$/.test(raw) && Number.isFinite(n) && n >= min
+      const valid =
+        (wholeMiB ? /^\d+(?:\.\d*)?$/ : /^\d+(?:\.\d{0,3})?$/).test(raw) &&
+        Number.isFinite(n) &&
+        n >= min &&
+        (!wholeMiB || Number.isInteger(n * 1024))
       setInvalid(!valid)
       onValidityChange?.(valid)
       if (!valid) {
@@ -164,7 +170,13 @@ function Stepper({
         value={text}
         inputMode={fractional ? 'decimal' : 'numeric'}
         aria-invalid={invalid}
-        title={invalid ? 'Enter at least 0.125 CPU with up to three decimal places' : undefined}
+        title={
+          invalid
+            ? wholeMiB
+              ? 'Enter memory in whole MiB increments, at least 0.125 GiB'
+              : 'Enter at least 0.125 CPU with up to three decimal places'
+            : undefined
+        }
         aria-label="value"
         onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
@@ -176,7 +188,7 @@ function Stepper({
       <button
         type="button"
         aria-label="increase"
-        onClick={() => onChange(clamp(fractional ? (CPU_STOPS.find((stop) => stop > value) ?? 16) : value + 1))}
+        onClick={() => onChange(clamp(fractional ? (CPU_STOPS.find((stop) => stop > value) ?? value + 1) : value + 1))}
         disabled={max != null && value >= max}
         className={cn(btn, 'border-l border-border')}
       >
@@ -222,6 +234,7 @@ function ResourceField({
         max={max}
         onExceed={onExceed}
         fractional={fractional}
+        wholeMiB={label === 'Memory'}
         onValidityChange={onValidityChange}
       />
       {estimate && <span className="font-mono text-meta text-muted-foreground">{estimate} / hr</span>}
@@ -298,8 +311,8 @@ function BoxPriceBreakdown({ quote }: { quote: NonNullable<ReturnType<typeof box
 // mirror the Lifecycle pattern (chips + a `Custom` escape hatch) so the two
 // sections teach one interaction, not two.
 const SIZE_PRESETS = [
-  { id: 'matchbox', label: 'Matchbox', cpu: 0.125, memory: 1, disk: 10 },
-  { id: 'pocket', label: 'Pocket', cpu: 0.25, memory: 1, disk: 10 },
+  { id: 'matchbox', label: 'Matchbox', cpu: 0.125, memory: 0.25, disk: 10 },
+  { id: 'pocket', label: 'Pocket', cpu: 0.25, memory: 0.5, disk: 10 },
   { id: 'lunchbox', label: 'Lunchbox', cpu: 0.5, memory: 1, disk: 10 },
   { id: 'small', label: 'Shoebox', cpu: 1, memory: 1, disk: 10 },
   { id: 'medium', label: 'Crate', cpu: 2, memory: 4, disk: 20 },
@@ -656,6 +669,7 @@ export const CreateBoxDialog = ({
 
   const [cpu, setCpu] = useState(initialCpu)
   const [cpuValid, setCpuValid] = useState(true)
+  const [memoryValid, setMemoryValid] = useState(true)
   const resourceDescriptionId = useId()
   const customDraft = useRef<BoxSpec | null>(null)
   useEffect(() => {
@@ -714,6 +728,7 @@ export const CreateBoxDialog = ({
     setMounts(prefillVolume ? [{ volumeId: prefillVolume, mountPath: '/data' }] : [])
     setSizePreset('small')
     setCpuValid(true)
+    setMemoryValid(true)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
   }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
@@ -777,7 +792,7 @@ export const CreateBoxDialog = ({
       if (id === 'custom') focusCustomResources()
       return
     }
-    if (sizePreset === 'custom' && cpuValid) customDraft.current = { cpu, memory, disk }
+    if (sizePreset === 'custom' && cpuValid && memoryValid) customDraft.current = { cpu, memory, disk }
     if (id === 'custom' && customDraft.current) {
       const restored = effectiveSpec(customDraft.current)
       setCpu(restored.cpu)
@@ -791,6 +806,7 @@ export const CreateBoxDialog = ({
     }
     setSizePreset(id)
     setCpuValid(true)
+    setMemoryValid(true)
     const spec = SIZE_PRESETS.find((p) => p.id === id)
     if (!spec || spec.cpu == null || spec.memory == null || spec.disk == null) return // `custom` only reveals the controls
     const nextCpu = limits.cpu != null && spec.cpu > limits.cpu ? limits.cpu : spec.cpu
@@ -803,7 +819,7 @@ export const CreateBoxDialog = ({
   }
 
   const handleCreate = async () => {
-    if (!cpuValid) return
+    if (!cpuValid || !memoryValid) return
     if (!selectedOrganization?.id) {
       toast.error('Select an organization to create a box.')
       return
@@ -1073,8 +1089,10 @@ export const CreateBoxDialog = ({
                   onExceed={() => setCapped((c) => ({ ...c, cpu: true }))}
                 />
                 <ResourceField
+                  fractional
+                  onValidityChange={setMemoryValid}
                   label="Memory"
-                  estimate={resourceEstimate('mem')}
+                  estimate={memoryValid ? resourceEstimate('mem') : '—'}
                   unit="GiB"
                   value={memory}
                   onChange={changeResource('memory', setMemory)}
@@ -1201,6 +1219,11 @@ export const CreateBoxDialog = ({
             </div>
           </div>
           <div className="-mx-6">
+            {!memoryValid && (
+              <p role="alert" className="text-destructive">
+                Enter memory in whole MiB increments, at least 0.125 GiB.
+              </p>
+            )}
             {!cpuValid && (
               <p role="alert" className="text-destructive">
                 Enter at least 0.125 CPU with up to three decimal places.
@@ -1219,7 +1242,7 @@ export const CreateBoxDialog = ({
             <div>
               <div className="text-meta text-muted-foreground">Estimated total</div>
               <div className="font-mono text-em">
-                {!cpuValid
+                {!cpuValid || !memoryValid
                   ? '—'
                   : !config.billingApiUrl
                     ? '$0.00'
@@ -1231,7 +1254,9 @@ export const CreateBoxDialog = ({
                 <span className="font-sans text-meta text-muted-foreground">/ hr</span>
               </div>
             </div>
-            {cpuValid && config.billingApiUrl && selectedQuote && <BoxPriceBreakdown quote={selectedQuote} />}
+            {cpuValid && memoryValid && config.billingApiUrl && selectedQuote && (
+              <BoxPriceBreakdown quote={selectedQuote} />
+            )}
             {!config.billingApiUrl && <span className="text-meta text-muted-foreground">No usage charges</span>}
             {config.billingApiUrl && !selectedQuote && (
               <p role="status" className="basis-full text-meta text-muted-foreground">
@@ -1252,6 +1277,7 @@ export const CreateBoxDialog = ({
             disabled={
               submitting ||
               !cpuValid ||
+              !memoryValid ||
               !selectedOrganization?.id ||
               !nameValid ||
               Boolean(lifecycleError) ||

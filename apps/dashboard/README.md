@@ -6,7 +6,7 @@ through Nx as the `dashboard` project.
 ## Create Box sizing
 
 New Box presents six named presets from 0.125 to 4 vCPU, retaining the existing
-1 vCPU / 1 GiB / 10 GiB default. Sub-core presets retain 1 GiB RAM and 10 GiB disk;
+1 vCPU / 1 GiB / 10 GiB default. Sub-core presets pair CPU and memory at 1:2 (0.125/0.25, 0.25/0.5, 0.5/1), with 10 GiB disk;
 the names identify configurations, not guaranteed workload suitability.
 Each card shows its effective organization-capped configuration and complete hourly
 estimate from the existing usage-price query. Adjusted cards are labelled before

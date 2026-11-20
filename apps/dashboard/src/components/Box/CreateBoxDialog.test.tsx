@@ -195,7 +195,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     const card = document.querySelector<HTMLButtonElement>('button[aria-label="Matchbox"]')
     expect(card).not.toBeNull()
     expect(card?.textContent).toContain('0.125')
-    expect(card?.textContent).toContain('$0.0225')
+    expect(card?.textContent).toContain('$0.0117')
     await act(async () => card!.click())
     await act(async () =>
       document.querySelector<HTMLButtonElement>('button[aria-label="Larger or custom box"]')!.click(),
@@ -266,6 +266,23 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ volumes: undefined }))
   })
 
+  it('accepts exact whole-MiB memory and rejects fractional MiB without a CPU error', async () => {
+    await renderOpen()
+    const memory = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')[1]
+    await act(async () => typeInto(memory, '0.2509765625'))
+    expect(memory.getAttribute('aria-invalid')).toBe('false')
+    expect(button('Create Box').disabled).toBe(false)
+    await submit()
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ resources: expect.objectContaining({ memory: 257 / 1024 }) }),
+    )
+    await act(async () => typeInto(memory, '0.251'))
+    expect(memory.getAttribute('aria-invalid')).toBe('true')
+    expect(memory.title).toContain('whole MiB')
+    expect(memory.title).not.toContain('CPU')
+    expect(button('Create Box').disabled).toBe(true)
+  })
+
   it('shows zero per-resource costs and no paid breakdown without billing', async () => {
     state.config = {}
     await renderOpen()
@@ -322,6 +339,23 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => button('Larger or custom box').click())
     expect(document.activeElement).toBe(cpuInput())
     expect(document.querySelector('input[aria-label="value"]')).toBeTruthy()
+  })
+
+  it.each([
+    ['Matchbox', 0.125, 0.25],
+    ['Pocket', 0.25, 0.5],
+    ['Lunchbox', 0.5, 1],
+  ])('keeps %s at a 1:2 CPU-memory ratio through Custom and submission', async (label, cpu, memory) => {
+    await rerenderOpen()
+    await act(async () => button(String(label)).click())
+    await act(async () => button('Larger or custom box').click())
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
+    expect(Number(inputs[1].value)).toBe(memory)
+    await act(async () => inputs[1].dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    await submit()
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ resources: { cpu, memory, disk: 10 } }),
+    )
   })
 
   function nameInput() {
