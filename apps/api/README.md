@@ -111,6 +111,12 @@ and drops a unique schema, requires a loopback database host, and skips without
 `DB_HOST`. It exercises the production authorization guard and repository queries;
 JWT identity setup, rate limiting, and Redis transport use test doubles.
 
+## Organization suspension
+
+Organization access caches organization records as JSON for 10 seconds. On cache reads,
+`suspendedUntil` is restored to a `Date` so temporary suspensions are enforced until their
+deadline on both cached and database reads. A null deadline keeps a suspension indefinite.
+
 ## Registration configuration
 
 Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
