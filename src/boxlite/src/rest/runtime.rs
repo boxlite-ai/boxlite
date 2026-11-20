@@ -498,6 +498,12 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
+                    if !options.volumes.is_empty() || !options.mounts.is_empty() {
+                        return Err(BoxliteError::Unsupported(format!(
+                            "cannot reuse box {box_name:?}: the REST response does not expose its \
+                             existing mount configuration; use a different name or recreate the box"
+                        )));
+                    }
                     let actual = response.privileged.ok_or_else(|| {
                         BoxliteError::Unsupported(format!(
                             "cannot reuse box {box_name:?}: the server did not report its \
@@ -1498,6 +1504,150 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
         );
+    }
+
+    #[tokio::test]
+    async fn create_sends_legacy_read_only_volume_after_capability() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (port, server) = capture_server(vec![
+            (200, r#"{"capabilities":{"volume_read_only_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::managed_volume("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("advertised read-only support permits the legacy create");
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+        let body = json_body(&requests[1].1);
+        assert_eq!(
+            body["volumes"],
+            serde_json::json!([{
+                "managed_volume": "workspace",
+                "guest_path": "/workspace",
+                "read_only": true
+            }])
+        );
+        assert!(body.get("mounts").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_or_create_requires_mount_capabilities_before_lookup() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        for options in [
+            BoxOptions {
+                mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                volumes: vec![VolumeSpec {
+                    read_only: true,
+                    ..VolumeSpec::managed_volume("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+        ] {
+            let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .err()
+                .expect("an old server must not reuse or create a mounted box");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_mount_reuse_without_configuration_metadata() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        for options in [
+            BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                volumes: vec![VolumeSpec {
+                    read_only: true,
+                    ..VolumeSpec::managed_volume("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+            BoxOptions {
+                mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                mounts: vec![MountSpec {
+                    read_only: true,
+                    sub_path: Some("team/backend".into()),
+                    ..MountSpec::volume_mount("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+        ] {
+            let requires_probe =
+                !options.mounts.is_empty() || options.volumes.iter().any(|volume| volume.read_only);
+            let mut response = serde_json::from_str::<serde_json::Value>(BOX_RESPONSE).unwrap();
+            response["privileged"] = false.into();
+            let response = Box::leak(response.to_string().into_boxed_str());
+            let mut replies = Vec::new();
+            if requires_probe {
+                replies.push((
+                    200,
+                    r#"{"capabilities":{"typed_mounts_enabled":true,"volume_read_only_enabled":true}}"#,
+                ));
+            }
+            replies.push((200, response));
+            let (port, server) = capture_server(replies).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .err()
+                .expect("reuse must not assume the existing mount configuration matches");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert!(error.to_string().contains("mount configuration"), "{error}");
+
+            let requests = server.await.unwrap();
+            let mut expected = Vec::new();
+            if requires_probe {
+                expected.push("GET /v1/config HTTP/1.1");
+            }
+            expected.push("GET /v1/boxes/named HTTP/1.1");
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|(headers, _)| headers.lines().next().unwrap())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]

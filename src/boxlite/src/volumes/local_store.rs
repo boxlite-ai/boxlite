@@ -123,14 +123,6 @@ impl LocalVolumeStore {
             {
                 return Err(BoxliteError::AlreadyExists(format!("volume name {name:?}")));
             }
-            if let Some(name) = name
-                && validate_id(name).is_ok()
-            {
-                return Err(BoxliteError::InvalidArgument(format!(
-                    "volume name {name:?} must not be a canonical UUID; omit the name to use \
-                     the generated id"
-                )));
-            }
 
             let id = Uuid::new_v4().to_string();
             let final_path = self.root.join(&id);
@@ -1638,8 +1630,11 @@ mod tests {
         let error = runtime
             .local_volume_store
             .create(Some(&existing.id))
-            .expect_err("an existing volume's canonical id is already taken");
-        assert!(matches!(error, BoxliteError::AlreadyExists(_)), "{error:?}");
+            .expect_err("a canonical UUID must not become a volume name");
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
         assert_eq!(
             runtime
                 .local_volume_store

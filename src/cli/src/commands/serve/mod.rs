@@ -4341,6 +4341,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
         let (base, server) = serve_router(state).await;
         let client = reqwest::Client::new();
@@ -4361,20 +4362,56 @@ mod tests {
         assert_eq!(created["size_bytes"], serde_json::Value::Null);
         assert!(created.get("host_path").is_none());
 
+        let named: serde_json::Value = client
+            .post(format!("{base}/v1/volumes"))
+            .json(&serde_json::json!({"name": "workspace"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let named_id = named["id"].as_str().unwrap().to_owned();
+        assert_eq!(named["name"], "workspace");
+        assert_ne!(named_id, "workspace");
+        assert_eq!(named["updated_at"], named["created_at"]);
+
         let duplicate = client
             .post(format!("{base}/v1/volumes"))
-            .json(&serde_json::json!({"name": id}))
+            .json(&serde_json::json!({"name": "workspace"}))
             .send()
             .await
             .unwrap();
         assert_eq!(duplicate.status(), reqwest::StatusCode::CONFLICT);
 
-        let invalid = client
-            .get(format!("{base}/v1/volumes/{id}"))
+        let uuid_name = client
+            .post(format!("{base}/v1/volumes"))
+            .json(&serde_json::json!({"name": id}))
             .send()
             .await
             .unwrap();
-        assert_eq!(invalid.status(), reqwest::StatusCode::OK);
+        assert_eq!(uuid_name.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        let fetched: serde_json::Value = client
+            .get(format!("{base}/v1/volumes/{named_id}"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(fetched["id"], named["id"]);
+        assert_eq!(fetched["name"], "workspace");
+        let by_name = client
+            .get(format!("{base}/v1/volumes/workspace"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_name.status(), reqwest::StatusCode::BAD_REQUEST);
 
         let listed: serde_json::Value = client
             .get(format!("{base}/v1/volumes"))
@@ -4384,14 +4421,25 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(listed["volumes"][0]["id"], created["id"]);
+        let listed_ids = listed["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|volume| volume["id"].as_str().unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            listed_ids,
+            std::collections::HashSet::from([id.as_str(), named_id.as_str()])
+        );
 
-        let removed = client
-            .delete(format!("{base}/v1/volumes/{id}"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(removed.status(), reqwest::StatusCode::NO_CONTENT);
+        for volume_id in [&id, &named_id] {
+            let removed = client
+                .delete(format!("{base}/v1/volumes/{volume_id}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(removed.status(), reqwest::StatusCode::NO_CONTENT);
+        }
         let missing = client
             .delete(format!("{base}/v1/volumes/{id}?force=false"))
             .send()
@@ -4404,6 +4452,110 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing_forced.status(), reqwest::StatusCode::NO_CONTENT);
+
+        server.abort();
+        local.shutdown(Some(1)).await.expect("shutdown runtime");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rest_mounts_reach_local_runtime_and_register_volume_holders() {
+        let home = tempfile::tempdir().expect("runtime home");
+        let local = BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
+            home_dir: home.path().join("boxlite"),
+            ..Default::default()
+        })
+        .expect("local runtime");
+        let state = Arc::new(AppState {
+            runtime: local.clone(),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
+        });
+        let (base, server) = serve_router(state).await;
+        let remote = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(base.clone()))
+            .expect("rest runtime");
+        let client = reqwest::Client::new();
+        let volumes = remote.volumes().expect("volume handle");
+        let typed_volume = volumes.create(Some("typed")).await.expect("typed volume");
+        let legacy_volume = volumes.create(Some("legacy")).await.expect("legacy volume");
+        std::fs::create_dir_all(
+            home.path()
+                .join("boxlite/volumes")
+                .join(&typed_volume.id)
+                .join("_data/team/backend"),
+        )
+        .expect("typed mount subdirectory");
+
+        let typed = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("team/backend".into()),
+                ..MountSpec::volume_mount("typed", "/workspace")
+            }],
+            ..Default::default()
+        };
+        let legacy = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::managed_volume("legacy", "/workspace")
+            }],
+            ..Default::default()
+        };
+        let missing_subdirectory = BoxOptions {
+            mounts: vec![MountSpec {
+                sub_path: Some("missing".into()),
+                ..MountSpec::volume_mount("typed", "/workspace")
+            }],
+            ..Default::default()
+        };
+        let error = remote
+            .create(missing_subdirectory, Some("missing-sub-path".into()))
+            .await
+            .err()
+            .expect("a missing typed-mount subdirectory must cross the REST boundary");
+        assert!(
+            matches!(error, boxlite::BoxliteError::NotFound(_)),
+            "{error:?}"
+        );
+        let not_created = client
+            .get(format!("{base}/v1/boxes/missing-sub-path"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(not_created.status(), reqwest::StatusCode::NOT_FOUND);
+
+        for (name, volume, options) in [
+            ("typed-box", &typed_volume, typed),
+            ("legacy-box", &legacy_volume, legacy),
+        ] {
+            let litebox = remote
+                .create(options, Some(name.to_string()))
+                .await
+                .expect("REST create must preserve the volume mount");
+            let held = client
+                .delete(format!("{base}/v1/volumes/{}?force=true", volume.id))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(held.status(), reqwest::StatusCode::CONFLICT);
+
+            let removed = client
+                .delete(format!("{base}/v1/boxes/{}", litebox.id()))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(removed.status(), reqwest::StatusCode::NO_CONTENT);
+            let remaining = client
+                .get(format!("{base}/v1/volumes/{}", volume.id))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(remaining.status(), reqwest::StatusCode::OK);
+        }
 
         server.abort();
         local.shutdown(Some(1)).await.expect("shutdown runtime");

@@ -1028,6 +1028,10 @@ A runtime refuses the mounts it does not take rather than dropping them; use
 
 - Importing an archive that carries mounts is not supported yet.
 
+Named REST `get_or_create` rejects reuse when the request contains `volumes` or `mounts`,
+because the box response cannot verify the existing source, target, read-only mode, or `sub_path`.
+Use a different name or recreate the box. Creation and reuse without mounts are unaffected.
+
 ### NetworkSpec
 
 Guest egress policy — unchanged by the outbound/inbound split.
