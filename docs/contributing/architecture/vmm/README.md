@@ -554,6 +554,13 @@ logged.
   attach order (`vda` container, `vdb` guest root), and defaults to `console=hvc0`.
   The single filesystem device exports logical shares below its aggregate root;
   matching mount instructions are sent only for the native engine.
+- **Runtime control.** The runtime sends `resize_disk` to the native shim over
+  the host-only `vmm.sock`, which stays open across transient accept errors.
+  The shim routes requests by `block_id` through
+  [`VmControl`](../../../../src/vmm/README.md#virtio-block-device).
+- **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
+  The host kernel enforces the shim's configured or inherited
+  [`RLIMIT_FSIZE` soft limit](../../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).

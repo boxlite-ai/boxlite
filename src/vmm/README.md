@@ -8,8 +8,8 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
-are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmControl`, `Error`
+and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
 `Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
@@ -27,7 +27,7 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -739,7 +739,7 @@ took, and then announces that slot on the kernel command line.
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
   `/dev/vdb`, and so on.
-- **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
+- **Configuration.** `DiskConfig { block_id, path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
   backing chain its header names. At most 8 disks; `blk::add_disk` fails with
   `Error::OpenDisk` for an image it cannot open and `add_all` fails with
@@ -753,7 +753,8 @@ took, and then announces that slot on the kernel command line.
   at most 128 MiB, and a read past the end returns zeros, while writes are
   refused.
 - **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
-  engine implements: `disk_info` once after open; `event_source` at every
+  engine implements: `disk_info` once after open; `resize_grow` to a larger
+  aligned size between requests, returning the new information; `event_source` at every
   activation, registered with the worker generation when it is `Some`;
   `submit(token, Request)` per parsed chain, answering `Done(CompletedRequest)`
   inline or `Pending`; `completions` on each `BackendReady` edge, drained
@@ -779,8 +780,26 @@ took, and then announces that slot on the kernel command line.
   and at most 128 MiB, so a conforming guest splits a larger range; imago
   zeroes what the format cannot discard, and a qcow2 image frees the
   clusters without punching the host file.
+- **Disk identity.** `block_id` is a nonempty host control ID, unique within
+  the VM. The native adapter preserves the ID assigned by BoxLite. IDs do not
+  affect attachment order or Linux device names. Invalid IDs fail VM creation
+  before host resources or images are opened.
+- **Online grow.** `vm.control().resize_disk("data", 2 << 30, timeout)`
+  grows the writable disk with `block_id: "data"` to 2 GiB. Targets must be
+  sector-aligned and at least the current capacity. A same-size request is a no-op.
+
+  After growth succeeds, the device worker updates guest capacity and raises a
+  configuration interrupt. A timeout ends the wait and the request can still complete.
+
+  On Linux, preflight rejects a Raw target or qcow2 estimate above the shim's
+  `RLIMIT_FSIZE` soft limit. The temporary qcow2 estimate adds 1 MiB per
+  started GiB of target capacity.
+
+  Fresh standalone samples from QEMU 8.2.2 (`preallocation=metadata`,
+  64 KiB clusters, 16-bit refcounts) added 384 KiB to file length at 1 GiB
+  and 10.25 MiB at 64 GiB. Existing image layouts can require more space.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
-  backend source, fails the device with `Fatal` if a request is still in
+  backend and control sources, fails the device with `Fatal` if a request is still in
   flight (no completion can arrive any more, and the guest may already
   reuse that memory), flushes, and forgets the activation. The imago
   backend finishes every request inline, so its table is always empty; a

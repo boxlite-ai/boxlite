@@ -342,7 +342,7 @@ fn each_environment_entry_stays_one_kernel_parameter() {
 }
 
 #[test]
-fn the_vm_config_keeps_the_disks_in_attach_order() {
+fn the_vm_config_keeps_disk_ids_and_attach_order() {
     let test_box = TestBox::new();
     let kernel = test_box.stage_kernel(&fake_kernel(), Some(b"070701"));
     let spec = runtime_like_spec(&test_box, Some(kernel.clone()));
@@ -356,17 +356,26 @@ fn the_vm_config_keeps_the_disks_in_attach_order() {
     let disks: Vec<_> = config
         .disks
         .iter()
-        .map(|disk| (disk.path.clone(), disk.format, disk.read_only))
+        .map(|disk| {
+            (
+                disk.block_id.as_str(),
+                disk.path.clone(),
+                disk.format,
+                disk.read_only,
+            )
+        })
         .collect();
     assert_eq!(
         disks,
         [
             (
+                "vda",
                 PathBuf::from("/disks/disk.qcow2"),
                 boxlite_vmm::DiskFormat::Qcow2,
                 false
             ),
             (
+                "vdb",
                 PathBuf::from("/bases/guest.ext4"),
                 boxlite_vmm::DiskFormat::Raw,
                 true
@@ -475,4 +484,77 @@ async fn reports_a_missing_kernel_through_the_exit_file() {
         }
         other => panic!("expected an Unsupported exit record, got {other:?}"),
     }
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 with /dev/kvm, VMM_KERNEL, VMM_DISK_GROW_INIT and a boxlite-shim built with native"]
+async fn grows_a_disk_through_the_shim_control_socket() {
+    use crate::vmm::vmm_socket::{ControlOp, ControlReply, ControlRequest, VERSION, request};
+
+    let test_box = TestBox::new();
+    let kernel = fs::read(std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL")).unwrap();
+    let init =
+        fs::read(std::env::var_os("VMM_DISK_GROW_INIT").expect("set VMM_DISK_GROW_INIT")).unwrap();
+    let archive = m1_initramfs::newc_archive("init", &init);
+    let prepared = test_box.stage_kernel(&kernel, Some(&archive));
+    // The container disk path is one the jail grants read-write; the test
+    // serves a raw image there.
+    fs::create_dir_all(test_box.layout.disks_dir()).unwrap();
+    let disk = test_box.layout.disk_path();
+    fs::File::create(&disk).unwrap().set_len(1 << 20).unwrap();
+    let mut spec = test_box.spec(Some(prepared));
+    spec.block_devices.add(BlockDevice {
+        block_id: "vda".to_string(),
+        disk_path: disk.clone(),
+        read_only: false,
+        format: DiskFormat::Raw,
+    });
+
+    let mut controller = ShimController::new(
+        find_binary("boxlite-shim").unwrap(),
+        VmmKind::Native,
+        test_box.box_id.clone(),
+        BoxOptions::default(),
+        test_box.layout.clone(),
+    )
+    .unwrap();
+    let handler = controller.start(&spec).await.unwrap();
+    let started = std::time::Instant::now();
+    while !test_box.console().contains("GROW_BEFORE") {
+        assert!(
+            started.elapsed() < SHIM_TIMEOUT && handler.is_running(),
+            "console:\n{}\nexit: {:?}",
+            test_box.console(),
+            fs::read_to_string(test_box.layout.exit_file_path())
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let path = test_box.layout.sockets().vmm_sock();
+    let grow = ControlRequest {
+        version: VERSION,
+        op: ControlOp::ResizeDisk {
+            block_id: "vda".into(),
+            bytes: 2 << 20,
+        },
+    };
+    let reply = tokio::task::spawn_blocking(move || request(&path, &grow, Duration::from_secs(15)))
+        .await
+        .unwrap()
+        .unwrap();
+    let exit = tokio::time::timeout(
+        SHIM_TIMEOUT,
+        ProcessMonitor::new(handler.pid()).wait_for_exit(),
+    )
+    .await
+    .expect("the shim exits within the timeout");
+
+    let console = test_box.console();
+    assert_eq!(
+        reply,
+        Ok(ControlReply::DiskSize(2 << 20)),
+        "console:\n{console}"
+    );
+    assert_eq!(exit, ProcessExit::Code(0), "console:\n{console}");
+    assert!(console.contains("GROW_AFTER 4096"), "console:\n{console}");
+    assert_eq!(fs::metadata(&disk).unwrap().len(), 2 << 20);
 }

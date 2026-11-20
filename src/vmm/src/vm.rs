@@ -11,6 +11,7 @@ use boxlite_hypervisor::Vm as HostVm;
 use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
+    control::{ControlRegistry, VmControl},
     devices::console::ConsoleWorker,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
@@ -73,6 +74,7 @@ pub struct Vm<H: HostVm> {
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
     /// `Sync`; `run` reaches it through `&mut self`.
     console: Mutex<Option<ConsoleWorker>>,
+    control: VmControl,
     events: Mutex<EventLoop>,
     sender: EventSender,
     boot_regs: BootRegisters,
@@ -196,11 +198,13 @@ impl<H: HostVm> Vm<H> {
         // early return leaves nothing running.
         let workers = create_workers(sender.clone()).map_err(Error::VirtioWorker)?;
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
+        let mut controls = ControlRegistry::default();
         devices(
             &mut chipset,
             DeviceContext {
                 memory: ram.memory(),
                 workers: &workers,
+                controls: &mut controls,
             },
             &mut config,
         )?;
@@ -221,6 +225,7 @@ impl<H: HostVm> Vm<H> {
             chipset: Some(chipset),
             workers: Some(workers),
             console: Mutex::new(None),
+            control: controls.finish(),
             events: Mutex::new(events),
             sender,
             boot_regs: BootRegisters::default(),
@@ -238,6 +243,11 @@ impl<H: HostVm> Vm<H> {
     /// [`run`](Self::run) starts.
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.sender.clone())
+    }
+
+    /// Controls the VM from another thread, addressing disks by their configured IDs.
+    pub fn control(&self) -> VmControl {
+        self.control.clone()
     }
 }
 
@@ -379,3 +389,7 @@ impl<H: HostVm> Drop for Vm<H> {
 #[cfg(test)]
 #[path = "../tests/vm/mod.rs"]
 mod tests;
+
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "../tests/control/mod.rs"]
+mod control_tests;

@@ -319,7 +319,13 @@ export VMM_KERNEL
 VMM_BALLOON_INIT ?= $(CURDIR)/target/vmm/boot/balloon-init
 export VMM_BALLOON_INIT
 
+# Freestanding guest that watches its disk grow while it runs.
+VMM_DISK_GROW_INIT ?= $(CURDIR)/target/vmm/boot/disk-grow-init
+export VMM_DISK_GROW_INIT
+
 $(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
+$(VMM_DISK_GROW_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/disk_grow_init.c
+$(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT):
 	@mkdir -p "$(@D)"
 	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
 
@@ -340,7 +346,7 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
 
@@ -361,7 +367,7 @@ export VMM_GUEST VMM_GUEST_PROBE
 _guest-boot-probe: $(if $(SETUP_DONE),,runtime\:debug)
 	@bash "$(SCRIPT_DIR)/test/build-guest-boot-probe.sh"
 
-test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe
+test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe $(VMM_DISK_GROW_INIT)
 	@cargo test -p boxlite --features native --lib --no-run
 	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
 	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1

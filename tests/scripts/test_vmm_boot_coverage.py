@@ -32,6 +32,7 @@ class VmmBootCoverageTest(unittest.TestCase):
             makefile.write_text(
                 f"PROJECT_ROOT := {root}\n"
                 "VMM_BALLOON_INIT :=\n"
+                "VMM_DISK_GROW_INIT :=\n"
                 f"include {COVERAGE_MAKEFILE}\n"
                 ".PHONY: _ensure-kvm _ensure-vmm-kernel vmm\\:guest-mount-init\n"
                 "_ensure-kvm _ensure-vmm-kernel:\n\t@true\n"

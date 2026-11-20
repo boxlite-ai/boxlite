@@ -92,6 +92,8 @@ pub(crate) struct DeviceContext<'a> {
     pub(crate) memory: &'a Arc<GuestMemoryMmap>,
     /// The VM's virtio workers.
     pub(crate) workers: &'a VirtioWorkers,
+    /// Device control channels registered during VM construction.
+    pub(crate) controls: &'a mut crate::control::ControlRegistry,
 }
 
 /// What the workers ask a device to do.
