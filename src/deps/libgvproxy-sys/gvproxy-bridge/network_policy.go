@@ -127,6 +127,10 @@ func (p *outboundPolicyController) apply(ctx context.Context, policy outboundPol
 }
 
 func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == outboundRecoveryGatePath {
+		p.serveRecoveryGate(w, r)
+		return
+	}
 	if r.URL.Path == outboundStatusPath {
 		p.serveStatus(w, r)
 		return
@@ -196,6 +200,10 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		previous := p.active.Load()
+		if previous.recoveryGate != nil && previous.recoveryGate.Sealed {
+			http.Error(w, "recovery epoch is sealed", http.StatusConflict)
+			return
+		}
 		revision, status, err := revisionForOutboundUpdate(r, previous.revision)
 		if err != nil {
 			http.Error(w, err.Error(), status)
@@ -205,6 +213,14 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			if !previous.managed {
 				http.Error(w, "managed proxy network is unavailable", http.StatusConflict)
 				return
+			}
+			if gate := previous.recoveryGate; gate != nil {
+				epochs := r.Header.Values("X-BoxLite-Managed-Epoch")
+				if len(epochs) != 1 || epochs[0] != gate.Epoch ||
+					(routeConfig != nil && (routeConfig.Binding == nil || routeConfig.Binding.Epoch != gate.Epoch)) {
+					http.Error(w, "managed network epoch changed", http.StatusPreconditionFailed)
+					return
+				}
 			}
 			route, routeErr := routeConfig.resolver(p.config.Subnet, p.dnsWork)
 			if routeErr != nil {

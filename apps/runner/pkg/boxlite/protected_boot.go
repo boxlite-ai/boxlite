@@ -22,6 +22,31 @@ func (c *Client) ProtectedBoot(ctx context.Context, boxID string, operation boxl
 	if err := lease.CheckIdle(); err != nil {
 		return nil, err
 	}
+	if operation == boxlite.ProtectedBootRemove {
+		id, err := c.nativeBoxID(boxID)
+		if err != nil {
+			return nil, err
+		}
+		receipt, err := c.runtime.RunnerRemoveRetired(ctx, id, payload)
+		if err != nil {
+			return nil, err
+		}
+		// An exact replay can resolve a retired incarnation while its name is in use again.
+		if _, err := c.runtime.GetInfo(ctx, id); err == nil {
+			return receipt, nil
+		} else if !boxlite.IsNotFound(err) {
+			return nil, err
+		}
+		if err := lease.Invalidate(); err != nil {
+			return nil, err
+		}
+		c.forgetBox(boxID)
+		if err := c.removeBoxVolumeMountRecord(ctx, boxID); err != nil {
+			return nil, err
+		}
+		c.CleanupOrphanedVolumeMounts(ctx)
+		return receipt, nil
+	}
 	box, err := c.getOrFetchBox(ctx, boxID)
 	if err != nil {
 		return nil, err

@@ -195,93 +195,266 @@ func TestIntegrationProtectedBootTCPPaths(t *testing.T) {
 		}
 	}()
 	https, runnerURL := startProtectedBootListener(t, client, cert, key)
+	t.Run("gated_guest_egress", func(t *testing.T) {
+		verifyGatedGuestEgress(t, ctx, client, https, runnerURL)
+	})
+	t.Run("proxy_traffic", func(t *testing.T) {
+		path := runnerURL + "/v1/boxes/" + boxID + "/network/outbound/bootstrap"
+		attempt := fmt.Sprintf(`{"runner_id":%q,"attempt_id":"fixture-attempt","registration_id":"fixture-registration","registration_revision":"7","policy":{"revision":"fixture-policy","policy":{"mode":"enabled","allow_net":["11.23.0.2","inspect.test","protected.test"]}}}`, bootRunnerID)
+		request := fmt.Sprintf(`{"key":%s,"scheme":"http","host":%q,"port":%d,"credential":{"username":"fixture-user","password":"fixture-password"}}`, attempt, bootProxyIP, proxyPort)
+		for _, tt := range []struct {
+			token, runnerID string
+			status          int
+		}{
+			{"wrong-token", bootRunnerID, http.StatusUnauthorized},
+			{bootAPIToken, "d02ae8d4-f05c-42f4-bb57-d1fdb71b5d42", http.StatusForbidden},
+		} {
+			postProtectedBoot(t, ctx, https, path, tt.token, tt.runnerID, request, tt.status)
+		}
+		if _, err := client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRead, json.RawMessage(attempt)); !boxlite.IsInvalidState(err) {
+			t.Fatalf("denied HTTP requests must leave startup unconfirmed: %v", err)
+		}
+		receipt := postProtectedBoot(t, ctx, https, path, bootAPIToken, bootRunnerID, request, http.StatusOK)
+		var evidence struct{ Epoch, Outcome string }
+		if err := json.Unmarshal(receipt, &evidence); err != nil || evidence.Epoch == "" || evidence.Outcome != "confirmed" {
+			t.Fatalf("unexpected startup evidence: %s (%v)", receipt, err)
+		}
+		observed := postProtectedBoot(t, ctx, https, path+"/receipt", bootAPIToken, bootRunnerID, attempt, http.StatusOK)
+		if string(observed) != string(receipt) {
+			t.Fatalf("read back exact startup evidence: %s", observed)
+		}
+		guestEnv, err := client.Exec(ctx, boxID, "env")
+		if err != nil || guestEnv.ExitCode != 0 {
+			t.Fatalf("read Guest environment: %v", err)
+		}
+		if strings.Contains(guestEnv.StdOut, "fixture-password") || strings.Contains(string(observed), "fixture-password") {
+			t.Fatal("proxy credential appeared in a Guest or readback record")
+		}
+
+		probe := func(url string, headers ...string) (*blclient.ExecResult, error) {
+			// Use the container trust bundle that the Guest agent updates at init.
+			args := []string{"--noproxy", "*", "--cacert", "/etc/ssl/certs/ca-certificates.crt",
+				"--fail", "--silent", "--show-error", "--max-time", "10"}
+			for _, header := range headers {
+				args = append(args, "--header", header)
+			}
+			return client.Exec(ctx, boxID, "curl", append(args, url)...)
+		}
+		for _, entry := range []struct {
+			url, body string
+			headers   []string
+		}{
+			{"http://" + bootPlainIP + "/plain", "plain", nil},
+			{"http://inspect.test/inspect", "inspect", nil},
+			// MITM only replaces headers the application explicitly sends.
+			{"https://protected.test/secret", "secret", []string{"Authorization: Bearer guest-placeholder"}},
+		} {
+			out, err := probe(entry.url, entry.headers...)
+			if err != nil || out.ExitCode != 0 || strings.TrimSpace(out.StdOut) != entry.body {
+				t.Fatalf("Guest traffic for %s: %+v (%v)", entry.url, out, err)
+			}
+			t.Logf("Guest reached %s through the fixture proxy", entry.url)
+		}
+		proxyMu.Lock()
+		for address := range allowed {
+			if connections[address] == 0 {
+				t.Errorf("registered proxy saw no CONNECT to %s", address)
+			}
+			t.Logf("proxy received %d CONNECT requests for %s", connections[address], address)
+		}
+		inspectionConnects := connections[bootInspectIP+":80"]
+		proxyMu.Unlock()
+		denied, err := probe("http://" + bootInspectIP + "/inspect")
+		if err != nil || denied.ExitCode == 0 {
+			t.Fatalf("Guest request by unapproved literal IP did not fail: %+v (%v)", denied, err)
+		}
+		proxyMu.Lock()
+		if connections[bootInspectIP+":80"] != inspectionConnects {
+			t.Error("unapproved literal IP opened a proxy tunnel")
+		}
+		proxyMu.Unlock()
+		reject.Store(true)
+		failed, err := probe("http://" + bootPlainIP + "/plain")
+		if err != nil || failed.ExitCode == 0 {
+			t.Fatalf("Guest request did not fail after proxy rejection: %+v (%v)", failed, err)
+		}
+		targetMu.Lock()
+		defer targetMu.Unlock()
+		for _, path := range []string{"/plain", "/inspect", "/secret"} {
+			if targets[path] != 1 {
+				t.Errorf("target %s received %d requests, want one through the proxy", path, targets[path])
+			}
+		}
+		t.Log("policy denial and proxy rejection produced no extra target requests")
+	})
+}
+
+func verifyGatedGuestEgress(t *testing.T, ctx context.Context, client *blclient.Client, runnerHTTPS *http.Client, runnerURL string) {
+	t.Helper()
+	const boxID = "c50503dd-a0fd-4d6c-8ddb-da3b8af71b48"
+	const hostIP = "192.168.127.254"
+	var tcp, datagrams atomic.Int32
+	tcpPort := serveProtectedBootFixture(t, "127.0.0.1:0", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		tcp.Add(1)
+		_, _ = io.WriteString(w, "gate-open")
+	}), "", "")
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	udpDone := make(chan struct{})
+	go func() {
+		defer close(udpDone)
+		buffer := make([]byte, 64)
+		for {
+			n, source, err := udp.ReadFromUDP(buffer)
+			if err != nil {
+				return
+			}
+			datagrams.Add(1)
+			_, _ = udp.WriteToUDP(buffer[:n], source)
+		}
+	}()
+	t.Cleanup(func() { _ = udp.Close(); <-udpDone })
+
+	cpu, outbound, skipStart := 1.0, true, true
+	_, _, err = client.Create(ctx, dto.CreateBoxDTO{
+		Id: boxID, Image: "python:3.13-alpine", CpuQuota: &cpu, MemoryQuota: 1, StorageQuota: 2,
+		Entrypoint: []string{"sleep"}, Cmd: []string{"3600"}, OutboundEnabled: &outbound, SkipStart: &skipStart,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := client.Stop(cleanup, boxID, false); err != nil && !boxlite.IsNotFound(err) {
+			t.Logf("stop gated fixture Box: %v", err)
+		}
+	})
+	if _, err = client.Start(ctx, boxID, nil, nil); err != nil {
+		t.Fatalf("start predecessor: %v", err)
+	}
+	if err = client.Stop(ctx, boxID, false); err != nil {
+		t.Fatalf("stop predecessor: %v", err)
+	}
+	policy := fmt.Sprintf(`{"mode":"enabled","allow_net":[%q]}`, hostIP)
+	bootKey := func(attempt string) string {
+		return fmt.Sprintf(`{"runner_id":%q,"attempt_id":%q,"registration_id":null,"registration_revision":null,"policy":{"revision":"gate-policy","policy":%s}}`, bootRunnerID, attempt, policy)
+	}
+	key := bootKey("gate-attempt")
+	const generation = "held-generation"
 	path := runnerURL + "/v1/boxes/" + boxID + "/network/outbound/bootstrap"
-	attempt := fmt.Sprintf(`{"runner_id":%q,"attempt_id":"fixture-attempt","registration_id":"fixture-registration","registration_revision":"7","policy":{"revision":"fixture-policy","policy":{"mode":"enabled","allow_net":["11.23.0.2","inspect.test","protected.test"]}}}`, bootRunnerID)
-	request := fmt.Sprintf(`{"key":%s,"scheme":"http","host":%q,"port":%d,"credential":{"username":"fixture-user","password":"fixture-password"}}`, attempt, bootProxyIP, proxyPort)
-	for _, tt := range []struct {
-		token, runnerID string
-		status          int
-	}{
-		{"wrong-token", bootRunnerID, http.StatusUnauthorized},
-		{bootAPIToken, "d02ae8d4-f05c-42f4-bb57-d1fdb71b5d42", http.StatusForbidden},
-	} {
-		postProtectedBoot(t, ctx, https, path, tt.token, tt.runnerID, request, tt.status)
+	request := fmt.Sprintf(`{"key":%s,"recovery_generation":%q,"restart":true}`, key, generation)
+	receipt := postProtectedBoot(t, ctx, runnerHTTPS, path, bootAPIToken, bootRunnerID, request, http.StatusOK)
+	var boot struct{ Epoch, Outcome string }
+	if err = json.Unmarshal(receipt, &boot); err != nil || boot.Epoch == "" || boot.Outcome != "confirmed" {
+		t.Fatalf("invalid gated startup receipt: %s (%v)", receipt, err)
 	}
-	if _, err := client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRead, json.RawMessage(attempt)); !boxlite.IsInvalidState(err) {
-		t.Fatalf("denied HTTP requests must leave startup unconfirmed: %v", err)
+	release := func(token, generation string, status int) {
+		request := fmt.Sprintf(`{"key":%s,"epoch":%q,"generation":%q}`, key, boot.Epoch, generation)
+		postProtectedBoot(t, ctx, runnerHTTPS, path+"/release-gate", token, bootRunnerID, request, status)
 	}
-	receipt := postProtectedBoot(t, ctx, https, path, bootAPIToken, bootRunnerID, request, http.StatusOK)
-	var evidence struct{ Epoch, Outcome string }
-	if err := json.Unmarshal(receipt, &evidence); err != nil || evidence.Epoch == "" || evidence.Outcome != "confirmed" {
-		t.Fatalf("unexpected startup evidence: %s (%v)", receipt, err)
+	release("wrong-token", generation, http.StatusUnauthorized)
+	release(bootAPIToken, "stale-generation", http.StatusConflict)
+
+	const probe = `
+import socket, sys, urllib.request
+
+host, tcp, udp = sys.argv[1:]
+
+def tcp_probe():
+    conn = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with conn.open(f"http://{host}:{tcp}", timeout=1) as reply:
+        return reply.read() == b"gate-open"
+
+def udp_probe():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as conn:
+        conn.settimeout(1)
+        conn.connect((host, int(udp)))
+        conn.send(b"gate-open")
+        return conn.recv(64) == b"gate-open"
+
+def dns_probe():
+    resolver = next(line.split()[1] for line in open("/etc/resolv.conf") if line.startswith("nameserver "))
+    query = bytes.fromhex("8a3c01000001000000000000") + b"\x04host\x07boxlite\x08internal\x00\x00\x01\x00\x01"
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as conn:
+        conn.settimeout(1)
+        conn.connect((resolver, 53))
+        conn.send(query)
+        reply = conn.recv(512)
+        return reply[:2] == query[:2] and reply[6:8] == b"\x00\x01" and reply[-4:] == socket.inet_aton(host)
+
+for name, run in (("tcp", tcp_probe), ("udp", udp_probe), ("dns", dns_probe)):
+    try:
+        print(name, "reached" if run() else "invalid-response")
+    except OSError:
+        print(name, "blocked")
+`
+	check := func(state string) {
+		t.Helper()
+		result, err := client.Exec(ctx, boxID, "python3", "-c", probe, hostIP,
+			fmt.Sprint(tcpPort), fmt.Sprint(udp.LocalAddr().(*net.UDPAddr).Port))
+		want := fmt.Sprintf("tcp %s\nudp %s\ndns %s", state, state, state)
+		if err != nil || result.ExitCode != 0 || strings.TrimSpace(result.StdOut) != want {
+			t.Fatalf("expected guest traffic to be %s: %+v (%v)", state, result, err)
+		}
+		t.Logf("guest probes after release attempt: %s", strings.TrimSpace(result.StdOut))
 	}
-	observed := postProtectedBoot(t, ctx, https, path+"/receipt", bootAPIToken, bootRunnerID, attempt, http.StatusOK)
-	if string(observed) != string(receipt) {
-		t.Fatalf("read back exact startup evidence: %s", observed)
+	check("blocked")
+	if tcp.Load() != 0 || datagrams.Load() != 0 {
+		t.Fatal("traffic crossed a held recovery gate")
 	}
-	guestEnv, err := client.Exec(ctx, boxID, "env")
-	if err != nil || guestEnv.ExitCode != 0 {
-		t.Fatalf("read Guest environment: %v", err)
-	}
-	if strings.Contains(guestEnv.StdOut, "fixture-password") || strings.Contains(string(observed), "fixture-password") {
-		t.Fatal("proxy credential appeared in a Guest or readback record")
+	release(bootAPIToken, generation, http.StatusOK)
+	check("reached")
+	if tcp.Load() != 1 || datagrams.Load() != 1 {
+		t.Fatalf("unexpected host fixture counts after release: TCP %d, UDP %d", tcp.Load(), datagrams.Load())
 	}
 
-	probe := func(url string, headers ...string) (*blclient.ExecResult, error) {
-		// Use the container trust bundle that the Guest agent updates at init.
-		args := []string{"--noproxy", "*", "--cacert", "/etc/ssl/certs/ca-certificates.crt",
-			"--fail", "--silent", "--show-error", "--max-time", "10"}
-		for _, header := range headers {
-			args = append(args, "--header", header)
+	before := fmt.Sprintf(`{"snapshot":{"revision":"gate-policy","policy":%s},"binding":null}`, policy)
+	candidate := fmt.Sprintf(`{"snapshot":{"revision":"pending-policy","policy":%s},"binding":null}`, policy)
+	update := fmt.Sprintf(`{"runner_id":%q,"epoch":%q,"command":{"operation":"prepare","update":{"attempt_id":"abandoned-stage","predecessor":%s,"candidate":%s}}}`, bootRunnerID, boot.Epoch, before, candidate)
+	postProtectedBoot(t, ctx, runnerHTTPS, strings.TrimSuffix(path, "/bootstrap")+"/managed-route", bootAPIToken, bootRunnerID, update, http.StatusOK)
+	retire := func(key, epoch, generation string) {
+		t.Helper()
+		gate := fmt.Sprintf(`{"key":%s,"epoch":%q,"generation":%q}`, key, epoch, generation)
+		postProtectedBoot(t, ctx, runnerHTTPS, path+"/seal-gate", bootAPIToken, bootRunnerID, gate, http.StatusOK)
+		if err := client.Stop(ctx, boxID, false); err != nil {
+			t.Fatalf("stop sealed epoch: %v", err)
 		}
-		return client.Exec(ctx, boxID, "curl", append(args, url)...)
-	}
-	for _, entry := range []struct {
-		url, body string
-		headers   []string
-	}{
-		{"http://" + bootPlainIP + "/plain", "plain", nil},
-		{"http://inspect.test/inspect", "inspect", nil},
-		// MITM only replaces headers the application explicitly sends.
-		{"https://protected.test/secret", "secret", []string{"Authorization: Bearer guest-placeholder"}},
-	} {
-		out, err := probe(entry.url, entry.headers...)
-		if err != nil || out.ExitCode != 0 || strings.TrimSpace(out.StdOut) != entry.body {
-			t.Fatalf("Guest traffic for %s: %+v (%v)", entry.url, out, err)
+		deadline := time.Now().Add(5 * time.Second)
+		var retired json.RawMessage
+		for {
+			var err error
+			retired, err = client.ProtectedBoot(ctx, boxID, boxlite.ProtectedBootRetire, json.RawMessage(key))
+			if err == nil {
+				break
+			}
+			if !boxlite.IsInvalidState(err) || time.Now().After(deadline) {
+				t.Fatalf("retire terminated epoch: %v", err)
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		t.Logf("Guest reached %s through the fixture proxy", entry.url)
-	}
-	proxyMu.Lock()
-	for address := range allowed {
-		if connections[address] == 0 {
-			t.Errorf("registered proxy saw no CONNECT to %s", address)
-		}
-		t.Logf("proxy received %d CONNECT requests for %s", connections[address], address)
-	}
-	inspectionConnects := connections[bootInspectIP+":80"]
-	proxyMu.Unlock()
-	denied, err := probe("http://" + bootInspectIP + "/inspect")
-	if err != nil || denied.ExitCode == 0 {
-		t.Fatalf("Guest request by unapproved literal IP did not fail: %+v (%v)", denied, err)
-	}
-	proxyMu.Lock()
-	if connections[bootInspectIP+":80"] != inspectionConnects {
-		t.Error("unapproved literal IP opened a proxy tunnel")
-	}
-	proxyMu.Unlock()
-	reject.Store(true)
-	failed, err := probe("http://" + bootPlainIP + "/plain")
-	if err != nil || failed.ExitCode == 0 {
-		t.Fatalf("Guest request did not fail after proxy rejection: %+v (%v)", failed, err)
-	}
-	targetMu.Lock()
-	defer targetMu.Unlock()
-	for _, path := range []string{"/plain", "/inspect", "/secret"} {
-		if targets[path] != 1 {
-			t.Errorf("target %s received %d requests, want one through the proxy", path, targets[path])
+		var receipt struct{ Epoch, Outcome string }
+		if err := json.Unmarshal(retired, &receipt); err != nil || receipt.Epoch != epoch || receipt.Outcome != "retired" {
+			t.Fatalf("invalid retirement receipt: %s (%v)", retired, err)
 		}
 	}
-	t.Log("policy denial and proxy rejection produced no extra target requests")
+	retire(key, boot.Epoch, generation)
+	key = bootKey("replacement-attempt")
+	request = fmt.Sprintf(`{"key":%s,"recovery_generation":"replacement-generation","restart":true}`, key)
+	receipt = postProtectedBoot(t, ctx, runnerHTTPS, path, bootAPIToken, bootRunnerID, request, http.StatusOK)
+	var replacement struct{ Epoch, Outcome string }
+	if err := json.Unmarshal(receipt, &replacement); err != nil || replacement.Epoch == "" || replacement.Epoch == boot.Epoch || replacement.Outcome != "confirmed" {
+		t.Fatalf("invalid replacement boot receipt: %s (%v)", receipt, err)
+	}
+	retire(key, replacement.Epoch, "replacement-generation")
+	remove := fmt.Sprintf(`{"key":%s,"epoch":%q}`, key, replacement.Epoch)
+	removed := postProtectedBoot(t, ctx, runnerHTTPS, path+"/remove-retired", bootAPIToken, bootRunnerID, remove, http.StatusOK)
+	replayed := postProtectedBoot(t, ctx, runnerHTTPS, path+"/remove-retired", bootAPIToken, bootRunnerID, remove, http.StatusOK)
+	if string(replayed) != string(removed) {
+		t.Fatalf("retry returned a different removal receipt: %s", replayed)
+	}
 }
 
 func startProtectedBootListener(t *testing.T, runtime *blclient.Client, cert, key string) (*http.Client, string) {

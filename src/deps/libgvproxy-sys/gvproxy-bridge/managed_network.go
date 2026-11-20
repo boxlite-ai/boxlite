@@ -11,7 +11,7 @@ const udpCutoverTimeout = 5 * time.Second
 
 // installManagedNetwork runs before guest attachment. Only invoke it when the
 // guest-link writer supports packet owners all the way to the Unix socket.
-func (p *outboundPolicyController) installManagedNetwork(ctx context.Context, work *dnsLookupWork, route *proxyDNSResolver) (*gatewayDNS, error) {
+func (p *outboundPolicyController) installManagedNetwork(ctx context.Context, work *dnsLookupWork, route *proxyDNSResolver, gate *recoveryGateID) (*gatewayDNS, error) {
 	gateway, err := p.installGatewayDNS(ctx, work)
 	if err != nil {
 		return nil, err
@@ -25,6 +25,9 @@ func (p *outboundPolicyController) installManagedNetwork(ctx context.Context, wo
 	p.managedContext = ctx
 	snapshot := *p.active.Load()
 	snapshot.managed = true
+	if gate != nil {
+		snapshot.recoveryGate = &recoveryGate{recoveryGateID: *gate, Closed: true}
+	}
 	if route != nil {
 		snapshot.proxyDNS = route
 		snapshot.configureResolution(work)
@@ -127,7 +130,7 @@ func (p *outboundPolicyController) applyManaged(ctx context.Context, previous, c
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
-	if enabled && candidate.proxyDNS == nil {
+	if !candidate.ingressClosed() && candidate.proxyDNS == nil {
 		candidate.udpRelay = p.newUDPRelay()
 	}
 	if !p.publish(candidate, "confirmed") {

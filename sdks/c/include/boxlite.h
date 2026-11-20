@@ -1151,9 +1151,17 @@ void boxlite_box_free(CBoxHandle *handle);
 
 // Internal Runner ABI. Protected credential input is borrowed for this call.
 // Release the output JSON with boxlite_free_string. Operations are 0 (start),
-// 1 (receipt), 2 (retire) and 3 (check protection for legacy recovery).
+// 1 (receipt), 2 (retire), 3 (check protection), 4 (release gate), 5 (seal gate),
+// and 6 (managed route control).
 enum BoxliteErrorCode boxlite_runner_protected_boot(CBoxHandle *handle,
                                                     uint8_t operation,
+                                                    const char *input_json,
+                                                    char **out_json,
+                                                    CBoxliteError *out_error);
+
+// Internal Runner ABI. Atomically remove an exact retired local epoch.
+enum BoxliteErrorCode boxlite_runner_remove_retired(CBoxliteRuntime *runtime,
+                                                    const char *box_id,
                                                     const char *input_json,
                                                     char **out_json,
                                                     CBoxliteError *out_error);

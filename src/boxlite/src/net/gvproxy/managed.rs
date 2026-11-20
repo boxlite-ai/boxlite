@@ -43,10 +43,35 @@ pub struct ManagedProxyRoute {
     pub credential: Option<ManagedProxyCredential>,
 }
 
+/// Epoch and generation of a host-only recovery gate.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedRecoveryGateId {
+    pub epoch: OutboundRevision,
+    pub generation: OutboundRevision,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ManagedRecoveryGate {
+    pub(crate) epoch: OutboundRevision,
+    pub(crate) generation: OutboundRevision,
+    pub(crate) closed: bool,
+    pub(crate) sealed: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RecoveryGateAction {
+    Release,
+    Seal,
+}
+
 /// Installed policy and proxy identity from one immutable bridge snapshot.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ManagedProxyStatus {
     #[serde(flatten)]
     pub(crate) status: OutboundSnapshotStatus,
-    pub(crate) binding: ManagedProxyIdentity,
+    pub(crate) binding: Option<ManagedProxyIdentity>,
+    pub(crate) recovery_gate: Option<ManagedRecoveryGate>,
+    pub(crate) capabilities: Vec<String>,
 }

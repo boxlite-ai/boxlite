@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +20,7 @@ func TestManagedNetworkClosesOldUDPBeforeBinding(t *testing.T) {
 	route, _ := startProxyDNSFixture(t, http.NotFoundHandler())
 	cfg := testGvproxyConfig()
 	tap := startNetworkWithSeams(t, cfg, networkSeams{beforeAttach: func(ctx context.Context, policy *outboundPolicyController) {
-		gateway, err := policy.installManagedNetwork(ctx, route.work, nil)
+		gateway, err := policy.installManagedNetwork(ctx, route.work, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,6 +76,70 @@ func TestManagedNetworkClosesOldUDPBeforeBinding(t *testing.T) {
 	}
 }
 
+func TestManagedRecoveryGateSurvivesUpdateAndSealRejectsDelayedRelease(t *testing.T) {
+	gate := recoveryGateID{Epoch: "epoch-recovery", Generation: "generation-recovery"}
+	tap := startNetworkWithSeams(t, testGvproxyConfig(), networkSeams{beforeAttach: func(ctx context.Context, p *outboundPolicyController) {
+		gateway, err := p.installManagedNetwork(ctx, newDNSLookupWork(ctx), nil, &gate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(gateway.server.close)
+	}})
+	upstream, port := listenUDP(t)
+	send := func(payload string) { tap.send(t, udpFrame(t, unlistedIP, port, []byte(payload))) }
+	send("before recovery release")
+	assertDatagramDropped(t, upstream, "fresh recovery network sent external UDP")
+
+	update := func(epoch, previous, candidate string, want int) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, outboundSnapshotPath, strings.NewReader(`{"mode":"enabled","proxy_route":null}`))
+		request.Header.Set("If-Match", outboundETag(previous))
+		request.Header.Set(outboundRevisionHeader, candidate)
+		request.Header.Set("X-BoxLite-Managed-Epoch", epoch)
+		tap.policy.ServeHTTP(recorder, request)
+		if recorder.Code != want {
+			t.Fatalf("policy update returned %d, want %d", recorder.Code, want)
+		}
+	}
+	update("old-epoch", tap.policy.active.Load().revision, "rejected", http.StatusPreconditionFailed)
+	update(gate.Epoch, tap.policy.active.Load().revision, "recovered", http.StatusOK)
+	send("after policy publication")
+	assertDatagramDropped(t, upstream, "policy update opened the recovery gate")
+
+	change := func(request recoveryGateRequest, want int) {
+		t.Helper()
+		body, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := httptest.NewRecorder()
+		tap.policy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, outboundRecoveryGatePath, strings.NewReader(string(body))))
+		if recorder.Code != want {
+			t.Fatalf("gate %s returned %d, want %d", request.Action, recorder.Code, want)
+		}
+	}
+	stale := recoveryGateRequest{recoveryGateID: recoveryGateID{Epoch: "old", Generation: gate.Generation}, Action: "release", Revision: "recovered"}
+	change(stale, http.StatusPreconditionFailed)
+	release := recoveryGateRequest{recoveryGateID: gate, Action: "release", Revision: "recovered"}
+	change(release, http.StatusNoContent)
+	send("released")
+	_ = upstream.SetReadDeadline(time.Now().Add(forwardWindow))
+	buffer := make([]byte, 128)
+	n, _, err := upstream.ReadFrom(buffer)
+	if err != nil || string(buffer[:n]) != "released" {
+		t.Fatalf("released recovery network got %q, error %v", buffer[:n], err)
+	}
+
+	seal := release
+	seal.Action = "seal"
+	change(seal, http.StatusNoContent)
+	change(release, http.StatusConflict)
+	send("after seal")
+	assertDatagramDropped(t, upstream, "delayed release reopened the sealed epoch")
+	update(gate.Epoch, "recovered", "late-update", http.StatusConflict)
+}
+
 type pausedManagedEnable struct {
 	nicOperations
 	enter  chan struct{}
@@ -89,7 +156,7 @@ func (n pausedManagedEnable) EnableNIC(id tcpip.NICID) tcpip.Error {
 func TestManagedNetworkStoppedBeforeCandidatePublication(t *testing.T) {
 	cfg := testGvproxyConfig()
 	tap := startNetworkWithSeams(t, cfg, networkSeams{beforeAttach: func(ctx context.Context, p *outboundPolicyController) {
-		gateway, err := p.installManagedNetwork(ctx, newDNSLookupWork(ctx), nil)
+		gateway, err := p.installManagedNetwork(ctx, newDNSLookupWork(ctx), nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -44,7 +44,10 @@ pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig};
 pub use instance::GvproxyInstance;
 #[cfg(feature = "gvproxy")]
 pub use logging::init_logging;
-pub use managed::{ManagedProxyCredential, ManagedProxyIdentity, ManagedProxyRoute};
+pub use managed::{
+    ManagedProxyCredential, ManagedProxyIdentity, ManagedProxyRoute, ManagedRecoveryGateId,
+};
+pub(crate) use managed::{ManagedProxyStatus, RecoveryGateAction};
 pub use services::GvproxyBackend;
 pub use stats::{NetworkStats, TcpStats};
 

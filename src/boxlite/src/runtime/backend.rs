@@ -37,6 +37,17 @@ use super::id::BoxID;
 pub(crate) trait RuntimeBackend: Send + Sync {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox>;
 
+    async fn create_with_outbound_proxy(
+        &self,
+        _options: BoxOptions,
+        _name: Option<String>,
+        _proxy: Option<&str>,
+    ) -> BoxliteResult<LiteBox> {
+        Err(BoxliteError::Unsupported(
+            "Registered proxy binding requires BoxLite Cloud".into(),
+        ))
+    }
+
     async fn get_or_create(
         &self,
         options: BoxOptions,
@@ -54,6 +65,16 @@ pub(crate) trait RuntimeBackend: Send + Sync {
     async fn metrics(&self) -> BoxliteResult<RuntimeMetrics>;
 
     async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>;
+
+    async fn remove_retired_protected(
+        &self,
+        _id: &crate::BoxID,
+        _request: &crate::litebox::protected_boot::ProtectedRemoveRequest,
+    ) -> BoxliteResult<crate::litebox::protected_boot::ProtectedBootReceipt> {
+        Err(BoxliteError::Unsupported(
+            "Protected removal requires a local runtime".into(),
+        ))
+    }
 
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()>;
 
@@ -189,6 +210,16 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
+    async fn update_outbound_proxy(
+        &self,
+        _config: OutboundNetworkConfig,
+        _proxy: Option<&str>,
+    ) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "Registered proxy binding requires BoxLite Cloud".into(),
+        ))
+    }
+
     async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
         Err(BoxliteError::Unsupported(
             "this backend does not support revisioned outbound status".into(),

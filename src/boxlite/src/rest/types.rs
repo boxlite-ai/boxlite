@@ -165,6 +165,14 @@ impl CreateBoxRequest {
         options: &crate::runtime::options::BoxOptions,
         name: Option<String>,
     ) -> Self {
+        Self::from_options_with_proxy(options, name, None)
+    }
+
+    pub fn from_options_with_proxy(
+        options: &crate::runtime::options::BoxOptions,
+        name: Option<String>,
+        proxy: Option<Option<&str>>,
+    ) -> Self {
         use crate::runtime::options::RootfsSpec;
 
         let (image, rootfs_path) = match &options.rootfs {
@@ -218,6 +226,7 @@ impl CreateBoxRequest {
             network: Some(CreateBoxNetworkSpec::from_options(
                 &options.network,
                 &options.inbound_network,
+                proxy,
             )),
             entrypoint: options.entrypoint.clone(),
             cmd: options.cmd.clone(),
@@ -318,6 +327,8 @@ pub(crate) struct CreateBoxOutboundNetworkSpec {
     pub mode: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allow_net: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<Option<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -338,30 +349,30 @@ impl CreateBoxNetworkSpec {
     fn from_options(
         outbound: &crate::runtime::options::NetworkSpec,
         inbound: &crate::runtime::options::NetworkSpec,
+        proxy: Option<Option<&str>>,
     ) -> Self {
         let config = crate::runtime::options::NetworkConfig::from_specs(outbound, inbound);
         // Servers read an omitted inbound as disabled, so the flat shape
         // carries a disabled inbound; enabling it requires the nested shape
         // and a server that understands it (#1199+).
-        match inbound {
-            crate::runtime::options::NetworkSpec::Disabled => {
+        match (inbound, proxy) {
+            (crate::runtime::options::NetworkSpec::Disabled, None) => {
                 Self::Legacy(CreateBoxLegacyNetworkSpec {
                     mode: mode_str(config.outbound.mode),
                     allow_net: config.outbound.allow_net,
                 })
             }
-            crate::runtime::options::NetworkSpec::Enabled { .. } => {
-                Self::Nested(CreateBoxNestedNetworkSpec {
-                    outbound: CreateBoxOutboundNetworkSpec {
-                        mode: mode_str(config.outbound.mode),
-                        allow_net: config.outbound.allow_net,
-                    },
-                    inbound: CreateBoxInboundNetworkSpec {
-                        mode: mode_str(config.inbound.mode),
-                        allow_net: config.inbound.allow_net,
-                    },
-                })
-            }
+            _ => Self::Nested(CreateBoxNestedNetworkSpec {
+                outbound: CreateBoxOutboundNetworkSpec {
+                    mode: mode_str(config.outbound.mode),
+                    allow_net: config.outbound.allow_net,
+                    proxy: proxy.map(|name| name.map(str::to_owned)),
+                },
+                inbound: CreateBoxInboundNetworkSpec {
+                    mode: mode_str(config.inbound.mode),
+                    allow_net: config.inbound.allow_net,
+                },
+            }),
         }
     }
 }

@@ -7,7 +7,16 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
+
+pub const PROTECTED_BOOT_RETIREMENT_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS protected_boot_retirement (
+    box_id TEXT PRIMARY KEY NOT NULL,
+    box_name TEXT,
+    receipts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS protected_boot_retirement_name_idx ON protected_boot_retirement (box_name);
+"#;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -156,6 +165,7 @@ pub fn all_schemas() -> Vec<&'static str> {
         SCHEMA_VERSION_TABLE,
         BOX_CONFIG_TABLE,
         BOX_STATE_TABLE,
+        PROTECTED_BOOT_RETIREMENT_TABLE,
         ALIVE_TABLE,
         IMAGE_INDEX_TABLE,
         BASE_DISK_TABLE,

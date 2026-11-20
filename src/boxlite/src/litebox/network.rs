@@ -412,6 +412,20 @@ impl NetworkHandle {
         self.network_backend.update_outbound(config).await
     }
 
+    /// Replace the complete Cloud outbound policy and proxy selection.
+    ///
+    /// Use None to explicitly unbind the current proxy.
+    pub async fn update_outbound_proxy(
+        &self,
+        config: OutboundNetworkConfig,
+        proxy: Option<&str>,
+    ) -> BoxliteResult<()> {
+        config.validate()?;
+        self.network_backend
+            .update_outbound_proxy(config, proxy)
+            .await
+    }
+
     /// Read persisted policy and identity; this does not prove live application.
     pub async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
         self.network_backend.outbound_snapshot().await

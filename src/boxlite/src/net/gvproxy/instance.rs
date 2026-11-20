@@ -9,7 +9,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::logging;
 use super::stats::NetworkStats;
-use super::{ManagedProxyRoute, ffi};
+use super::{ManagedProxyRoute, ManagedRecoveryGateId, ffi};
 use crate::net::{NetworkBackendEndpoint, NetworkBackendSpec, OutboundSnapshot};
 
 /// Safe wrapper for gvproxy library with automatic resource management
@@ -48,6 +48,12 @@ pub struct GvproxyInstance {
     socket_path: PathBuf,
 }
 
+struct ManagedNetworkSeed<'a> {
+    policy: &'a OutboundSnapshot,
+    route: Option<&'a ManagedProxyRoute>,
+    recovery_gate: Option<&'a ManagedRecoveryGateId>,
+}
+
 impl GvproxyInstance {
     /// Create a gvproxy instance from a fully-built config.
     ///
@@ -66,16 +72,19 @@ impl GvproxyInstance {
     fn new_with_route(
         config: super::config::GvproxyConfig,
         revision: Option<&crate::net::OutboundRevision>,
-        managed: Option<(&OutboundSnapshot, &ManagedProxyRoute)>,
+        managed: Option<ManagedNetworkSeed<'_>>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
         let socket_path = config.socket_path.clone();
         let id = match managed {
-            Some((policy, route)) => {
-                ffi::create_managed_instance(&config, &policy.revision, route)?
-            }
+            Some(seed) => ffi::create_managed_instance(
+                &config,
+                &seed.policy.revision,
+                seed.route,
+                seed.recovery_gate,
+            )?,
             None => ffi::create_instance(&config, revision)?,
         };
 
@@ -118,19 +127,37 @@ impl GvproxyInstance {
         policy: &OutboundSnapshot,
         route: &ManagedProxyRoute,
     ) -> BoxliteResult<(Self, NetworkBackendEndpoint)> {
+        Self::from_managed_network(spec, policy, Some(route), None)
+    }
+
+    /// Install managed networking with an optional route and a recovery gate.
+    pub fn from_managed_network(
+        spec: &NetworkBackendSpec,
+        policy: &OutboundSnapshot,
+        route: Option<&ManagedProxyRoute>,
+        recovery_gate: Option<&ManagedRecoveryGateId>,
+    ) -> BoxliteResult<(Self, NetworkBackendEndpoint)> {
         policy.policy.validate()?;
         if !spec.outbound_disabled || !spec.allow_net.is_empty() {
             return Err(BoxliteError::Network(
                 "Protected launch requires disabled legacy egress".into(),
             ));
         }
-        Self::from_seed(spec, None, Some((policy, route)))
+        Self::from_seed(
+            spec,
+            None,
+            Some(ManagedNetworkSeed {
+                policy,
+                route,
+                recovery_gate,
+            }),
+        )
     }
 
     fn from_seed(
         spec: &super::super::NetworkBackendSpec,
         revision: Option<&crate::net::OutboundRevision>,
-        managed: Option<(&OutboundSnapshot, &ManagedProxyRoute)>,
+        managed: Option<ManagedNetworkSeed<'_>>,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
         let secrets = spec.secrets.iter().map(Into::into).collect();
 
@@ -143,10 +170,10 @@ impl GvproxyInstance {
             .with_secrets(secrets)
             .with_rate_limit(spec.rate_limit);
         config.outbound_disabled = spec.outbound_disabled;
-        if let Some((policy, _)) = managed {
+        if let Some(seed) = &managed {
             config.outbound_disabled =
-                policy.policy.mode == crate::runtime::options::NetworkMode::Disabled;
-            config.allow_net.clone_from(&policy.policy.allow_net);
+                seed.policy.policy.mode == crate::runtime::options::NetworkMode::Disabled;
+            config.allow_net.clone_from(&seed.policy.policy.allow_net);
         }
 
         if let (Some(cert), Some(key)) = (spec.ca_cert_pem.as_deref(), spec.ca_key_pem.as_deref()) {
