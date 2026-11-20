@@ -7,7 +7,7 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, LessThan, In, EntityManager } from 'typeorm'
+import { Repository, LessThan, In, Not, EntityManager } from 'typeorm'
 import { Job } from '../entities/job.entity'
 import { JobDto, JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { ResourceTypeForJobType } from '../dto/job-type-map.dto'
@@ -46,6 +46,7 @@ export class JobService {
     resourceType: ResourceTypeForJobType<T>,
     resourceId: string,
     payload?: string | Record<string, any>,
+    id?: string,
   ): Promise<Job> {
     // Use provided manager if available, otherwise use default repository
     const repo = manager ? manager.getRepository(Job) : this.jobRepository
@@ -57,6 +58,7 @@ export class JobService {
 
     try {
       const job = new Job({
+        id,
         type,
         runnerId,
         resourceType,
@@ -75,7 +77,7 @@ export class JobService {
 
       // Notify runner via Redis - happens outside transaction
       // If transaction rolls back, notification is harmless (runner will poll and find nothing)
-      await this.notifyRunner(runnerId, job.id)
+      if (type !== JobType.CREATE_COMPLETE_OUTBOUND_BOX) await this.notifyRunner(runnerId, job.id)
 
       return job
     } catch (error) {
@@ -235,6 +237,9 @@ export class JobService {
       if (!job) {
         throw new NotFoundException(`Job with ID ${jobId} not found`)
       }
+      if (job.type === JobType.CREATE_COMPLETE_OUTBOUND_BOX) {
+        throw new ConflictException('Complete outbound jobs require a bound receipt')
+      }
 
       if (!this.isValidStatusTransition(job.status, status)) {
         throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
@@ -277,6 +282,7 @@ export class JobService {
       where: {
         runnerId,
         status: JobStatus.PENDING,
+        type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
       },
       order: {
         createdAt: 'ASC',
@@ -286,11 +292,7 @@ export class JobService {
   }
 
   async findJobsForRunner(runnerId: string, status?: JobStatus, page = 1, limit = 100): Promise<PaginatedList<JobDto>> {
-    const whereCondition: { runnerId: string; status?: JobStatus } = { runnerId }
-
-    if (status) {
-      whereCondition.status = status
-    }
+    const whereCondition = { runnerId, type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX), ...(status ? { status } : {}) }
 
     const [jobs, total] = await this.jobRepository.findAndCount({
       where: whereCondition,
@@ -395,7 +397,7 @@ export class JobService {
       const staleJobs = await this.jobRepository.find({
         where: {
           status: JobStatus.IN_PROGRESS,
-          type: In(Object.values(JobType)),
+          type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
           updatedAt: LessThan(threshold),
         },
         take: 500,
@@ -439,6 +441,7 @@ export class JobService {
       where: {
         runnerId,
         status: JobStatus.PENDING,
+        type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
       },
       order: {
         createdAt: 'ASC',
@@ -458,6 +461,7 @@ export class JobService {
       {
         id: In(jobs.map((job) => job.id)),
         status: JobStatus.PENDING,
+        type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
       },
       {
         status: JobStatus.IN_PROGRESS,

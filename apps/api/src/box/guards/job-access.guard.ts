@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common'
 import { BaseAuthContext } from '../../common/interfaces/auth-context.interface'
 import { JobService } from '../services/job.service'
+import { JobType } from '../enums/job-type.enum'
 import { isRunnerContext, RunnerContext } from '../../common/interfaces/runner-context.interface'
 
 @Injectable()
@@ -31,7 +32,7 @@ export class JobAccessGuard implements CanActivate {
 
     try {
       const job = await this.jobService.findOne(jobId)
-      if (!job) {
+      if (!job || job.type === JobType.CREATE_COMPLETE_OUTBOUND_BOX) {
         throw new NotFoundException('Job not found')
       }
 

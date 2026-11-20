@@ -24,6 +24,19 @@ function makeWaiter(initialState = BoxState.STARTING, toBoxDto?: (box: any) => P
 }
 
 describe('BoxStateWaiterService', () => {
+  it('returns typed 501 only for a complete create with a committed unsupported failure', async () => {
+    const { waiter, boxService } = makeWaiter(BoxState.ERROR)
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-1',
+      state: BoxState.ERROR,
+      errorReason: 'outbound_create_unsupported',
+    })
+    await expect(waiter.waitForStarted('box-1', 'org-1', 5, true)).rejects.toMatchObject({
+      status: 501,
+      response: expect.objectContaining({ code: 'unsupported' }),
+    })
+    await expect(waiter.waitForStarted('box-1', 'org-1', 5)).rejects.toThrow('Box state transition failed')
+  })
   it('resolves concurrent waiters for the same box from one state event', async () => {
     const { waiter, subscriber } = makeWaiter()
     const first = waiter.waitForStarted('box-1', 'org-1', 5)

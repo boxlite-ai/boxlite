@@ -25,6 +25,7 @@ function makeController() {
   const boxService = {
     create: jest.fn().mockResolvedValue(startedBox),
     findOneByIdOrName: jest.fn().mockResolvedValue(startedBox),
+    getBoxNetworkProjections: jest.fn().mockResolvedValue([]),
     start: jest.fn().mockResolvedValue(startedBox),
     stop: jest.fn().mockResolvedValue({ id: 'box-1' }),
     toBoxDto: jest.fn().mockResolvedValue(startedBox),

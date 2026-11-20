@@ -6,7 +6,7 @@
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { IsEnum, IsObject, IsOptional, IsString } from 'class-validator'
-import { JobType } from '../enums/job-type.enum'
+import { JobType, LEGACY_JOB_TYPES } from '../enums/job-type.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { Job } from '../entities/job.entity'
@@ -26,7 +26,7 @@ export class JobDto {
 
   @ApiProperty({
     description: 'The type of the job',
-    enum: JobType,
+    enum: LEGACY_JOB_TYPES,
     enumName: 'JobType',
     example: JobType.CREATE_BOX,
   })
