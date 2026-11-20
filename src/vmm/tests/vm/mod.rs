@@ -1968,6 +1968,7 @@ fn an_invalid_hotplug_capacity_fails_before_the_host_vm_exists() {
     configuration.validate().unwrap();
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn a_hotplug_capacity_adds_virtio_mem_and_returns_its_handle() {
     use crate::devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES};
