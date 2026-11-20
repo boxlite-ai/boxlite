@@ -183,9 +183,23 @@ describe('CI shared Listener orchestration', () => {
   }
   const ingressRows = () => state.recover(lease, 1000, ['notice/', 'wake/', 'receipt/'])
   it('persists a verified notification before any scheduler owns the lease and deduplicates a retry', async () => {
+    const observe = jest.fn()
+    host.observe = observe
     const event = notification()
     expect(await listener.receive(event)).toBe('stored')
     expect(await listener.receive(event)).toBe('duplicate')
+    const facts = observe.mock.calls.map(([fact]) => fact)
+    expect(facts).toMatchObject(
+      ['stored', 'duplicate'].map((result) => ({
+        event: 'ci-job-notification',
+        jobId: event.hint.job!.id,
+        runId: event.hint.job!.runId,
+        repositoryId: event.hint.repositoryId,
+        status: 'queued',
+        result,
+      })),
+    )
+    expect(JSON.stringify(facts)).not.toContain(event.digest)
     const owner = (await state.acquire(randomUUID(), 3000))!
     expect((await state.recover(owner, 1000, ['notice/', 'receipt/'])).map((row) => row.key)).toEqual([
       'notice/1/55',

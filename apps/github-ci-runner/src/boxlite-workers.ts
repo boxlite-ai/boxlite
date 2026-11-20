@@ -95,8 +95,12 @@ export class BoxLiteWorkers {
       )
         throw new Error('Original Box create intent changed')
     }
-    const rejectUndispatchedCreate = async (name: string, effect: string): Promise<never> => {
-      const rejected = new ConfirmedWorkerCreationRejected(effect),
+    const rejectUndispatchedCreate = async (
+      name: string,
+      effect: string,
+      reason: ConfirmedWorkerCreationRejected['reason'] = 'undispatched',
+    ): Promise<never> => {
+      const rejected = new ConfirmedWorkerCreationRejected(effect, reason),
         row = await allocation(name)
       creating(row, effect)
       const ledgerKey = 'box-rest/' + name,
@@ -250,7 +254,7 @@ export class BoxLiteWorkers {
           row = await admission(launch.name)
         } catch (error) {
           if (original.value.box.phase === 'requested' && original.value.effect?.kind === 'box-create')
-            return rejectUndispatchedCreate(launch.name, original.value.effect.id)
+            return rejectUndispatchedCreate(launch.name, original.value.effect.id, 'admission')
           throw error
         }
         if (original.value.box.phase !== 'requested' || original.value.effect?.kind !== 'box-create')

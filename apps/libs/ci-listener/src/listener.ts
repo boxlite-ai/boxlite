@@ -1,5 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { ScaleSetController, ScaleSetWork } from './scale-set-controller'
+import type { ScaleSetEvent, ScaleSetFailure } from './scale-set-diagnostics'
+import type { JobObservation } from './job-observation'
 import { ActionsScaleSets } from './scale-set-client'
 import { selectRunnerLabels } from './resource-labels'
 import { randomUUID } from 'node:crypto'
@@ -24,6 +26,20 @@ export interface ListenerBackend extends PoolBackend {
   scaleSetAuthority(signal: AbortSignal): Promise<ReadonlySet<string>>
   close(): Promise<void>
 }
+export type ListenerEvent =
+  | WorkerEvent
+  | ScaleSetEvent
+  | {
+      event: 'ci-job-notification'
+      level: 'info'
+      installation: number
+      repositoryId: number
+      runId: number
+      jobId: number
+      runnerId: number | null
+      status: JobObservation['status']
+      result: 'stored' | 'duplicate'
+    }
 export interface ListenerHost {
   readonly recovery?: Pick<AppDeliveryRecovery, 'step'>
   discover(lease: ExecutionLease, signal: AbortSignal, request: DiscoveryRequest): Promise<DiscoverySnapshot>
@@ -31,8 +47,8 @@ export interface ListenerHost {
   scan(claim: ScanClaim, signal: AbortSignal): Promise<RepositoryScanSession>
   /** Persist with live binding authorization in the same ingress transaction. */
   accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'>
-  report(error: unknown, operation: string): void
-  observe?(event: WorkerEvent): void
+  report(error: unknown, operation: string, context?: ScaleSetFailure): void
+  observe?(event: ListenerEvent): void
   /** Permanently retire background discovery/replay and their local handles. */
   close?(): Promise<void>
 }
@@ -97,8 +113,27 @@ export class Listener {
     }
     await this.journal.initialize()
     const result = await this.options.host.accept(captured)
+    if (captured.hint.job && captured.observation)
+      this.observe({
+        event: 'ci-job-notification',
+        level: 'info',
+        installation: captured.hint.installationId,
+        repositoryId: captured.hint.repositoryId,
+        runId: captured.hint.job.runId,
+        jobId: captured.hint.job.id,
+        runnerId: captured.observation.runner,
+        status: captured.observation.status,
+        result,
+      })
     this.wake?.()
     return result
+  }
+  private observe(event: ListenerEvent): void {
+    try {
+      this.options.host.observe?.(event)
+    } catch {
+      // A logging failure must not replay an accepted notification or a committed worker effect.
+    }
   }
   async run(signal: AbortSignal): Promise<void> {
     if (this.running) throw new Error('Listener is already running')
@@ -303,7 +338,7 @@ export class Listener {
           key,
           async () => backend,
           this.worker,
-          (event) => this.options.host.observe?.(event),
+          (event) => this.observe(event),
           { queue: session.execution, wake: () => this.wake?.() },
         ),
       }
@@ -494,7 +529,8 @@ export class Listener {
           creationReady: (label) => runtime.pool.creationReady(label),
           authority: backend.scaleSetAuthority.bind(backend),
           policy,
-          report: (error) => this.options.host.report(error, 'scale-set-session'),
+          observe: (event) => this.observe(event),
+          report: (error, context) => this.options.host.report(error, 'scale-set-session', context),
           wake: () => this.wake?.(),
         },
         signal,

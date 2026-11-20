@@ -5,6 +5,7 @@ import { ExecutionJournal } from './execution/journal'
 import { ExecutionScope, object, positive, retryCapacity, scopeKey } from './execution/model'
 import { GitHubRequestError } from './github'
 import { DEFAULT_RESOURCE_LABEL, selectRunnerLabels } from './resource-labels'
+import { ScaleSetDiagnostics, ScaleSetEvent, ScaleSetFailure } from './scale-set-diagnostics'
 import { ActionsScaleSets, ScaleSetRemoved, ScaleSetSession } from './scale-set-client'
 import { LeaseLost, StateCorrupt, StateRecord } from './state/database'
 import { ExecutionLease, ListenerState, StateChange, StateCheck } from './state/store'
@@ -99,7 +100,8 @@ interface SetHost {
   charged(id: number): number
   authority(signal: AbortSignal): Promise<ReadonlySet<string>>
   policy(signal: AbortSignal): Promise<CapacityPolicy>
-  report(error: unknown): void
+  observe?(event: ScaleSetEvent): void
+  report(error: unknown, context: ScaleSetFailure): void
   wake(): void
 }
 export class ScaleSetController {
@@ -159,12 +161,23 @@ export class ScaleSetController {
     if (!selection) throw new StateCorrupt()
     const lane: Lane = { label, task: Promise.resolve() }
     this.lanes.set(label, lane)
-    lane.task = this.listen(lane, [...selection.labels], failures)
+    const log = new ScaleSetDiagnostics(
+      {
+        scope: scopeKey(this.scope),
+        organization: this.scope.organization,
+        installation: this.scope.installation.id,
+        label,
+        scaleSet: null,
+        messageId: null,
+      },
+      this.host.observe,
+    )
+    lane.task = this.listen(lane, [...selection.labels], failures, log)
       .then((rotate) => {
         if (rotate && !this.signal.aborted) this.waiting.set(label, 0)
       })
       .catch((error) => {
-        if (!this.signal.aborted) this.host.report(error)
+        if (!this.signal.aborted) this.host.report(error, log.failure(error))
       })
       .finally(() => {
         this.lanes.delete(label)
@@ -315,14 +328,17 @@ export class ScaleSetController {
     }
     this.watch(label)
   }
-  private async start(key: string, labels: string[], signal: AbortSignal) {
-    await this.host.authority(signal)
+  private async start(key: string, labels: string[], signal: AbortSignal, log: ScaleSetDiagnostics) {
+    await log.during('authority', () => this.host.authority(signal))
     let row = await this.registration(key)
     const previous = readRecord(row)
     const group = this.scope.runners.kind === 'repository' ? 1 : this.scope.runners.group
+    log.context.scaleSet = previous.set
     let set
     try {
-      set = await this.host.service.resolve(previous.name, group, labels, signal, previous.set ?? undefined)
+      set = await log.during('resolve', () =>
+        this.host.service.resolve(previous.name, group, labels, signal, previous.set ?? undefined),
+      )
     } catch (error) {
       if (error instanceof ScaleSetRemoved && previous.set && (await this.drainRemoved(previous.set))) {
         await this.state.commit(this.lease, [
@@ -343,24 +359,26 @@ export class ScaleSetController {
       }
       throw error
     }
+    log.context.scaleSet = set.id
     if (previous.set !== null && previous.set !== set.id) throw new Error('Original scale set identity changed')
     if (!previous.set)
       [row] = await this.state.commit(this.lease, [
         { key, expected: row.version, payload: { ...previous, set: set.id } },
       ])
     await this.journal.check(this.lease)
-    const session = await this.host.service.open(set.id, this.lease.owner, signal)
+    const session = await log.during('open', () => this.host.service.open(set.id, this.lease.owner, signal))
     return { row, session, id: set.id }
   }
-  private async listen(lane: Lane, labels: string[], failures: number) {
+  private async listen(lane: Lane, labels: string[], failures: number, log: ScaleSetDiagnostics) {
     const signal = this.signal,
       key = this.prefix + lane.label
     if (signal.aborted) return false
     let session: ScaleSetSession | undefined
     let retryAt = 0
     try {
-      const start = await this.work.run(signal, () => this.start(key, labels, signal))
+      const start = await this.work.run(signal, () => this.start(key, labels, signal, log))
       session = start.session
+      log.emit({ event: 'ci-scale-set-session-opened', assigned: session.initial, acquired: session.initialAcquired })
       let row = start.row
       const previous = readRecord(row)
       const pendingRequests = new Map(previous.pending.map(({ id, phase }) => [id, phase]))
@@ -389,7 +407,7 @@ export class ScaleSetController {
           // Lock the set before its scope, the same order as Box admission.
           if (retryActivity)
             changes.push({ key: retryActivity.key, expected: retryActivity.version, payload: retryActivity.payload })
-          const saved = await this.state.commit(this.lease, changes, checks)
+          const saved = await log.during('persist-target', () => this.state.commit(this.lease, changes, checks))
           row = saved.find((record) => record.key === key)!
         } else await this.journal.check(this.lease)
         lane.target = { id: start.id, labels, assigned, held, check: { key, version: row.version } }
@@ -399,7 +417,7 @@ export class ScaleSetController {
       const verifyAcquisitions = async (assigned: number, held: number, idle = false) => {
         const uncertain = [...pendingRequests].filter(([, phase]) => phase === 'verify')
         if (!uncertain.length && !idle) return { assigned, held }
-        const current = await this.host.service.currentStatistics(start.id, signal)
+        const current = await log.during('statistics', () => this.host.service.currentStatistics(start.id, signal))
         verifyAfter = Date.now() + 50_000
         // Confirmed requests already account for part of the service total. An
         // assigned job may be one of them, so only deduct the guaranteed overlap.
@@ -449,13 +467,26 @@ export class ScaleSetController {
       })
       let last: number | undefined
       while (!signal.aborted) {
-        const capacity = await this.work.run(signal, async () => {
-          const policy = await this.host.policy(signal)
-          const free = await this.journal.remainingCapacity(this.lease, scopeKey(this.scope), policy)
-          const limits = policy.limits.flatMap((limit) => (limit.maximum === null ? [] : [limit.maximum]))
-          return Math.min(2_147_483_647, free + this.host.charged(start.id), ...limits)
-        })
-        const message = await session.poll(capacity, last, signal)
+        log.context.messageId = null
+        const capacity = await log.during('capacity', () =>
+          this.work.run(signal, async () => {
+            const policy = await this.host.policy(signal)
+            const free = await this.journal.remainingCapacity(this.lease, scopeKey(this.scope), policy)
+            const limits = policy.limits.flatMap((limit) => (limit.maximum === null ? [] : [limit.maximum]))
+            return Math.min(2_147_483_647, free + this.host.charged(start.id), ...limits)
+          }),
+        )
+        log.emit({ event: 'ci-scale-set-poll-started', capacity })
+        const message = await log.during('poll', () => start.session.poll(capacity, last, signal))
+        log.context.messageId = message?.id ?? null
+        if (message)
+          log.emit({
+            event: 'ci-scale-set-message-received',
+            offered: message.available.length,
+            capacity,
+            assigned: message.assigned,
+            held: lane.target!.held,
+          })
         failures = 0
         // On reconnect a lost acquire may never be redelivered. Compare any
         // missing request with service statistics, keeping explicit reoffers charged.
@@ -490,7 +521,8 @@ export class ScaleSetController {
           // Resolve a conflicting first delivery against the current set before acquiring again.
           let assigned = refreshedAssigned ?? message.assigned ?? lane.target!.assigned
           if (last === undefined && assigned !== lane.target!.assigned)
-            assigned = (await this.host.service.currentStatistics(start.id, signal)).assigned
+            assigned = (await log.during('statistics', () => this.host.service.currentStatistics(start.id, signal)))
+              .assigned
           // Statistics can account for an assignment before its ID arrives. Removing
           // that ID narrows the pending candidates without consuming a second hold.
           for (const id of message.settledRequests) pendingRequests.delete(String(id))
@@ -502,13 +534,14 @@ export class ScaleSetController {
           const canceled = lane.target!.held - held - Math.max(0, assigned - lane.target!.assigned)
           if (canceled > 0) await this.withdrawCanceled(start.id, canceled, assigned + held, lane.target!.check)
           if (message.available.length && (capacity > assigned || held) && this.host.creationReady(lane.label)) {
-            const authorized = await this.host.authority(signal)
+            const authorized = await log.during('authority', () => this.host.authority(signal))
             const eligible = message.available.filter(
               (job) =>
                 job.owner.toLowerCase() === this.scope.installation.account.login &&
                 authorized.has(job.repository.toLowerCase()) &&
                 selectRunnerLabels(job.labels, this.labels)?.label === lane.label,
             )
+            if (!eligible.length) log.emit({ event: 'ci-scale-set-offers-skipped', reason: 'no-match' })
             const offers = [...new Map(eligible.map((job) => [String(job.id), job.id])).values()]
             const existing = new Set(pendingRequests.keys())
             const unresolved = offers.filter(
@@ -527,7 +560,8 @@ export class ScaleSetController {
                 if (await this.journal.permitsChargedRetry(this.lease, scopeKey(this.scope), policy)) {
                   const prior = readRecord(row)
                   await save(assigned, prior.message, prior.session, held, policy.checks ?? [], slots.activity)
-                  const accepted = await start.session.acquire(unresolved, signal)
+                  const accepted = await log.during('acquire', () => start.session.acquire(unresolved, signal))
+                  log.emit({ event: 'ci-scale-set-acquired', attempted: unresolved.length, accepted: accepted.length })
                   for (const id of unresolved) pendingRequests.set(String(id), 'verify')
                   for (const id of accepted) pendingRequests.set(String(id), 'accepted')
                   if (accepted.length !== unresolved.length) {
@@ -542,7 +576,7 @@ export class ScaleSetController {
             const free = Math.max(0, capacity - assigned - held)
             const ids = needReservation.slice(0, free)
             if (ids.length) {
-              const policy = await this.offerPolicy(start.id, assigned + held, signal)
+              const policy = await log.during('capacity', () => this.offerPolicy(start.id, assigned + held, signal))
               const prior = readRecord(row)
               // Invalidate older plans before reserving. The pool holds these slots
               // without dispatching a Box until Actions reports assigned demand.
@@ -550,24 +584,31 @@ export class ScaleSetController {
               let reserved = 0
               while (reserved < ids.length && this.host.creationReady(lane.label)) {
                 signal.throwIfAborted()
-                const allocation = await this.journal.reserve(
-                  this.lease,
-                  scopeKey(this.scope),
-                  null,
-                  {
-                    ...policy,
-                    checks: [...(policy.checks ?? []), { key, version: row.version }],
-                  },
-                  { labels, scaleSet: start.id },
+                const allocation = await log.during('reserve', () =>
+                  this.journal.reserve(
+                    this.lease,
+                    scopeKey(this.scope),
+                    null,
+                    {
+                      ...policy,
+                      checks: [...(policy.checks ?? []), { key, version: row.version }],
+                    },
+                    { labels, scaleSet: start.id },
+                  ),
                 )
-                if (!allocation) break
+                if (!allocation) {
+                  log.emit({ event: 'ci-scale-set-offers-skipped', reason: 'no-slot' })
+                  break
+                }
+                if (!reserved) log.emit({ event: 'ci-scale-set-first-reservation', allocation: allocation.record.key })
                 reserved++
               }
               if (reserved && this.host.creationReady(lane.label)) {
                 const offered = ids.slice(0, reserved)
                 for (const id of offered) pendingRequests.set(String(id), 'requested')
                 await save(assigned, prior.message, prior.session, held + reserved)
-                const accepted = await start.session.acquire(offered, signal)
+                const accepted = await log.during('acquire', () => start.session.acquire(offered, signal))
+                log.emit({ event: 'ci-scale-set-acquired', attempted: offered.length, accepted: accepted.length })
                 let reconcile = false
                 const confirmed = new Set(accepted.map(String))
                 for (const request of offered) {
@@ -586,6 +627,11 @@ export class ScaleSetController {
                 }
               }
             }
+          } else if (message.available.length) {
+            log.emit({
+              event: 'ci-scale-set-offers-skipped',
+              reason: capacity > assigned || held ? 'creation-backoff' : 'capacity',
+            })
           }
           for (const runner of message.worked) {
             const allocation = await this.journal.allocation(this.lease, 'worker/' + runner.name.slice(7))
@@ -604,25 +650,28 @@ export class ScaleSetController {
           }
           await save(assigned, message.id, start.session.id, held)
           signal.throwIfAborted()
-          await start.session.ack(message.id, signal)
+          await log.during('ack', () => start.session.ack(message.id, signal))
           last = message.id
         })
       }
     } catch (error) {
       lane.target = undefined
       if (signal.aborted) return false
-      this.host.report(error)
-      if (error instanceof LeaseLost || error instanceof StateCorrupt) return false
-      failures++
-      const deadline = error instanceof GitHubRequestError ? (error.retryAt ?? 0) : 0
-      const backoff = Math.min(60_000, 1000 * 2 ** Math.min(6, failures - 1))
-      retryAt = Math.max(deadline, Date.now() + backoff) + Math.floor(Math.random() * 500)
+      const failure = log.failure(error)
+      if (!(error instanceof LeaseLost || error instanceof StateCorrupt)) {
+        failures++
+        const deadline = error instanceof GitHubRequestError ? (error.retryAt ?? 0) : 0
+        const backoff = Math.min(60_000, 1000 * 2 ** Math.min(6, failures - 1))
+        retryAt = Math.max(deadline, Date.now() + backoff) + Math.floor(Math.random() * 500)
+        failure.retryAt = retryAt
+      }
+      this.host.report(error, failure)
     } finally {
       if (session)
         try {
           await session.close()
         } catch (error) {
-          this.host.report(error)
+          this.host.report(error, log.failure(error, 'close'))
         }
     }
     if (retryAt) this.retryAfter(lane.label, retryAt, failures)

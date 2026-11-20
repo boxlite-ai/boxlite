@@ -386,6 +386,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       const resources = parseResourceLabels(['boxlite-2vcpu-4gbmem-10gbdisk'])!.resources
       await expect(host.create({ ...config, ...resources })).rejects.toMatchObject({
         rejectedCreationEffect: row.value.effect!.id,
+        reason: 'before-persistence',
+        platformStatus: expect.any(Number),
       })
       expect(await db.getRepository(Box).count()).toBe(0)
       await expect(host.get(config.name)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
