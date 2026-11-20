@@ -198,7 +198,11 @@ function AppPreview({ app }: { app: AppSummary }) {
   const [loaded, setLoaded] = useState(false)
   return (
     <div className="relative flex aspect-video items-center justify-center overflow-hidden border-b border-border bg-muted/20">
-      <AppHostingIllustration compact draft={app.status === 'draft'} className="absolute inset-0 size-full" />
+      <AppHostingIllustration
+        compact
+        draft={app.status === 'draft'}
+        className="absolute inset-[18%] size-[64%] opacity-80"
+      />
       {app.previewSrc && (
         <AppImage
           path={app.previewSrc}
