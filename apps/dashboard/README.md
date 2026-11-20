@@ -38,6 +38,8 @@ Their existing defaults, validation and submission behavior are unchanged.
 
 ## App hosting
 
+See the [UI walkthrough and screenshots](app-hosting-ui.md) for the current mock experience.
+
 **Applications → App hosting** defaults to an early-access introduction. The
 **Get early access** button is a UI placeholder: it sends no application and does
 not report approval. List and detail entry points withhold management content.
