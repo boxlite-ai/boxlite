@@ -247,6 +247,9 @@ On Linux, CI preserves the full-suite report when it adds nested runtime coverag
 Database rollback and migration lock cleanup have bounded waits; a connection
 with a failed migration unlock is discarded.
 
+The test helper verifies the database name before tests run, even if the URL includes
+database query parameters. Canary enrollment reads back the persisted ciphertext.
+
 Go reports statement coverage; Codecov also distinguishes partially covered source
 lines, so a passing statement percentage does not imply passing patch coverage.
 The uint32 framing overflow guards remain in place; tests do not allocate multi-GiB
