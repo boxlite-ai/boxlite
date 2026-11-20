@@ -37,6 +37,7 @@ use crate::util::{PidFileReader, process::pid_may_be_alive};
 use crate::vmm::controller::{ShimHandler, VmmHandler};
 use crate::{BoxID, BoxInfo};
 
+pub(crate) mod live_checkpoint;
 mod operations;
 pub(crate) use operations::{BoxEvent, BoxRun};
 use operations::{StopCommit, StopReason};
@@ -59,6 +60,8 @@ pub type SharedBoxImpl = Arc<BoxImpl>;
 pub(crate) struct LiveState {
     // VM process control
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
+    pub(crate) checkpoint_controller:
+        Option<std::sync::Mutex<Box<dyn live_checkpoint::LiveCheckpointController>>>,
     guest_session: GuestSession,
     #[cfg(test)]
     test_guest_channel: Option<tonic::transport::Channel>,
@@ -114,6 +117,7 @@ impl LiveState {
     ) -> Self {
         Self {
             handler: std::sync::Mutex::new(handler),
+            checkpoint_controller: None,
             guest_session,
             #[cfg(test)]
             test_guest_channel: None,
@@ -298,6 +302,7 @@ impl BoxImpl {
         let locker = self.disk_locker()?;
         let _lock = LockGuard::new_async(locker.as_ref()).await;
         self.ensure_box_exists()?;
+        live_checkpoint::ensure_no_pending_checkpoint(&self.config.box_home)?;
         fut.await
     }
 
@@ -810,19 +815,20 @@ impl BoxImpl {
                 self.config.id
             )));
         }
-        self.with_operation(async {
-            if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running
-            {
-                return Err(BoxliteError::InvalidState(format!(
-                    "Box {} is not running",
-                    self.id()
-                )));
-            }
-            self.live
-                .get_or_try_init(|| self.init_live_state(false))
-                .await
-        })
-        .await
+        self.with_operation(self.existing_live_state_locked()).await
+    }
+
+    /// Caller holds lifecycle admission. This path can only attach.
+    async fn existing_live_state_locked(&self) -> BoxliteResult<&LiveState> {
+        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(format!(
+                "Box {} is not running",
+                self.id()
+            )));
+        }
+        self.live
+            .get_or_try_init(|| self.init_live_state(false))
+            .await
     }
 
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -2025,6 +2031,7 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     mod execution_recovery;
+    mod live_checkpoint;
     mod operation_lock;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
