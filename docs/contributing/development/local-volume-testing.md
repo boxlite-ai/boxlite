@@ -1,8 +1,9 @@
 # Local volume test runbook
 
 Use this runbook for changes to local managed volumes: the store, box holder lifecycle, archive
-round trips, CLI mounts, guest resolved mounts, or the existing Python `volumes` dictionary API.
-It tests the local runtime only; cloud, REST, and runner behavior are out of scope.
+round trips, CLI mounts, guest resolved mounts, the REST volume API, or the existing Python
+`volumes` dictionary API. It tests the local runtime and the server-backed REST API; cloud and
+runner behavior are out of scope.
 
 Run every command from the repository root unless the command changes directory itself. Execute the
 steps in order and keep the output needed to identify which tests actually ran.
@@ -133,6 +134,21 @@ as **not run; Linux KVM required**.
 Step 4 is complete when the three CLI scenarios and archive round trip pass, plus all four M3
 directory cases on Linux. On a host without a usable hypervisor, skip the remaining VM steps and
 continue to the final report with that coverage marked as blocked.
+
+For REST API changes, start a real `boxlite serve` process and drive its volume endpoints:
+
+```bash
+SETUP_DONE=1 make test:integration:cli FILTER=volume_crud_over_rest
+```
+
+Confirm that `volume_crud_over_rest` ran. It creates a named volume through the Rust REST client,
+checks list and get metadata, verifies the invalid-id and missing-volume error classes, removes the
+volume, and confirms that both get and list reflect the removal. Unlike the local CLI scenarios,
+this case does not boot a VM; it verifies server startup, routing, persistence-backed CRUD, and
+HTTP error mapping.
+
+REST coverage is complete when this named test runs; it does not replace the real-VM coverage above
+when the mount or guest protocol changes.
 
 ## 5. Verify the Python compatibility path
 
