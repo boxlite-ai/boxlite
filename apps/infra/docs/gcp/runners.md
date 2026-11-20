@@ -88,12 +88,10 @@ A host created before its data disk existed keeps box state on its root filesyst
 that attaches and mounts the disk is fixed at creation, so a later deploy does not attach it. The OS policy
 still converges the disk environment onto such a host.
 
-The runner nonetheless advertises no `dataDiskRef` while the device is absent or carries another
-filesystem. Expansion therefore skips the host.
-
-A `size_drift` outcome on the `runner_disk_expansion_total` counter points at such a host. A WARN
-naming a reported capacity that "does not match device size" says the same. Both mean an older
-runner binary without the gate is running there; upgrade it first.
+The runner therefore reports no `dataDiskRef` while the device is absent or carries another
+filesystem. The stored identity clears on the first heartbeat without one. Expansion skips the host,
+which surfaces as `runner_disk_missing_ref`; pressure on its root filesystem stays with generic disk
+alerting.
 
 Two recovery paths:
 

@@ -223,8 +223,8 @@ function makeService(opts: {
       ? jest.fn(() => new Promise<never>(() => {}))
       : opts.getDiskError
         ? jest.fn(() => Promise.reject(opts.getDiskError))
-        // A real disks.get always carries the device size, and the drift
-        // guard reads it every round: the default snapshot matches the
+        // A real disks.get always carries the device size, and the size
+        // check reads it every round: the default snapshot matches the
         // default runner's 200 GiB disk. Tests that exercise the missing
         // size pass diskSnapshot: {} explicitly.
         : jest.fn(async () => opts.diskSnapshot ?? { sizeGb: '200' }),
@@ -434,44 +434,8 @@ describe('RunnerDiskExpansionService round', () => {
     expect(gcpDiskClient.resizeDisk).not.toHaveBeenCalled()
   })
 
-  describe('size drift guard', () => {
-    it('warns once per drift episode and counts every round of it', async () => {
-      const counterAdd = jest.fn()
-      const meterSpy = jest.spyOn(metrics, 'getMeter').mockReturnValue({
-        createCounter: () => ({ add: counterAdd }),
-        createObservableGauge: () => ({ addCallback: () => {} }),
-        // The round runs under WithInstrumentation, which asks for a histogram
-        // on first use; a stub without one breaks the round when this test
-        // runs alone (name-pattern filtering).
-        createHistogram: () => ({ record: () => {} }),
-      } as unknown as Meter)
-      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
-      const runner = gcpRunner({ diskGiB: 99.2, currentAllocatedDiskGiB: 89.2 })
-      const { service } = makeService({
-        readyRunners: [runner],
-        diskSnapshot: { sizeGb: '200' },
-      })
-
-      await service.evaluateAndConfirm()
-      await service.evaluateAndConfirm()
-
-      expect(warnSpy).toHaveBeenCalledTimes(1)
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('does not match device size'),
-        expect.objectContaining({
-          'disk.expansion_result': 'size_drift',
-          'disk.reported_capacity_gib': 99.2,
-          'disk.device_size_gib': 200,
-          'disk.to_gib': 124,
-        }),
-      )
-      expect(counterAdd).toHaveBeenCalledWith(1, { result: 'size_drift' })
-      expect(counterAdd).toHaveBeenCalledTimes(2) // one tick per round, warn only once
-      meterSpy.mockRestore()
-      warnSpy.mockRestore()
-    })
-
-    it('never PATCHes a target not larger than the device (99.2 reported on 200)', async () => {
+  describe('device size check', () => {
+    it('does not grow a disk when the target is not larger than its real size', async () => {
       // The legacy-host shape from the incident: root-filesystem metrics
       // (99.2 GiB) sized a request against an unattached 200 GiB disk.
       const runner = gcpRunner({ diskGiB: 99.2, currentAllocatedDiskGiB: 89.2 }) // 10 GiB free, below the line
@@ -484,11 +448,11 @@ describe('RunnerDiskExpansionService round', () => {
 
       // ceil(99.2 * 1.25) = 124: the exact request GCP rejected, must not reach it.
       expect(gcpDiskClient.resizeDisk).not.toHaveBeenCalled()
-      // No PATCH, no ledger row: the every-minute not_accepted storm is gone.
+      // No PATCH, no ledger row: the every-minute rejection storm is gone.
       expect(expansions.insert).not.toHaveBeenCalled()
     })
 
-    it('stays quiet across rounds without retrying the withheld target', async () => {
+    it('keeps deferring the round while the sizes disagree', async () => {
       const runner = gcpRunner({ diskGiB: 99.2, currentAllocatedDiskGiB: 89.2 })
       const { service, gcpDiskClient, expansions } = makeService({
         readyRunners: [runner],
@@ -502,10 +466,10 @@ describe('RunnerDiskExpansionService round', () => {
       expect(expansions.insert).not.toHaveBeenCalled()
     })
 
-    it('does not false-positive on the ext4 overhead gap', async () => {
+    it('still grows through the ext4 overhead gap', async () => {
       // A healthy 200 GiB device reports ~195.8 GiB of filesystem: the step
-      // (25% of capacity) clears the device comfortably, so the guard must
-      // not mistake normal overhead for drift.
+      // (25% of capacity) clears the device comfortably, so the check must
+      // not mistake normal overhead for two different disks.
       const runner = gcpRunner({ diskGiB: 195.8, currentAllocatedDiskGiB: 185.8 })
       const { service, gcpDiskClient } = makeService({
         readyRunners: [runner],
@@ -1091,7 +1055,7 @@ describe('RunnerDiskExpansionService round', () => {
 
     expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
     expect(expansions.update).toHaveBeenCalledWith('inserted-row', { accepted: true, operation: 'op-1' })
-    // The read now serves the drift guard every round, cooldown or not; the
+    // The read serves the size check every round, cooldown or not; the
     // cooldown gate then holds the PATCH to size-only.
     expect(gcpDiskClient.getDisk).toHaveBeenCalledTimes(1)
   })
@@ -1102,7 +1066,7 @@ describe('RunnerDiskExpansionService round', () => {
 
     await service.evaluateAndConfirm()
 
-    // Without the device size the drift guard cannot hold, so the round is
+    // Without the device size the size check cannot hold, so the round is
     // deferred to the next cron tick instead of PATCHing blind.
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('device size read failed, skipping expansion this round'),
@@ -1266,7 +1230,7 @@ describe('RunnerDiskExpansionService round', () => {
       expect.objectContaining({ 'disk.expansion_result': 'perf_gate_query_failed' }),
     )
     expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
-    // The read precedes the gate (the drift guard needs it), so it happens
+    // The read precedes the gate (the size check needs it), so it happens
     // even when the cooldown answer itself is unavailable.
     expect(gcpDiskClient.getDisk).toHaveBeenCalledTimes(1)
     warnSpy.mockRestore()
