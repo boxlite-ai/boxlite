@@ -27,12 +27,21 @@ pub use arm64::{Arm64BootRegisters, Arm64Vcpu, CpuOnResult};
 mod x86;
 #[cfg(target_arch = "x86_64")]
 pub use x86::{X86BootRegisters, X86CpuidEntry, X86Msr, X86Segment, X86Vcpu, X86Vm};
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub use x86::{X86IrqchipState, X86VcpuState, X86VmState};
 
 pub use error::{Error, Result};
 pub use exit::VcpuExit;
 pub use memory::MemoryRegion;
 pub use vcpu::{Vcpu, VcpuHandle};
 pub use vm::Vm;
+
+/// One captured CPUID entry; `X86VcpuState::cpuid` is a vector of these.
+///
+/// Re-exported so callers can name the entry type without depending on
+/// `kvm-bindings` directly.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use kvm_bindings::kvm_cpuid_entry2;
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf;
