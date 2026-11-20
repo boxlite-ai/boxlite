@@ -171,15 +171,20 @@ export const selectRunnerBinary = ({
   workspaceVersion,
 }: {
   environment: NodeJS.ProcessEnv
-  workspaceVersion: string
+  /**
+   * The checkout's version, or a reader for it. A reader is consulted only
+   * when `VERSION` is unset, so an explicit release needs no workspace at all.
+   */
+  workspaceVersion: string | (() => string)
 }): RunnerBinarySelector => {
   const configuredVersion = trimmed(environment, 'VERSION')
-  const version = (configuredVersion ?? workspaceVersion).replace(/^v/, '')
+  const resolved = configuredVersion ?? (typeof workspaceVersion === 'function' ? workspaceVersion() : workspaceVersion)
+  const version = resolved.replace(/^v/, '')
   if (!STABLE_VERSION.test(version)) {
     throw new RunnerBinaryError(
       configuredVersion
         ? `VERSION must be a stable semantic version (X.Y.Z); got ${JSON.stringify(configuredVersion)}`
-        : `the workspace version ${JSON.stringify(workspaceVersion)} is not a stable semantic version (X.Y.Z)`,
+        : `the workspace version ${JSON.stringify(resolved)} is not a stable semantic version (X.Y.Z)`,
     )
   }
 
@@ -404,7 +409,7 @@ export const resolveRunnerBinary = ({
   /** Injected so the resolution is provable without a checkout. */
   readVersion?: typeof readWorkspaceVersion
 }): ResolvedRunnerBinary => {
-  const selector = selectRunnerBinary({ environment, workspaceVersion: readVersion({ from: configRoot }) })
+  const selector = selectRunnerBinary({ environment, workspaceVersion: () => readVersion({ from: configRoot }) })
   return {
     ...runnerArtifactFor({ selector, staging }),
     source: selector.kind,

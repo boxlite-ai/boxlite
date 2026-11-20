@@ -81,6 +81,37 @@ test('the workspace version is read from the Cargo.toml above the config', () =>
   assert.equal(readWorkspaceVersion({ from: join(root, 'apps', 'infra') }), '1.2.3', 'walks up')
 })
 
+test('an explicit VERSION needs no workspace above the config directory', () => {
+  // An external app declaration's config directory sits outside this checkout,
+  // so nothing above it holds a Cargo.toml. VERSION names the release on its
+  // own; reading the workspace first would refuse a configuration that is
+  // already fully specified.
+  const root = mkdtempSync(join(tmpdir(), 'mdeploy-external-'))
+  const resolved = resolveRunnerBinary({ environment: { VERSION: '0.9.5' }, configRoot: root })
+  assert.equal(resolved.version, '0.9.5')
+  assert.equal(resolved.source, 'release')
+})
+
+test('the workspace version is only read when VERSION does not answer', () => {
+  // A read that cannot happen must not happen: the reader is the failure the
+  // external declaration above hits, so the test watches it directly.
+  const resolved = resolveRunnerBinary({
+    environment: { VERSION: '0.9.5' },
+    configRoot: '/repo/apps/infra',
+    readVersion: () => {
+      throw new Error('the workspace must not be read when VERSION is set')
+    },
+  })
+  assert.equal(resolved.version, '0.9.5')
+})
+
+test('omitting VERSION still reads the workspace default', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdeploy-default-'))
+  writeFileSync(join(root, 'Cargo.toml'), '[workspace.package]\nversion = "1.2.3"\nedition = "2021"\n')
+  const resolved = resolveRunnerBinary({ environment: {}, configRoot: join(root, 'apps', 'infra') })
+  assert.equal(resolved.version, '1.2.3')
+})
+
 test('a checkout with no workspace version says so, and says what to set instead', () => {
   const root = mkdtempSync(join(tmpdir(), 'mdeploy-bare-'))
   assert.throws(
