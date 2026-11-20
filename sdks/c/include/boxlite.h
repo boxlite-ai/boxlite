@@ -1149,6 +1149,15 @@ char *boxlite_box_name(CBoxHandle *handle);
 
 void boxlite_box_free(CBoxHandle *handle);
 
+// Internal Runner ABI. Protected credential input is borrowed for this call.
+// Release the output JSON with boxlite_free_string. Operations are 0 (start),
+// 1 (receipt), 2 (retire) and 3 (check protection for legacy recovery).
+enum BoxliteErrorCode boxlite_runner_protected_boot(CBoxHandle *handle,
+                                                    uint8_t operation,
+                                                    const char *input_json,
+                                                    char **out_json,
+                                                    CBoxliteError *out_error);
+
 void boxlite_free_checkpoint_info(struct CCheckpointInfo *info);
 
 void boxlite_free_checkpoint_list(struct CCheckpointList *list);

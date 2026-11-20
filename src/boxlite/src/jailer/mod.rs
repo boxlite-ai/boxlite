@@ -111,6 +111,45 @@ pub(crate) fn reap_box(_box_id: &crate::runtime::id::BoxID) -> bool {
     false
 }
 
+/// Verify containment before credentials are handed to a protected shim.
+pub(crate) fn protected_owner_is_contained(box_id: &crate::BoxID, pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string(cgroup::cgroup_path(box_id.as_str()).join("cgroup.procs"))
+            .is_ok_and(|procs| {
+                procs
+                    .lines()
+                    .any(|process| process.parse::<u32>() == Ok(pid))
+            })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = box_id;
+        // SAFETY: getpgid only inspects the process identity returned at spawn.
+        (unsafe { libc::getpgid(pid as i32) }) == pid as i32
+    }
+}
+
+pub(crate) fn protected_processes_terminated(box_id: &crate::BoxID, pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = pid;
+        // Nested sandbox processes can leave the launcher's POSIX group. The
+        // kernel prevents removing a populated cgroup, even after launcher exit.
+        match std::fs::read_to_string(cgroup::cgroup_path(box_id.as_str()).join("cgroup.events")) {
+            Ok(events) => events.lines().any(|line| line == "populated 0"),
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = box_id;
+        // SAFETY: signal zero only queries the group. PID 0 and 1 are never an owner.
+        (unsafe { libc::kill(-(pid as i32), 0) }) == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+}
+
 // Volume specification (convenience re-export)
 pub use crate::runtime::options::VolumeSpec;
 use crate::runtime::options::{MountSpec, MountType};

@@ -440,6 +440,7 @@ udevadm trigger --name-match=kvm || true`,
           // resource, so there is nothing here to resolve.
           binary: request.binary,
           port: RUNNER_PORT,
+          protectedProxy: slot.protectedProxy,
           environment: {
             ...Object.fromEntries(
               Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
@@ -600,6 +601,7 @@ udevadm trigger --name-match=kvm || true`,
     // slot. Resolved together and not cast, for the reason the boot script above
     // records: an unresolved Output renders as Pulumi's `[toString]` refusal
     // text, and this one would converge the whole fleet onto it.
+    const protectedProxy = assignments.find(({ slot }) => slot.protectedProxy)?.slot.protectedProxy
     const unitEnvPolicy = $resolve([
       request.apiUrl,
       request.otlpUrl,
@@ -612,6 +614,7 @@ udevadm trigger --name-match=kvm || true`,
         volumeBackend: VOLUME_BACKEND,
         registryProxyHost: (proxyHost as string) || null,
         runnerEnv: runnerEnv as string,
+        protectedProxy,
         // The disks the control plane grows online are named here and
         // nowhere else: the policy derives each host's from the same
         // function the disk resource below creates under, so a grant or a

@@ -34,6 +34,7 @@ mod ffi;
 mod instance;
 #[cfg(feature = "gvproxy")]
 mod logging;
+mod managed;
 mod services;
 mod stats;
 
@@ -43,6 +44,7 @@ pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig};
 pub use instance::GvproxyInstance;
 #[cfg(feature = "gvproxy")]
 pub use logging::init_logging;
+pub use managed::{ManagedProxyCredential, ManagedProxyIdentity, ManagedProxyRoute};
 pub use services::GvproxyBackend;
 pub use stats::{NetworkStats, TcpStats};
 

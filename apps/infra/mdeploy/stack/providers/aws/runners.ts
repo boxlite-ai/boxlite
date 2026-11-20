@@ -262,6 +262,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
                 binary: request.binary,
                 region,
                 port: RUNNER_PORT,
+                protectedProxy: slot.protectedProxy,
                 environment: {
                   ...Object.fromEntries(
                     Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
@@ -341,6 +342,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
             apiUrl: apiUrl as string,
             otlpUrl: otlpUrl as string,
             runnerEnv: runnerEnv as string,
+            protectedProxy: slot.protectedProxy,
           }),
       )
       previousUpgrade = new command.local.Command(

@@ -6,6 +6,7 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -35,6 +36,9 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	}
 
 	if err := c.Destroy(ctx, boxId); err != nil {
+		if errors.Is(err, errProtectedBox) {
+			return err
+		}
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 

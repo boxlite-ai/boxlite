@@ -1,8 +1,10 @@
 //! Subprocess spawning for boxlite-shim binary.
 
 use std::{
+    io::{self, Write},
     path::{Path, PathBuf},
-    process::{Child, Stdio},
+    process::{Child, ChildStdin, Stdio},
+    time::Duration,
 };
 
 use crate::jailer::{Jail, JailerBuilder, PathAccess};
@@ -10,6 +12,7 @@ use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::{BoxOptions, NetworkSpec};
 use crate::util::configure_library_env;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use tokio::io::AsyncWriteExt;
 
 use super::watchdog;
 
@@ -19,6 +22,17 @@ const NESTED_VIRT_PROBE_PATHS: [&str; 2] = [
     "/sys/module/kvm_intel/parameters/nested",
     "/sys/module/kvm_amd/parameters/nested",
 ];
+
+const PROTECTED_LAUNCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) enum ProtectedSpawnEvent {
+    PreparingChild,
+    NoChild,
+    ChildStarted(u32),
+}
+
+pub(super) type ProtectedSpawnRecorder =
+    Box<dyn Fn(ProtectedSpawnEvent) -> BoxliteResult<()> + Send>;
 
 /// A shim that was spawned, with its child process handle and optional keepalive.
 ///
@@ -30,6 +44,27 @@ pub struct SpawnedShim {
     /// Parent-side watchdog keepalive. Dropping triggers shim shutdown.
     /// `None` for detached boxes (no watchdog).
     pub keepalive: Option<watchdog::Keepalive>,
+}
+
+struct PendingProtectedShim<'a> {
+    shim: Option<SpawnedShim>,
+    box_id: &'a str,
+}
+
+impl Drop for PendingProtectedShim<'_> {
+    fn drop(&mut self) {
+        if let Some(SpawnedShim { mut child, .. }) = self.shim.take() {
+            // Keep the durable reservation until the lifecycle proves this child has exited.
+            drop(child.stdin.take());
+            let _ = child.kill();
+            if let Some(id) = crate::BoxID::parse(self.box_id) {
+                crate::jailer::reap_box(&id);
+            }
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
 }
 
 /// Spawns `boxlite-shim` with full isolation, environment, and watchdog.
@@ -128,6 +163,45 @@ impl<'a> ShimSpawner<'a> {
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
     pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
+        let mut shim = self.spawn_child(detach, None)?;
+        if let Some(mut stdin) = shim.child.stdin.take() {
+            stdin.write_all(config_json.as_bytes()).map_err(|e| {
+                BoxliteError::Engine(format!("Failed to write config to shim stdin: {e}"))
+            })?;
+        }
+        Ok(shim)
+    }
+
+    pub(super) async fn spawn_protected(
+        &self,
+        config_json: &str,
+        detach: bool,
+        record_spawn: ProtectedSpawnRecorder,
+    ) -> BoxliteResult<SpawnedShim> {
+        let shim = self.spawn_child(detach, Some(&*record_spawn))?;
+        let mut pending = PendingProtectedShim {
+            shim: Some(shim),
+            box_id: self.box_id,
+        };
+        let child = &mut pending.shim.as_mut().expect("pending protected shim").child;
+        record_spawn(ProtectedSpawnEvent::ChildStarted(child.id()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| BoxliteError::Engine("Missing protected shim launch pipe".into()))?;
+        write_protected_config(stdin, config_json.as_bytes(), PROTECTED_LAUNCH_TIMEOUT)
+            .await
+            .map_err(|e| {
+                BoxliteError::Engine(format!("Failed to write protected shim config: {e}"))
+            })?;
+        Ok(pending.shim.take().expect("pending protected shim"))
+    }
+
+    fn spawn_child(
+        &self,
+        detach: bool,
+        record_spawn: Option<&dyn Fn(ProtectedSpawnEvent) -> BoxliteResult<()>>,
+    ) -> BoxliteResult<SpawnedShim> {
         // 1. Create watchdog pipe (non-detached only)
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
@@ -179,31 +253,26 @@ impl<'a> ShimSpawner<'a> {
         cmd.stderr(Stdio::from(stderr_file));
 
         // 7. Spawn
-        let mut child = cmd.spawn().map_err(|e| {
-            let err_msg = format!(
-                "Failed to spawn VM subprocess at {}: {}",
-                self.binary_path.display(),
-                e
-            );
-            tracing::error!("{}", err_msg);
-            BoxliteError::Engine(err_msg)
-        })?;
-
-        // 8. Write config to stdin, then close (shim reads until EOF).
-        // The child is already spawned and will read from stdin, so this is a
-        // producer-consumer pattern via the kernel pipe buffer. For typical
-        // configs (~2-5KB), write_all completes immediately. For large configs
-        // (>16KB on macOS, >64KB on Linux), write_all blocks until the child
-        // drains the buffer — which it does as its first action in main().
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            stdin.write_all(config_json.as_bytes()).map_err(|e| {
-                BoxliteError::Engine(format!("Failed to write config to shim stdin: {e}"))
-            })?;
-            drop(stdin); // close write end — shim sees EOF
+        if let Some(record_spawn) = record_spawn {
+            record_spawn(ProtectedSpawnEvent::PreparingChild)?;
         }
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                // On Unix, Command::spawn waits for the failed child before returning an exec error.
+                if let Some(record_spawn) = record_spawn {
+                    record_spawn(ProtectedSpawnEvent::NoChild)?;
+                }
+                let message = format!(
+                    "Failed to spawn VM subprocess at {}: {error}",
+                    self.binary_path.display()
+                );
+                tracing::error!("{message}");
+                return Err(BoxliteError::Engine(message));
+            }
+        };
 
-        // 9. Close read end in parent (child inherited it via fork)
+        // Close the parent's copy of the watchdog read end.
         drop(child_setup);
 
         Ok(SpawnedShim { child, keepalive })
@@ -254,6 +323,23 @@ impl<'a> ShimSpawner<'a> {
     }
 }
 
+async fn write_protected_config(
+    stdin: ChildStdin,
+    config: &[u8],
+    timeout: Duration,
+) -> io::Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut stdin = tokio::process::ChildStdin::from_std(stdin)?;
+    tokio::time::timeout_at(deadline, stdin.write_all(config))
+        .await
+        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
+    // Closing the writer lets the shim decode the one complete record.
+    Ok(())
+}
+
 #[cfg(all(test, target_os = "linux"))]
 #[path = "tests/fractional_cpus_membership.rs"]
 mod fractional_cpus_membership_tests;
@@ -263,6 +349,75 @@ mod tests {
     use super::*;
     use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
     use std::ffi::OsStr;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_bootstrap_stalled_pipe_yields_and_times_out() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "head -c 1; exec sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let stdin = child.stdin.take().unwrap();
+        let completed = std::cell::Cell::new(false);
+        let (result, writer_completed_before_sibling) = tokio::join!(
+            biased;
+            async {
+                let result = write_protected_config(stdin, &vec![b'x'; 2 << 20], Duration::from_secs(1)).await;
+                completed.set(true);
+                result
+            },
+            async {
+                tokio::task::yield_now().await;
+                completed.get()
+            },
+        );
+        let _ = child.kill();
+        child.wait().unwrap();
+        let mut observed = Vec::new();
+        std::io::Read::read_to_end(&mut child.stdout.take().unwrap(), &mut observed).unwrap();
+        assert_eq!(observed, b"x");
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            !writer_completed_before_sibling,
+            "stalled shim starved the current-thread Runtime"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_bootstrap_pipe_cancellation_reaps_the_pending_child() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let stdin = child.stdin.take().unwrap();
+        let launch = async move {
+            let _pending = PendingProtectedShim {
+                shim: Some(SpawnedShim {
+                    child,
+                    keepalive: None,
+                }),
+                box_id: "",
+            };
+            write_protected_config(stdin, &vec![b'x'; 2 << 20], Duration::from_secs(5)).await
+        };
+        tokio::select! {
+            biased;
+            result = launch => panic!("pipe unexpectedly completed before cancellation: {result:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while crate::util::is_process_alive(pid) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("pending protected child should exit after cancellation");
+    }
 
     fn test_layout() -> BoxFilesystemLayout {
         BoxFilesystemLayout::new(

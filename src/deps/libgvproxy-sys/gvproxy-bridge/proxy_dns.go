@@ -88,6 +88,7 @@ type proxyDNSResolver struct {
 	roots   *x509.CertPool
 	connect connectFunc
 	work    *dnsLookupWork
+	binding *managedProxyBinding
 }
 
 func newProxyDNSResolver(uri string, address netip.AddrPort, roots *x509.CertPool, connect connectFunc, work *dnsLookupWork) (*proxyDNSResolver, error) {

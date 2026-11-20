@@ -1215,6 +1215,11 @@ impl RuntimeImpl {
         state: BoxState,
         lock_id: crate::lock::LockId,
     ) -> BoxliteResult<()> {
+        if self.box_manager.protected_boot(id)?.is_some() {
+            return Err(BoxliteError::InvalidState(
+                "Protected bootstrap records require coordinated removal".into(),
+            ));
+        }
         let mut state = state;
         if state.status.is_active() || state.pid.is_some() {
             if force {
@@ -1476,29 +1481,27 @@ impl RuntimeImpl {
         // - Only Running boxes must have a directory
         let mut boxes_to_remove = Vec::new();
         for (config, state) in &persisted {
-            let should_remove = if config.options.removes_on_stop() {
+            let remove_on_stop = config.options.removes_on_stop();
+            let orphaned_active = state.status.is_active() && !config.box_home.exists();
+            if !(remove_on_stop || orphaned_active)
+                || self.box_manager.protected_boot(&config.id)?.is_some()
+            {
+                continue;
+            }
+            if remove_on_stop {
                 tracing::info!(
                     box_id = %config.id,
                     "Removing ephemeral (remove-on-stop) box during recovery"
                 );
-                true
-            } else if state.status.is_active() && !config.box_home.exists() {
-                // Only remove orphaned boxes that were in an active state
-                // Stopped boxes might not have a directory if never started
+            } else {
                 tracing::warn!(
                     box_id = %config.id,
                     status = ?state.status,
                     box_home = %config.box_home.display(),
                     "Removing orphaned active box (directory missing) during recovery"
                 );
-                true
-            } else {
-                false
-            };
-
-            if should_remove {
-                boxes_to_remove.push(config.id.clone());
             }
+            boxes_to_remove.push(config.id.clone());
         }
 
         // Remove invalid boxes from database and cleanup their directories

@@ -40,6 +40,7 @@
 import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from './runner-binary.ts'
 import { kernelDeployment } from './runner-kernel.ts'
 import { renderRunnerEnvironment } from './runner-environment.ts'
+import { protectedRunnerServiceEnvironment, type RunnerProtectedProxy } from './runner-protected-proxy.ts'
 
 /**
  * Where the unit environment lives on a host.
@@ -122,6 +123,7 @@ export type BootInput = {
   /** Values the unit carries beyond what this file decides. */
   environment: Record<string, string>
   platform: BootPlatform
+  protectedProxy?: RunnerProtectedProxy
 }
 
 /**
@@ -134,9 +136,11 @@ export type BootInput = {
 export const renderRunnerBoot = (input: BootInput): string => {
   const { platform } = input
   const { BOXLITE_RUNNER_ENV, ...environment } = input.environment
+  const enrollmentEnvironment = protectedRunnerServiceEnvironment(input.protectedProxy)
   const customEnvironment = renderRunnerEnvironment(BOXLITE_RUNNER_ENV, [
     ...Object.keys(environment),
     ...Object.keys(platform.unitEnvironment),
+    ...Object.keys(enrollmentEnvironment),
   ])
   const region = input.region ?? null
   const fetch = (url: string, destination: string) =>
@@ -159,6 +163,7 @@ export const renderRunnerBoot = (input: BootInput): string => {
     OTEL_EXPORTER_OTLP_ENDPOINT: input.otlpUrl,
     ...environment,
     ...platform.unitEnvironment,
+    ...enrollmentEnvironment,
   }
 
   const script = `#!/bin/bash

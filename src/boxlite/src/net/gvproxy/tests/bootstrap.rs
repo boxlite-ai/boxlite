@@ -102,3 +102,57 @@ async fn outbound_bootstrap_real_bridge_restores_identity_and_enforces_cas() {
         .expect("gvproxy socket cleanup completed before restart");
     }
 }
+
+#[tokio::test]
+async fn outbound_bootstrap_ffi_installs_exact_managed_route() {
+    use crate::net::gvproxy::{GvproxyBackend, GvproxyInstance, ManagedProxyIdentity};
+    use crate::net::{
+        NetworkBackend, NetworkBackendConfig, OutboundApplicationState, OutboundRevision,
+        OutboundSnapshot,
+    };
+    use crate::runtime::options::{NetworkMode, OutboundNetworkConfig};
+
+    let dir = tempfile::Builder::new()
+        .prefix("bl-boot-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let backend = GvproxyBackend::from_config(&NetworkBackendConfig {
+        outbound_disabled: true,
+        socket_path: dir.path().join("net.sock"),
+        allow_net: vec![],
+        secrets: vec![],
+        ca_dir: dir.path().to_path_buf(),
+        rate_limit: Default::default(),
+    });
+    let spec = backend.spec();
+    let binding = ManagedProxyIdentity {
+        registration_id: OutboundRevision::parse("fixture-reg").unwrap(),
+        registration_revision: OutboundRevision::parse("7").unwrap(),
+        epoch: OutboundRevision::fresh(),
+    };
+    let route = ManagedProxyRoute {
+        binding: binding.clone(),
+        scheme: "https".into(),
+        host: "8.8.8.8".into(),
+        port: 443,
+        doh_url: "https://resolver.example.com/dns-query".into(),
+        doh_address: "1.1.1.1:443".parse().unwrap(),
+        credential: None,
+    };
+    let snapshot = OutboundSnapshot {
+        policy: OutboundNetworkConfig {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["packages.example.com".into()],
+        },
+        revision: OutboundRevision::fresh(),
+    };
+    let (_instance, _) = GvproxyInstance::from_managed_config(&spec, &snapshot, &route).unwrap();
+    let observed = backend.managed_proxy_status().await.unwrap();
+    assert_eq!(
+        observed.status.application_state,
+        OutboundApplicationState::Confirmed
+    );
+    assert_eq!(observed.status.snapshot, snapshot);
+    assert_eq!(observed.binding, binding);
+    assert!(spec.outbound_disabled && spec.allow_net.is_empty());
+}

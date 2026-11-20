@@ -738,16 +738,19 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		return err
 	}
 	defer operation.Close()
+	ids, err := operation.NativeTargets()
+	if err != nil {
+		return err
+	}
+	if err := c.refuseProtectedRemoval(ctx, ids); err != nil {
+		return err
+	}
 	if err := operation.Invalidate(); err != nil {
 		return err
 	}
 	ctx = context.WithoutCancel(ctx)
 	c.forgetBox(boxId)
 
-	ids, err := operation.NativeTargets()
-	if err != nil {
-		return err
-	}
 	for _, id := range ids {
 		if err := c.runtime.ForceRemove(ctx, id); err != nil && !boxlite.IsNotFound(err) {
 			return err

@@ -43,6 +43,8 @@ export interface StartBoxResponse {
 export interface RunnerAdapter {
   init(runner: Runner): Promise<void>
 
+  supportsProtectedBootstrap?(): Promise<boolean>
+
   healthCheck(signal?: AbortSignal): Promise<void>
 
   runnerInfo(signal?: AbortSignal): Promise<RunnerInfo>

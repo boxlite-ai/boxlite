@@ -22,6 +22,9 @@ type Config struct {
 	TLSCertFile                        string        `envconfig:"TLS_CERT_FILE"`
 	TLSKeyFile                         string        `envconfig:"TLS_KEY_FILE"`
 	EnableTLS                          bool          `envconfig:"ENABLE_TLS"`
+	ProtectedProxyRunnerID             string        `envconfig:"BOXLITE_PROTECTED_PROXY_RUNNER_ID"`
+	ProtectedProxyDoHURL               string        `envconfig:"BOXLITE_PROTECTED_PROXY_DOH_URL"`
+	ProtectedProxyDoHAddress           string        `envconfig:"BOXLITE_PROTECTED_PROXY_DOH_ADDRESS"`
 	OtelLoggingEnabled                 bool          `envconfig:"OTEL_LOGGING_ENABLED"`
 	OtelTracingEnabled                 bool          `envconfig:"OTEL_TRACING_ENABLED"`
 	OtelEndpoint                       string        `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`

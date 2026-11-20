@@ -31,6 +31,7 @@
 import type { Placement } from './network.ts'
 import type { RunnerArtifact } from './runner-binary.ts'
 import { instanceFor } from 'naming'
+import type { RunnerProtectedProxy } from './runner-protected-proxy.ts'
 
 export type RunnerSize = 'small' | 'medium' | 'large'
 
@@ -42,6 +43,7 @@ export type RunnerSlot = {
   nameTag: string
   /** The name the control plane registers it under. Unique across the fleet. */
   controlPlaneRunnerName: string
+  protectedProxy?: RunnerProtectedProxy
 }
 
 /**

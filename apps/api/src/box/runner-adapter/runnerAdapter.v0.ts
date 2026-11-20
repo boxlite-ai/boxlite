@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import axios, { AxiosError } from 'axios'
+import axios, { AxiosError, AxiosInstance } from 'axios'
 import axiosDebug from 'axios-debug-log'
 import axiosRetry from 'axios-retry'
 
@@ -23,6 +23,7 @@ import { Box } from '../entities/box.entity'
 import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { checkedBootReceipt, enrolledRunnerAgent, ProtectedBootKey, ProtectedBootRoute } from './protected-runner'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -124,6 +125,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   private boxApiClient: BoxApi
   private runnerApiClient: DefaultApi
   private runner: Runner
+  private bootstrapApi?: AxiosInstance
 
   private convertBoxState(state: EnumsBoxState): BoxState {
     switch (state) {
@@ -156,11 +158,22 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
     this.runner = runner
 
+    const httpsAgent = enrolledRunnerAgent(runner)
+    const enrolledTransport = httpsAgent && { httpsAgent, maxRedirects: 0, proxy: false as const }
+    const headers = { Authorization: `Bearer ${runner.apiKey}` }
+    this.bootstrapApi = enrolledTransport
+      ? axios.create({
+          ...enrolledTransport,
+          baseURL: runner.apiUrl,
+          headers: { ...headers, 'X-BoxLite-Runner-Id': runner.id },
+          timeout: 120_000,
+        })
+      : undefined
+
     const axiosInstance = axios.create({
       baseURL: runner.apiUrl,
-      headers: {
-        Authorization: `Bearer ${runner.apiKey}`,
-      },
+      headers,
+      ...enrolledTransport,
       timeout: 1 * 60 * 60 * 1000, // 1 hour
     })
 
@@ -235,6 +248,71 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
+  async supportsProtectedBootstrap(): Promise<boolean> {
+    if (!this.bootstrapApi) return false
+    try {
+      const { data } = await this.bootstrapApi.get('/v1/outbound-proxy/bootstrap', { timeout: 3000 })
+      return (
+        data.runner_id === this.runner.id &&
+        data.version === 1 &&
+        Array.isArray(data.operations) &&
+        ['start', 'receipt', 'retire'].every((operation) => data.operations.includes(operation))
+      )
+    } catch {
+      return false
+    }
+  }
+
+  async createProtectedBox(
+    box: Box,
+    image: string,
+    key: ProtectedBootKey,
+    loadRoute: () => Promise<ProtectedBootRoute>,
+  ) {
+    if (
+      box.runnerId !== this.runner.id ||
+      key.runner_id !== this.runner.id ||
+      !(await this.supportsProtectedBootstrap())
+    ) {
+      throw new Error('Runner does not qualify for protected bootstrap')
+    }
+    await this.createBox(box, image, undefined, false, true)
+    const route = await loadRoute()
+    return this.protectedBootOperation(box.id, '', key, { ...route, key })
+  }
+
+  async readProtectedBoot(boxId: string, key: ProtectedBootKey, expectedEpoch?: string) {
+    return this.protectedBootOperation(boxId, '/receipt', key, key, expectedEpoch)
+  }
+
+  async retireProtectedBoot(boxId: string, key: ProtectedBootKey, expectedEpoch?: string) {
+    return this.protectedBootOperation(boxId, '/retire', key, key, expectedEpoch)
+  }
+
+  private async protectedBootOperation(
+    boxId: string,
+    suffix: '' | '/receipt' | '/retire',
+    key: ProtectedBootKey,
+    body: unknown,
+    expectedEpoch?: string,
+  ) {
+    if (!this.bootstrapApi || key.runner_id !== this.runner.id)
+      throw new Error('Protected Runner enrollment is missing')
+    let evidence: unknown
+    try {
+      const path = `/v1/boxes/${encodeURIComponent(boxId)}/network/outbound/bootstrap${suffix}`
+      evidence = (await this.bootstrapApi.post(path, body)).data
+    } catch {
+      // Axios errors retain the request body, including the proxy credential.
+      throw new Error('Protected Runner bootstrap outcome is unconfirmed')
+    }
+    const receipt = checkedBootReceipt(evidence, boxId, key, expectedEpoch)
+    if ((!suffix && receipt.outcome !== 'confirmed') || (suffix === '/retire' && receipt.outcome !== 'retired')) {
+      throw new Error('Unexpected protected bootstrap outcome')
+    }
+    return receipt
+  }
+
   async runnerInfo(signal?: AbortSignal): Promise<RunnerInfo> {
     const response = await this.runnerApiClient.runnerInfo({ signal })
     return {
@@ -259,6 +337,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     image: string,
     metadata?: { [key: string]: string },
     nestedVirtualization = false,
+    protectedPlaceholder = false,
   ): Promise<StartBoxResponse | undefined> {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
@@ -285,8 +364,9 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         placeholder: secret.placeholder,
         headers: secret.headers,
       })),
-      outboundEnabled: box.outboundEnabled,
-      outboundAllowNet: box.outboundAllowNet ?? undefined,
+      ...(protectedPlaceholder
+        ? { outboundEnabled: false, skipStart: true }
+        : { outboundEnabled: box.outboundEnabled, outboundAllowNet: box.outboundAllowNet ?? undefined }),
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
