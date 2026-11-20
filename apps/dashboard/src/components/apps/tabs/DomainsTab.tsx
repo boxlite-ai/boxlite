@@ -53,7 +53,7 @@ export function DomainsTab({ app }: { app: AppDetail }) {
             )}
           </span>
           <Tag>Primary</Tag>
-          <span className="ml-auto text-[12px] text-muted-foreground" title="Change it from Access in the header">
+          <span className="ml-auto text-meta text-muted-foreground" title="Change it from Access in the header">
             Access: <span className="text-foreground">{capitalize(VISIBILITY_LABEL[app.visibility])}</span>
           </span>
         </div>
@@ -78,13 +78,11 @@ function AddDomainDialog({ app, onClose }: { app: AppDetail; onClose: () => void
   }
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[560px] font-mono text-body')} data-testid="add-domain-dialog">
+      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[560px] font-sans text-body')} data-testid="add-domain-dialog">
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">
-            Bind a platform domain
-          </DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">Bind a platform domain</DialogTitle>
         </DialogHeader>
-        <p className="text-[12px] text-muted-foreground">
+        <p className="text-meta text-muted-foreground">
           Enter a full platform domain already held by your organization. Request one in{' '}
           <Link className="underline" to={RoutePath.DOMAINS}>
             Domains
@@ -92,7 +90,7 @@ function AddDomainDialog({ app, onClose }: { app: AppDetail; onClose: () => void
           first.
         </p>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[12px] text-muted-foreground">Full hostname</span>
+          <span className="text-meta text-muted-foreground">Full hostname</span>
           <Input
             value={host}
             autoFocus
@@ -168,7 +166,7 @@ function YourDomains({ app }: { app: AppDetail }) {
           </ToolButton>
         }
       />
-      <p className="px-2 py-2 font-mono text-[13px] text-muted-foreground">
+      <p className="px-2 py-2 font-sans text-body text-muted-foreground">
         {supported ? (
           <>
             Bind a platform domain held by your organization. Request one in{' '}

@@ -66,6 +66,8 @@ describe('cloud App organization isolation', () => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     state.organization = { id: 'org-a' }
     state.permitted = true
+    vi.stubEnv('VITE_ENABLE_MOCKING', 'true')
+    sessionStorage.setItem('mock-app-hosting-access', 'enabled')
     requests = []
     respond = async (request) => response(request, [{ id: 'one', name: 'current-app' }])
     axios.defaults.adapter = async (request) => {
@@ -81,6 +83,8 @@ describe('cloud App organization isolation', () => {
   afterEach(() => {
     act(() => root.unmount())
     cache.clear()
+    vi.unstubAllEnvs()
+    sessionStorage.clear()
     axios.defaults.adapter = adapter
     if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
     else Reflect.deleteProperty(navigator, 'clipboard')
@@ -303,5 +307,54 @@ describe('cloud App organization isolation', () => {
     )
     await act(async () => {})
     expect(host.textContent).toBe('/dashboard/apps')
+  })
+
+  it.each(['/dashboard/apps', '/dashboard/apps/app-a'])('withholds management at %s by default', (path) => {
+    sessionStorage.removeItem('mock-app-hosting-access')
+    const mounted = vi.fn()
+    function Management() {
+      mounted()
+      useAppsQuery()
+      return <button>New app</button>
+    }
+    render(
+      <OrganizationScope>
+        <Management />
+      </OrganizationScope>,
+      path,
+    )
+    expect(host.textContent).toContain('App hosting is in early access')
+    expect(host.textContent).not.toContain('New app')
+    expect(mounted).not.toHaveBeenCalled()
+    const button = host.querySelector('button')!
+    expect(button.textContent).toBe('Get early access')
+    act(() => button.click())
+    expect(mounted).not.toHaveBeenCalled()
+    expect(requests).toEqual([])
+    expect(sessionStorage.getItem('mock-app-hosting-access')).toBeNull()
+    expect(host.textContent).not.toContain('submitted')
+  })
+
+  it('cannot admit a non-mock build through the stored fixture or URL', () => {
+    vi.stubEnv('VITE_ENABLE_MOCKING', 'false')
+    render(
+      <OrganizationScope>
+        <button>New app</button>
+      </OrganizationScope>,
+      '/dashboard/apps?appHosting=enabled',
+    )
+    expect(host.textContent).toContain('Get early access')
+    expect(host.textContent).not.toContain('New app')
+  })
+
+  it('retains read permission checks in the admitted fixture', () => {
+    state.permitted = false
+    render(
+      <OrganizationScope>
+        <button>New app</button>
+      </OrganizationScope>,
+    )
+    expect(host.textContent).toContain('read permission')
+    expect(host.textContent).not.toContain('New app')
   })
 })

@@ -74,7 +74,7 @@ function PlatformSources({
           type="button"
           title="Build output, visitor requests and platform detail"
           className={cn(
-            '-ml-px inline-flex h-[30px] items-center gap-1 border border-border px-3 font-mono text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand/35',
+            '-ml-px inline-flex h-[30px] items-center gap-1 border border-border px-3 font-sans text-body outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand/35',
             picked.length
               ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
               : 'text-muted-foreground hover:text-foreground data-[state=open]:text-foreground',
@@ -84,7 +84,7 @@ function PlatformSources({
           <ChevronDown className="size-3.5" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[13rem] font-mono">
+      <DropdownMenuContent align="end" className="min-w-[13rem] font-sans">
         {DETAIL_SOURCES.map((source) => (
           <DropdownMenuItem
             key={source}
@@ -286,7 +286,7 @@ function RuntimeLogs({
           <button
             type="button"
             onClick={showHeld}
-            className="mt-2 bg-foreground px-3 py-1.5 font-mono text-[13px] font-semibold text-background shadow-lg"
+            className="mt-2 bg-foreground px-3 py-1.5 font-sans text-body font-semibold text-background shadow-lg"
           >
             {held} new line{held === 1 ? '' : 's'} · Show
           </button>
@@ -297,7 +297,7 @@ function RuntimeLogs({
           {error ? (
             <EmptyNote title="The logs could not be read">{errorText(error)}</EmptyNote>
           ) : isLoading ? (
-            <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
+            <div className="flex items-center gap-2 py-8 text-body text-muted-foreground">
               <Spinner className="size-4" /> Loading logs…
             </div>
           ) : visible.length === 0 ? (
@@ -320,7 +320,7 @@ function RuntimeLogs({
                 return (
                   <div key={line.id}>
                     {newDay && (
-                      <div className="sticky top-0 z-[1] bg-background pb-1 pt-3 text-[12px] font-medium text-muted-foreground">
+                      <div className="sticky top-0 z-[1] bg-background pb-1 pt-3 text-meta font-medium text-muted-foreground">
                         {day.charAt(0).toUpperCase() + day.slice(1)}
                       </div>
                     )}
@@ -328,7 +328,7 @@ function RuntimeLogs({
                       type="button"
                       onClick={() => setSelected(selected === line.id ? null : line.id)}
                       className={cn(
-                        `grid ${ROW_GRID} w-full items-center px-2 py-[5px] text-left text-[12px] transition-colors hover:bg-card/60`,
+                        `grid ${ROW_GRID} w-full items-center px-2 py-[5px] text-left text-meta transition-colors hover:bg-card/60`,
                         selected === line.id && 'bg-card',
                         fresh.has(line.id) ? 'bg-brand/10 transition-none' : 'transition-colors duration-700',
                       )}
@@ -354,7 +354,7 @@ function RuntimeLogs({
                 )
               })}
               {visible.length > rows.length && (
-                <div className="flex items-center justify-center gap-3 py-4 text-[12px] text-muted-foreground">
+                <div className="flex items-center justify-center gap-3 py-4 text-meta text-muted-foreground">
                   Showing the newest {rows.length} of {visible.length} lines
                   <ToolButton onClick={() => setLimit((n) => n + PAGE)}>Show older</ToolButton>
                 </div>
@@ -364,7 +364,7 @@ function RuntimeLogs({
         </div>
         {detail && (
           <Panel className="sticky top-2 self-start border-l border-border/60">
-            <div className="flex items-center justify-between px-4 py-2 text-[12px] text-muted-foreground">
+            <div className="flex items-center justify-between px-4 py-2 text-meta text-muted-foreground">
               <span className="font-medium text-foreground">Log line</span>
               <button
                 type="button"
@@ -413,7 +413,7 @@ function RuntimeLogs({
                 <span className="flex items-center justify-between text-muted-foreground">
                   Message <CopyIconButton text={detail.raw} />
                 </span>
-                <pre className="whitespace-pre-wrap break-words bg-card/60 p-3 text-[12px] leading-[1.6] text-foreground">
+                <pre className="whitespace-pre-wrap break-words bg-card/60 p-3 text-meta leading-[1.6] text-foreground">
                   {detail.message}
                 </pre>
               </div>
@@ -468,7 +468,7 @@ function Activity({ app, onGoTo }: { app: AppDetail; onGoTo: (link: ActivityLink
                 <button
                   type="button"
                   onClick={() => entry.link && onGoTo(entry.link)}
-                  className="text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35"
+                  className="text-meta text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35"
                 >
                   {linkLabel(entry.link)}
                 </button>

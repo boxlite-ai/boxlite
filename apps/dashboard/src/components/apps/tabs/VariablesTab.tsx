@@ -114,7 +114,7 @@ function InlineEditor({
     if (e.key === 'Escape') onCancel()
   }
   return (
-    <div className={`grid ${ENV_GRID} items-center bg-card/60 px-2 py-2`}>
+    <div className={`grid ${ENV_GRID} items-center bg-card/60 px-4 py-2`}>
       <span className="flex flex-col gap-1">
         <input
           autoFocus={!lockName && !initialName}
@@ -125,7 +125,7 @@ function InlineEditor({
           placeholder="NAME"
           className={cn(TEXT_INPUT, 'h-8 disabled:opacity-70')}
         />
-        {nameError && <span className="text-[12px] text-destructive">{nameError}</span>}
+        {nameError && <span className="text-meta text-destructive">{nameError}</span>}
       </span>
       <input
         autoFocus={lockName || !!initialName}
@@ -188,9 +188,9 @@ function ImportDialog({
   const label = [adds && `add ${adds}`, updates && `update ${updates}`].filter(Boolean).join(', ')
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[640px] font-mono text-body')}>
+      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[640px] font-sans text-body')}>
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">Import from .env</DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">Import from .env</DialogTitle>
         </DialogHeader>
         <textarea
           autoFocus
@@ -199,14 +199,14 @@ function ImportDialog({
           placeholder={'DATABASE_POOL=10\nFEATURE_FLAGS="beta,search"\n# comments are ignored'}
           rows={6}
           spellCheck={false}
-          className="resize-none border border-border bg-background p-3 font-mono text-[13px] leading-[1.6] text-foreground outline-none focus:border-foreground/40"
+          className="resize-none border border-border bg-background p-3 font-mono text-body leading-[1.6] text-foreground outline-none focus:border-foreground/40"
         />
         {plan.length === 0 ? (
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-body text-muted-foreground">
             Paste KEY=VALUE lines. You see what changes before saving.
           </span>
         ) : (
-          <div className="flex max-h-[220px] flex-col overflow-y-auto text-[13px]">
+          <div className="flex max-h-[220px] flex-col overflow-y-auto text-body">
             {plan.map((p) => (
               <div
                 key={p.name}
@@ -234,12 +234,12 @@ function ImportDialog({
           </div>
         )}
         {plan.length > 0 && (
-          <span className="text-[12px] text-muted-foreground">
+          <span className="text-meta text-muted-foreground">
             Saving starts one deployment of {environment} with these values.
           </span>
         )}
         {invalid.length > 0 && (
-          <span className="text-[12px] text-warning">
+          <span className="text-meta text-warning">
             Skipped line {invalid.join(', ')}: not KEY=VALUE, or a name BoxLite sets
           </span>
         )}
@@ -280,12 +280,12 @@ function SecretDialog({
   const blocked = !nameOk || (mode === 'new' ? !value : !chosen)
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[540px] font-mono text-body')}>
+      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[540px] font-sans text-body')}>
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">Add a secret</DialogTitle>
+          <DialogTitle className="font-display text-section font-semibold">Add a secret</DialogTitle>
         </DialogHeader>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[13px] text-muted-foreground">Variable name</span>
+          <span className="text-body text-muted-foreground">Variable name</span>
           <input
             autoFocus
             value={name}
@@ -306,7 +306,7 @@ function SecretDialog({
               type="button"
               onClick={() => setMode(m)}
               className={cn(
-                '-ml-px border border-border px-3 py-1.5 text-[12px] transition-colors first:ml-0',
+                '-ml-px border border-border px-3 py-1.5 text-meta transition-colors first:ml-0',
                 mode === m
                   ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
                   : 'text-muted-foreground hover:text-foreground',
@@ -318,7 +318,7 @@ function SecretDialog({
         </div>
         {mode === 'new' ? (
           <label className="flex flex-col gap-1.5">
-            <span className="text-[13px] text-muted-foreground">Value</span>
+            <span className="text-body text-muted-foreground">Value</span>
             <input
               type="password"
               value={value}
@@ -327,7 +327,7 @@ function SecretDialog({
               autoComplete="off"
               className={cn(TEXT_INPUT, 'h-10')}
             />
-            <span className="text-[12px] text-muted-foreground">
+            <span className="text-meta text-muted-foreground">
               {/* The control plane stores it under the same name (shared secretNameFor). */}
               Kept for this app only{name ? ` as app/${name.toLowerCase().replace(/_/g, '-')}` : ''}. It cannot be
               viewed after saving.
@@ -335,9 +335,9 @@ function SecretDialog({
           </label>
         ) : (
           <label className="flex flex-col gap-1.5">
-            <span className="text-[13px] text-muted-foreground">Secret</span>
+            <span className="text-body text-muted-foreground">Secret</span>
             {stored.length === 0 ? (
-              <span className="text-[13px] text-muted-foreground">
+              <span className="text-body text-muted-foreground">
                 {isLoading ? 'Loading…' : 'Nothing stored yet. Add it as a new value instead.'}
               </span>
             ) : (
@@ -351,7 +351,7 @@ function SecretDialog({
             )}
           </label>
         )}
-        <span className="text-[12px] text-muted-foreground">
+        <span className="text-meta text-muted-foreground">
           The app reads it from its environment as {name || 'the name above'}.
         </span>
         <DialogFooter className="gap-1">
@@ -488,12 +488,12 @@ export function VariablesTab({ app }: { app: AppDetail }) {
         </EmptyNote>
       ) : (
         <>
-          <p className="pb-4 font-mono text-[13px] text-muted-foreground">
+          <p className="pb-4 font-sans text-body text-muted-foreground">
             Secrets stay in your org&apos;s secret store and are never shown. Saving restarts the services with the new
             values; no rebuild.
           </p>
           {removed.length > 0 && (
-            <p className="pb-3 font-mono text-[12px] text-warning">
+            <p className="pb-3 font-sans text-meta text-warning">
               {removed.join(', ')} {removed.length === 1 ? 'is' : 'are'} removed; the release serving now still has{' '}
               {removed.length === 1 ? 'it' : 'them'} until {app.deploying?.id ?? 'the next deployment'} is live.
             </p>
@@ -567,7 +567,7 @@ export function VariablesTab({ app }: { app: AppDetail }) {
                         <DropdownMenuTrigger asChild>
                           <MoreButton />
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-[10rem] font-mono">
+                        <DropdownMenuContent align="end" className="min-w-[10rem] font-sans">
                           <DropdownMenuItem
                             className="cursor-pointer text-destructive focus:text-destructive"
                             onClick={() => void remove(row)}
@@ -674,12 +674,12 @@ function CopyFrom({ app }: { app: AppDetail }) {
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="inline-flex h-[28px] items-center gap-1.5 whitespace-nowrap border border-border px-[10px] font-mono text-[12px] text-muted-foreground outline-none transition-colors hover:border-brand hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:border-brand data-[state=open]:text-foreground"
+            className="inline-flex h-[28px] items-center gap-1.5 whitespace-nowrap border border-border px-[10px] font-sans text-meta text-muted-foreground outline-none transition-colors hover:border-brand hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:border-brand data-[state=open]:text-foreground"
           >
             Copy from <ChevronDown className="size-3.5" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[12rem] font-mono">
+        <DropdownMenuContent align="end" className="min-w-[12rem] font-sans">
           {others.map((env) => (
             <DropdownMenuItem
               disabled={!canWrite}
