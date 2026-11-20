@@ -677,6 +677,11 @@ Result of a completed execution.
 
 **Note:** For higher-level APIs (`SimpleBox.exec()`), the result also includes `stdout` and `stderr` strings.
 
+`SimpleBox.exec()` and `SyncSimpleBox.exec()` close stdin before collecting output.
+Commands that read stdin therefore receive EOF. To send input, use the
+lower-level `Box.exec()` or `SyncBox.exec()` and write through
+`Execution.stdin()` before closing it.
+
 ---
 
 ## Box types

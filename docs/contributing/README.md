@@ -39,6 +39,8 @@ Dated root-cause analyses and design studies, newest first.
 
 - 2026-11-13 · [Runner data-disk performance scaling](investigations/2026-11-13-runner-data-disk-performance-scaling.md): expansion raises provisioned IOPS/throughput proportionally, clipped to the per-disk ceiling; capacity never waits for performance.
 - 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
+
+- 2026-11-10 · [One-shot Python stdin](investigations/2026-11-10-python-one-shot-stdin-eof.md): input ownership, EOF delivery, and streaming controls.
 - 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.
 - 2026-11-10 · [Desktop visual refinement](investigations/2026-11-10-desktop-visual-refinement.md): resource view consistency and desktop review findings.
 - 2026-11-09 · [Desktop dashboard consistency](investigations/2026-11-09-desktop-review-corrections.md): shared resource presentation, compact usage summaries and desktop screenshot evidence.
