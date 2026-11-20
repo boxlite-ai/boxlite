@@ -665,6 +665,29 @@ impl ApiClient {
         ensure_capability("per-exec user", capabilities.exec_user_enabled)
     }
 
+    pub async fn require_mount_capabilities(
+        &self,
+        typed_mounts: bool,
+        read_only_mounts: bool,
+    ) -> BoxliteResult<()> {
+        if !typed_mounts && !read_only_mounts {
+            return Ok(());
+        }
+        let config = self.fetch_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise volume mount capability".to_string(),
+            )
+        })?;
+        if typed_mounts {
+            ensure_capability("typed mounts", capabilities.typed_mounts_enabled)?;
+        }
+        if read_only_mounts {
+            ensure_capability("volume read-only", capabilities.volume_read_only_enabled)?;
+        }
+        Ok(())
+    }
+
     pub async fn require_privileged_enabled(&self) -> BoxliteResult<()> {
         // Recheck before every create: cached support may outlive a rollback.
         let config = self.fetch_config().await?;

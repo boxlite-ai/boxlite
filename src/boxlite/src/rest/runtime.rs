@@ -383,16 +383,12 @@ impl BoxOptions {
             ));
         }
 
-        // Mounts. `BoxOptions::sanitize` is local-only, so
-        // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
-        // Go callers can violate by setting the fields directly — has no other
-        // chance to run before the request goes out.
-        //
-        // A host bind has no meaning against a REST runtime either: the path
-        // names the *server's* filesystem, not the caller's. The rejected path
-        // is deliberately not quoted back — the caller already knows what they
-        // asked for, and echoing a server-side path into a client error is a
-        // leak, not a diagnostic.
+        if !self.volumes.is_empty() && !self.mounts.is_empty() {
+            return Err(BoxliteError::InvalidArgument(
+                "volumes and mounts must not both be non-empty; use typed mounts for new requests"
+                    .to_string(),
+            ));
+        }
 
         for volume in &self.volumes {
             volume.validate()?;
@@ -410,26 +406,15 @@ impl BoxOptions {
             ));
         }
 
-        // The server rejects `read_only: true` on a managed mount. Refusing here
-        // says so plainly instead of surfacing a field-level 400, and — more to the
-        // point — never lets a caller believe a writable mount is protected.
-        if let Some(volume) = self
-            .volumes
-            .iter()
-            .find(|volume| volume.read_only)
-            .and_then(|volume| volume.managed_volume.as_deref())
-        {
-            return Err(BoxliteError::Unsupported(format!(
-                "read-only managed volumes are not supported yet; mount {volume:?} read-write"
-            )));
-        }
-
-        // REST runtimes send no typed mounts yet(TODO): refused here, before
-        // any request, rather than left out of it.
-        if !self.mounts.is_empty() {
-            return Err(BoxliteError::Unsupported(
-                "typed mounts are not supported by REST runtimes yet".to_string(),
-            ));
+        for mount in &self.mounts {
+            mount.validate()?;
+            if mount.mount_type == crate::runtime::options::MountType::Bind {
+                return Err(BoxliteError::Unsupported(
+                    "host bind mounts are only supported by the local runtime; create a volume \
+                     and mount it by id or name instead"
+                        .to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -471,6 +456,14 @@ impl RuntimeBackend for RestRuntime {
         if options.advanced.privileged {
             self.client.require_privileged_enabled().await?;
         }
+        let typed_mounts = !options.mounts.is_empty();
+        let read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+            || options.mounts.iter().any(|mount| mount.read_only);
+        if typed_mounts || read_only_mounts {
+            self.client
+                .require_mount_capabilities(typed_mounts, read_only_mounts)
+                .await?;
+        }
 
         let req = CreateBoxRequest::from_options(&options, name);
         let resp = self.client.create_box(&req).await?;
@@ -492,11 +485,25 @@ impl RuntimeBackend for RestRuntime {
             ));
         }
         options.sanitize_remote()?;
+        let typed_mounts = !options.mounts.is_empty();
+        let read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+            || options.mounts.iter().any(|mount| mount.read_only);
+        if typed_mounts || read_only_mounts {
+            self.client
+                .require_mount_capabilities(typed_mounts, read_only_mounts)
+                .await?;
+        }
 
         if let Some(ref box_name) = name {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
+                    if !options.volumes.is_empty() || !options.mounts.is_empty() {
+                        return Err(BoxliteError::Unsupported(format!(
+                            "cannot reuse box {box_name:?}: the REST response does not expose its \
+                             existing mount configuration; use a different name or recreate the box"
+                        )));
+                    }
                     let actual = response.privileged.ok_or_else(|| {
                         BoxliteError::Unsupported(format!(
                             "cannot reuse box {box_name:?}: the server did not report its \
@@ -1366,37 +1373,43 @@ mod tests {
         );
     }
 
-    /// Until REST runtimes send typed mounts, create refuses them before any
-    /// network I/O rather than leaving them out of the request.
+    /// Typed mounts can only be sent to a server that advertises the wire
+    /// contract. The probe happens before the create request so an older
+    /// server cannot drop the field silently.
     #[tokio::test]
-    async fn create_refuses_typed_mounts_until_rest_sends_them() {
+    async fn create_requires_typed_mount_advertisement() {
         use crate::runtime::options::MountSpec;
 
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                .expect("failed to create REST runtime");
         let box_options = BoxOptions {
             mounts: vec![MountSpec::volume_mount("run42", "/workspace")],
             ..Default::default()
         };
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("typed mounts must be refused before network I/O");
+        let error = match RuntimeBackend::create(&runtime, box_options, None).await {
+            Err(error) => error,
+            Ok(_) => panic!("unadvertised typed mounts must be rejected before creation"),
+        };
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("typed mounts"), "{error}");
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
     }
 
-    /// The server rejects `read_only: true` on a managed mount. Refusing it
-    /// here keeps a caller from believing a writable mount is protected — the
-    /// failure mode that matters is the silent downgrade, not the 400.
+    /// Read-only is a safety property, not a cosmetic flag. If an older server
+    /// cannot advertise it, the client refuses to ask rather than assume both
+    /// sides agree on writable data.
     #[tokio::test]
-    async fn create_rejects_read_only_managed_volume() {
+    async fn create_requires_read_only_advertisement() {
         use crate::runtime::options::VolumeSpec;
 
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                .expect("failed to create REST runtime");
         let box_options = BoxOptions {
             volumes: vec![VolumeSpec {
                 read_only: true,
@@ -1405,13 +1418,263 @@ mod tests {
             ..Default::default()
         };
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("read-only managed volumes must be rejected before network I/O");
+        let error = match RuntimeBackend::create(&runtime, box_options, None).await {
+            Err(error) => error,
+            Ok(_) => panic!("unadvertised read-only mounts must be rejected before creation"),
+        };
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("read-only"), "{error}");
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn create_sends_typed_read_only_mount_after_both_capabilities() {
+        use crate::runtime::options::MountSpec;
+
+        let (port, server) = capture_server(vec![
+            (
+                200,
+                r#"{"capabilities":{"typed_mounts_enabled":true,"volume_read_only_enabled":true}}"#,
+            ),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("team/backend".into()),
+                ..MountSpec::volume_mount("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("both advertised capabilities permit the create");
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+        let body: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+        assert_eq!(
+            body["mounts"][0],
+            serde_json::json!({
+                "type": "volume",
+                "source": "workspace",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "team/backend",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_writable_mount_requires_only_typed_mount_capability() {
+        use crate::runtime::options::MountSpec;
+
+        let (port, server) = capture_server(vec![
+            (200, r#"{"capabilities":{"typed_mounts_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("writable typed mounts do not need the read-only capability");
+        assert_eq!(
+            server
+                .await
+                .unwrap()
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap().to_owned())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_sends_legacy_read_only_volume_after_capability() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (port, server) = capture_server(vec![
+            (200, r#"{"capabilities":{"volume_read_only_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::managed_volume("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("advertised read-only support permits the legacy create");
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+        let body = json_body(&requests[1].1);
+        assert_eq!(
+            body["volumes"],
+            serde_json::json!([{
+                "managed_volume": "workspace",
+                "guest_path": "/workspace",
+                "read_only": true
+            }])
+        );
+        assert!(body.get("mounts").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_or_create_requires_mount_capabilities_before_lookup() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        for options in [
+            BoxOptions {
+                mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                volumes: vec![VolumeSpec {
+                    read_only: true,
+                    ..VolumeSpec::managed_volume("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+        ] {
+            let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .err()
+                .expect("an old server must not reuse or create a mounted box");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_mount_reuse_without_configuration_metadata() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        for options in [
+            BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                volumes: vec![VolumeSpec {
+                    read_only: true,
+                    ..VolumeSpec::managed_volume("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+            BoxOptions {
+                mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                mounts: vec![MountSpec {
+                    read_only: true,
+                    sub_path: Some("team/backend".into()),
+                    ..MountSpec::volume_mount("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+        ] {
+            let requires_probe =
+                !options.mounts.is_empty() || options.volumes.iter().any(|volume| volume.read_only);
+            let mut response = serde_json::from_str::<serde_json::Value>(BOX_RESPONSE).unwrap();
+            response["privileged"] = false.into();
+            let response = Box::leak(response.to_string().into_boxed_str());
+            let mut replies = Vec::new();
+            if requires_probe {
+                replies.push((
+                    200,
+                    r#"{"capabilities":{"typed_mounts_enabled":true,"volume_read_only_enabled":true}}"#,
+                ));
+            }
+            replies.push((200, response));
+            let (port, server) = capture_server(replies).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .err()
+                .expect("reuse must not assume the existing mount configuration matches");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert!(error.to_string().contains("mount configuration"), "{error}");
+
+            let requests = server.await.unwrap();
+            let mut expected = Vec::new();
+            if requires_probe {
+                expected.push("GET /v1/config HTTP/1.1");
+            }
+            expected.push("GET /v1/boxes/named HTTP/1.1");
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|(headers, _)| headers.lines().next().unwrap())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn create_box_request_carries_typed_volume_mount() {
+        use crate::runtime::options::MountSpec;
+
+        let options = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("team/backend".to_string()),
+                ..MountSpec::volume_mount("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+        let request = CreateBoxRequest::from_options(&options, None);
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(
+            json["mounts"],
+            serde_json::json!([{
+                "type": "volume",
+                "source": "workspace",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "team/backend"
+            }])
+        );
     }
 
     /// The guard is about host paths, not about mounts: a managed volume gets

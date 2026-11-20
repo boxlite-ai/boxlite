@@ -140,7 +140,8 @@ Python runs all four supported versions on Linux x64 and the latest on macOS and
 (six jobs); Node runs all three versions on Linux x64 and the latest on the other platforms
 (five jobs). Weekly and manually dispatched tests exercise every platform/version combination
 and bypass change filters. Combined Rust and CLI coverage runs on all three platforms, including
-non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
+non-VM integration tests and Linux guest tests. Linux CI also runs the volume REST lifecycle
+against a real `boxlite serve` process. Codecov requires 90% coverage of changed lines
 and reports total coverage.
 
 The Linux Rust jobs enable unprivileged user namespaces on their disposable runners
