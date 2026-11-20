@@ -197,6 +197,24 @@ maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
 headers. Agent HTTP routes and REST client support are unavailable.
 
+### Go JSON mapping
+
+Go's internal agent converters use the core's snake_case JSON fields. Nullable
+strings become empty strings, a null turn result becomes nil, and null capability
+limits remain nil while a reported zero remains a pointer to zero.
+
+Empty record arrays remain non-nil empty slices. Optional `json.RawMessage` data
+normalizes absent or top-level null to nil; false, zero, empty collections and
+nested nulls retain their JSON values.
+
+Required event data and permission arguments preserve literal JSON null.
+Answers and explicit permission responses
+use different tagged records, so an answer cannot grant permission.
+
+Retention is read from `idempotency_retention_seconds` using checked decimal
+conversion to `time.Duration`, without a float64 intermediate. Sub-nanosecond
+fractions are truncated; negative or out-of-range values return an error.
+
 ### Example: handle operation errors
 
 Python (the Box may already exist; this call starts no work):

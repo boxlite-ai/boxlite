@@ -80,8 +80,11 @@ Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
 The [release runbook](../../apps/infra/docs/release.md) documents fixed child inputs, timeouts, and recovery.
-Full releases require repository secret `SLACK_WEBHOOK_URL` and required reviewers on the `prod` Environment.
-The Slack button opens the exact pending prod run; a reviewer approves it with their own GitHub identity.
+
+Full releases require reviewers on the `prod` Environment. A full release can send #release a dev approval link before polling, then the E2E result and prod approval link.
+
+Deployment applies can also notify #dev_deployment for dev or #release for prod before each approval batch. Each button opens the corresponding GitHub run.
+
 Release deployments need one target Environment approval; commit deployments use two batches: parallel artifact preparation, then deploy.
 Wait until both preparation legs are awaiting review before approving their shared Environment; queued or later jobs can require another review.
 
@@ -458,7 +461,8 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 - `PYPI_API_TOKEN` — PyPI, for the wheels
 - `NPM_TOKEN` — npm, for the Node packages
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
-- `SLACK_WEBHOOK_URL` — incoming webhook for full release reports and the prod approval link
+- `SLACK_WEBHOOK_URL` — optional #release webhook for release dev approvals, final reports and prod apply approvals
+- `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for dev apply approvals. An empty secret skips that channel.
 
 ## Plugin release artifacts
 

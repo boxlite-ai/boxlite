@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from compose import orchestrator
 from compose.config import InfraConfig, worktree_home
-from compose.services import HealthCheck, SPEC_MINIO
+from compose.services import HealthCheck, SPEC_RUSTFS
 from compose.storage import ensure_bucket, storage_client
 
 
@@ -46,8 +46,8 @@ async def smoke(root: Path) -> None:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     home = Path(os.environ.get("BOXLITE_STORAGE_SMOKE_HOME") or worktree_home(Path(__file__).resolve().parents[3], "s"))
-    cfg = InfraConfig(data_dir=root / "data", boxlite_home=home, minio_host_port=port)
-    spec = replace(SPEC_MINIO, ports=[(port, 9000)], healthcheck=HealthCheck(http_url=f"http://127.0.0.1:{port}/health", retries=60))
+    cfg = InfraConfig(data_dir=root / "data", boxlite_home=home, rustfs_host_port=port)
+    spec = replace(SPEC_RUSTFS, ports=[(port, 9000)], healthcheck=HealthCheck(http_url=f"http://127.0.0.1:{port}/health", retries=60))
     orchestrator.ensure_home_env(cfg)
     runtime = orchestrator.get_runtime()
     try:
@@ -57,8 +57,8 @@ async def smoke(root: Path) -> None:
             client.put_object(Bucket="boxlite", Key="infra-smoke", Body=b"durable across recovery")
             assert client.get_object(Bucket="boxlite", Key="infra-smoke")["Body"].read() == b"durable across recovery"
         assert not await orchestrator.start_service(runtime, spec, cfg), "healthy box was recreated"
-        if any(item.name == "boxlite-local-minio" for item in await runtime.list_info()):
-            await runtime.remove("boxlite-local-minio", force=True)
+        if any(item.name == "boxlite-local-rustfs" for item in await runtime.list_info()):
+            await runtime.remove("boxlite-local-rustfs", force=True)
         assert await orchestrator.start_service(runtime, spec, cfg)
         await asyncio.to_thread(ensure_bucket, cfg)
         with storage_client(cfg) as client:
@@ -67,8 +67,8 @@ async def smoke(root: Path) -> None:
             assert client.list_objects_v2(Bucket="boxlite").get("KeyCount") == 0
         print("PASS: isolated S3 bootstrap, CRUD, warm reuse and persistence after recreation")
     finally:
-        if any(item.name == "boxlite-local-minio" for item in await runtime.list_info()):
-            await runtime.remove("boxlite-local-minio", force=True)
+        if any(item.name == "boxlite-local-rustfs" for item in await runtime.list_info()):
+            await runtime.remove("boxlite-local-rustfs", force=True)
 
 
 if __name__ == "__main__":

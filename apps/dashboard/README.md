@@ -569,7 +569,7 @@ includes alias deletion; using an image does not automatically require catalog a
 
 Users can explicitly select **No expiration**, 90 days or one year. Existing keys
 and Quickstart defaults are unchanged. A successful creation displays the returned
-permissions and expiration with a one-time secret. Copy is explicit and does not
+permissions and expiration with a one-time secret. Absolute expiration dates use English formatting while retaining the browser’s local timezone. The secret is a selectable, horizontally scrollable single line with a fixed copy icon on its right; copy success is announced and failure preserves manual selection and retry. Copy is explicit and does not
 close the result. Closing the dialog or switching organization discards the secret
 and ignores late responses. Unavailable selected permissions remain visible until
 removed; permission changes invalidate in-flight results. Background membership refreshes
@@ -587,6 +587,8 @@ assigned member-read permission, but the Console does not offer member-write.
 The mock preview uses synthetic, organization-scoped keys held only in memory.
 Create, list, duplicate-name refusal and revoke are supported; reload resets them.
 Mock results do not verify live authorization or expiration enforcement.
+
+Creation-result layout: [light](../../docs/contributing/investigations/assets/api-key-result/light.png), [dark](../../docs/contributing/investigations/assets/api-key-result/dark.png), [390px viewport](../../docs/contributing/investigations/assets/api-key-result/narrow.png). These captures contain synthetic MSW keys only.
 
 Visual review: [before](../../docs/contributing/investigations/assets/api-key-access/before.png),
 [default form](../../docs/contributing/investigations/assets/api-key-access/after.png), and
@@ -835,6 +837,13 @@ Management is a primary disclosure after Applications, with Billing and Organiza
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
 Organization switching is in the header; theme and logout are in the account menu.
+The account avatar keeps a fixed 23px box and displays name/email initials while
+its image loads or after loading fails. Missing names and emails use the shared
+account icon. Images appear only after `load`; `error` removes the image without
+automatic retries. The avatar is keyed by OIDC issuer, subject and image URL, so
+identity or URL changes start fresh and late image events cannot affect another
+account. Avatar content is decorative; the profile-menu trigger retains its
+accessible name and keyboard behavior.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
@@ -850,7 +859,7 @@ to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcemen
 height consistently. Preserve `min-w-0` on the content region when adding routes.
 
 Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
-section label. Applications contains CI → Runners / Connects, including compact-rail expansion, hover preview, active-child highlighting and mobile menu destinations. Management remains a separate primary entry. Compact navigation
+section label. Applications contains one CI destination, active on both the runner inventory and GitHub connections routes. The CI page exposes persistent Runners and GitHub connections tabs on desktop and mobile, backed by the existing routes. Both routes retain multi-resource inventories within the selected organization. Management remains a separate primary entry. Compact navigation
 keeps the group accessible name without squeezing in a visual label.
 
 Expanded navigation highlights only the current child, using the same full row
@@ -998,13 +1007,12 @@ A new verified connection can reconnect later. Switching BoxLite organizations
 does not redirect an in-flight delete. Legacy Organization `?tab=ci` links and
 successful browser authorization lead to Connects. `start:mock` includes synthetic
 JIT Boxes and deletable connections for local presentation checks.
-Neither tab has a manual Refresh control. Connects fetches on entry and after
+Neither CI page has a manual Refresh control. Connects fetches on entry and after
 successful additions/updates/deletions; it does not poll the connection list.
 
-**Run workflows on BoxLite** on Connects and **How to run a job** on Runners follow the page description as an underlined button that opens
+**How to run a job** follows the stable CI page description as an underlined button that opens
 the guide sheet; it wraps below the description on narrow screens. Each Runners empty state
-uses a single title, concise explanation and at most one primary action. Workflow
-steps live in the guide rather than being repeated below a second empty-state heading. Successful browser
+uses a single title, concise explanation and at most one primary action. The empty inventory exposes the minimal workflow diff inline; the guide retains the complete test workflow and troubleshooting. Successful browser
 connection offers the same guide for the current BoxLite organization. The success
 entry survives removal of the authorization route parameter and clears when a new
 attempt starts, the organization changes, or a connection is successfully deleted.
@@ -1028,7 +1036,7 @@ In `start:mock`, open the workflow guide next to the CI page description. Use Co
 to inspect the installed repositories and private repository policy.
 The empty Runners page checks owner-visible connection settings before choosing
 its next step. No connections leads to **Set up GitHub**, which opens Connects in a new tab and preserves the current guide; existing
-connections lead to **Set up a job**, with repository checks still required.
+connections keep **No active runners** and show a collapsible **Configure a workflow** section, with repository checks still required. The empty inventory embeds the same copyable runner diff as the side sheet. No-connection owners see the existing new-tab Connects entry beside that diff. Loading, error, member and unavailable states retain their existing feedback. See [inline setup](docs/ci-inline-setup/README.md).
 Loading, permission uncertainty, members without owner access, failed reads
 (including failed refreshes of cached empty data), and disabled CI have distinct
 messages. They never imply that GitHub is connected or disconnected.

@@ -8,6 +8,7 @@ import { turnstileConfig } from './turnstile-config'
 import { parseFilestoreInstances } from './filestore-instances'
 import { checkpointConfig } from './checkpoint-config'
 import { customDomainConfig } from './custom-domain-config'
+import { secretServerConfig } from './secret-server-config'
 
 /**
  * A whole number at least 1, or a hard failure.
@@ -800,6 +801,7 @@ const configuration = {
   billingApiUrl: billingApiUrlConfig(),
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
+  secretServer: secretServerConfig(),
   incidentIo: incidentIoConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
