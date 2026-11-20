@@ -326,6 +326,12 @@ pub(crate) struct Chipset {
 }
 
 impl Chipset {
+    /// Whether the chipset contains any userspace devices.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn is_empty(&self) -> bool {
+        self._devices.is_empty()
+    }
+
     /// Serves an MMIO or port access and returns `None`; returns every other
     /// exit to the caller unchanged.
     pub(crate) fn dispatch<'a>(&self, exit: VcpuExit<'a>) -> Option<VcpuExit<'a>> {

@@ -8,13 +8,42 @@ use std::{error, fmt, io, path::PathBuf};
 /// Result of a VMM operation.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A failure that ends the VM.
+/// Why a VM control operation was refused or failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlReason {
+    /// The operation is unavailable in the current lifecycle state.
+    InvalidState,
+    /// The operation requires a device-less configuration.
+    UnsupportedDevice,
+    /// The operation did not complete before its deadline.
+    DeadlineTimeout,
+    /// A terminal event interrupted the operation.
+    TerminalOutcome,
+}
+
+impl fmt::Display for ControlReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidState => "invalid state",
+            Self::UnsupportedDevice => "operation requires a device-less VM",
+            Self::DeadlineTimeout => "vCPU acknowledgements are still incomplete",
+            Self::TerminalOutcome => "the VM is stopping",
+        })
+    }
+}
+
+/// A VMM construction, execution, or control failure.
 ///
 /// The cause chain stays intact through [`error::Error::source`], so callers
 /// can tell a host that cannot run VMs from other failures.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
+    /// A control operation was refused or failed.
+    Control {
+        operation: &'static str,
+        reason: ControlReason,
+    },
     /// The vCPU count is outside `1..=config::MAX_VCPUS`.
     InvalidVcpuCount(u8),
     /// Opening or configuring filesystem exports failed.
@@ -88,6 +117,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Control { operation, reason } => write!(f, "{operation}: {reason}"),
             Self::Vsock(_) => f.write_str("failed to configure vsock bridges"),
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
@@ -158,7 +188,8 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            Self::InvalidVcpuCount(_)
+            Self::Control { .. }
+            | Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
             | Self::GuestMemoryAddressLimit { .. }
             | Self::InvalidCommandLine(_)

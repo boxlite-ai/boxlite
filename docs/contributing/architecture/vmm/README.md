@@ -486,9 +486,9 @@ engine adapter calls it from
 `VmmInstance::enter`:
 
 ```rust
-let mut vm = Vm::new(config, console)?; // validate, create the host VM, map RAM, load the kernel, build devices
-let stop = vm.stop_handle();   // Clone + Send; the shim's SIGTERM path calls stop.stop()
-let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopRequested
+let mut vm = Vm::new(config, console)?;
+let control = vm.control(); // Clone for threads that observe or stop the VM.
+let exit = vm.run()?;       // Blocks on the thread that owns the VM.
 ```
 
 `run` returns once: a second call fails with `AlreadyRan`, since a VM never
@@ -496,6 +496,28 @@ restarts. `console` is a `Box<dyn Write + Send>` that receives the guest's
 serial output through a bounded queue; `run` waits up to one second for the
 sink to take the rest, and bytes it never takes are counted as dropped and
 logged.
+
+The driver holds exclusive access to `Vm` throughout `run`. The backend-independent
+`VmControl` shares lifecycle state through an `Arc` and keeps no VM resources
+such as RAM or vCPUs alive. External threads use `status()` and `stop()`.
+`StopHandle::stop` uses the same latch.
+
+`VmStatus` starts at `Created`, advances to `Running` as the driver starts,
+and becomes `Stopping` on a stop request or when the driver processes a
+terminal event. A stop in `Created` goes directly to `Stopping`, so the
+first `run` skips vCPU creation and takes the usual cleanup path.
+The first terminal event determines the outcome of an active run.
+
+On teardown, the driver joins all scoped vCPUs, shuts down virtio workers,
+finishes the console, and publishes `Exited`. A worker join timeout leaves
+the VM in `Stopping` until drop. The VM owns the RAM mappings until drop,
+which also publishes `Exited` if the VM was never run.
+
+Linux x86_64 also supports `Vm::new_device_less(config)`, which shares KVM
+preflight, RAM registration, and kernel and initramfs loading with `Vm::new`.
+It builds an empty chipset and starts no console worker. Configuring disks,
+filesystem, vsock, network, or virtio console returns `Error::Control` with
+`ControlReason::UnsupportedDevice` before KVM setup.
 
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED
