@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -91,6 +92,47 @@ func TestRunRejectsInvalidArgumentsAndMissingDatabase(t *testing.T) {
 	}
 	if err := run(context.Background(), []string{"migrate"}); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
 		t.Errorf("missing database: %v", err)
+	}
+}
+
+func TestRunRejectsInvalidServiceConfig(t *testing.T) {
+	for name, value := range map[string]string{"SECRET_SERVER_ROLE": "invalid-role", "ENVIRONMENT": "local", "DATABASE_URL": "postgres://localhost/test", "SECRET_MASTER_KEY_ID": "env:test", "SECRET_MASTER_KEY_BASE64": base64.StdEncoding.EncodeToString(make([]byte, 32)), "SECRET_SERVER_AUTH_MODE": "dev", "SECRET_SERVER_DEV_TOKEN": "test-token", "SECRET_SERVER_AUDIENCE": "", "SECRET_SERVER_ALLOWED_CALLERS": "", "PORT": "8080", "SHUTDOWN_TIMEOUT_SEC": ""} {
+		t.Setenv(name, value)
+	}
+	if err := run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "SECRET_SERVER_ROLE") {
+		t.Fatalf("run with invalid role = %v", err)
+	}
+}
+
+func TestRunRejectsOccupiedPort(t *testing.T) {
+	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("SECRET_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	_, databaseURL := testdb.Create(t, ctx, admin, dsn, false)
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"SECRET_SERVER_ROLE": "write", "ENVIRONMENT": "local", "DATABASE_URL": databaseURL, "SECRET_MASTER_KEY_ID": "env:test", "SECRET_MASTER_KEY_BASE64": base64.StdEncoding.EncodeToString(make([]byte, 32)), "SECRET_SERVER_AUTH_MODE": "dev", "SECRET_SERVER_DEV_TOKEN": "test-token", "SECRET_SERVER_AUDIENCE": "", "SECRET_SERVER_ALLOWED_CALLERS": "", "PORT": port, "SHUTDOWN_TIMEOUT_SEC": ""} {
+		t.Setenv(name, value)
+	}
+	err = run(ctx, nil)
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "listen" {
+		t.Fatalf("run with occupied port = %v, want listen error", err)
 	}
 }
 

@@ -107,7 +107,7 @@ coverage\:go: dev\:go
 PHONY_TARGETS += coverage\:apps\:secret-server\:integration
 coverage\:apps\:secret-server\:integration:
 	@mkdir -p "$(PROJECT_ROOT)/target/coverage"
-	@cd apps/secret-server && GOWORK=off go test -race -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server-integration.out" ./internal/database ./internal/server ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer)$$'
+	@cd apps/secret-server && GOWORK=off go test -race -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server-integration.out" ./internal/database ./internal/server ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort)$$'
 
 # Native archive import/export does not boot a VM, but the production constructor still
 # requires a supported host. The Linux native-binding job enables KVM first.

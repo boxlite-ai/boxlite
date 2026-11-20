@@ -41,3 +41,12 @@ func TestStartupRejectsInvalidKeyID(t *testing.T) {
 		t.Fatalf("New with invalid key ID = %v, %v", s, err)
 	}
 }
+
+func TestStartupRejectsInvalidDatabaseURLWithoutLeakingCredentials(t *testing.T) {
+	const secret = "test-password-marker"
+	c := Config{KeyID: "env:test", Key: base64.StdEncoding.EncodeToString(make([]byte, 32)), DatabaseURL: "postgres://localhost:999999/db?password=" + secret}
+	s, err := New(context.Background(), c)
+	if s != nil || err == nil || err.Error() != "invalid DATABASE_URL" || strings.Contains(err.Error(), secret) {
+		t.Fatalf("New with invalid database URL = %v, %v", s, err)
+	}
+}
