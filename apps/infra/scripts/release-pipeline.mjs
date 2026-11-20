@@ -68,13 +68,55 @@ export const slackWebhook = (value) => {
   return url.href
 }
 
+async function githubRequest(repo, token, request, path, body) {
+  const method = body === undefined ? 'GET' : 'POST'
+  let response
+  try {
+    response = await request('https://api.github.com/repos/' + repo + path, {
+      method,
+      headers: {
+        Authorization: 'Bearer ' + token,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2026-03-10',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch {
+    throw new Error(
+      method === 'POST' ? 'Dispatch outcome unknown; inspect GitHub before retrying' : 'GitHub read failed',
+    )
+  }
+  if (!response.ok) {
+    throw new Error(
+      'GitHub ' +
+        method +
+        ' failed: HTTP ' +
+        response.status +
+        (method === 'POST' && response.status >= 500 ? '; dispatch outcome unknown, inspect before retrying' : ''),
+    )
+  }
+  try {
+    const result = await response.json()
+    if (result === null || typeof result !== 'object') throw new Error('Invalid JSON document')
+    return result
+  } catch {
+    throw new Error(
+      method === 'POST'
+        ? 'Dispatch outcome unknown: no readable run ID; inspect before retrying'
+        : 'Malformed GitHub JSON response',
+    )
+  }
+}
+
 export class ReleasePipeline {
   #repo
   #requiredAssets
   #tag
   #sha
-  #token
-  #request
+  #api
   #timer
   #record
   #log
@@ -85,54 +127,10 @@ export class ReleasePipeline {
     if (!token) throw new Error('GH_TOKEN is required')
     this.#tag = tag
     this.#sha = sha
-    this.#token = token
-    this.#request = request
+    this.#api = (path, body) => githubRequest(this.#repo, token, request, path, body)
     this.#timer = timer
     this.#record = record
     this.#log = log
-  }
-
-  async #api(path, body) {
-    const method = body === undefined ? 'GET' : 'POST'
-    let response
-    try {
-      response = await this.#request('https://api.github.com/repos/' + this.#repo + path, {
-        method,
-        headers: {
-          Authorization: 'Bearer ' + this.#token,
-          Accept: 'application/vnd.github+json',
-          'Content-Type': 'application/json',
-          'X-GitHub-Api-Version': '2026-03-10',
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
-      })
-    } catch {
-      throw new Error(
-        method === 'POST' ? 'Dispatch outcome unknown; inspect GitHub before retrying' : 'GitHub read failed',
-      )
-    }
-    if (!response.ok) {
-      throw new Error(
-        'GitHub ' +
-          method +
-          ' failed: HTTP ' +
-          response.status +
-          (method === 'POST' && response.status >= 500 ? '; dispatch outcome unknown, inspect before retrying' : ''),
-      )
-    }
-    try {
-      const result = await response.json()
-      if (result === null || typeof result !== 'object') throw new Error('Invalid JSON document')
-      return result
-    } catch {
-      throw new Error(
-        method === 'POST'
-          ? 'Dispatch outcome unknown: no readable run ID; inspect before retrying'
-          : 'Malformed GitHub JSON response',
-      )
-    }
   }
 
   async #poll(read, timeout, describe) {
@@ -255,13 +253,28 @@ export class ReleasePipeline {
     throw new Error('Deployment history was truncated; refusing a prod request')
   }
 
-  async run() {
+  async run(notifyDev) {
     const inputs = { stage: 'dev', components: 'api+runner', ref: this.#tag, apply: true, confirm: true }
+    this.#record('phase', 'dev_dispatch')
     const devId = await this.#dispatch('mdeploy-all.yml', inputs, 'dev')
+    this.#record('phase', 'dev_wait')
+    if (notifyDev) {
+      try {
+        await notifyDev(devId)
+      } catch {
+        this.#log(
+          '::warning::Dev approval notice failed. Follow https://github.com/' + this.#repo + '/actions/runs/' + devId,
+        )
+      }
+    }
     const dev = await this.#completed(devId, 'dev', 3 * HOUR)
+    this.#record('phase', 'e2e_dispatch')
     const e2eId = await this.#dispatch('e2e-cloud.yml', { stage: 'dev', tag: this.#tag }, 'e2e')
+    this.#record('phase', 'e2e_wait')
     const e2e = await this.#completed(e2eId, 'e2e', HOUR)
+    this.#record('phase', 'history')
     await this.#undisturbed(dev, e2e)
+    this.#record('phase', 'prod_reviewers')
     const environment = await this.#api('/environments/prod')
     if (
       !Array.isArray(environment.protection_rules) ||
@@ -272,8 +285,44 @@ export class ReleasePipeline {
       throw new Error('Prod must have required Environment reviewers before a prod run can be created')
     }
     // Creation fixes inputs; GitHub Environment approval remains a separate human action.
+    this.#record('phase', 'prod_dispatch')
     await this.#dispatch('mdeploy-all.yml', { ...inputs, stage: 'prod' }, 'prod')
   }
+}
+
+const reviewButton = (repo, runId, environment) => ({
+  type: 'actions',
+  elements: [
+    {
+      type: 'button',
+      style: 'primary',
+      text: { type: 'plain_text', text: 'Review ' + environment + ' deployment' },
+      url: 'https://github.com/' + repository(repo) + '/actions/runs/' + id(Number(runId)),
+    },
+  ],
+})
+
+const releasePhases = {
+  dev_dispatch: ['dev', 'Dev deployment dispatch'],
+  dev_wait: ['dev', 'Dev deployment'],
+  e2e_dispatch: ['dev', 'E2E dispatch'],
+  e2e_wait: ['dev', 'E2E cloud'],
+  history: ['dev', 'Dev validation history'],
+  prod_reviewers: ['prod', 'Prod reviewer verification'],
+  prod_dispatch: ['prod', 'Prod deployment dispatch'],
+}
+
+const stoppedPhase = (results) => {
+  for (const [job, label] of [
+    ['resolve', 'Release ref resolution'],
+    ['publish', 'Image publication'],
+    ['assets', 'Release assets'],
+  ]) {
+    if (results[job]?.result && results[job].result !== 'success') return ['Pre-deployment', label]
+  }
+  return (
+    releasePhases[results.pipeline?.outputs?.phase] ?? ['Release', 'Release orchestration (last phase unavailable)']
+  )
 }
 
 export const releaseReport = ({ repo, tag, runId, results }) => {
@@ -285,7 +334,12 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
     /^[1-9][0-9]*$/.test(String(value ?? '')) ? '<' + source + '/actions/runs/' + value + '|' + label + '>' : label
   const success = pipeline.result === 'success' && /^[1-9][0-9]*$/.test(outputs.prod_run_id ?? '')
   const release = VERSION.test(tag) ? tag : '(invalid release tag)'
-  const title = release + (success ? ': dev verified; prod review requested' : ': release pipeline failed')
+  const [environment, phase] = success ? ['prod', 'Prod deployment approval'] : stoppedPhase(results)
+  const interrupted = Object.values(results).some((job) => job.result === 'cancelled')
+  const outcome = interrupted ? 'interrupted' : 'failed'
+  const title = success
+    ? release + ': dev verified; prod review requested'
+    : release + ': release pipeline ' + outcome + ' at ' + phase
   const rows = [
     ['Publication', results.publish?.result ?? 'not started'],
     ['Release assets', results.assets?.result ?? 'not started'],
@@ -309,17 +363,7 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
           ', components=api+runner, apply=true, confirm=true. Review and approve in GitHub.',
       },
     })
-    blocks.push({
-      type: 'actions',
-      elements: [
-        {
-          type: 'button',
-          style: 'primary',
-          text: { type: 'plain_text', text: 'Review prod deployment' },
-          url: source + '/actions/runs/' + outputs.prod_run_id,
-        },
-      ],
-    })
+    blocks.push(reviewButton(repo, outputs.prod_run_id, 'prod'))
   }
   const summary =
     '## ' +
@@ -330,7 +374,7 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
       .join('\n') +
     '\n' +
     (success ? '\nProd run: ' + source + '/actions/runs/' + outputs.prod_run_id + '\n' : '')
-  return { payload: { text: title, blocks }, summary }
+  return { payload: { text: title, blocks }, summary, environment, phase }
 }
 
 export const sendSlack = async (webhook, payload, request = fetch) => {
@@ -350,6 +394,47 @@ export const sendSlack = async (webhook, payload, request = fetch) => {
   if (!response.ok) throw new Error('Slack notification failed: HTTP ' + response.status)
 }
 
+async function sendRunSlack({ payload, environment, phase }) {
+  const {
+    SLACK_WEBHOOK_URL: webhook,
+    GITHUB_REPOSITORY,
+    GITHUB_RUN_ID,
+    GITHUB_WORKFLOW,
+    GITHUB_ACTOR,
+    GH_TOKEN,
+  } = process.env
+  if (!webhook) return
+  slackWebhook(webhook)
+  const runId = id(Number(GITHUB_RUN_ID))
+  const run = await githubRequest(repository(GITHUB_REPOSITORY), GH_TOKEN, fetch, '/actions/runs/' + runId)
+  if (run.id !== runId || !run.display_title || typeof run.display_title !== 'string') {
+    throw new Error('GitHub returned no title for the sending workflow run')
+  }
+  const fields = [
+    ['Workflow', GITHUB_WORKFLOW],
+    ['Run', run.display_title],
+    ['GitHub actor', GITHUB_ACTOR],
+    ['Environment', environment],
+    ['Phase', phase],
+  ].map(([label, value]) => ({ type: 'plain_text', text: label + '\n' + value }))
+  const [header, ...details] = payload.blocks
+  await sendSlack(webhook, { ...payload, blocks: [header, { type: 'section', fields }, ...details] })
+}
+
+function notifyApproval(runId, environment, phase, title) {
+  return sendRunSlack({
+    environment,
+    phase,
+    payload: {
+      text: title,
+      blocks: [
+        { type: 'header', text: { type: 'plain_text', text: title } },
+        reviewButton(process.env.GITHUB_REPOSITORY, runId, environment),
+      ],
+    },
+  })
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   try {
     if (process.argv[2] === 'report') {
@@ -360,7 +445,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
         results: JSON.parse(process.env.RELEASE_RESULTS),
       })
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, report.summary)
-      await sendSlack(process.env.SLACK_WEBHOOK_URL, report.payload)
+      await sendRunSlack(report)
+    } else if (process.argv[2] === 'approval') {
+      const { DEPLOY_ENVIRONMENT, APPROVAL_PHASE, GITHUB_RUN_ID } = process.env
+      try {
+        await notifyApproval(GITHUB_RUN_ID, DEPLOY_ENVIRONMENT, APPROVAL_PHASE, 'Deployment review requested')
+      } catch {
+        console.warn('::warning::Deployment approval notice failed. Review this run in GitHub.')
+      }
     } else {
       const pipeline = new ReleasePipeline({
         repo: process.env.GITHUB_REPOSITORY,
@@ -369,10 +461,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
         token: process.env.GH_TOKEN,
       })
       if (process.argv[2] === 'assets') {
-        slackWebhook(process.env.SLACK_WEBHOOK_URL)
+        if (process.env.SLACK_WEBHOOK_URL) slackWebhook(process.env.SLACK_WEBHOOK_URL)
         await pipeline.waitForAssets()
-      } else if (process.argv[2] === 'run') await pipeline.run()
-      else throw new Error('Expected assets, run, or report')
+      } else if (process.argv[2] === 'run') {
+        await pipeline.run((devId) =>
+          notifyApproval(devId, 'dev', 'Dev deployment approval', process.env.TAG + ': dev deployment dispatched'),
+        )
+      } else throw new Error('Expected assets, run, report, or approval')
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : 'Release pipeline failed')
