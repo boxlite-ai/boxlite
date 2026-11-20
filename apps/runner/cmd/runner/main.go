@@ -188,9 +188,15 @@ func run() int {
 
 	// Grow the data disk filesystem whenever the block device gets larger
 	// (hyperdisk LLD §5.1). No-op on hosts without the data disk device.
+	// The same resolved path feeds the healthcheck's backing gate, so both
+	// readers agree on which device is the data disk.
+	dataDiskDevicePath := cfg.DataDiskDevice
+	if dataDiskDevicePath == "" {
+		dataDiskDevicePath = diskresize.DefaultDevicePath
+	}
 	dataDiskResizer := diskresize.New(diskresize.Config{
 		Logger:     logger,
-		DevicePath: cfg.DataDiskDevice,
+		DevicePath: dataDiskDevicePath,
 	})
 	go func() {
 		logger.Info("Starting data disk resize ticker")
@@ -225,6 +231,8 @@ func run() int {
 			GCPZone:            cfg.GCPZone,
 			RunnerDataDiskName: cfg.RunnerDataDiskName,
 			RunnerDataDiskType: cfg.RunnerDataDiskType,
+			BoxliteHomeDir:     boxliteClient.HomeDir(),
+			DataDiskDevicePath: dataDiskDevicePath,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)
