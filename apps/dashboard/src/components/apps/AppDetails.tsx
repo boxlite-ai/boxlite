@@ -252,7 +252,7 @@ function AppDetails() {
   const isNotFound = isError && httpStatusOf(error) === 404
 
   return (
-    <div className="resource-page min-w-0 flex-1">
+    <div className="resource-page min-w-0 flex-1 gap-4">
       <div className="flex items-center gap-[9px] font-sans text-meta text-muted-foreground">
         <button type="button" onClick={() => navigate(RoutePath.APPS)} className="hover:text-foreground">
           App hosting
@@ -326,7 +326,7 @@ function AppDetails() {
           />
 
           {/* Content tabs share the Console underline navigation. */}
-          <Tabs value={tab} onValueChange={(next) => goTo(next as AppTab)} className="mb-7 gap-0">
+          <Tabs value={tab} onValueChange={(next) => goTo(next as AppTab)} className="gap-0">
             <TabsList variant="underline" className="max-w-full overflow-x-auto overflow-y-hidden">
               {TABS.map((candidate) => (
                 <TabsTrigger
@@ -430,8 +430,8 @@ function Header({
   const latest = app.releases[0]
   const failedNewer = latest && latest.status === 'failed' && app.activeRelease ? latest : null
   return (
-    // Laid out like box details: name, status, then bordered controls on the right, a divider under it all.
-    <div className="mb-5 mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-border pb-4">
+    // Keep identity and controls together; the content tabs supply the divider below.
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
         <h1 className="resource-title break-all">{app.name}</h1>
         <span className="font-sans text-em text-border">/</span>
