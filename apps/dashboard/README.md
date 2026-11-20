@@ -83,7 +83,8 @@ BoxLite illustration until loaded, including when the preview request fails.
 App names identify applications; their platform address is assigned automatically
 using an environment identifier, not the app name. Mock addresses also use generated IDs.
 Detail actions use shared Console buttons, and secondary screens use keyboard-accessible
-segmented tabs. The early-access illustration follows the idea → code → hosted app flow in a
+segmented tabs. App detail spacing uses a single 16px rhythm between identity,
+primary navigation and content; tab wrappers add no extra vertical margins. The early-access illustration follows the idea → code → hosted app flow in a
 4.8-second entrance sequence, then settles. Card placeholders stay static;
 reduced-motion preferences disable the sequence. The introduction reuses the
 agent handoff logos to show compatible coding agents below the product description.
