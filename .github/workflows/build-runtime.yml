@@ -77,25 +77,22 @@ jobs:
         with:
           show-sccache-stats: ${{ github.event_name == 'schedule' }}
 
-      - name: Build runtime (Linux)
+      - name: Build and package runtime (Linux)
         if: runner.os == 'Linux'
         uses: ./.github/actions/run-in-manylinux
         with:
           target: ${{ matrix.target }}
           script: |
-            bash scripts/build/stage-runtime.sh
+            bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
 
-      - name: Build runtime (macOS)
+      - name: Build and package runtime (macOS)
         if: runner.os == 'macOS'
+        env:
+          BOXLITE_CI_TARGET: ${{ matrix.target }}
         run: |
           make setup:build runtime
-          bash scripts/build/stage-runtime.sh
+          bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
           command -v sccache &>/dev/null && sccache --show-stats || true
-
-      - name: Package runtime
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          tar czf "boxlite-runtime-v${VERSION}-${{ matrix.target }}.tar.gz" -C dist/runtime boxlite-runtime/
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4
