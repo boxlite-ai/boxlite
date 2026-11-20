@@ -52,6 +52,9 @@ mock build. No query parameter grants production access.
 
 App hosting uses the Console's shared resource headings, buttons and type scale.
 UI text uses Inter; code, URLs, paths and technical values use Commit Mono.
+Applications appear in a responsive card grid. Each card opens its detail page;
+the open-app and menu actions are independent. Screenshots use a neutral app
+glyph until loaded, including when the preview request fails.
 
 App hosting uses the same OIDC session,
 organization switcher and resource permissions. Its management requests go to
