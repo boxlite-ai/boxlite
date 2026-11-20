@@ -85,7 +85,8 @@ using an environment identifier, not the app name. Mock addresses also use gener
 Detail actions use shared Console buttons, and secondary screens use keyboard-accessible
 segmented tabs. The early-access illustration follows the idea → code → hosted app flow in a
 4.8-second entrance sequence, then settles. Card placeholders stay static;
-reduced-motion preferences disable the sequence.
+reduced-motion preferences disable the sequence. The introduction reuses the
+agent handoff logos to show compatible coding agents below the product description.
 
 App hosting uses the same OIDC session,
 organization switcher and resource permissions. Its management requests go to

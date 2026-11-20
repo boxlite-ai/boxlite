@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
 import { Button } from '@/components/ui/button'
+import { AgentLogos } from './AgentLogos'
 import { AppHostingIllustration } from './AppHostingIllustration'
 
 /** Presentation fixture only. Server-side eligibility is a separate API contract. */
@@ -27,6 +28,10 @@ export function AppHostingAccess() {
           <p className="text-body leading-relaxed text-muted-foreground">
             Bring an idea to your coding agent. Build it, deploy it, and let BoxLite keep it running.
           </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-3 py-2">
+          <p className="text-meta text-muted-foreground">Works with your coding agent</p>
+          <AgentLogos className="gap-5 [&>svg]:size-5" />
         </div>
         <div className="flex flex-col items-center gap-4">
           <p className="text-meta text-muted-foreground">App hosting is in early access.</p>
