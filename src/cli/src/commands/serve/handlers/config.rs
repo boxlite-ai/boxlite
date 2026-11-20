@@ -7,6 +7,7 @@ use super::super::types::{ServerCapabilities, ServerConfig};
 pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
     Json(ServerConfig {
         capabilities: ServerCapabilities {
+            local_port_publication_enabled: true,
             checkpoints_enabled: false,
             linux_capabilities_enabled: true,
             privileged_enabled: true,

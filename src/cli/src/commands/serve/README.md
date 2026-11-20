@@ -48,6 +48,65 @@ execute(ServeArgs, GlobalFlags)
 
 ## Architecture
 
+### Local host port publication
+
+This serve deployment supports a local extension to the shared cloud API.
+`GET /v1/config` advertises `capabilities.local_port_publication_enabled: true`.
+Create a box with TCP publication requests:
+
+```json
+{
+  "image": "your-registry/agentbox:latest",
+  "ports": [{"guest_port": 30141, "host_port": null, "host_ip": "0.0.0.0", "protocol": "tcp"}],
+  "detach": true,
+  "auto_stop": 0,
+  "auto_delete": 0
+}
+```
+
+An omitted, null, or zero `host_port` asks the OS to bind an available port.
+A non-zero `host_port` requests a fixed port. The box's local runtime owns
+the listener; concurrent automatic allocations use OS binding instead of
+probing and releasing a port. No separate proxy daemon is required.
+
+Call `POST /v1/boxes/{id}/start`, then read `GET /v1/boxes/{id}`.
+The creation response can precede binding. Get/list/start responses expose
+the runtime's current `network.published_ports`, for example:
+
+```json
+{"network":{"published_ports":[{"guest_port":30141,"host_ip":"0.0.0.0","host_port":40141,"protocol":"tcp"}]}}
+```
+
+Use `http://<serve-host>:40141` for a guest HTTP service. `host_ip` is a bind
+address, not a public URL; `0.0.0.0` must be replaced by a reachable host address.
+Read metadata again after a restart: an automatically allocated port can change.
+An empty list means no active publications; an omitted field means unknown.
+Stopped/deleted boxes release their listeners through the runtime's lifecycle.
+On Linux, stopping snapshots the sandbox process tree before terminating its
+launcher. Descendants in separate sessions receive SIGTERM, followed by a
+bounded wait, cgroup cleanup when available, and SIGKILL for survivors. This
+also releases gvproxy listeners when cgroup controller delegation is unavailable.
+If tracked processes survive a stop, BoxLite keeps their identities on disk.
+Later stop or removal attempts retry those processes even after the launcher
+exits. If the record cannot be written, BoxLite still attempts teardown and
+keeps any surviving identities in memory for retries in the same runtime.
+Removal preserves the box record and files until cleanup succeeds.
+Boxes created without `ports` have no mapping to recover; this API does not
+add publications to existing boxes. Preserve their data before explicitly
+recreating them with publication options.
+
+The guest service must listen on its guest interface (for example `0.0.0.0`),
+and outbound networking must be enabled. UDP and invalid bind IPs are rejected.
+Local publication is separate from the cloud proxy's inbound policy and
+private tunnel authentication: the published service enforces its own auth.
+The shared OpenAPI and cloud REST SDKs continue to use cloud service tunnels;
+this extension is for direct HTTP callers of this local serve deployment.
+
+When serve runs in Docker, its listeners are in that container's network
+namespace. Use Linux `network_mode: host` to make dynamically allocated ports
+reachable on the host; publishing only the management port 8100 is insufficient.
+
+
 ```
 ┌───────────────────────────────────────────────────────┐
 │                    SDK Clients                         │

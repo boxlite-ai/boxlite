@@ -33,7 +33,7 @@ use crate::portal::GuestSession;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
-use crate::vmm::controller::VmmHandler;
+use crate::vmm::controller::{ShimHandler, VmmHandler};
 use crate::{BoxID, BoxInfo};
 
 mod operations;
@@ -844,6 +844,7 @@ impl BoxImpl {
 
     async fn stop_inner(&self) -> BoxliteResult<()> {
         let t0 = Instant::now();
+        let resumed_cleanup = ShimHandler::retry_cleanup(self.id(), &self.layout)?;
 
         // Early exit if already stopped (idempotent, prevents double-counting)
         // Note: We check status, not shutdown_token, because the token may be cancelled
@@ -882,7 +883,10 @@ impl BoxImpl {
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
         let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted_locked().await {
+        if !resumed_cleanup
+            && should_attach
+            && let Ok(live) = self.ensure_booted_locked().await
+        {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -1307,7 +1311,10 @@ impl BoxImpl {
         }
 
         self.live
-            .get_or_try_init(|| self.init_live_state(true))
+            .get_or_try_init(|| async {
+                ShimHandler::retry_cleanup(self.id(), &self.layout)?;
+                self.init_live_state(true).await
+            })
             .await
     }
 

@@ -1,5 +1,9 @@
 //! ShimController and ShimHandler - Universal process management for all Box engines.
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/shim_cleanup_retry.rs"]
+mod cleanup_retry_tests;
+
 use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
 
 use crate::{
@@ -28,6 +32,7 @@ pub struct ShimHandler {
     pid: u32,
     #[allow(dead_code)]
     box_id: BoxID,
+    layout: BoxFilesystemLayout,
     /// Child process handle for proper lifecycle management.
     /// When we spawn the process, we keep the Child to properly wait() on stop.
     /// When we attach to an existing process, this is None.
@@ -43,17 +48,190 @@ pub struct ShimHandler {
     metrics_sys: Mutex<sysinfo::System>,
 }
 
+/// Snapshot before stopping the launcher: detached bwrap descendants can enter
+/// another session and become reparented as soon as the launcher exits.
+#[cfg(target_os = "linux")]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ShimProcessTree(Vec<crate::util::PidRecord>);
+
+#[cfg(target_os = "linux")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingShimCleanup {
+    boot_id: String,
+    pid_namespace: PathBuf,
+    tree: ShimProcessTree,
+}
+
+// If both publication and teardown fail, retain the survivors for another
+// handler in this runtime process. The lifecycle lock serializes each box.
+#[cfg(target_os = "linux")]
+static UNSAVED_CLEANUP: parking_lot::Mutex<std::collections::BTreeMap<PathBuf, ShimProcessTree>> =
+    parking_lot::Mutex::new(std::collections::BTreeMap::new());
+
+#[cfg(target_os = "linux")]
+impl PendingShimCleanup {
+    fn path(layout: &BoxFilesystemLayout) -> PathBuf {
+        layout.root().join("shim-cleanup.json")
+    }
+
+    fn save(layout: &BoxFilesystemLayout, tree: &ShimProcessTree) -> BoxliteResult<()> {
+        let pending = Self {
+            boot_id: std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?,
+            pid_namespace: std::fs::read_link("/proc/self/ns/pid")?,
+            tree: tree.clone(),
+        };
+        std::fs::create_dir_all(layout.root())?;
+        let mut file = tempfile::NamedTempFile::new_in(layout.root())?;
+        serde_json::to_writer(&mut file, &pending)?;
+        file.persist(Self::path(layout)).map_err(|e| e.error)?;
+        Ok(())
+    }
+
+    fn finish(
+        box_id: &BoxID,
+        layout: &BoxFilesystemLayout,
+        mut tree: ShimProcessTree,
+        publication: BoxliteResult<()>,
+    ) -> BoxliteResult<()> {
+        match (publication, tree.stop(box_id)) {
+            (Ok(()), Ok(())) => std::fs::remove_file(Self::path(layout)).map_err(Into::into),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(_), Ok(())) => Ok(()),
+            (Err(error), Err(cleanup_error)) => {
+                UNSAVED_CLEANUP.lock().insert(layout.root().into(), tree);
+                tracing::warn!(%box_id, %cleanup_error, "Unsaved shim cleanup is incomplete");
+                Err(error)
+            }
+        }
+    }
+
+    fn retry(box_id: &BoxID, layout: &BoxFilesystemLayout) -> BoxliteResult<bool> {
+        let unsaved = UNSAVED_CLEANUP.lock().remove(layout.root());
+        if let Some(tree) = unsaved {
+            let publication = Self::save(layout, &tree);
+            Self::finish(box_id, layout, tree, publication)?;
+            return Ok(true);
+        }
+
+        let path = Self::path(layout);
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        let mut pending: Self = serde_json::from_reader(file)?;
+        if pending.boot_id == std::fs::read_to_string("/proc/sys/kernel/random/boot_id")? {
+            if pending.pid_namespace != std::fs::read_link("/proc/self/ns/pid")? {
+                return Err(BoxliteError::InvalidState(format!(
+                    "box {box_id} has pending shim cleanup in a different PID namespace"
+                )));
+            }
+            pending.tree.stop(box_id)?;
+        }
+        std::fs::remove_file(path)?;
+        Ok(true)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ShimProcessTree {
+    fn capture(root: u32) -> Self {
+        let mut system = sysinfo::System::new();
+        system.refresh_processes_specifics(sysinfo::ProcessRefreshKind::new());
+        let mut parents = vec![sysinfo::Pid::from_u32(root)];
+        let mut descendants = crate::util::process_start_time(root)
+            .map(|start_time| crate::util::PidRecord {
+                pid: root,
+                start_time: Some(start_time),
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        while let Some(parent) = parents.pop() {
+            for (pid, process) in system.processes() {
+                if process.parent() == Some(parent) {
+                    parents.push(*pid);
+                    if let Some(start_time) = crate::util::process_start_time(pid.as_u32()) {
+                        descendants.push(crate::util::PidRecord {
+                            pid: pid.as_u32(),
+                            start_time: Some(start_time),
+                        });
+                    }
+                }
+            }
+        }
+        Self(descendants)
+    }
+
+    fn retain_alive(&mut self) {
+        self.0.retain(|record| {
+            i32::try_from(record.pid).is_ok_and(|pid| pid > 0)
+                && record.start_time.is_some()
+                && match crate::util::process_start_time(record.pid) {
+                    Some(start_time) => {
+                        Some(start_time) == record.start_time
+                            && !crate::util::process::is_process_zombie_linux(record.pid)
+                    }
+                    None => {
+                        // An unreadable process may still own resources. Only ESRCH
+                        // establishes that there is no process at this PID.
+                        let result = unsafe { libc::kill(record.pid as i32, 0) };
+                        result == 0
+                            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+                    }
+                }
+        });
+    }
+
+    fn signal(&mut self, signal: i32) {
+        // A recycled PID is unrelated to this box and must never be signalled.
+        self.retain_alive();
+        for record in self.0.iter().rev() {
+            if crate::util::process_start_time(record.pid) == record.start_time {
+                unsafe { libc::kill(record.pid as i32, signal) };
+            }
+        }
+    }
+
+    fn wait(&mut self) {
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            self.retain_alive();
+            if self.0.is_empty() || Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn stop(&mut self, box_id: &BoxID) -> BoxliteResult<()> {
+        // Let the inner shim flush its disks before any hard tree kill.
+        self.signal(libc::SIGTERM);
+        self.wait();
+        crate::jailer::reap_box(box_id);
+        self.signal(libc::SIGKILL);
+        self.wait();
+        if !self.0.is_empty() {
+            return Err(BoxliteError::InvalidState(format!(
+                "box {box_id} still has live sandbox processes: {:?}",
+                self.0.iter().map(|record| record.pid).collect::<Vec<_>>()
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl ShimHandler {
     /// Create a handler from a spawned shim.
     ///
     /// Takes ownership of the `SpawnedShim` (child process + keepalive) for
     /// proper lifecycle management. The keepalive keeps the watchdog pipe
     /// alive; dropping it triggers shim shutdown.
-    pub fn from_spawned(spawned: SpawnedShim, box_id: BoxID) -> Self {
+    pub fn from_spawned(spawned: SpawnedShim, box_id: BoxID, layout: &BoxFilesystemLayout) -> Self {
         let pid = spawned.child.id();
         Self {
             pid,
             box_id,
+            layout: layout.clone(),
             process: Some(spawned.child),
             keepalive: spawned.keepalive,
             metrics_sys: Mutex::new(sysinfo::System::new()),
@@ -68,21 +246,37 @@ impl ShimHandler {
     /// # Arguments
     /// * `pid` - Process ID of the running VM
     /// * `box_id` - Box identifier (for logging)
-    pub fn from_pid(pid: u32, box_id: BoxID) -> Self {
+    /// * `layout` - Filesystem layout for resuming pending cleanup
+    pub fn from_pid(pid: u32, box_id: BoxID, layout: &BoxFilesystemLayout) -> Self {
         Self {
             pid,
             box_id,
+            layout: layout.clone(),
             process: None,
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
 
+    /// Resume a stop even when the original launcher is gone.
+    pub(crate) fn retry_cleanup(
+        box_id: &BoxID,
+        layout: &BoxFilesystemLayout,
+    ) -> BoxliteResult<bool> {
+        #[cfg(target_os = "linux")]
+        return PendingShimCleanup::retry(box_id, layout);
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (box_id, layout);
+            Ok(false)
+        }
+    }
+
     /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
     ///
     /// Signals only `self.pid` (the outer launcher). The full process-tree
-    /// sweep happens in `stop()` after this returns — see the comment there for
-    /// why the order matters (libkrun must flush before the hard cgroup kill).
+    /// sweep happens in `stop()` after this returns so libkrun can flush before
+    /// a hard process-tree kill.
     fn graceful_stop(&mut self) -> BoxliteResult<()> {
         // Graceful shutdown: SIGTERM first, wait, then SIGKILL if needed.
         // This gives libkrun time to flush its virtio-blk buffers to disk,
@@ -173,17 +367,24 @@ impl VmmHandlerTrait for ShimHandler {
     }
 
     fn stop(&mut self) -> BoxliteResult<()> {
-        // Graceful shutdown of the recorded pid first, then sweep the box's
-        // whole tree. `graceful_stop` only signals the recorded pid — the outer
-        // bwrap launcher — and a detached box's inner pid-ns tree (inner bwrap +
-        // shim + VM) outlives it, since #851 stopped applying `--die-with-parent`
-        // to detached boxes. The whole tree lives in the box's cgroup, so reap it
-        // by id — *after* graceful shutdown, so libkrun can flush its virtio-blk
-        // buffers first (a cgroup kill is a hard kill; reaping mid-flush risks
-        // qcow2 corruption). Best-effort and idempotent.
-        let result = self.graceful_stop();
+        #[cfg(target_os = "linux")]
+        {
+            if Self::retry_cleanup(&self.box_id, &self.layout)? {
+                return Ok(());
+            }
+            // Publish the snapshot before the launcher can orphan its children.
+            let tree = ShimProcessTree::capture(self.pid);
+            if !tree.0.is_empty() {
+                let publication = PendingShimCleanup::save(&self.layout, &tree);
+                let graceful = self.graceful_stop();
+                PendingShimCleanup::finish(&self.box_id, &self.layout, tree, publication)?;
+                return graceful;
+            }
+        }
+
+        self.graceful_stop()?;
         crate::jailer::reap_box(&self.box_id);
-        result
+        Ok(())
     }
 
     fn metrics(&self) -> BoxliteResult<VmmMetrics> {
@@ -392,7 +593,7 @@ impl VmmController for ShimController {
         // which allows reusing that task across spawn/restart/reconnect.
 
         // Create handler from spawned shim (takes ownership of child + keepalive)
-        let handler = ShimHandler::from_spawned(spawned, self.box_id.clone());
+        let handler = ShimHandler::from_spawned(spawned, self.box_id.clone(), &self.layout);
 
         tracing::info!(
             box_id = %self.box_id,
@@ -409,6 +610,99 @@ impl VmmController for ShimController {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_listener_child() {
+        if std::env::var_os("BOXLITE_TEST_PORT_CHILD").is_none() {
+            return;
+        }
+        // Model bwrap's inner shim: a new session outside the launcher's group.
+        assert!(unsafe { libc::setsid() } > 0);
+        // Exercise the bounded SIGKILL fallback as well as normal SIGTERM exit.
+        if std::env::var_os("BOXLITE_TEST_IGNORE_TERM").is_some() {
+            unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        println!(
+            "\nPORT_CHILD {} {}",
+            std::process::id(),
+            listener.local_addr().unwrap()
+        );
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stop_releases_descendant_port_without_cgroup() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        for attached in [false, true] {
+            for ignore_term in [false, true] {
+                let mut command = Command::new("sh");
+                command
+                    .args(["-c", "\"$@\" & wait", "port-launcher"])
+                    .arg(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        concat!(module_path!(), "::port_listener_child")
+                            .split_once("::")
+                            .unwrap()
+                            .1,
+                        "--nocapture",
+                    ])
+                    .env("BOXLITE_TEST_PORT_CHILD", "1")
+                    .stdout(Stdio::piped());
+                if ignore_term {
+                    command.env("BOXLITE_TEST_IGNORE_TERM", "1");
+                }
+                let mut launcher = command.spawn().unwrap();
+                let output = BufReader::new(launcher.stdout.take().unwrap());
+                let line = output
+                    .lines()
+                    .map(Result::unwrap)
+                    .find(|line| line.starts_with("PORT_CHILD "))
+                    .unwrap();
+                let mut fields = line.split_whitespace().skip(1);
+                let descendant: u32 = fields.next().unwrap().parse().unwrap();
+                let address: std::net::SocketAddr = fields.next().unwrap().parse().unwrap();
+
+                // Always clean up even when the pre-fix assertion fails.
+                struct Cleanup(u32);
+                impl Drop for Cleanup {
+                    fn drop(&mut self) {
+                        unsafe { libc::kill(self.0 as i32, libc::SIGKILL) };
+                    }
+                }
+                let _cleanup = Cleanup(descendant);
+                assert!(std::net::TcpListener::bind(address).is_err());
+                let box_id = crate::runtime::id::BoxIDMint::mint();
+                let dir = tempfile::tempdir().unwrap();
+                let layout = BoxFilesystemLayout::new(dir.path().into(), Default::default(), false);
+                let mut handler = if attached {
+                    ShimHandler::from_pid(launcher.id(), box_id, &layout)
+                } else {
+                    ShimHandler::from_spawned(
+                        SpawnedShim {
+                            child: launcher,
+                            keepalive: None,
+                        },
+                        box_id,
+                        &layout,
+                    )
+                };
+                handler.stop().unwrap();
+                assert!(
+                    std::net::TcpListener::bind(address).is_ok(),
+                    "stop returned with descendant {descendant} still holding {address}; attached={attached}, ignore_term={ignore_term}"
+                );
+                handler.stop().unwrap();
+            }
+        }
+    }
 
     /// Captures `tracing` output into a shared byte buffer so a test can
     /// assert what was (and wasn't) written by an event emitted within
