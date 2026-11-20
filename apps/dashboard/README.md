@@ -87,6 +87,8 @@ segmented tabs. App detail spacing uses a single 16px rhythm between identity,
 primary navigation and content; tab wrappers add no extra vertical margins. The early-access illustration follows the idea → code → hosted app flow in a
 4.8-second entrance sequence, then settles. Undeployed cards show an unassembled outline Box and draft window, distinct from the
 filled cloud-app illustration used when a deployed app has no screenshot.
+Card illustrations occupy the central 64% of the preview area, leaving a quiet
+margin around the artwork; actual screenshots fill the preview area.
 Card placeholders stay static;
 reduced-motion preferences disable the sequence. The introduction reuses the
 agent handoff logos to show compatible coding agents below the product description.
