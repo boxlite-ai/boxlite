@@ -8,6 +8,7 @@ package boxlite
 import "C"
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime/cgo"
 	"strings"
@@ -29,6 +30,8 @@ const drainTimeoutMs = 100
 // Runtime manages BoxLite boxes. Create one with NewRuntime.
 type Runtime struct {
 	handle *C.CBoxliteRuntime
+	// Keep the native runtime alive while preparing or posting a hosted create.
+	nativeCallMu sync.Mutex
 
 	drainMu   sync.Mutex
 	drainOnce sync.Once
@@ -104,10 +107,11 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 // ErrRuntimeClosed and release their per-call resources before the drain
 // goroutine and native runtime are stopped.
 func (r *Runtime) Close() error {
+	r.nativeCallMu.Lock()
+	defer r.nativeCallMu.Unlock()
 	if r.handle == nil {
 		return nil
 	}
-
 	r.closingOnce.Do(func() {
 		if r.closing != nil {
 			close(r.closing)
@@ -215,7 +219,24 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 // plane's unique box id, so a replayed CREATE_BOX re-adopts the orphan.
 // Force-removing only the created case on cancel is a tracked follow-up.
 func (r *Runtime) GetOrCreate(ctx context.Context, image string, opts ...BoxOption) (*Box, bool, error) {
-	r.ensureDrainRunning()
+	return r.getOrCreate(ctx, image, nil, opts)
+}
+
+// GetOrCreateWithPreparedOutbound installs or adopts the exact hosted policy.
+func (r *Runtime) GetOrCreateWithPreparedOutbound(ctx context.Context, image string, prepared PreparedOutboundCreate, opts ...BoxOption) (*Box, bool, error) {
+	body, err := json.Marshal(prepared)
+	if err != nil {
+		return nil, false, err
+	}
+	cPrepared := C.CString(string(body))
+	defer C.free(unsafe.Pointer(cPrepared))
+	return r.getOrCreate(ctx, image, cPrepared, opts)
+}
+
+func (r *Runtime) getOrCreate(ctx context.Context, image string, prepared *C.char, opts []BoxOption) (*Box, bool, error) {
+	if r == nil {
+		return nil, false, ErrRuntimeClosed
+	}
 
 	cfg := &boxConfig{}
 	for _, o := range opts {
@@ -231,7 +252,21 @@ func (r *Runtime) GetOrCreate(ctx context.Context, image string, opts ...BoxOpti
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_get_or_create_box(r.handle, cOpts, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	var code C.enum_BoxliteErrorCode
+	r.nativeCallMu.Lock()
+	if r.handle == nil {
+		r.nativeCallMu.Unlock()
+		deleteHandleForDispatch(h)
+		C.boxlite_options_free(cOpts)
+		return nil, false, ErrRuntimeClosed
+	}
+	r.ensureDrainRunning()
+	if prepared == nil {
+		code = C.boxlite_get_or_create_box(r.handle, cOpts, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	} else {
+		code = C.boxlite_get_or_create_box_with_prepared_outbound(r.handle, cOpts, prepared, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	}
+	r.nativeCallMu.Unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		// boxlite_get_or_create_box consumes opts on success but not on synchronous failure.

@@ -5,6 +5,7 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -62,7 +63,13 @@ func (n nativeCheckpointRecovery) Lookup(ctx context.Context, target string) (*c
 	if err != nil {
 		return nil, err
 	}
-	return &checkpoint.NativeBox{ID: info.ID, State: string(info.State), PID: info.PID}, nil
+	_, err = n.client.OutboundSnapshot(ctx, target)
+	var failure *boxlite.Error
+	protected := errors.As(err, &failure) && failure.Code == boxlite.ErrUnsupported
+	if err != nil && !protected {
+		return nil, err
+	}
+	return &checkpoint.NativeBox{ID: info.ID, State: string(info.State), PID: info.PID, ProtectedOutbound: protected}, nil
 }
 
 func (n nativeCheckpointRecovery) Remove(ctx context.Context, nativeID string) error {

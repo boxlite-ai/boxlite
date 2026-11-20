@@ -219,6 +219,24 @@ impl BoxManager {
         self.store.save_complete_outbound(id.as_str(), complete)
     }
 
+    pub(crate) fn hosted_outbound_journal(
+        &self,
+        incarnation: &str,
+    ) -> BoxliteResult<Option<String>> {
+        self.store.hosted_outbound_journal(incarnation)
+    }
+
+    pub(crate) fn commit_hosted_outbound(
+        &self,
+        id: &BoxID,
+        incarnation: &str,
+        journal: &str,
+        control: Option<(&super::box_impl::outbound::CompleteOutboundControl, bool)>,
+    ) -> BoxliteResult<()> {
+        self.store
+            .commit_hosted_outbound(id.as_str(), incarnation, journal, control)
+    }
+
     pub(crate) fn restore_legacy_outbound(
         &self,
         id: &BoxID,

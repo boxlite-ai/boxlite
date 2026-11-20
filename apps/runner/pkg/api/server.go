@@ -56,26 +56,28 @@ type ApiServerConfig struct {
 
 func NewApiServer(config ApiServerConfig) *ApiServer {
 	return &ApiServer{
-		logger:      config.Logger.With(slog.String("component", "server")),
-		apiPort:     config.ApiPort,
-		apiToken:    config.ApiToken,
-		tlsCertFile: config.TLSCertFile,
-		tlsKeyFile:  config.TLSKeyFile,
-		enableTLS:   config.EnableTLS,
-		logRequests: config.LogRequests,
+		logger:           config.Logger.With(slog.String("component", "server")),
+		apiPort:          config.ApiPort,
+		apiToken:         config.ApiToken,
+		tlsCertFile:      config.TLSCertFile,
+		tlsKeyFile:       config.TLSKeyFile,
+		enableTLS:        config.EnableTLS,
+		logRequests:      config.LogRequests,
+		completeOutbound: controllers.NewCompleteOutboundHandlers(nil),
 	}
 }
 
 type ApiServer struct {
-	logger      *slog.Logger
-	apiPort     int
-	apiToken    string
-	tlsCertFile string
-	tlsKeyFile  string
-	enableTLS   bool
-	httpServer  *http.Server
-	router      *gin.Engine
-	logRequests bool
+	logger           *slog.Logger
+	apiPort          int
+	apiToken         string
+	tlsCertFile      string
+	tlsKeyFile       string
+	enableTLS        bool
+	httpServer       *http.Server
+	router           *gin.Engine
+	logRequests      bool
+	completeOutbound controllers.CompleteOutboundHandlers
 }
 
 func (a *ApiServer) Start(ctx context.Context) error {
@@ -161,6 +163,13 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.GET("/:boxId/network/outbound", controllers.BoxliteGetOutboundNetwork)
 		boxliteApi.GET("/:boxId/network/outbound/status", controllers.BoxliteOutboundStatus)
 		boxliteApi.PUT("/:boxId/network/outbound/snapshot", controllers.BoxliteReplaceOutboundSnapshot)
+		boxliteApi.POST("/:boxId/network/outbound/complete/prepare-create", a.completeOutbound.PrepareCreate)
+		boxliteApi.POST("/:boxId/network/outbound/complete/create", a.completeOutbound.Create)
+		boxliteApi.POST("/:boxId/network/outbound/complete/cancel-create", a.completeOutbound.CancelCreate)
+		boxliteApi.POST("/:boxId/network/outbound/complete/replace-control", a.completeOutbound.ReplaceControl)
+		boxliteApi.POST("/:boxId/network/outbound/complete/rebuild", a.completeOutbound.Rebuild)
+		boxliteApi.GET("/:boxId/network/outbound/complete", a.completeOutbound.Snapshot)
+		boxliteApi.GET("/:boxId/network/outbound/complete/status", a.completeOutbound.Status)
 		boxliteApi.POST("/:boxId/ssh", controllers.BoxliteSSHConfigure)
 		boxliteApi.POST("/:boxId/ssh/enable", controllers.BoxliteSSHEnable)
 		boxliteApi.GET("/:boxId/ssh", controllers.BoxliteSSHStatus)

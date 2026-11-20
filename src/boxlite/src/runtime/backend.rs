@@ -55,6 +55,27 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
+    async fn prepare_hosted_outbound_create(
+        &self,
+        _policy: crate::net::CompleteOutboundPolicy,
+        _revision: crate::net::OutboundRevision,
+    ) -> BoxliteResult<crate::net::PreparedOutboundCreate> {
+        Err(BoxliteError::Unsupported(
+            "hosted outbound preparation requires a local runtime".into(),
+        ))
+    }
+
+    async fn get_or_create_with_prepared_outbound(
+        &self,
+        _options: BoxOptions,
+        _name: String,
+        _prepared: crate::net::PreparedOutboundCreate,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        Err(BoxliteError::Unsupported(
+            "prepared outbound creation requires a local runtime".into(),
+        ))
+    }
+
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>>;
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>>;
@@ -220,6 +241,15 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
     async fn complete_outbound_status(&self) -> BoxliteResult<crate::net::CompleteOutboundStatus> {
         Err(BoxliteError::Unsupported(
             "this backend does not support complete outbound policies".into(),
+        ))
+    }
+
+    async fn hosted_outbound(
+        &self,
+        _command: crate::net::HostedOutboundCommand,
+    ) -> BoxliteResult<crate::net::HostedOutboundReceipt> {
+        Err(BoxliteError::Unsupported(
+            "hosted outbound control requires the local Runtime".into(),
         ))
     }
 

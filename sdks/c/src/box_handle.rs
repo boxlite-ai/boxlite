@@ -15,6 +15,7 @@ use tokio::runtime::Runtime as TokioRuntime;
 use boxlite::BoxID;
 use boxlite::BoxliteError;
 use boxlite::litebox::LiteBox;
+use boxlite::net::PreparedOutboundCreate;
 
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
@@ -64,7 +65,32 @@ pub unsafe extern "C" fn boxlite_get_or_create_box(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    get_or_create_box(runtime, opts, cb, user_data, out_error)
+    get_or_create_box(runtime, opts, None, cb, user_data, out_error)
+}
+
+/// Create or adopt a named Box with the exact prepared outbound identity.
+/// The prepared JSON is copied before return. On success, consumes `opts`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_get_or_create_box_with_prepared_outbound(
+    runtime: *mut CBoxliteRuntime,
+    opts: *mut CBoxliteOptions,
+    prepared_json: *const c_char,
+    cb: CBoxGetOrCreateBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let prepared = unsafe { c_str_to_string(prepared_json) }.and_then(|json| {
+        serde_json::from_str::<PreparedOutboundCreate>(&json).map_err(|error| {
+            BoxliteError::InvalidArgument(format!("invalid prepared outbound create: {error}"))
+        })
+    });
+    match prepared {
+        Ok(prepared) => get_or_create_box(runtime, opts, Some(prepared), cb, user_data, out_error),
+        Err(error) => {
+            unsafe { write_error(out_error, error) };
+            BoxliteErrorCode::InvalidArgument
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -202,6 +228,7 @@ unsafe fn create_box(
 unsafe fn get_or_create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
+    prepared: Option<PreparedOutboundCreate>,
     cb: CBoxGetOrCreateBoxCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -221,6 +248,16 @@ unsafe fn get_or_create_box(
             return BoxliteErrorCode::InvalidArgument;
         }
 
+        if prepared.is_some() && (*opts).name.as_deref().is_none_or(str::is_empty) {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument(
+                    "prepared outbound create requires a Box name".into(),
+                ),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
         let runtime_ref = &*runtime;
         let opts_handle = Box::from_raw(opts);
         let runtime_clone = runtime_ref.runtime.clone();
@@ -231,19 +268,27 @@ unsafe fn get_or_create_box(
         let task_queue = queue.clone();
 
         tokio_rt.spawn(async move {
-            let result = runtime_clone
-                .get_or_create(opts_handle.options, opts_handle.name)
-                .await
-                .map(|(handle, created)| {
-                    let box_id = handle.id().clone();
-                    let boxed = Box::new(BoxHandle {
-                        handle: Arc::new(handle),
-                        box_id,
-                        tokio_rt: task_tokio_rt,
-                        queue: task_queue.clone(),
-                    });
-                    (crate::event_queue::OwnedFfiPtr::new(boxed), created)
+            let result = match (prepared, opts_handle.name) {
+                (Some(prepared), Some(name)) => {
+                    runtime_clone
+                        .get_or_create_with_prepared_outbound(opts_handle.options, name, prepared)
+                        .await
+                }
+                (None, name) => runtime_clone.get_or_create(opts_handle.options, name).await,
+                (Some(_), None) => Err(BoxliteError::InvalidArgument(
+                    "prepared outbound create requires a Box name".into(),
+                )),
+            };
+            let result = result.map(|(handle, created)| {
+                let box_id = handle.id().clone();
+                let boxed = Box::new(BoxHandle {
+                    handle: Arc::new(handle),
+                    box_id,
+                    tokio_rt: task_tokio_rt,
+                    queue: task_queue.clone(),
                 });
+                (crate::event_queue::OwnedFfiPtr::new(boxed), created)
+            });
             push_event(
                 &queue,
                 RuntimeEvent::GetOrCreateBox {

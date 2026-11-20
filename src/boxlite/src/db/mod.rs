@@ -72,6 +72,8 @@ impl Database {
         ))?;
 
         Self::init_schema(&conn, db_path)?;
+        // This additive table leaves existing Runtime homes readable during rollout.
+        db_err!(conn.execute_batch(schema::HOSTED_OUTBOUND_OPERATION_TABLE))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

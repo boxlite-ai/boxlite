@@ -254,6 +254,66 @@ impl BoxStore {
         self.write_outbound_row(box_id, policy, "null".into())
     }
 
+    pub(crate) fn hosted_outbound_journal(
+        &self,
+        incarnation: &str,
+    ) -> BoxliteResult<Option<String>> {
+        db_err!(
+            self.db
+                .conn()
+                .query_row(
+                    "SELECT journal FROM hosted_outbound_operation WHERE incarnation = ?1",
+                    params![incarnation],
+                    |row| row.get(0),
+                )
+                .optional()
+        )
+    }
+
+    pub(crate) fn commit_hosted_outbound(
+        &self,
+        box_id: &str,
+        incarnation: &str,
+        journal: &str,
+        control: Option<(&CompleteOutboundControl, bool)>,
+    ) -> BoxliteResult<()> {
+        let mut conn = self.db.conn();
+        let tx = db_err!(conn.transaction())?;
+        if let Some((control, protected)) = control {
+            control.validate()?;
+            let (policy, record) = if protected {
+                let policy = CompletePolicyField {
+                    outbound_v1: control.clone(),
+                };
+                (
+                    serde_json::to_string(&policy).map_err(state_error)?,
+                    "null".to_string(),
+                )
+            } else {
+                let (policy, record) = control.legacy().ok_or_else(|| {
+                    BoxliteError::InvalidState("hosted policy has no legacy representation".into())
+                })?;
+                (
+                    serde_json::to_string(&policy).map_err(state_error)?,
+                    serde_json::to_string(&record).map_err(state_error)?,
+                )
+            };
+            let updated = db_err!(tx.execute(
+                "UPDATE box_state SET json = json_set(json, '$.outbound_policy', json(?1), '$.outbound_control', json(?2)) WHERE id = ?3",
+                params![policy, record, box_id],
+            ))?;
+            if updated != 1 {
+                return Err(BoxliteError::NotFound(box_id.into()));
+            }
+        }
+        db_err!(tx.execute(
+            "INSERT INTO hosted_outbound_operation (incarnation, journal) VALUES (?1, ?2)
+            ON CONFLICT(incarnation) DO UPDATE SET journal = excluded.journal",
+            params![incarnation, journal],
+        ))?;
+        db_err!(tx.commit())
+    }
+
     pub(crate) fn restore_legacy_outbound(
         &self,
         box_id: &str,

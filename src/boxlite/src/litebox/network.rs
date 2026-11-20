@@ -455,6 +455,15 @@ impl NetworkHandle {
         self.network_backend.complete_outbound_status().await
     }
 
+    /// Entry point for the authenticated Runner control plane's owned replacement.
+    #[doc(hidden)]
+    pub async fn hosted_outbound(
+        &self,
+        command: crate::net::HostedOutboundCommand,
+    ) -> BoxliteResult<crate::net::HostedOutboundReceipt> {
+        self.network_backend.hosted_outbound(command).await
+    }
+
     /// Replace the local outbound policy. Omission cannot clear effective denies.
     pub async fn update_outbound_policy(
         &self,

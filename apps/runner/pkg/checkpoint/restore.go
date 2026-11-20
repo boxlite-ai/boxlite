@@ -46,9 +46,10 @@ func (r RestoreRequest) validate() error {
 }
 
 type NativeBox struct {
-	ID    string
-	State string
-	PID   int
+	ID                string
+	State             string
+	PID               int
+	ProtectedOutbound bool
 }
 
 type RecoveryBackend interface {
@@ -95,6 +96,10 @@ func (r Restorer) Restore(ctx context.Context, request RestoreRequest, attemptID
 	request = ownedRequest
 	lease, err := r.Operations.Lock(ctx, request.Target)
 	if err != nil {
+		return RestoreResult{}, err
+	}
+	if err := lease.CheckNoCompleteCreate(); err != nil {
+		lease.Close()
 		return RestoreResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -148,6 +153,9 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 	current, err := r.Backend.Lookup(ctx, request.Target)
 	if err != nil {
 		return RestoreResult{}, err
+	}
+	if current != nil && current.ProtectedOutbound {
+		return RestoreResult{}, ErrCompleteCreateConflict
 	}
 	if record == nil || record.Stage == "preparing" && record.PredecessorID == "" {
 		if request.Mode == "create" && current != nil {

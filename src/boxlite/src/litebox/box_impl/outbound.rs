@@ -69,7 +69,10 @@ impl CompleteOutboundControl {
         Ok(())
     }
 
-    fn from_legacy(committed: OutboundSnapshot, legacy: Option<&OutboundControl>) -> Self {
+    pub(super) fn from_legacy(
+        committed: OutboundSnapshot,
+        legacy: Option<&OutboundControl>,
+    ) -> Self {
         Self {
             committed: committed.into(),
             pending: legacy
@@ -254,6 +257,9 @@ impl BoxImpl {
             }
             let store = &self.runtime.box_manager;
             let (state, legacy, complete) = store.outbound_state(&self.config.id)?;
+            if self.has_hosted_outbound_owner(complete.is_some())? {
+                return Err(complete_only());
+            }
             let mut control = complete.clone().unwrap_or_else(|| CompleteOutboundControl::from_legacy(
                 self.snapshot_from_state(&state, legacy.as_ref()), legacy.as_ref(),
             ));
@@ -364,7 +370,7 @@ impl BoxImpl {
         Ok(self.snapshot_from_state(&state, control.as_ref()))
     }
 
-    fn snapshot_from_state(
+    pub(super) fn snapshot_from_state(
         &self,
         state: &BoxState,
         control: Option<&OutboundControl>,
@@ -453,7 +459,7 @@ impl BoxImpl {
             }
             let manager = &self.runtime.box_manager;
             let (state, mut control, complete) = manager.outbound_state(&self.config.id)?;
-            if complete.is_some() {
+            if complete.is_some() || self.has_hosted_outbound_owner(false)? {
                 return Err(complete_only());
             }
             let mut previous = self.snapshot_from_state(&state, control.as_ref());
@@ -587,7 +593,7 @@ impl BoxImpl {
     }
 }
 
-fn confirms(
+pub(super) fn confirms(
     observation: &CompleteOutboundObservation,
     candidate: &CompleteOutboundSnapshot,
 ) -> bool {
@@ -595,7 +601,7 @@ fn confirms(
         && observation.snapshot == *candidate
 }
 
-async fn backend_confirms(
+pub(super) async fn backend_confirms(
     backend: &dyn NetworkBackend,
     candidate: &CompleteOutboundSnapshot,
 ) -> bool {
@@ -605,7 +611,7 @@ async fn backend_confirms(
         .is_ok_and(|(observed, _)| confirms(&observed, candidate))
 }
 
-async fn apply_complete(
+pub(super) async fn apply_complete(
     backend: &dyn NetworkBackend,
     expected: &OutboundRevision,
     candidate: &CompleteOutboundSnapshot,

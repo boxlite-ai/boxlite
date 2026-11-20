@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
 	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 )
@@ -25,11 +26,12 @@ type PollerServiceConfig struct {
 
 // Service handles job polling from the API
 type Service struct {
-	log         *slog.Logger
-	pollTimeout time.Duration
-	pollLimit   int
-	executor    *executor.Executor
-	client      *apiclient.APIClient
+	log           *slog.Logger
+	pollTimeout   time.Duration
+	pollLimit     int
+	executor      *executor.Executor
+	client        *apiclient.APIClient
+	completeLease string
 }
 
 // NewService creates a new poller service
@@ -38,18 +40,26 @@ func NewService(cfg *PollerServiceConfig) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
+	runnerConfig, err := config.GetConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Runner config: %w", err)
+	}
 
 	return &Service{
-		log:         cfg.Logger.With(slog.String("component", "poller")),
-		pollTimeout: cfg.PollTimeout,
-		pollLimit:   cfg.PollLimit,
-		executor:    cfg.Executor,
-		client:      apiClient,
+		log:           cfg.Logger.With(slog.String("component", "poller")),
+		pollTimeout:   cfg.PollTimeout,
+		pollLimit:     cfg.PollLimit,
+		executor:      cfg.Executor,
+		client:        apiClient,
+		completeLease: runnerConfig.CompleteOutboundLeaseToken,
 	}, nil
 }
 
 // Start begins the job polling loop
 func (s *Service) Start(ctx context.Context) {
+	if s.completeLease != "" {
+		go s.pollCompleteCreates(ctx)
+	}
 	inProgressJobs, _, err := s.client.JobsAPI.ListJobs(ctx).Status(apiclient.JOBSTATUS_IN_PROGRESS).Execute()
 	if err != nil {
 		// Only log error
@@ -90,6 +100,42 @@ func (s *Service) Start(ctx context.Context) {
 					go s.executor.Execute(ctx, &job)
 				}
 			}
+		}
+	}
+}
+
+func (s *Service) pollCompleteCreates(ctx context.Context) {
+	slots := make(chan struct{}, max(1, s.pollLimit))
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+
+		request, err := runnerapiclient.ClaimCompleteCreate(ctx, s.client, s.completeLease)
+		if err == nil && request != nil {
+			go func() {
+				defer func() { <-slots }()
+				s.executor.ExecuteCompleteCreate(ctx, s.completeLease, *request)
+			}()
+			continue
+		}
+		<-slots
+		delay := time.Second
+		if err != nil && ctx.Err() == nil {
+			s.log.WarnContext(ctx, "Failed to claim complete outbound create", "error", err)
+			delay = 3 * time.Second
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
 		}
 	}
 }
