@@ -7,9 +7,10 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { OrganizationPlan } from '@/billing-api'
 import { ThisCycleCard } from './ThisCycleCard'
 
-const plan = {
+const plan: OrganizationPlan = {
   planId: 'pro',
   planName: 'Pro',
   status: 'active' as const,
@@ -48,6 +49,8 @@ describe('ThisCycleCard quota summary', () => {
     act(() => root?.unmount())
     root = null
     document.body.innerHTML = ''
+    delete plan.trial
+    vi.useRealTimers()
   })
 
   it('renders quota remaining from the plan response', () => {
@@ -67,5 +70,28 @@ describe('ThisCycleCard quota summary', () => {
     expect(label?.parentElement?.textContent).toContain('$187.50')
     expect(label?.parentElement?.textContent).not.toContain('$62.50')
     expect(document.body.textContent).not.toContain('Quota consumed')
+  })
+
+  it('trial countdown renders the trial deadline instead of the monthly cycle', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-14T12:00:00.000Z'))
+    plan.trial = {
+      startedAt: new Date('2026-08-05T12:00:00.000Z'),
+      endsAt: new Date('2026-08-17T12:00:00.000Z'),
+      conversionAmountCents: 14900,
+      currency: 'USD',
+      conversionState: 'not_attempted',
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    act(() => {
+      root = createRoot(host)
+      root.render(<ThisCycleCard />)
+    })
+
+    expect(document.body.textContent).toContain('Pro · Aug 5 – Aug 17')
+    expect(document.body.textContent).toMatch(/Free trial ends in\s*3\s*days/)
+    expect(document.body.textContent).not.toContain('Cycle ends in')
   })
 })

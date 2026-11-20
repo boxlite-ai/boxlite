@@ -1,6 +1,6 @@
 ## TL;DR
 
-Publish a stable release to build its artifacts, validate dev, and receive a Slack link to approve that version's prod deployment.
+Publish a stable release to build its artifacts, validate dev and request prod approval in GitHub. Optional Slack messages link reviewers to each deployment.
 
 ## Release runbook
 
@@ -10,7 +10,6 @@ Pre-release suffixes are unsupported.
 ### Before you start
 
 - Merge the version bump into `main` and pass its required checks.
-- Configure repository Actions secret `SLACK_WEBHOOK_URL` with a Slack incoming webhook.
 - Configure required reviewers on the `prod` GitHub Environment.
 - Ensure the dev/prod stage declarations, cloud credentials, and cloud E2E credentials are configured.
 - Have permission to start workflows and approve the deployment Environments.
@@ -46,11 +45,11 @@ Open **Actions → mbuild-release**:
 ```text
 Publish all declared images to GHCR
   → Wait for required GitHub Release assets
-  → dispatch mdeploy-all: dev, this tag → wait for success
+  → dispatch mdeploy-all: dev, this tag → notify #release → wait for that dev run
   → dispatch e2e-cloud: dev, this tag → wait for success
   → verify dev deployment history and prod reviewers
   → dispatch mdeploy-all: prod, this tag (approval pending)
-  → report results to Slack and the GitHub job summary
+  → write the GitHub job summary and optionally send the release report to #release
 ```
 
 The publisher reads the tagged commit's artifact declaration and builds its current four images:
@@ -83,7 +82,26 @@ All child workflows run from `main`, with these fixed inputs:
 
 The pipeline waits for the exact run IDs returned by GitHub dispatch.
 A failed, cancelled, or timed-out dev/E2E run prevents the prod request.
-Slack reports each stage and links to its specific runs; failed pipelines have no prod approval button.
+The GitHub summary includes the E2E result and the prod run link after success, or the failed or interrupted phase.
+
+### Slack approval notices
+
+Configure each incoming webhook as a repository Actions secret for its channel. Each deployment notification step references only its destination’s secret by name.
+
+| Sender | When | Channel and secret |
+| --- | --- | --- |
+| `mbuild-release` | After dev dispatch and before polling, then again with the final E2E result and prod link on success | #release · `SLACK_WEBHOOK_URL` |
+| `mdeploy-all` dev apply | Before the release deployment or commit preparation, and again after successful commit preparation | #dev_deployment · `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` |
+| `mdeploy-all` prod apply | Before the release deployment | #release · `SLACK_WEBHOOK_URL` |
+
+Each notice shows the sending workflow, its run title, GitHub actor, environment and phase. Buttons open GitHub, where reviewers approve the Environment.
+
+For a release-driven dev deployment, both channels receive a link to the same dev child run. A commit with parallel preparation jobs gets one notice for that batch.
+Previews, stage deployments and build-only releases skip these notices.
+
+An empty or unset secret skips delivery to its channel. Review a run directly in GitHub if its notice fails.
+
+A supplied malformed release webhook fails the asset preflight. A final delivery failure leaves the GitHub summary available.
 
 ### 3. Approve the prod request
 
@@ -153,7 +171,7 @@ Rerunning the whole pipeline can create another deployment request.
 | --- | --- |
 | Missing GitHub Release | Publish the Release matching the tag |
 | Missing required assets | Inspect the runtime/C/Node/wheels/Runner builds; the Runner build follows the C SDK build |
-| Invalid or missing webhook | Configure repository secret `SLACK_WEBHOOK_URL`; full mode refuses deployment without it |
+| Invalid release webhook | Correct or clear `SLACK_WEBHOOK_URL` before rerunning asset preflight |
 | Missing GHCR image | Recover with `build-only=true`, then inspect downstream runs before restarting |
 | Invalid tag or tag moved | Use an immutable stable release tag whose commit is on `main` |
 | Overlapping dev apply | Finish deployment activity and repeat dev acceptance for the intended release |
