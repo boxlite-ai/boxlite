@@ -36,7 +36,7 @@ export function Workbench<T extends string>({
 }) {
   if (items.length === 0) return <>{children}</>
   return (
-    <Tabs value={value} onValueChange={(next) => onChange(next as T)} className="min-w-0 gap-6">
+    <Tabs value={value} onValueChange={(next) => onChange(next as T)} className="min-w-0 gap-4">
       <TabsList
         variant="segmented"
         className="max-w-full shrink-0 self-start overflow-x-auto overflow-y-hidden"
