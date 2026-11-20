@@ -41,7 +41,7 @@ export interface RunnerHealthcheck {
      */
     'serviceHealth'?: Array<RunnerServiceHealth>;
     /**
-     * Cloud identity of the runner data disk; absent when the runner has none (AWS or local)
+     * Cloud identity of the runner data disk. The runner reports it only while its own check confirms the device carries the BoxLite home, and omitting it clears any stored identity.
      */
     'dataDiskRef'?: RunnerDataDiskRef;
     /**
