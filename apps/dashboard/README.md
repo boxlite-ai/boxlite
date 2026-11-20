@@ -60,7 +60,9 @@ using an environment identifier, not the app name. Mock addresses also use gener
 Detail actions use shared Console buttons, and secondary screens use keyboard-accessible
 segmented tabs. App detail spacing uses a single 16px rhythm between identity,
 primary navigation and content; tab wrappers add no extra vertical margins. The early-access illustration follows the idea → code → hosted app flow in a
-4.8-second entrance sequence, then settles. Card placeholders stay static;
+4.8-second entrance sequence, then settles. Undeployed cards show an unassembled outline Box and draft window, distinct from the
+filled cloud-app illustration used when a deployed app has no screenshot.
+Card placeholders stay static;
 reduced-motion preferences disable the sequence. The introduction reuses the
 agent handoff logos to show compatible coding agents below the product description.
 
