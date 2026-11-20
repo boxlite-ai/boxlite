@@ -104,6 +104,7 @@ fn pty_executor_configures_terminal_before_real_workload() {
             .build()
             .unwrap();
         PtyExecutor {
+            timeout_group_socket: None,
             inner: Box::new(DefaultExecutor {}),
             config: Some(config()),
         }
@@ -194,6 +195,7 @@ fn pty_executor_initializes_before_delegating_and_preserves_workload_error() {
             ..Observer::default()
         };
         let executor = PtyExecutor {
+            timeout_group_socket: None,
             inner: Box::new(observer.clone()),
             config: Some(config()),
         };
@@ -209,6 +211,7 @@ fn pty_executor_without_config_accepts_nonterminal_stdin() {
     in_child(false, || {
         let observer = Observer::default();
         let executor = PtyExecutor {
+            timeout_group_socket: None,
             inner: Box::new(observer.clone()),
             config: None,
         };
@@ -224,6 +227,7 @@ fn pty_executor_initialization_failure_prevents_workload_execution() {
     in_child(false, || {
         let observer = Observer::default();
         let executor = PtyExecutor {
+            timeout_group_socket: None,
             inner: Box::new(observer.clone()),
             config: Some(config()),
         };
@@ -244,6 +248,7 @@ fn pty_executor_initialization_failure_prevents_workload_execution() {
 fn pty_executor_delegates_validation_and_environment_errors() {
     let observer = Observer::default();
     let executor = PtyExecutor {
+        timeout_group_socket: None,
         inner: Box::new(observer.clone()),
         config: Some(config()),
     };

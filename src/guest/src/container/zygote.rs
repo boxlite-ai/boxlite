@@ -13,6 +13,7 @@
 
 use super::capabilities::CapabilitySet;
 use super::SpawnFailure;
+use crate::service::exec::process_instance::ProcessGroup;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
@@ -62,6 +63,7 @@ pub(crate) struct BuildSpec {
     pub uid: u32,
     pub gid: u32,
     pub capabilities: CapabilitySet,
+    pub capture_timeout_group: bool,
 }
 
 /// What init to build. Serialized over IPC to the zygote.
@@ -209,7 +211,7 @@ impl Zygote {
         }
     }
 
-    /// Build a container tenant process via the zygote. Returns the spawned PID.
+    /// Build a container tenant process and obtain its optional timed process group.
     ///
     /// Wraps BuildSpec in ZygoteRequest::Build and expects ZygoteResponse::Build back.
     /// SCM_RIGHTS fd passing is unchanged — fds are only attached for Build requests.
@@ -217,12 +219,19 @@ impl Zygote {
     ///
     /// A command the image cannot run is [`SpawnFailure::Rejected`]: the exec
     /// it belongs to ends with the POSIX status instead of failing the call.
-    pub fn build(&self, spec: BuildSpec, fds: Option<[RawFd; 3]>) -> Result<Pid, SpawnFailure> {
+    pub fn build(
+        &self,
+        spec: BuildSpec,
+        fds: Option<[RawFd; 3]>,
+    ) -> Result<(Pid, Option<ProcessGroup>), SpawnFailure> {
         let sock = self.sock.lock().unwrap();
         let fd = sock.as_raw_fd();
         send_request(fd, &ZygoteRequest::Build(spec), fds)?;
-        match recv_response(fd)? {
-            ZygoteResponse::Build(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
+        let (response, group) = recv_response(fd)?;
+        match response {
+            ZygoteResponse::Build(BuildResult::Spawned { pid }) => {
+                Ok((Pid::from_raw(pid), group.map(ProcessGroup::from)))
+            }
             ZygoteResponse::Build(BuildResult::Failed { error }) => {
                 Err(BoxliteError::Internal(error).into())
             }
@@ -251,7 +260,7 @@ impl Zygote {
         let sock = self.sock.lock().unwrap();
         let fd = sock.as_raw_fd();
         send_request(fd, &ZygoteRequest::BuildInit(spec), fds)?;
-        match recv_response(fd)? {
+        match recv_response(fd)?.0 {
             ZygoteResponse::BuildInit(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
             ZygoteResponse::BuildInit(BuildResult::Failed { error }) => {
                 Err(BoxliteError::Internal(error))
@@ -270,7 +279,7 @@ impl Zygote {
         let sock = self.sock.lock().unwrap();
         let fd = sock.as_raw_fd();
         send_request(fd, &ZygoteRequest::InspectAmbientRuntimeEnvironment, None)?;
-        match recv_response(fd)? {
+        match recv_response(fd)?.0 {
             ZygoteResponse::AmbientRuntimeEnvironment(variables) => Ok(variables),
             other => Err(BoxliteError::Internal(format!(
                 "zygote protocol violation: environment probe answered with {other:?}"
@@ -298,8 +307,33 @@ fn serve(sock: OwnedFd) -> ! {
     loop {
         match recv_request(fd) {
             Ok((request, fds)) => {
+                let mut group = None;
                 let response = match request {
-                    ZygoteRequest::Build(spec) => ZygoteResponse::Build(do_build(spec, fds)),
+                    ZygoteRequest::Build(spec) => {
+                        // Each timed build gets a private channel. The child sends
+                        // its own pidfd during validation, before the workload runs.
+                        let channel = spec
+                            .capture_timeout_group
+                            .then(|| {
+                                socketpair(
+                                    AddressFamily::Unix,
+                                    SockType::SeqPacket,
+                                    None,
+                                    SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+                                )
+                            })
+                            .and_then(Result::ok);
+                        let socket = channel.as_ref().map(|(_, sender)| sender.as_raw_fd());
+                        let outcome = do_build(spec, fds, socket);
+                        if matches!(outcome, BuildResult::Spawned { .. }) {
+                            if let Some((receiver, _)) = channel {
+                                group = recv_packet(receiver.as_raw_fd(), &mut [0])
+                                    .ok()
+                                    .and_then(|(_, fd)| fd);
+                            }
+                        }
+                        ZygoteResponse::Build(outcome)
+                    }
                     ZygoteRequest::BuildInit(spec) => {
                         ZygoteResponse::BuildInit(do_build_init(spec, fds))
                     }
@@ -313,7 +347,7 @@ fn serve(sock: OwnedFd) -> ! {
                         ZygoteResponse::AmbientRuntimeEnvironment(retained)
                     }
                 };
-                if let Err(e) = send_response(fd, &response) {
+                if let Err(e) = send_response(fd, &response, group.as_ref()) {
                     eprintln!("[zygote] send_response failed: {e}");
                     std::process::exit(1);
                 }
@@ -346,7 +380,11 @@ fn sanitize_ambient_runtime_environment() {
 ///
 /// This is the same ContainerBuilder chain that was in `command.rs build_and_spawn()`,
 /// moved here to run in the zygote's single-threaded context where clone3() is safe.
-fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
+fn do_build(
+    spec: BuildSpec,
+    fds: Option<[RawFd; 3]>,
+    timeout_group_socket: Option<RawFd>,
+) -> BuildResult {
     let mut rejection = None;
     let build_fn = || -> Result<Pid, String> {
         // Own the received fds before any fallible step: they arrived via
@@ -377,6 +415,7 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
         builder = builder.with_executor(super::pty::PtyExecutor {
             inner,
             config: spec.pty_config.clone(),
+            timeout_group_socket,
         });
 
         if let Some((stdin, stdout, stderr)) = owned_fds {
@@ -666,7 +705,11 @@ fn recv_request(sock: RawFd) -> BoxliteResult<(ZygoteRequest, Option<[RawFd; 3]>
 }
 
 /// Send a ZygoteResponse back to the parent.
-fn send_response(sock: RawFd, response: &ZygoteResponse) -> BoxliteResult<()> {
+fn send_response(
+    sock: RawFd,
+    response: &ZygoteResponse,
+    group: Option<&OwnedFd>,
+) -> BoxliteResult<()> {
     let json = serde_json::to_vec(response)
         .map_err(|e| BoxliteError::Internal(format!("serialize ZygoteResponse: {e}")))?;
 
@@ -678,24 +721,14 @@ fn send_response(sock: RawFd, response: &ZygoteResponse) -> BoxliteResult<()> {
         )));
     }
 
-    let iov = [IoSlice::new(&json)];
-
-    sendmsg::<()>(sock, &iov, &[], MsgFlags::empty(), None)
-        .map_err(|e| BoxliteError::Internal(format!("sendmsg response: {e}")))?;
-    Ok(())
+    send_packet(sock, &json, group.map(AsRawFd::as_raw_fd))
+        .map_err(|e| BoxliteError::Internal(format!("sendmsg response: {e}")))
 }
 
-/// Receive a ZygoteResponse from the zygote.
-fn recv_response(sock: RawFd) -> BoxliteResult<ZygoteResponse> {
+fn recv_response(sock: RawFd) -> BoxliteResult<(ZygoteResponse, Option<OwnedFd>)> {
     let mut buf = vec![0u8; MAX_MSG_SIZE];
-
-    let mut iov = [IoSliceMut::new(&mut buf)];
-    let msg = recvmsg::<()>(sock, &mut iov, None, MsgFlags::empty())
+    let (bytes, group) = recv_packet(sock, &mut buf)
         .map_err(|e| BoxliteError::Internal(format!("recvmsg response: {e}")))?;
-
-    let bytes = msg.bytes;
-    let _ = msg;
-    let _ = iov;
 
     if bytes == 0 {
         return Err(BoxliteError::Internal(
@@ -703,8 +736,45 @@ fn recv_response(sock: RawFd) -> BoxliteResult<ZygoteResponse> {
         ));
     }
 
-    serde_json::from_slice(&buf[..bytes])
-        .map_err(|e| BoxliteError::Internal(format!("deserialize ZygoteResponse: {e}")))
+    let response = serde_json::from_slice(&buf[..bytes])
+        .map_err(|e| BoxliteError::Internal(format!("deserialize ZygoteResponse: {e}")))?;
+    Ok((response, group))
+}
+
+pub(super) fn send_timeout_group(socket: RawFd) {
+    if let Some(group) = ProcessGroup::capture(nix::unistd::getpid()) {
+        let _ = send_packet(socket, &[0], Some(group.as_raw_fd()));
+    }
+}
+
+fn send_packet(socket: RawFd, payload: &[u8], fd: Option<RawFd>) -> nix::Result<()> {
+    let iov = [IoSlice::new(payload)];
+    let fds = fd.map(|fd| [fd]);
+    let rights = fds.as_ref().map(|fds| [ControlMessage::ScmRights(fds)]);
+    let messages = rights.as_ref().map_or(&[][..], |rights| rights.as_slice());
+    sendmsg::<()>(socket, &iov, messages, MsgFlags::MSG_NOSIGNAL, None)?;
+    Ok(())
+}
+
+fn recv_packet(socket: RawFd, payload: &mut [u8]) -> nix::Result<(usize, Option<OwnedFd>)> {
+    let mut iov = [IoSliceMut::new(payload)];
+    let mut cmsg_buf = nix::cmsg_space!([RawFd; 1]);
+    let msg = recvmsg::<()>(
+        socket,
+        &mut iov,
+        Some(&mut cmsg_buf),
+        MsgFlags::MSG_CMSG_CLOEXEC,
+    )?;
+    let mut received = None;
+    for message in msg.cmsgs()? {
+        if let ControlMessageOwned::ScmRights(fds) = message {
+            for fd in fds {
+                // SAFETY: SCM_RIGHTS has transferred ownership to this process.
+                received = Some(unsafe { OwnedFd::from_raw_fd(fd) });
+            }
+        }
+    }
+    Ok((msg.bytes, received))
 }
 
 // ============================================================================
@@ -751,6 +821,7 @@ mod tests {
             uid: 1000,
             gid: 1000,
             capabilities: CapabilitySet::default(),
+            capture_timeout_group: false,
         }
     }
 
@@ -821,6 +892,7 @@ mod tests {
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
+            capture_timeout_group: false,
         };
         let json = serde_json::to_vec(&spec).unwrap();
         let decoded: BuildSpec = serde_json::from_slice(&json).unwrap();
@@ -915,9 +987,9 @@ mod tests {
         let fd_b = b.as_raw_fd();
 
         let response = ZygoteResponse::Build(BuildResult::Spawned { pid: 12345 });
-        send_response(fd_a, &response).unwrap();
+        send_response(fd_a, &response, None).unwrap();
 
-        let received = recv_response(fd_b).unwrap();
+        let (received, _) = recv_response(fd_b).unwrap();
         match received {
             ZygoteResponse::Build(BuildResult::Spawned { pid }) => assert_eq!(pid, 12345),
             other => panic!("expected Build(Spawned) response, got: {other:?}"),
@@ -939,9 +1011,9 @@ mod tests {
         let response = ZygoteResponse::Build(BuildResult::Failed {
             error: "container not found".to_string(),
         });
-        send_response(fd_a, &response).unwrap();
+        send_response(fd_a, &response, None).unwrap();
 
-        let received = recv_response(fd_b).unwrap();
+        let (received, _) = recv_response(fd_b).unwrap();
         match received {
             ZygoteResponse::Build(BuildResult::Failed { error }) => {
                 assert_eq!(error, "container not found");
@@ -981,6 +1053,7 @@ mod tests {
             uid: 65534,
             gid: 65534,
             capabilities: CapabilitySet::default(),
+            capture_timeout_group: false,
         };
 
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
@@ -1013,6 +1086,7 @@ mod tests {
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
+            capture_timeout_group: false,
         };
 
         let (a, _b) = socketpair(
@@ -1046,7 +1120,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = send_response(a.as_raw_fd(), &response);
+        let result = send_response(a.as_raw_fd(), &response, None);
         assert!(result.is_err(), "oversized response should be rejected");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -1144,7 +1218,7 @@ mod tests {
         drop(b); // Close receiver
 
         let response = ZygoteResponse::Build(BuildResult::Spawned { pid: 1 });
-        let send_err = send_response(fd_a, &response);
+        let send_err = send_response(fd_a, &response, None);
         assert!(send_err.is_err(), "send on closed socket should fail");
     }
 
@@ -1184,7 +1258,7 @@ mod tests {
                 };
                 assert!(spec.container_id.starts_with("concurrent-"));
                 let response = ZygoteResponse::Build(BuildResult::Spawned { pid: 1000 + i });
-                send_response(child_fd, &response).unwrap();
+                send_response(child_fd, &response, None).unwrap();
             }
             // SAFETY: We own this fd via mem::forget above
             unsafe { nix::libc::close(child_fd) };
@@ -1207,8 +1281,9 @@ mod tests {
                     uid: 0,
                     gid: 0,
                     capabilities: CapabilitySet::default(),
+                    capture_timeout_group: false,
                 };
-                z.build(spec, None).unwrap()
+                z.build(spec, None).unwrap().0
             }));
         }
 
@@ -1250,6 +1325,7 @@ mod tests {
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
+            capture_timeout_group: false,
         }
     }
 
@@ -1361,7 +1437,7 @@ mod tests {
                         panic!("unexpected environment probe")
                     }
                 };
-                send_response(child_fd, &response).unwrap();
+                send_response(child_fd, &response, None).unwrap();
             }
             // SAFETY: We own this fd via mem::forget above
             unsafe { nix::libc::close(child_fd) };
@@ -1374,7 +1450,7 @@ mod tests {
         for i in 0..4i32 {
             let z = Arc::clone(&zygote);
             handles.push(thread::spawn(move || {
-                let pid = z
+                let (pid, _) = z
                     .build(tenant_spec_named(&format!("mix-b-{i}")), None)
                     .unwrap();
                 assert_eq!(
@@ -1424,7 +1500,7 @@ mod tests {
             let response = ZygoteResponse::BuildInit(BuildResult::Failed {
                 error: "bundle exploded: no config.json".to_string(),
             });
-            send_response(child_fd, &response).unwrap();
+            send_response(child_fd, &response, None).unwrap();
             drop(child_sock);
         });
 
@@ -1502,7 +1578,7 @@ mod tests {
             };
             // Deliberately answer with the wrong tag.
             let response = ZygoteResponse::Build(BuildResult::Spawned { pid: 1 });
-            send_response(child_fd, &response).unwrap();
+            send_response(child_fd, &response, None).unwrap();
             drop(child_sock);
         });
 
@@ -1598,8 +1674,9 @@ mod tests {
                 uid: 0,
                 gid: 0,
                 capabilities: CapabilitySet::default(),
+                capture_timeout_group: false,
             };
-            do_build(spec, Some(fds))
+            do_build(spec, Some(fds), None)
         });
     }
 

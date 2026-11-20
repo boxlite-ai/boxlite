@@ -59,9 +59,8 @@ class CodeBox(SimpleBox):
         Args:
             code: Python code to execute
             timeout: Execution timeout in seconds. A timed-out run returns the
-                output written before termination rather than raising. The
-                deadline applies to the process the guest started; a child
-                that keeps the stdout pipe open can still delay the return.
+                output written before termination. The SDK allows up to
+                three additional seconds to collect output and exit status.
 
         Returns:
             Execution stdout as a string. Use exec() directly if you need

@@ -1,6 +1,69 @@
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
 use nix::errno::Errno;
+use nix::libc;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::{getpgid, Pid};
+
+/// A kernel reference to the original group leader's PID.
+pub(crate) struct ProcessGroup(OwnedFd);
+
+impl ProcessGroup {
+    /// Capture only an owned group. The caller holds the reaper fence across
+    /// spawn and capture, or is the leader itself before running user code.
+    pub(crate) fn capture(leader: Pid) -> Option<Self> {
+        if getpgid(Some(leader)).ok()? != leader {
+            return None;
+        }
+        // SAFETY: pidfd_open takes a PID and flags. A successful call returns
+        // a new descriptor owned by this process.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, leader.as_raw(), 0) };
+        if fd < 0 {
+            return None;
+        }
+        // SAFETY: the syscall returned a new, valid file descriptor.
+        Some(Self(unsafe { OwnedFd::from_raw_fd(fd as i32) }))
+    }
+
+    pub(super) fn signal(&self, signal: i32) -> Result<bool, Errno> {
+        // Linux >= 6.9. The pidfd targets the original group even after the
+        // leader is reaped. It never selects a recycled numeric PGID.
+        const PIDFD_SIGNAL_PROCESS_GROUP: libc::c_uint = 1 << 2;
+        // SAFETY: the fd is live and a null siginfo requests normal signal delivery.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.0.as_raw_fd(),
+                signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                PIDFD_SIGNAL_PROCESS_GROUP,
+            )
+        };
+        if result == 0 {
+            return Ok(true);
+        }
+        match Errno::last() {
+            Errno::ESRCH => Ok(false),
+            error => Err(error),
+        }
+    }
+
+    pub(super) fn has_members(&self) -> bool {
+        matches!(self.signal(0), Ok(true) | Err(Errno::EPERM))
+    }
+}
+
+impl AsRawFd for ProcessGroup {
+    fn as_raw_fd(&self) -> i32 {
+        self.0.as_raw_fd()
+    }
+}
+
+impl From<OwnedFd> for ProcessGroup {
+    fn from(fd: OwnedFd) -> Self {
+        Self(fd)
+    }
+}
 
 /// A process instance distinguished from a prior process that used the same
 /// PID.
@@ -50,6 +113,13 @@ impl ProcessInstance {
             .stat()
             .ok()
             .map(|stat| stat.starttime)
+    }
+
+    #[cfg(test)]
+    pub(super) fn capture_group_for_test(&self) -> Option<ProcessGroup> {
+        self.is_current()
+            .then(|| ProcessGroup::capture(self.pid))
+            .flatten()
     }
 
     #[cfg(test)]
