@@ -69,7 +69,10 @@ export class BoxSecret {
     description: 'Real secret value. Never enters the guest VM.',
     example: 'sk-...',
   })
-  value: string
+  value?: string
+
+  /** Internal reference; present instead of value after Secret Server transfer. */
+  secretId?: string
 
   @ApiProperty({
     description: 'Hosts where this secret is injected. Required for new boxes, at least one host.',

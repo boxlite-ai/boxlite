@@ -9,7 +9,7 @@ import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.
 import { Context } from '../common/context/context'
 
 const organization = { id: '11111111-1111-4111-8111-111111111111' }
-const authContext = { organization, organizationId: organization.id }
+const authContext = { organization, organizationId: organization.id, userId: 'authenticated-user' }
 const startedBox = {
   id: 'box-1',
   organizationId: organization.id,
@@ -55,7 +55,7 @@ describe('BoxliteBoxController creation limit', () => {
       expect.objectContaining({ image: 'boxlite/base' }),
       organization,
       expect.anything(),
-      { maxCreatedBoxes: 3 },
+      { maxCreatedBoxes: 3, createdBy: authContext.userId },
     )
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()
     expect(response).toEqual(expect.objectContaining({ box_id: 'box-1', status: 'running' }))
