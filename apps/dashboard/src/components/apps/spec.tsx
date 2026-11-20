@@ -4,30 +4,18 @@
  */
 
 import { Check, ChevronRight, Copy, MoreHorizontal, Search } from '@/components/ui/icon'
+import { Button } from '@/components/ui/button'
+import { ResourceSectionHeading } from '@/components/ResourceLayout'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { useAppsScope } from '@/lib/apps/client'
 import { forwardRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
 
-// Small presentation pieces shared by the Apps pages. They speak the console's
-// own design language (components/ascii.tsx, the Boxes and Volumes tables, box
-// details): ▸ TRACKED section labels, bordered panels and controls, square
-// status marks, uppercase table headers, dotted leaders on spec rows. Apps is a
-// part of the console, so it must not look like a different product.
-
 export { Panel } from '@/components/ascii'
 
-/** Section heading, as on box details: ▸ TITLE, a count, a dashed rule, an optional action. */
+/** App sections share the same heading hierarchy as other Console resources. */
 export function SectionTitle({ title, count, right }: { title: string; count?: ReactNode; right?: ReactNode }) {
-  return (
-    <div className="mb-3 flex min-h-[30px] items-center gap-[9px]">
-      <span className="text-label leading-none text-brand">▸</span>
-      <span className="whitespace-nowrap font-mono text-[11px] uppercase tracking-[2px] text-foreground">{title}</span>
-      {count !== undefined && <span className="font-mono text-[11px] text-muted-foreground">{count}</span>}
-      <span className="flex-1 border-t border-dashed border-border" />
-      {right && <span className="flex items-center gap-[6px]">{right}</span>}
-    </div>
-  )
+  return <ResourceSectionHeading title={title} count={count} right={right} />
 }
 
 /**
@@ -46,7 +34,7 @@ export function StatusBadge({
   caps?: boolean
 }) {
   return (
-    <span className={cn('inline-flex items-center gap-1.5 font-mono', caps ? 'text-[11px]' : 'text-meta', className)}>
+    <span className={cn('inline-flex items-center gap-1.5 font-sans', 'text-meta', className)}>
       <span className="inline-block size-[9px] shrink-0" style={{ background: color }} />
       <span className={caps ? 'uppercase tracking-[0.5px]' : 'text-foreground'} style={caps ? { color } : undefined}>
         {label}
@@ -72,7 +60,7 @@ export function Disclosure({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="inline-flex items-center gap-1 font-mono text-meta text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35"
+        className="inline-flex items-center gap-1 font-sans text-meta text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35"
       >
         <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
         {label}
@@ -90,10 +78,10 @@ export function HoverActions({ children, className }: { children: ReactNode; cla
 /** Label / value with a dotted leader, as on box details. Keep it in a narrow column. */
 export function SpecRow({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
   return (
-    <div className="mb-[6px] flex items-baseline gap-2 font-mono text-body" title={title}>
+    <div className="mb-[6px] flex items-baseline gap-2 font-sans text-body" title={title}>
       <span className="whitespace-nowrap text-muted-foreground">{label}</span>
       <span className="-translate-y-1 flex-1 border-b border-dotted border-border" />
-      <span className="min-w-0 max-w-[66%] truncate text-right text-foreground">{children}</span>
+      <span className="min-w-0 max-w-[66%] truncate font-mono text-right text-foreground">{children}</span>
     </div>
   )
 }
@@ -140,7 +128,7 @@ export function PromptBlock({ label, text, compact }: { label?: string; text: st
   return (
     <div className="border border-border bg-[hsl(var(--code-background))]">
       {label && (
-        <div className="px-4 pt-3 font-mono text-label uppercase text-muted-foreground">
+        <div className="px-4 pt-3 font-sans text-label uppercase text-muted-foreground">
           <span className="text-brand">▸</span> {label}
         </div>
       )}
@@ -148,7 +136,7 @@ export function PromptBlock({ label, text, compact }: { label?: string; text: st
         <pre
           className={cn(
             'min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-foreground',
-            compact ? 'text-[12px] leading-[1.65]' : 'text-[13px] leading-[1.7]',
+            compact ? 'text-meta leading-[1.65]' : 'text-body leading-[1.7]',
           )}
         >
           {text}
@@ -160,7 +148,7 @@ export function PromptBlock({ label, text, compact }: { label?: string; text: st
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           }}
-          className="inline-flex shrink-0 items-center gap-1.5 border border-border px-[9px] py-[5px] font-mono text-[11px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+          className="inline-flex shrink-0 items-center gap-1.5 border border-border px-[9px] py-[5px] font-sans text-meta text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
           {copied ? 'Copied' : 'Copy'}
@@ -177,12 +165,7 @@ export function Dot({ color, className }: { color: string; className?: string })
 /** Column header for the grid tables, as in Volumes: uppercase, tracked, one rule underneath. */
 export function GridHeader({ grid, columns, className }: { grid: string; columns: ReactNode[]; className?: string }) {
   return (
-    <div
-      className={cn(
-        `grid ${grid} items-center border-b border-border px-2 py-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`,
-        className,
-      )}
-    >
+    <div className={cn(`resource-list-head grid ${grid} items-center`, className)}>
       {columns.map((column, i) => (
         <span key={i} className={i === columns.length - 1 ? 'text-right' : undefined}>
           {column}
@@ -207,7 +190,7 @@ export function GridRow({
     <div
       onClick={onClick}
       className={cn(
-        `group grid ${grid} min-h-[52px] items-center border-b border-border/60 px-2 py-[10px] font-mono text-body transition-colors`,
+        `resource-list-row group grid ${grid} items-center font-sans`,
         onClick && 'cursor-pointer hover:bg-card/50',
         className,
       )}
@@ -220,7 +203,7 @@ export function GridRow({
 /** Empty state, as in the console's tables: centred, small, one bordered action. */
 export function EmptyNote({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center font-mono">
+    <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center font-sans">
       <div className="text-body font-semibold text-foreground">{title}</div>
       {children && <div className="max-w-md text-meta text-muted-foreground">{children}</div>}
       {action && <div className="mt-2">{action}</div>}
@@ -250,25 +233,25 @@ export function FlatButton({
 }) {
   const { canWrite } = useAppsScope()
   return (
-    <button
+    <Button
       type="button"
       title={title}
       disabled={disabled || loading || (requiresWrite && !canWrite)}
       onClick={onClick}
-      className={cn(
-        // The console's two button forms (ascii AsciiButton, the Volumes dialog): a filled primary and a bordered
-        // secondary. Danger is the bordered form in red; the solid form is reserved for the final destructive step.
-        'inline-flex h-9 items-center justify-center gap-2 px-4 font-mono text-body outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-40',
-        variant === 'primary' && 'bg-primary font-semibold text-primary-foreground transition-opacity hover:opacity-85',
-        variant === 'secondary' && 'border border-border text-foreground hover:border-brand',
-        variant === 'danger' && 'border border-border text-destructive hover:border-destructive',
-        variant === 'dangerSolid' && 'bg-destructive font-semibold text-white hover:opacity-90',
-        className,
-      )}
+      variant={
+        variant === 'primary'
+          ? 'default'
+          : variant === 'dangerSolid'
+            ? 'destructive'
+            : variant === 'danger'
+              ? 'danger'
+              : 'outline'
+      }
+      className={className}
     >
       {loading && <Spinner className="size-3.5" />}
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -304,21 +287,16 @@ export function SearchField({
   count?: number
 }) {
   return (
-    <label
-      className={cn(
-        'flex h-9 w-[380px] max-w-full items-center gap-[11px] border border-dashed border-border bg-card px-[14px] transition-colors focus-within:border-brand',
-        className,
-      )}
-    >
-      <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
+    <label className={cn('resource-filter', className)}>
+      <Search className="size-[15px] shrink-0" aria-hidden="true" />
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full border-0 bg-transparent p-0 font-mono text-body text-foreground outline-none placeholder:text-muted-foreground"
+        className="w-full border-0 bg-transparent p-0 font-sans text-body text-foreground outline-none placeholder:text-muted-foreground"
       />
       {count !== undefined && (
-        <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+        <span className="whitespace-nowrap font-sans text-label uppercase tracking-[1px] text-muted-foreground">
           {count}
         </span>
       )}
@@ -328,7 +306,7 @@ export function SearchField({
 
 /** The console's text input (Volumes "New volume"): bordered card surface, brand focus. */
 export const TEXT_INPUT =
-  'h-9 border border-border bg-card px-[13px] font-mono text-body text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-brand'
+  'h-9 border border-border bg-card px-[13px] font-sans text-body text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-brand'
 
 /**
  * The console's dialog frame (Volumes "New volume"): a ruled header and footer

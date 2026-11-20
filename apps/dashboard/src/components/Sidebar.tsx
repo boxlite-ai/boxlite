@@ -94,7 +94,6 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  { label: 'Apps', icon: 'app', path: RoutePath.APPS },
   {
     label: 'Images',
     icon: 'images',
@@ -121,6 +120,7 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
 ]
 
 const APPLICATION_NAV_ITEMS: NavItem[] = [
+  { label: 'App hosting', icon: 'app', path: RoutePath.APPS },
   {
     label: 'CI',
     icon: 'ci',

@@ -34,7 +34,7 @@ export function ServicesSection({
         }
       >
         {app.services.length === 0 ? (
-          <p className="font-mono text-[13px] text-muted-foreground">
+          <p className="font-sans text-body text-muted-foreground">
             No services yet; they start with the first deployment.
           </p>
         ) : (

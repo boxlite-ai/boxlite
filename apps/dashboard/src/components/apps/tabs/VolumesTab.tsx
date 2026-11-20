@@ -39,7 +39,7 @@ export function VolumesTab({ app }: { app: AppDetail }) {
             <section key={volume.name} className="border border-border bg-card">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-[22px] py-4">
                 <h3 className="font-mono text-em font-semibold text-foreground">{volume.name}</h3>
-                <span className="font-mono text-meta text-muted-foreground">{summary(volume)}</span>
+                <span className="font-sans text-meta text-muted-foreground">{summary(volume)}</span>
                 <span className="ml-auto flex gap-[6px]">
                   <ToolButton
                     disabled={!app.activeRelease}
@@ -87,7 +87,7 @@ function summary(volume: AppStorage): string {
 function Fact({ label, children }: { label: string; children: string }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+      <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
         <span className="text-brand">▸</span> {label}
       </span>
       <span className="font-mono text-body text-foreground">{children}</span>

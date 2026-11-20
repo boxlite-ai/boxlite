@@ -53,11 +53,11 @@ function FailurePanel({
   return (
     <section className="border border-destructive/40 bg-destructive/[0.04] px-5 py-4" data-testid="failure-panel">
       {failing.map((check) => (
-        <div key={check.summary} className="flex flex-col gap-1 font-mono">
+        <div key={check.summary} className="flex flex-col gap-1 font-sans">
           <StatusBadge label={check.summary} color={STATUS.error} className="text-body font-semibold" />
-          <span className="pl-[15px] text-[13px] text-muted-foreground">{check.detail}</span>
+          <span className="pl-[15px] text-body text-muted-foreground">{check.detail}</span>
           {check.serving && (
-            <span className="pl-[15px] text-[12px] text-muted-foreground">{check.serving} keeps serving users.</span>
+            <span className="pl-[15px] text-meta text-muted-foreground">{check.serving} keeps serving users.</span>
           )}
         </div>
       ))}
@@ -104,8 +104,8 @@ function LiveElsewhere({ app, onSwitchEnv }: { app: AppDetail; onSwitchEnv: (env
   const live = envs.filter((e) => e.name !== app.environment && e.lastDeploy)
   if (!live.length) return null
   return (
-    <section className="flex flex-col border border-border bg-card font-mono">
-      <div className="border-b border-border px-5 py-3 text-[13px] text-muted-foreground">
+    <section className="flex flex-col border border-border bg-card font-sans">
+      <div className="border-b border-border px-5 py-3 text-body text-muted-foreground">
         Nothing is deployed to {app.environment} yet. {app.name} runs in{' '}
         {live.length === 1 ? 'another environment' : `${live.length} other environments`}:
       </div>
@@ -120,14 +120,14 @@ function LiveElsewhere({ app, onSwitchEnv }: { app: AppDetail; onSwitchEnv: (env
           >
             <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="font-semibold text-foreground">{e.name}</span>
-            <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5 text-meta text-muted-foreground">
               <span className="size-[6px]" style={{ background: status.color }} />
               {status.label}
             </span>
-            <span className="text-[12px] text-muted-foreground">
+            <span className="text-meta text-muted-foreground">
               {e.lastDeploy!.releaseId} · deployed {relTime(e.lastDeploy!.at)}
             </span>
-            <span className="ml-auto inline-flex items-center gap-1 text-[12px] text-foreground group-hover:underline">
+            <span className="ml-auto inline-flex items-center gap-1 text-meta text-foreground group-hover:underline">
               Go to {e.name} <ArrowRightIcon className="size-3.5" />
             </span>
           </button>
