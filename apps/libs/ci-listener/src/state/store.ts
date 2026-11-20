@@ -15,6 +15,8 @@ export interface StateChange {
   /** Undefined deletes an existing version; null is a persistable JSON value. */
   payload?: Json
 }
+// A key-only mutation advances the locked record's version and preserves its payload.
+type PreparedChange = StateChange | { key: string; expected?: never; payload?: never }
 export const MAX_STATE_CHECKS = 100
 export interface StateCheck {
   key: string
@@ -246,9 +248,19 @@ export class ListenerState {
     lease: ExecutionLease,
     changes: StateChange[],
     checks: readonly StateCheck[] = [],
+    refreshScopeActivity?: string,
   ): Promise<StateRecord[]> {
     lease = { ...lease }
-    const prepared = this.prepare(changes)
+    const prepared: PreparedChange[] = this.prepare(changes)
+    if (refreshScopeActivity !== undefined) {
+      if (
+        !/^scope-state\/[0-9a-f]{64}$/.test(refreshScopeActivity) ||
+        prepared.length >= 100 ||
+        prepared.some((change) => change.key === refreshScopeActivity)
+      )
+        throw new Error('Invalid scope activity refresh')
+      prepared.push({ key: refreshScopeActivity })
+    }
     if (!Array.isArray(checks) || checks.length > MAX_STATE_CHECKS) throw new Error('Invalid Listener state checks')
     const fences = checks.map(({ key, version, expiresAt }) => ({ key, version, expiresAt }))
     if (
@@ -383,11 +395,17 @@ export class ListenerState {
     }
     return result
   }
-  private async apply(tx: StateTransaction, changes: StateChange[]): Promise<StateRecord[]> {
+  private async apply(tx: StateTransaction, changes: PreparedChange[]): Promise<StateRecord[]> {
     const result: StateRecord[] = []
     const ordered = changes.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
     for (let index = 0; index < ordered.length; index++) {
-      const change = ordered[index]
+      let change = ordered[index]
+      if (change.expected === undefined) {
+        // Lock in the same order as membership writes; a dispatch preserves their latest active count.
+        const current = await tx.get(change.key, true)
+        this.valid(current)
+        change = { key: change.key, expected: current!.version, payload: current!.payload }
+      }
       if (tx.insertMany && change.expected === null) {
         let end = index + 1
         while (end < ordered.length && ordered[end].expected === null) end++
