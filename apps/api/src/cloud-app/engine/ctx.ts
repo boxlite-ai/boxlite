@@ -9,7 +9,7 @@ import type { Orchestrator } from './orchestrator'
 import type { Origins } from './origins'
 import type { Resources } from './resources'
 import type { Scheduler } from './scheduler'
-import type { SupervisorClient } from './supervisor'
+import type { SupervisorClient, TunnelHeaders } from './supervisor'
 
 export interface AppCredentials {
   /** A recognized platform key is never forwarded, even if it cannot access Apps. */
@@ -43,7 +43,7 @@ export interface Deps {
   domains: import('./services/domains').AppDomains
   volumes: AppVolumes
   boxes: AppBoxes
-  tunnelHeaders?: (boxUrl: string) => Promise<Record<string, string>>
+  tunnelHeaders?: TunnelHeaders
   organizationMember?: (organizationId: string, provider: string, providerUserId: string) => Promise<boolean>
   boxlite: BoxliteClient
   neon: NeonClient

@@ -57,20 +57,42 @@ export function forwardHeaders(env: Pick<EnvRow, 'forward_secret'>): Record<stri
   return { [FORWARD_HEADER]: env.forward_secret }
 }
 
-export function controlHeaders(env: Pick<EnvRow, 'control_secret'>): Record<string, string> {
-  return controlHeader(env.control_secret)
-}
+export type TunnelHeaders = (boxUrl: string) => Promise<Record<string, string>>
 
-function controlHeader(secret: string): Record<string, string> {
-  return { [CONTROL_HEADER]: secret }
+/** The Proxy consumes the tunnel token before forwarding the Supervisor control secret. */
+export async function supervisorControlHeaders(
+  boxUrl: string,
+  secret: string,
+  tunnelHeaders?: TunnelHeaders,
+  signal?: AbortSignal,
+): Promise<Record<string, string>> {
+  signal?.throwIfAborted()
+  if (!signal || !tunnelHeaders) return { ...(await tunnelHeaders?.(boxUrl)), [CONTROL_HEADER]: secret }
+
+  let onAbort!: () => void
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    const lookup = Promise.resolve().then(() => {
+      signal.throwIfAborted()
+      return tunnelHeaders(boxUrl)
+    })
+    const headers = await Promise.race([lookup, aborted])
+    signal.throwIfAborted()
+    return { ...headers, [CONTROL_HEADER]: secret }
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
 }
 
 /**
- * CP → supervisor calls (contracts §2.3), made through the Box's public tunnel. `secret` is the
+ * CP → supervisor calls (contracts §2.3), made through the Box tunnel. `secret` is the
  * env's control secret (`env.control_secret`); the gateway refuses control calls without it.
  */
 export interface SupervisorClient {
-  health(boxUrl: string, secret: string): Promise<SupervisorHealth>
+  health(boxUrl: string, secret: string, signal?: AbortSignal): Promise<SupervisorHealth>
   /** Fetch + extract + build release N, then report `built`; the old release keeps serving. */
   deploy(boxUrl: string, secret: string, release: number): Promise<void>
   /** Start release N's services, health-gate, flip traffic; reports `starting` then `live|failed`. */
@@ -82,16 +104,19 @@ export interface SupervisorClient {
 }
 
 export class HttpSupervisorClient implements SupervisorClient {
-  constructor(private readonly headersForUrl?: (url: string) => Promise<Record<string, string>>) {}
-  private async headers(boxUrl: string, secret: string): Promise<Record<string, string>> {
-    return { ...(await this.headersForUrl?.(boxUrl)), ...controlHeader(secret) }
+  constructor(private readonly tunnelHeaders?: TunnelHeaders) {}
+  private headers(boxUrl: string, secret: string, signal?: AbortSignal): Promise<Record<string, string>> {
+    return supervisorControlHeaders(boxUrl, secret, this.tunnelHeaders, signal)
   }
-  async health(boxUrl: string, secret: string): Promise<SupervisorHealth> {
+  async health(boxUrl: string, secret: string, signal?: AbortSignal): Promise<SupervisorHealth> {
+    const timeout = AbortSignal.timeout(10_000)
+    const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout
     const { body } = await requestJson<SupervisorHealth>('supervisor', {
       method: 'GET',
       url: `${boxUrl}/.boxlite/sv/health`,
-      headers: await this.headers(boxUrl, secret),
-      timeoutMs: 10_000,
+      headers: await this.headers(boxUrl, secret, deadline),
+      signal: deadline,
+      redirect: 'manual',
     })
     return body
   }

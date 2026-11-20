@@ -178,6 +178,8 @@ does not issue a key; credentials are managed on the existing API Keys page.
 | `POST`, `PUT` | `/v1/{organizationId}/apps/{app}/uploads/...` | Upload a source manifest and missing source objects to platform object storage. |
 | `POST` | `/v1/{organizationId}/apps/{app}/envs/{env}/plan` | Compare desired manifest with current environment. |
 | `POST` | `/v1/{organizationId}/apps/{app}/envs/{env}/deployments` | Queue `deploy`, `apply` or `rollback` in PostgreSQL for the App worker. |
+| `GET` | `/v1/{organizationId}/apps/{app}/envs/{env}/volumes` | List the environment's volume declarations. |
+| `GET`, `PUT`, `DELETE` | `/v1/{organizationId}/apps/{app}/envs/{env}/volumes/{name}/files` | List or stream a mounted path with `read:apps`. Upload and delete require `write:apps`. |
 | `GET` / WebSocket | `/v1/{organizationId}/apps/{app}/envs/{env}/db/connect` | PostgreSQL proxy; read-only unless `write=1` and the principal holds write permission. |
 | `GET` | `/v1/{organizationId}/cli/version` | Version and download URL of the packaged CLI. |
 | HTTP / WebSocket | `/internal/apps/ingress/{environmentId}/...` | Proxy-authenticated App ingress. Validates the hostname binding, then applies App access and end-user authentication. |
@@ -190,6 +192,27 @@ to an environment, which routes through the API to a private Box tunnel. Box cre
 allocation use the platform services and organization limits. App metadata, deployment state,
 logs and callback status live in the platform PostgreSQL schema `cloud_app`; source content lives
 in the configured GCS/S3 bucket. Neon remains the application database provider, through its official API.
+
+Volume file operations from the CLI and Console start the Box if it is asleep.
+
+```mermaid
+sequenceDiagram
+    participant Client as CLI or Console
+    participant API as Cloud Apps API
+    participant Proxy as Private tunnel Proxy
+    participant Preview as Preview API
+    participant SV as Box Supervisor
+    Client->>API: Request a volume file operation
+    API->>API: Check organization and App permissions
+    API->>Proxy: Send tunnel token and control credential
+    Proxy->>Preview: Submit tunnel token for verification
+    Preview-->>Proxy: Grant tunnel access
+    Proxy->>SV: Forward with the control credential
+    SV->>SV: Verify control credential and access mounted path
+```
+
+A bare `boxlite-app app volume ls` reads the App spec without contacting the Box.
+Use `boxlite-app app volume ls uploads:/avatars` to list a directory on the mount.
 
 API replicas only enqueue publications. A separate worker uses renewable Redis environment locks
 and persisted PostgreSQL state. Interrupted publications become failed when the next worker recovers

@@ -36,6 +36,13 @@ describe('App management organization permissions', () => {
     expect(() => service.principal(reader, 'POST', '/apps')).toThrow(ForbiddenException)
     expect(() => service.principal(reader, 'DELETE', '/apps/crm')).toThrow(ForbiddenException)
     expect(service.principal(member(permissions, [Permission.WRITE_APPS]), 'POST', '/apps').organizationId).toBe('org')
+    const files = '/apps/crm/envs/main/volumes/uploads/files'
+    const writer = member(permissions, [Permission.WRITE_APPS])
+    expect(service.principal(reader, 'GET', files).organizationId).toBe('org')
+    for (const method of ['PUT', 'DELETE']) {
+      expect(() => service.principal(reader, method, files)).toThrow(ForbiddenException)
+      expect(service.principal(writer, method, files).organizationId).toBe('org')
+    }
   })
 
   it('rejects an organization key from another organization even for an administrator', () => {
