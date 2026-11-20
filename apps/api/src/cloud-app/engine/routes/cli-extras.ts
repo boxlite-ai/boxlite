@@ -319,12 +319,13 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
         'rerun in 30 s; `boxlite-app doctor` checks the Box',
       )
     }
-    return { env, ...target }
+    return { env, ...target, boxUrl: env.box_url, controlSecret: env.control_secret }
   }
 
   r.get('/envs/:env/volumes/:name/files', async (c) => {
-    const { env, volume, rel, abs } = await runningEnv(c)
-    const res = await readVolume(env, volume.name, rel, abs)
+    const target = await runningEnv(c)
+    const { volume, rel } = target
+    const res = await readVolume(target, ctx.tunnelHeaders)
     if ((res.headers.get('content-type') ?? '').startsWith('application/json')) {
       const listing = (await res.json()) as { entries?: unknown[] }
       return c.json({ volume: volume.name, path: rel, type: 'dir', entries: listing.entries ?? [] })
@@ -336,7 +337,8 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
   })
 
   r.put('/envs/:env/volumes/:name/files', async (c) => {
-    const { env, volume, rel, abs } = await runningEnv(c)
+    const target = await runningEnv(c)
+    const { volume, rel } = target
     if (rel === '/')
       throw fail(
         'invalid_request',
@@ -357,19 +359,20 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
         `file is ${body.byteLength} bytes; the limit is ${VOLUME_FILE_MAX}`,
         'split the file or let the app write it',
       )
-    const out = await writeVolume(env, volume.name, rel, abs, body, c.req.query('overwrite') === '1')
+    const out = await writeVolume(target, body, c.req.query('overwrite') === '1', ctx.tunnelHeaders)
     return c.json({ volume: volume.name, path: rel, ...out })
   })
 
   r.delete('/envs/:env/volumes/:name/files', async (c) => {
-    const { env, volume, rel, abs } = await runningEnv(c)
+    const target = await runningEnv(c)
+    const { env, volume, rel } = target
     if (rel === '/')
       throw fail(
         'invalid_request',
         `refusing to delete the volume ${volume.name} itself`,
         `name what is inside it: \`boxlite-app app volume ls ${volume.name}\``,
       )
-    const out = await removeVolume(env, volume.name, rel, abs, c.req.query('recursive') === '1')
+    const out = await removeVolume(target, c.req.query('recursive') === '1', ctx.tunnelHeaders)
     await ctx.store.recordActivity(c.get('app').id, env.name, c.get('actor'), 'volume.delete', {
       volume: volume.name,
       path: rel,
