@@ -155,12 +155,11 @@ export class Organization {
   })
   imageCountLimit: number
 
-  // How many domain names this organization may hold, platform subdomains
-  // and later custom domains together. A held name counts whether or not it
-  // is bound to a target: unbinding keeps the name for the organization.
+  // Generated App URLs and requested platform names share this allowance.
+  // A requested name still counts after it is unbound.
   @Column({
     type: 'int',
-    default: 1,
+    default: 20,
     name: 'domain_count_limit',
   })
   domainCountLimit: number
