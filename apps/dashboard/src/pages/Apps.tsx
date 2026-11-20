@@ -5,7 +5,7 @@
 
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ascii'
-import { AppTable } from '@/components/apps/AppTable'
+import { AppCards } from '@/components/apps/AppCards'
 import { CreateAppDialog } from '@/components/apps/CreateAppDialog'
 import { RecentlyDeleted } from '@/components/apps/RecentlyDeleted'
 import { OrganizationScope } from '@/components/apps/OrganizationScope'
@@ -94,7 +94,7 @@ const Apps: React.FC = () => {
       </div>
       {cannotCreate && <p className="-mt-3 text-right font-sans text-body text-muted-foreground">{cannotCreate}</p>}
 
-      <AppTable
+      <AppCards
         apps={visible}
         filter={filter.trim() && apps.length > 0 ? filter.trim() : undefined}
         loading={isLoading}
