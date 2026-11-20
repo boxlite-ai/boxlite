@@ -1,21 +1,17 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! virtio-mem on KVM with the pinned kernel: the host grows a 512 MiB guest by
-//! 1024 MiB, the guest writes 640 MiB, and the host shrinks the target back to
-//! 256 MiB. The guest reports its RAM on the console; the host acts on those
-//! markers through `MemoryHandle`.
+//! virtio-mem on KVM with the pinned kernel: the host grows a 512 MiB or
+//! 6 GiB guest by 1024 MiB, the guest writes 640 MiB, then the host shrinks
+//! the target back to 256 MiB. The 6 GiB guest exercises high boot RAM.
 
 use std::sync::atomic::AtomicBool;
 
 use super::*;
-use crate::MemoryStatus;
 
-/// Drives the target from the guest's console markers until `stop` is set and
-/// returns the last status read after the shrink request.
-fn control(log: &SerialLog, handle: &crate::MemoryHandle, stop: &AtomicBool) -> MemoryStatus {
+/// Drives the target from the guest's console markers until `stop` is set.
+fn control(log: &SerialLog, handle: &crate::MemoryHandle, stop: &AtomicBool) {
     let (mut grew, mut shrank) = (false, false);
-    let mut last = MemoryStatus::default();
     while !stop.load(Ordering::SeqCst) {
         let text = log.text();
         if !grew && text.contains("HOTPLUG_BASE") {
@@ -26,26 +22,35 @@ fn control(log: &SerialLog, handle: &crate::MemoryHandle, stop: &AtomicBool) -> 
             handle.request(256).unwrap();
             shrank = true;
         }
-        if shrank {
-            last = handle.status();
-        }
         std::thread::sleep(Duration::from_millis(100));
     }
-    last
 }
 
 #[test]
 #[ignore = "requires Linux x86_64 KVM, a virtio-mem VMM_KERNEL and VMM_HOTPLUG_INIT"]
 fn virtio_mem_grows_and_shrinks_a_real_guest() {
+    grow_and_shrink(512, 4 << 30);
+}
+
+#[test]
+#[ignore = "requires Linux x86_64 KVM, a virtio-mem VMM_KERNEL and VMM_HOTPLUG_INIT"]
+fn virtio_mem_grows_and_shrinks_with_high_boot_ram() {
+    grow_and_shrink(6144, 7 << 30);
+}
+
+fn grow_and_shrink(boot_mib: u32, window_base: u64) {
     let init = fs::read(
         std::env::var_os("VMM_HOTPLUG_INIT")
             .expect("use make test:integration:vmm:linux for the guest init"),
     )
     .unwrap();
-    let initramfs = TempFile::new("hotplug.cpio", &newc_archive("init", &init));
+    let initramfs = TempFile::new(
+        &format!("hotplug-{boot_mib}.cpio"),
+        &newc_archive("init", &init),
+    );
     let log = SerialLog::default();
     let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
-    config.memory_mib = 512;
+    config.memory_mib = boot_mib;
     config.hotplug_mib = 1024;
     let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
     let handle = vm.memory_handle().expect("hotplug_mib adds the device");
@@ -56,12 +61,23 @@ fn virtio_mem_grows_and_shrinks_a_real_guest() {
     };
     let (exit, elapsed) = run_with_watchdog(&mut vm, Duration::from_secs(120));
     stop.store(true, Ordering::SeqCst);
-    let after_shrink = controller.join().unwrap();
+    controller.join().unwrap();
+    let after_shrink = handle.status();
     let log = log.text();
     eprintln!("virtio-mem KVM elapsed={elapsed:?} status={after_shrink:?}\n{log}");
 
     assert_eq!(exit.unwrap(), VmExit::GuestReset, "{log}");
     assert!(!log.contains("HOTPLUG_FAIL"), "{log}");
+    let expected_base = format!("{window_base:#x}");
+    assert!(
+        log.lines().any(|line| {
+            line.starts_with("virtio_mem ")
+                && line
+                    .split_once(": start address: ")
+                    .is_some_and(|(_, address)| address.trim() == expected_base)
+        }),
+        "virtio-mem window should start at {expected_base}\n{log}"
+    );
     for marker in [
         "HOTPLUG_GROWN",
         "HOTPLUG_USED",

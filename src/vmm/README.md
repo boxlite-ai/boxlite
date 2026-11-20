@@ -238,13 +238,14 @@ memory_hotplug.online_policy=auto-movable` to the guest command line. New
 blocks come online at once. As many as the default 301% ratio allows land in
 ZONE_MOVABLE, where the guest can empty them again for unplug.
 
-`boot::tests::hotplug` runs this on KVM with the pinned kernel. It boots
-512 MiB with 1024 MiB capacity, grows by 1024 MiB and writes 640 MiB, then
-shrinks the target to 256 MiB:
+`boot::tests::hotplug` runs both 512 MiB and 6 GiB boot configurations
+through `Vm::new` on KVM. Both have 1024 MiB of hotplug capacity, grow by
+1024 MiB, write 640 MiB and shrink the target to 256 MiB. The 6 GiB
+configuration puts the hotplug window after high boot RAM at 7 GiB.
 
 | Step | Guest `totalram` | Host `status()` |
 | --- | --- | --- |
-| Boot | base, about 489 MiB | target 0 |
+| Boot | base | target 0 |
 | `request(1024)` | base + 1024 MiB | plugged 1024 |
 | `request(256)` | base + 256 MiB | plugged 256, mapped 256 |
 
