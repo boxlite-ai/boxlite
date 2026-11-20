@@ -40,8 +40,8 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     };
     let handle = require_box(&rt, box_name).await?;
     let status = handle.info().await?.status;
-    if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
-        anyhow::bail!("cp is not allowed on paused or parked boxes: box '{box_name}' is {status}");
+    if status == BoxStatus::Paused {
+        anyhow::bail!("cp is not allowed on paused boxes: box '{box_name}' is {status}");
     }
 
     // Let the copy decide whether it can boot the box. An explicit start
@@ -281,8 +281,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::parked_upload(BoxStatus::Parked, true)]
-    #[case::parked_download(BoxStatus::Parked, false)]
     #[case::paused_upload(BoxStatus::Paused, true)]
     #[case::paused_download(BoxStatus::Paused, false)]
     #[tokio::test]
@@ -300,7 +298,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("cp is not allowed on paused or parked boxes"),
+                .contains("cp is not allowed on paused boxes"),
             "{error}"
         );
     }

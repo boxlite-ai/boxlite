@@ -579,7 +579,7 @@ export class BoxService {
     query: { pageSize: number; status?: BoxPublicStatus; after?: string },
   ): Promise<Box[]> {
     // Enumerate the persisted enum domains through the same projection the response uses.
-    // An empty match must never become TypeORM's unfiltered where: [].
+    // An empty match (paused/failed today) must never become TypeORM's unfiltered where: [].
     const where: FindOptionsWhere<Box>[] = []
     for (const state of Object.values(BoxState)) {
       for (const desiredState of Object.values(BoxDesiredState)) {

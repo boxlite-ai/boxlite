@@ -378,12 +378,8 @@ main process: `executionId` (canonical guest ID), `argv`, `startedAt`
 (Unix milliseconds), `tty`, and `isMainSession`. Completed processes disappear; this
 is not execution history. Listing does not attach or consume output, and never
 boots a stopped box. A stopped/unstarted native box returns an empty list; a
-paused or parked box returns an invalid-state error. An uncreated `SimpleBox` also
+paused box returns an invalid-state error. An uncreated `SimpleBox` also
 returns an empty list without creating its box.
-
-`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
-`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
-Neither state allows exec or an implicit cold start.
 
 Use `await box.executions().get(executionId)` for control-only access while
 another client owns output, or `await box.executions().attach(executionId, false)`

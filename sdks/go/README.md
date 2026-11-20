@@ -120,12 +120,8 @@ func main() {
 including its main process (`IsMainSession`). Fields are `ExecutionID` (canonical guest
 ID), `Argv`, `StartedAt` (Unix milliseconds), `TTY`, and `IsMainSession`.
 Completed executions disappear. Listing never boots the box; a stopped or
-not-yet-started box returns an empty slice, and a paused or parked box returns an
+not-yet-started box returns an empty slice, and a paused box returns an
 invalid-state error.
-
-`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
-`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
-Neither state allows exec or an implicit cold start.
 
 `box.Executions().Get(ctx, id)` recovers a control-only `*Execution`: `ID()`,
 `Wait`, `Kill`, `Signal`, and `ResizeTTY` work without claiming stdout/stderr.

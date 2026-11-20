@@ -806,11 +806,7 @@ read-only guest query. The callback owns its `CExecutionInfoList`; release it
 with `boxlite_free_execution_info_list`. Each entry contains `execution_id`,
 `argv`/`argc`, Unix-millisecond `started_at`, `tty`,
 and `is_main_session`. Created/stopped boxes return an empty list without starting;
-a paused or parked box returns an invalid-state error.
-
-`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
-`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
-Neither state allows exec or an implicit cold start.
+a paused box returns an invalid-state error.
 
 Use a returned ID with `boxlite_box_executions_get` for control-only access,
 or `boxlite_box_executions_attach` for stdin/output. Both return an owned

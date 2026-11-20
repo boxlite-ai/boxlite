@@ -99,7 +99,7 @@ info:
     guest's bounded retention window, but this API does not promise durable
     execution history.
     Listing does not start or restart a box. Configured and stopped boxes
-    answer `{"executions": []}`; `paused` and `parked` boxes return an invalid-state error.
+    answer `{"executions": []}`; paused boxes return an invalid-state error.
 
     Out-of-band control endpoints exist for clients that prefer a
     request/response style: `GET /executions/{exec_id}` (status),
@@ -873,8 +873,8 @@ paths:
         and is not durable history.
 
         Listing never starts or resumes a box. Configured and stopped boxes
-        answer `{"executions": []}`; `paused` and `parked` boxes return an
-        invalid-state error. Polling does not refresh the box's idle clock.
+        answer `{"executions": []}`; paused boxes return an invalid-state
+        error. Polling does not refresh the box's idle clock.
       tags: [Execution]
       responses:
         "200":
@@ -2638,23 +2638,15 @@ components:
         - `running`: VM active, accepting commands
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
-        - `paused`: The VM is temporarily frozen by guest freeze and SIGSTOP
-          for a disk-only consistency operation (snapshot, clone, or disk export).
-        - `parked`: The memory-snapshot checkpoint control interface has confirmed
-          the pause (preserving live VM memory and device state). The VM remains
-          paused until resumed.
+        - `paused`: VM frozen via SIGSTOP (during snapshot/export)
         - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
-
-        Neither `paused` nor `parked` means the VM has stopped. Neither
-        state allows command execution.
       enum:
         - configured
         - running
         - stopping
         - stopped
         - paused
-        - parked
         - failed
         - unknown
 

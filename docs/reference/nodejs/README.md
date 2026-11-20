@@ -1103,16 +1103,12 @@ interface ExecutionInfo {
 ```
 
 The list excludes completed sessions. A created or stopped box returns `[]`
-without starting; a paused or parked box returns an invalid-state error. Use
+without starting; a paused box returns an invalid-state error. Use
 `executions().get(executionId)` for independent control, or
 `executions().attach(executionId)` for streams; an existing output reader is a
 conflict.
 See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for retention semantics.
-
-`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
-`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
-Neither state allows exec or an implicit cold start.
 
 ### `ExecResult` (wrapper)
 

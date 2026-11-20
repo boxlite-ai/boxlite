@@ -367,7 +367,6 @@ async fn ssh_observation_does_not_start_idle_boxes() {
         BoxStatus::Unknown,
         BoxStatus::Stopping,
         BoxStatus::Paused,
-        BoxStatus::Parked,
         BoxStatus::Failed,
     ] {
         for command in [None, Some("cmd"), Some("entrypoint")] {

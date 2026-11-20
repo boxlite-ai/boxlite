@@ -8,7 +8,6 @@ export const BOX_PUBLIC_STATUSES = [
   'running',
   'stopping',
   'stopped',
-  'parked',
   'paused',
   'failed',
   'unknown',

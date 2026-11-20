@@ -78,29 +78,71 @@ impl ExecutionService for ExitRecoveryGuest {
     }
 }
 
+async fn running_box_for_execution_test() -> (TempDir, SharedBoxImpl, ChildGuard) {
+    let home = TempDir::new_in("/tmp").expect("create runtime directory");
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        image_registries: vec![],
+        ..Default::default()
+    })
+    .expect("create runtime");
+    let (child, id, _) = running_box_with_standin(&runtime, false, 0, Vec::new());
+    let box_impl = runtime
+        .get(id.as_str())
+        .await
+        .expect("get persisted box")
+        .expect("box exists")
+        .box_backend
+        .as_any_arc()
+        .downcast::<BoxImpl>()
+        .expect("local box implementation");
+    (home, box_impl, child)
+}
+
 #[tokio::test]
 async fn recovered_main_wait_uses_exit_file_without_changing_auxiliary_status() {
-    let gate = Arc::new(StartGate::default());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind execution guest");
-    let address = listener.local_addr().expect("execution guest address");
-    let incoming = tonic::transport::server::TcpIncoming::from_listener(listener, true, None)
-        .expect("configure execution guest listener");
-    let mut fixture = running_box_for_start_test_with_live(Arc::clone(&gate), |live| {
-        live.guest_session = GuestSession::new(BoxTransport::tcp(address.port()));
-    })
-    .await;
-    let main_id = fixture.box_impl.container_id().to_owned();
-    fixture.server.abort();
-    fixture.server = tokio::spawn(async move {
+    let (_home, box_impl, child) = running_box_for_execution_test().await;
+    let main_id = box_impl.container_id().to_owned();
+    let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+    let incoming = futures::stream::iter([Ok::<_, std::io::Error>(server_io)]);
+    let start_gate = Arc::new(StartGate::default());
+    start_gate.release.add_permits(1);
+    let gate = Arc::clone(&start_gate);
+    let server = tokio::spawn(async move {
         Server::builder()
             .add_service(ExecutionServer::new(ExitRecoveryGuest { main_id }))
+            .add_service(ContainerServer::new(StartStubGuest { gate }))
             .serve_with_incoming(incoming)
             .await
             .expect("serve execution guest");
     });
-    let box_impl = &fixture.box_impl;
+    let mut client_io = Some(client_io);
+    let channel = Endpoint::from_static("http://execution-guest")
+        .connect_with_connector(tower::service_fn(move |_: tonic::transport::Uri| {
+            let stream = client_io.take().expect("single guest connection");
+            std::future::ready(Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(
+                stream,
+            )))
+        }))
+        .await
+        .expect("connect to execution guest");
+    let mut live = LiveState::new(
+        Box::new(InfoTestHandler(child.0.id())),
+        GuestSession::new(BoxTransport::tcp(0)),
+        None,
+        None,
+        BoxMetricsStorage::new(),
+        Disk::new(
+            box_impl.config.box_home.join("container.qcow2"),
+            DiskFormat::Qcow2,
+            true,
+        ),
+        None,
+        #[cfg(target_os = "linux")]
+        None,
+    );
+    live.test_guest_channel = Some(channel);
+    assert!(box_impl.live.set(live).is_ok());
     let exit_file = box_impl.layout.container_exit_file(box_impl.container_id());
     std::fs::create_dir_all(exit_file.parent().unwrap()).expect("create exit-file directory");
     boxlite_shared::layout::ExitRecord { exit_code: 129 }
@@ -108,7 +150,11 @@ async fn recovered_main_wait_uses_exit_file_without_changing_auxiliary_status() 
         .expect("write guest exit record");
 
     for (id, expected) in [(box_impl.container_id(), 129), ("auxiliary", -libc::SIGHUP)] {
-        let mut execution = box_impl.get_execution(id).await.expect("recover execution");
+        let mut execution =
+            tokio::time::timeout(Duration::from_secs(5), box_impl.get_execution(id))
+                .await
+                .expect("execution recovery must complete")
+                .expect("recover execution");
         assert!(execution.stdin().is_none());
         assert!(execution.stdout().is_none());
         assert!(execution.stderr().is_none());
@@ -124,16 +170,15 @@ async fn recovered_main_wait_uses_exit_file_without_changing_auxiliary_status() 
         };
         assert_eq!(result.error_message.as_deref(), diagnostic);
     }
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(start_gate.calls.load(Ordering::SeqCst), 0);
+    server.abort();
 }
 
 #[tokio::test]
 async fn dropping_main_wait_receiver_releases_the_upstream() {
-    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let (_home, box_impl, _child) = running_box_for_execution_test().await;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let downstream = fixture
-        .box_impl
-        .exit_code_from_file_when_portal_has_none(rx);
+    let downstream = box_impl.exit_code_from_file_when_portal_has_none(rx);
     drop(downstream);
     tokio::time::timeout(Duration::from_secs(1), tx.closed())
         .await
@@ -211,12 +256,7 @@ async fn list_executions_rejects_frozen_and_leaves_idle_boxes_unstarted() {
         ..Default::default()
     })
     .expect("create runtime");
-    for status in [
-        BoxStatus::Configured,
-        BoxStatus::Stopped,
-        BoxStatus::Parked,
-        BoxStatus::Paused,
-    ] {
+    for status in [BoxStatus::Configured, BoxStatus::Stopped, BoxStatus::Paused] {
         let id = BoxIDMint::mint();
         let config = BoxConfig {
             id: id.clone(),
@@ -251,7 +291,7 @@ async fn list_executions_rejects_frozen_and_leaves_idle_boxes_unstarted() {
             runtime.shutdown_token.child_token(),
         );
 
-        if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
+        if status == BoxStatus::Paused {
             assert!(matches!(
                 box_impl.ensure_booted().await,
                 Err(BoxliteError::InvalidState(_))
@@ -266,7 +306,7 @@ async fn list_executions_rejects_frozen_and_leaves_idle_boxes_unstarted() {
             ));
         }
         let result = box_impl.list_executions().await;
-        if matches!(status, BoxStatus::Parked | BoxStatus::Paused) {
+        if status == BoxStatus::Paused {
             assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
         } else {
             assert!(result.expect("list idle box").is_empty());
@@ -312,28 +352,27 @@ async fn recovered_frozen_standin(
 
 #[tokio::test]
 async fn stop_terminates_recovered_frozen_shim() {
-    for status in [BoxStatus::Parked, BoxStatus::Paused] {
-        let (_home, runtime, _child, id, pid) = recovered_frozen_standin(status, false).await;
-        let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
-        let bx = Arc::clone(&handle.box_backend)
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .ok()
-            .unwrap();
-        assert_eq!(bx.state.read().status, status);
-        assert!(!bx.live.initialized());
+    let status = BoxStatus::Paused;
+    let (_home, runtime, _child, id, pid) = recovered_frozen_standin(status, false).await;
+    let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+    let bx = Arc::clone(&handle.box_backend)
+        .as_any_arc()
+        .downcast::<BoxImpl>()
+        .ok()
+        .unwrap();
+    assert_eq!(bx.state.read().status, status);
+    assert!(!bx.live.initialized());
 
-        handle.stop().await.unwrap();
+    handle.stop().await.unwrap();
 
-        assert!(!is_process_alive(pid), "stop left the {status} shim alive");
-        assert!(!bx.live.initialized());
-        assert!(!bx.layout.pid_file_path().exists());
-        let persisted = runtime.box_manager.update_box(&id).unwrap();
-        assert_eq!(
-            (persisted.status, persisted.pid),
-            (BoxStatus::Stopped, None)
-        );
-    }
+    assert!(!is_process_alive(pid), "stop left the {status} shim alive");
+    assert!(!bx.live.initialized());
+    assert!(!bx.layout.pid_file_path().exists());
+    let persisted = runtime.box_manager.update_box(&id).unwrap();
+    assert_eq!(
+        (persisted.status, persisted.pid),
+        (BoxStatus::Stopped, None)
+    );
 }
 
 #[tokio::test]
@@ -354,7 +393,7 @@ async fn sync_shutdown_terminates_recovered_frozen_shim() {
 
 #[tokio::test]
 async fn snapshot_restore_rejects_recovered_unknown_shim() {
-    let (_home, runtime, _child, id, pid) = recovered_frozen_standin(BoxStatus::Parked, true).await;
+    let (_home, runtime, _child, id, pid) = recovered_frozen_standin(BoxStatus::Paused, true).await;
     let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
     let (config, persisted) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
     assert_eq!(
@@ -384,12 +423,12 @@ async fn snapshot_restore_rejects_recovered_unknown_shim() {
     assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
 }
 
-async fn assert_snapshot_rejects_recovered_frozen_shim(status: BoxStatus) {
+#[tokio::test]
+async fn snapshot_rejects_recovered_paused_shim() {
+    let status = BoxStatus::Paused;
     let (_home, runtime, _child, id, pid) = recovered_frozen_standin(status, false).await;
-    if status == BoxStatus::Paused {
-        // Simulate SIGCONT having landed without the Running state being saved.
-        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
-    }
+    // Simulate SIGCONT having landed without the Running state being saved.
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
     let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
     let (config, persisted) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
     assert_eq!((persisted.status, persisted.pid), (status, Some(pid)));
@@ -418,16 +457,6 @@ async fn assert_snapshot_rejects_recovered_frozen_shim(status: BoxStatus) {
     let persisted = runtime.box_manager.update_box(&id).unwrap();
     assert_eq!((persisted.status, persisted.pid), (status, Some(pid)));
     assert_eq!(std::fs::read(pid_file).unwrap(), pid_record);
-}
-
-#[tokio::test]
-async fn snapshot_rejects_recovered_paused_shim() {
-    assert_snapshot_rejects_recovered_frozen_shim(BoxStatus::Paused).await;
-}
-
-#[tokio::test]
-async fn snapshot_rejects_recovered_parked_shim() {
-    assert_snapshot_rejects_recovered_frozen_shim(BoxStatus::Parked).await;
 }
 
 #[tokio::test]
@@ -460,7 +489,7 @@ async fn quiesce_rejects_recovered_unknown_shim_from_pid_file() {
 #[tokio::test]
 async fn stop_preserves_unverified_frozen_shim() {
     let (_home, runtime, _child, id, pid) =
-        recovered_frozen_standin(BoxStatus::Parked, false).await;
+        recovered_frozen_standin(BoxStatus::Paused, false).await;
     let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
     let pid_file = runtime
         .layout
@@ -482,6 +511,6 @@ async fn stop_preserves_unverified_frozen_shim() {
     let persisted = runtime.box_manager.update_box(&id).unwrap();
     assert_eq!(
         (persisted.status, persisted.pid),
-        (BoxStatus::Parked, Some(pid))
+        (BoxStatus::Paused, Some(pid))
     );
 }

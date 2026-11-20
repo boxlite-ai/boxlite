@@ -84,8 +84,9 @@ impl ShimHandler {
         }
     }
 
-    /// Stop a frozen shim without attaching to the guest. Caller holds the lifecycle lock.
-    pub(crate) fn stop_frozen(
+    /// Stop a verified shim and wait for exit without attaching to the guest.
+    /// Caller holds lifecycle admission or exclusive runtime startup admission.
+    pub(crate) fn stop_verified(
         box_id: &BoxID,
         persisted_pid: Option<u32>,
         pid_file: &Path,
@@ -101,22 +102,40 @@ impl ShimHandler {
                 while pid_may_be_alive(pid) {
                     if Instant::now() >= deadline {
                         return Err(BoxliteError::Internal(format!(
-                            "Frozen box {box_id} shim (PID {pid}) did not exit"
+                            "Box {box_id} shim (PID {pid}) did not exit"
                         )));
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
             }
-            _ if persisted_pid.is_some_and(pid_may_be_alive)
-                || reader
-                    .read()
-                    .is_ok_and(|record| pid_may_be_alive(record.pid)) =>
-            {
-                return Err(BoxliteError::InvalidState(format!(
-                    "Cannot verify live shim identity for frozen box {box_id}"
-                )));
+            _ => {
+                let pid_file_may_be_alive = match reader.read() {
+                    Ok(record)
+                        if persisted_pid.is_none()
+                            && (record.pid == 0 || i32::try_from(record.pid).is_err()) =>
+                    {
+                        return Err(BoxliteError::InvalidState(format!(
+                            "Invalid shim PID {} for box {box_id}",
+                            record.pid
+                        )));
+                    }
+                    Ok(record) => pid_may_be_alive(record.pid),
+                    Err(error)
+                        if persisted_pid.is_none()
+                            && !std::fs::symlink_metadata(pid_file).is_err_and(|error| {
+                                error.kind() == std::io::ErrorKind::NotFound
+                            }) =>
+                    {
+                        return Err(error);
+                    }
+                    Err(_) => false,
+                };
+                if persisted_pid.is_some_and(pid_may_be_alive) || pid_file_may_be_alive {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "Cannot verify live shim identity for box {box_id}"
+                    )));
+                }
             }
-            _ => {}
         }
         Ok(())
     }
@@ -452,6 +471,23 @@ impl VmmController for ShimController {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_recovery_stop_verified_rejects_invalid_pid_without_persisted_pid() {
+        let home = tempfile::tempdir().unwrap();
+        let pid_file = home.path().join("shim.pid");
+        let box_id = crate::runtime::id::BoxIDMint::mint();
+        let results = [0, u32::MAX].map(|pid| {
+            std::fs::write(&pid_file, pid.to_string()).unwrap();
+            ShimHandler::stop_verified(&box_id, None, &pid_file)
+        });
+        assert!(
+            results
+                .iter()
+                .all(|result| matches!(result, Err(BoxliteError::InvalidState(_)))),
+            "expected invalid PID errors for 0 and u32::MAX, got {results:?}"
+        );
+    }
 
     /// Captures `tracing` output into a shared byte buffer so a test can
     /// assert what was (and wasn't) written by an event emitted within

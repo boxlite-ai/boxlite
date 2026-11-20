@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 /// start()   → Running (VM initialized)
 /// SIGSTOP   → Paused (VM frozen for disk-only consistency)
 /// SIGCONT   → Running (VM resumed from Paused)
-/// memory-snapshot checkpoint pause confirmed → Parked
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
 /// ```
@@ -43,9 +42,6 @@ pub enum BoxStatus {
     /// Rootfs is preserved, box can be restarted.
     Stopped,
 
-    /// Box VM pause confirmed by the memory-snapshot checkpoint control interface.
-    Parked,
-
     /// Brief guest freeze + SIGSTOP state during disk-only consistency operations.
     Paused,
 
@@ -57,7 +53,7 @@ pub enum BoxStatus {
 
 impl BoxStatus {
     /// States with an active VM process, including frozen VMs.
-    pub(crate) const ACTIVE: [Self; 3] = [Self::Running, Self::Parked, Self::Paused];
+    pub(crate) const ACTIVE: [Self; 2] = [Self::Running, Self::Paused];
 
     /// Check if this status represents a VM whose process is still up.
     pub fn is_active(&self) -> bool {
@@ -96,12 +92,9 @@ impl BoxStatus {
     }
 
     /// Check if stop() can be called from this state.
-    /// Running, Parked, and Paused boxes can be stopped.
+    /// Running and Paused boxes can be stopped.
     pub fn can_stop(&self) -> bool {
-        matches!(
-            self,
-            BoxStatus::Running | BoxStatus::Parked | BoxStatus::Paused
-        )
+        matches!(self, BoxStatus::Running | BoxStatus::Paused)
     }
 
     /// Check if remove() can be called from this state.
@@ -145,10 +138,9 @@ impl BoxStatus {
             (Configured, Stopped) |
             (Configured, Failed) |
             (Configured, Unknown) |
-            // Running → Stopping, Stopped, Parked (memory-snapshot checkpoint), Paused (disk-only operation), or Failed
+            // Running → Stopping, Stopped, Paused (disk-only operation), or Failed
             (Running, Stopping) |
             (Running, Stopped) |
-            (Running, Parked) |
             (Running, Paused) |
             (Running, Failed) |
             (Running, Unknown) |
@@ -160,10 +152,7 @@ impl BoxStatus {
             (Stopped, Running) |
             (Stopped, Failed) |
             (Stopped, Unknown) |
-            // Parked or Paused → Running (resume), Stopped (killed), or Unknown (recovery)
-            (Parked, Running) |
-            (Parked, Stopped) |
-            (Parked, Unknown) |
+            // Paused → Running (resume), Stopped (killed), or Unknown (recovery)
             (Paused, Running) |
             (Paused, Stopped) |
             (Paused, Unknown) |
@@ -182,7 +171,6 @@ impl BoxStatus {
             BoxStatus::Running => "running",
             BoxStatus::Stopping => "stopping",
             BoxStatus::Stopped => "stopped",
-            BoxStatus::Parked => "parked",
             BoxStatus::Paused => "paused",
             BoxStatus::Failed => "failed",
         }
@@ -201,7 +189,6 @@ impl std::str::FromStr for BoxStatus {
             "running" => Ok(BoxStatus::Running),
             "stopping" => Ok(BoxStatus::Stopping),
             "stopped" => Ok(BoxStatus::Stopped),
-            "parked" => Ok(BoxStatus::Parked),
             "paused" => Ok(BoxStatus::Paused),
             "failed" => Ok(BoxStatus::Failed),
             // Legacy: old transient statuses map to Stopped (DB backward compat)
@@ -417,7 +404,7 @@ impl BoxState {
     /// shim writing its PID file and this row being saved. A `started_at` written
     /// for the PID we are replacing cannot describe the adopted one, so recovery
     /// clears it. This keeps the PID and timestamp safe to read together as one
-    /// snapshot. `Parked` and `Paused` are preserved only for the same verified PID.
+    /// snapshot. `Paused` is preserved only for the same verified PID.
     pub fn adopt_recovered_shim(&mut self, pid: u32) {
         let same_pid = self.pid == Some(pid);
         if !same_pid {
@@ -426,8 +413,8 @@ impl BoxState {
         let status = match self.status {
             // Reattaching does not resume a frozen VM. A different shim is
             // live, but we cannot claim it has the recorded frozen state.
-            BoxStatus::Parked | BoxStatus::Paused if !same_pid => BoxStatus::Unknown,
-            BoxStatus::Parked | BoxStatus::Paused => self.status,
+            BoxStatus::Paused if !same_pid => BoxStatus::Unknown,
+            BoxStatus::Paused => self.status,
             // A live shim still does not establish guest state on subsequent recovery.
             BoxStatus::Unknown if self.pid.is_some() => BoxStatus::Unknown,
             _ => BoxStatus::Running,
@@ -503,7 +490,7 @@ impl BoxState {
 
     /// Reset state after system reboot.
     ///
-    /// Active boxes (Running, Parked, or Paused) become Stopped since VM rootfs is preserved.
+    /// Active boxes (Running or Paused) become Stopped since VM rootfs is preserved.
     /// PID is cleared since all processes are gone after reboot.
     pub fn reset_for_reboot(&mut self) {
         if self.status.is_active() {
@@ -556,7 +543,6 @@ mod tests {
         assert!(BoxStatus::Running.is_active());
         assert!(!BoxStatus::Stopping.is_active());
         assert!(!BoxStatus::Stopped.is_active());
-        assert!(BoxStatus::Parked.is_active());
         assert!(!BoxStatus::Unknown.is_active());
     }
 
@@ -570,7 +556,6 @@ mod tests {
     #[test]
     fn test_status_is_paused() {
         assert!(BoxStatus::Paused.is_paused());
-        assert!(!BoxStatus::Parked.is_paused());
         assert!(!BoxStatus::Running.is_paused());
         assert!(!BoxStatus::Stopped.is_paused());
     }
@@ -581,7 +566,6 @@ mod tests {
         assert!(!BoxStatus::Running.can_start());
         assert!(!BoxStatus::Stopping.can_start());
         assert!(BoxStatus::Stopped.can_start());
-        assert!(!BoxStatus::Parked.can_start());
         assert!(!BoxStatus::Unknown.can_start());
     }
 
@@ -591,7 +575,6 @@ mod tests {
         assert!(BoxStatus::Running.can_stop());
         assert!(!BoxStatus::Stopping.can_stop());
         assert!(!BoxStatus::Stopped.can_stop());
-        assert!(BoxStatus::Parked.can_stop());
         assert!(!BoxStatus::Unknown.can_stop());
     }
 
@@ -608,7 +591,6 @@ mod tests {
         assert!(BoxStatus::Stopped.can_exec());
 
         assert!(!BoxStatus::Stopping.can_exec());
-        assert!(!BoxStatus::Parked.can_exec());
         assert!(!BoxStatus::Unknown.can_exec());
     }
 
@@ -622,7 +604,6 @@ mod tests {
         // Running transitions
         assert!(BoxStatus::Running.can_transition_to(BoxStatus::Stopping));
         assert!(BoxStatus::Running.can_transition_to(BoxStatus::Stopped));
-        assert!(BoxStatus::Running.can_transition_to(BoxStatus::Parked));
         assert!(!BoxStatus::Running.can_transition_to(BoxStatus::Configured));
 
         // Stopping transitions
@@ -633,84 +614,71 @@ mod tests {
         assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Running));
         assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Configured));
         assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Stopping));
-        assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Parked));
-
-        // Parked transitions
-        assert!(BoxStatus::Parked.can_transition_to(BoxStatus::Running));
-        assert!(BoxStatus::Parked.can_transition_to(BoxStatus::Stopped));
-        assert!(!BoxStatus::Parked.can_transition_to(BoxStatus::Configured));
 
         // Unknown can go anywhere (recovery)
         assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Configured));
         assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Running));
         assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Stopped));
-        assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Parked));
     }
 
     #[test]
     fn test_frozen_state_matrix_and_admission() {
         use BoxStatus::*;
         let statuses = [
-            Unknown, Configured, Running, Stopping, Stopped, Parked, Paused, Failed,
+            Unknown, Configured, Running, Stopping, Stopped, Paused, Failed,
         ];
-        for frozen in [Parked, Paused] {
-            assert!(frozen.is_active());
-            assert!(frozen.can_stop());
-            assert!(!frozen.can_start());
-            assert!(!frozen.can_exec());
-            assert!(!frozen.can_remove());
-            for status in statuses {
-                assert_eq!(
-                    frozen.can_transition_to(status),
-                    matches!(status, Running | Stopped | Unknown),
-                    "{frozen} -> {status}"
-                );
-                assert_eq!(
-                    status.can_transition_to(frozen),
-                    matches!(status, Running | Unknown),
-                    "{status} -> {frozen}"
-                );
-            }
-            let mut state = BoxState::new();
-            state.status = frozen;
-            let other = if frozen == Parked { Paused } else { Parked };
-            assert!(state.transition_to(other).is_err());
-            assert_eq!(state.status, frozen);
-            state.pid = Some(4242);
-            state.reset_for_reboot();
-            assert_eq!(state.status, Stopped);
-            assert_eq!(state.pid, None);
+        let frozen = Paused;
+        assert!(frozen.is_active());
+        assert!(frozen.can_stop());
+        assert!(!frozen.can_start());
+        assert!(!frozen.can_exec());
+        assert!(!frozen.can_remove());
+        for status in statuses {
+            assert_eq!(
+                frozen.can_transition_to(status),
+                matches!(status, Running | Stopped | Unknown),
+                "{frozen} -> {status}"
+            );
+            assert_eq!(
+                status.can_transition_to(frozen),
+                matches!(status, Running | Unknown),
+                "{status} -> {frozen}"
+            );
         }
+        let mut state = BoxState::new();
+        state.status = frozen;
+        state.pid = Some(4242);
+        state.reset_for_reboot();
+        assert_eq!(state.status, Stopped);
+        assert_eq!(state.pid, None);
     }
 
     #[test]
     fn test_frozen_status_wire_roundtrip() {
-        for (status, wire) in [(BoxStatus::Parked, "parked"), (BoxStatus::Paused, "paused")] {
-            assert_eq!(status.as_str(), wire);
-            assert_eq!(status.to_string(), wire);
-            assert_eq!(wire.parse(), Ok(status));
-            let json = serde_json::to_string(&status).unwrap();
-            assert_eq!(json, format!("\"{wire}\""));
-            assert_eq!(serde_json::from_str::<BoxStatus>(&json).unwrap(), status);
-        }
+        let (status, wire) = (BoxStatus::Paused, "paused");
+        assert_eq!(status.as_str(), wire);
+        assert_eq!(status.to_string(), wire);
+        assert_eq!(wire.parse(), Ok(status));
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, format!("\"{wire}\""));
+        assert_eq!(serde_json::from_str::<BoxStatus>(&json).unwrap(), status);
     }
 
     #[test]
     fn adopting_frozen_shim_preserves_status_only_for_same_pid() {
-        for status in [BoxStatus::Parked, BoxStatus::Paused] {
-            let mut state = BoxState::new();
-            state.set_pid(Some(4242));
-            state.mark_started();
-            let started_at = state.started_at;
-            state.status = status;
-            state.adopt_recovered_shim(4242);
-            assert_eq!(state.status, status);
-            assert_eq!(state.started_at, started_at);
-            state.adopt_recovered_shim(4243);
-            assert_eq!(state.status, BoxStatus::Unknown);
-            assert_eq!(state.pid, Some(4243));
-            assert_eq!(state.started_at, None);
-        }
+        let status = BoxStatus::Paused;
+        let mut state = BoxState::new();
+        state.set_pid(Some(4242));
+        state.mark_started();
+        let started_at = state.started_at;
+        state.status = status;
+        state.adopt_recovered_shim(4242);
+        assert_eq!(state.status, status);
+        assert_eq!(state.started_at, started_at);
+        state.adopt_recovered_shim(4243);
+        assert_eq!(state.status, BoxStatus::Unknown);
+        assert_eq!(state.pid, Some(4243));
+        assert_eq!(state.started_at, None);
     }
 
     #[test]
@@ -721,7 +689,6 @@ mod tests {
         assert!(state.transition_to(BoxStatus::Running).is_ok());
         assert_eq!(state.status, BoxStatus::Running);
 
-        // Disk-only operations use Paused, not memory-snapshot checkpoint Parked.
         assert!(state.transition_to(BoxStatus::Paused).is_ok());
         assert_eq!(state.status, BoxStatus::Paused);
 
@@ -757,7 +724,7 @@ mod tests {
     #[test]
     fn test_reset_for_reboot_paused() {
         let mut state = BoxState::new();
-        state.status = BoxStatus::Parked;
+        state.status = BoxStatus::Paused;
         state.pid = Some(12345);
         state.reset_for_reboot();
         assert_eq!(state.status, BoxStatus::Stopped);
@@ -787,7 +754,6 @@ mod tests {
         assert_eq!(BoxStatus::Running.as_str(), "running");
         assert_eq!(BoxStatus::Stopping.as_str(), "stopping");
         assert_eq!(BoxStatus::Stopped.as_str(), "stopped");
-        assert_eq!(BoxStatus::Parked.as_str(), "parked");
         assert_eq!(BoxStatus::Paused.as_str(), "paused");
         assert_eq!(BoxStatus::Failed.as_str(), "failed");
     }
@@ -800,7 +766,6 @@ mod tests {
         assert_eq!("running".parse(), Ok(BoxStatus::Running));
         assert_eq!("stopping".parse(), Ok(BoxStatus::Stopping));
         assert_eq!("stopped".parse(), Ok(BoxStatus::Stopped));
-        assert_eq!("parked".parse(), Ok(BoxStatus::Parked));
         assert_eq!("paused".parse(), Ok(BoxStatus::Paused));
         assert_eq!("failed".parse(), Ok(BoxStatus::Failed));
         // Legacy transient statuses map to Stopped
@@ -850,7 +815,6 @@ mod tests {
         assert!(BoxStatus::Failed.can_transition_to(BoxStatus::Unknown));
         // But Failed cannot bounce back into transient/active states by itself.
         assert!(!BoxStatus::Failed.can_transition_to(BoxStatus::Stopping));
-        assert!(!BoxStatus::Failed.can_transition_to(BoxStatus::Parked));
         assert!(!BoxStatus::Failed.can_transition_to(BoxStatus::Configured));
     }
 

@@ -46,9 +46,7 @@ pub(crate) fn resolved_from_state(
     config: &BoxConfig,
     state: &BoxState,
 ) -> Option<Vec<PublishedPort>> {
-    use crate::BoxStatus::{
-        Configured, Failed, Parked, Paused, Running, Stopped, Stopping, Unknown,
-    };
+    use crate::BoxStatus::{Configured, Failed, Paused, Running, Stopped, Stopping, Unknown};
 
     if config.options.ports.is_empty() {
         return Some(Vec::new());
@@ -64,6 +62,6 @@ pub(crate) fn resolved_from_state(
         }
         // Running and paused lifecycles can still own listeners, and an unknown
         // or stopping one cannot prove anything either way.
-        Running | Parked | Paused | Stopping | Unknown => None,
+        Running | Paused | Stopping | Unknown => None,
     }
 }

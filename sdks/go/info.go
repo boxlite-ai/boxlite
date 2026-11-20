@@ -14,15 +14,18 @@ import (
 // State represents the lifecycle state of a box.
 type State string
 
-// The full set the runtime can report, matching the core's BoxStatus wire values.
+// The full set the runtime can report, 1:1 with the core's BoxStatus
+// (src/boxlite/src/litebox/state.rs) as the FFI layer spells it
+// (sdks/c/src/info.rs). Unknown, Paused and Failed were previously unnameable
+// from Go, so callers switching on State silently funnelled them into their
+// default branch.
 const (
 	StateUnknown    State = "unknown"
 	StateConfigured State = "configured"
 	StateRunning    State = "running"
 	StateStopping   State = "stopping"
 	StateStopped    State = "stopped"
-	StatePaused     State = "paused" // Guest freeze + SIGSTOP during disk-only operations.
-	StateParked     State = "parked" // Pause confirmed by the memory-snapshot checkpoint control interface.
+	StatePaused     State = "paused"
 	StateFailed     State = "failed"
 )
 

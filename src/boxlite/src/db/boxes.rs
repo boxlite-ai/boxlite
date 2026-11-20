@@ -593,7 +593,7 @@ mod tests {
 
         let store = BoxStore::new(Database::open(Path::new(":memory:")).unwrap());
         let statuses = [
-            Unknown, Configured, Running, Stopping, Stopped, Parked, Paused, Failed,
+            Unknown, Configured, Running, Stopping, Stopped, Paused, Failed,
         ];
         let mut expected = Vec::new();
         for (pid, status) in (1000..).zip(statuses) {
@@ -656,14 +656,12 @@ mod tests {
             )
             .unwrap();
 
-        let frozen_boxes = [(BoxStatus::Paused, 1000), (BoxStatus::Parked, 1001)];
-        for (status, pid) in frozen_boxes {
-            let config = create_test_config(status.as_str());
-            let mut state = BoxState::new();
-            state.set_status(status);
-            state.set_pid(Some(pid));
-            store.save(&config, &state).unwrap();
-        }
+        let (status, pid) = (BoxStatus::Paused, 1000);
+        let config = create_test_config(status.as_str());
+        let mut state = BoxState::new();
+        state.set_status(status);
+        state.set_pid(Some(pid));
+        store.save(&config, &state).unwrap();
 
         let is_reboot = store.check_and_update_boot_with(None).unwrap();
         assert!(
@@ -681,10 +679,8 @@ mod tests {
             .unwrap();
         assert_eq!(alive, ("original-boot-id".to_string(), 0));
 
-        for (status, pid) in frozen_boxes {
-            let state = store.load_state(status.as_str()).unwrap().unwrap();
-            assert_eq!((state.status, state.pid), (status, Some(pid)));
-        }
+        let state = store.load_state(status.as_str()).unwrap().unwrap();
+        assert_eq!((state.status, state.pid), (status, Some(pid)));
     }
 
     #[test]
@@ -698,7 +694,6 @@ mod tests {
                 .unwrap()
         );
         let cases = [
-            (Parked, 1000, Stopped, None),
             (Paused, 1001, Stopped, None),
             (Running, 1002, Stopped, None),
             (Stopped, 1003, Stopped, Some(1003)),
@@ -740,6 +735,6 @@ mod tests {
                 expected_pid.is_none()
             );
         }
-        assert_eq!(reset_ids.len(), 3);
+        assert_eq!(reset_ids.len(), 2);
     }
 }

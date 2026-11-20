@@ -630,11 +630,7 @@ the `CExecutionInfoList*` and must free it with
 guest ID), `argv`/`argc`, `started_at` (Unix milliseconds), `tty`, and
 `is_main_session`. The main process is included; completed executions disappear.
 Listing never boots a box; a stopped/unstarted box returns an empty list, and
-a paused or parked box returns an invalid-state error.
-
-`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
-`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
-Neither state allows exec or an implicit cold start.
+a paused box returns an invalid-state error.
 
 `boxlite_execution_id(execution)` returns an owned ID string; release it with
 `boxlite_free_string`. `boxlite_box_executions_get(box, id, &execution, &error)`

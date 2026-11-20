@@ -36,6 +36,7 @@ impl BoxImpl {
         let locker = self.runtime.lock_manager.retrieve(lock_id)?;
         let _guard = LockGuard::new_async(locker.as_ref()).await;
         let current = self.runtime.box_manager.update_box(self.id())?;
+        live_checkpoint::ensure_no_pending_checkpoint(&self.config.box_home)?;
         {
             let mut state = self.state.write();
             if self.live.initialized()

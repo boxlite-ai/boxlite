@@ -403,14 +403,10 @@ starting the box.
 once the guest reaper records their exit, before registry cleanup. Existing wait
 status/output may remain available in bounded guest retention after a session
 disappears from the list. Calling it on a created or stopped box returns an
-empty vector and does not start or restart the box. A paused or parked box returns an
+empty vector and does not start or restart the box. A paused box returns an
 invalid-state error instead of claiming its sessions disappeared.
 `ExecutionInfo` carries the canonical guest execution ID, argv, Unix-millisecond
 spawn time, PTY flag, and `is_main_session`.
-
-`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
-`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
-Neither state allows exec or an implicit cold start.
 
 `executions().get(id)` returns a control-only handle (no stdin/stdout/stderr).
 The local runtime verifies the ID against the live guest inventory; a
@@ -531,18 +527,17 @@ live binding data yet, so `info()`, `get_info()`, or `list_info()` may report
 Lifecycle status of a box.
 
 `Paused` (`"paused"`) is the temporary guest-freeze + SIGSTOP state used by
-snapshot, clone, and disk export operations for disk-only consistency. `Parked`
-(`"parked"`) is a pause confirmed by the memory-snapshot checkpoint control
-interface (preserving live VM memory and device state).
-Both count as active and can be stopped; neither permits exec or an implicit
-cold start. They cannot transition directly into each other.
+snapshot, clone, and disk export operations for disk-only consistency.
+A paused box counts as active and can be stopped. Execution and operations
+that would implicitly start the box return an invalid-state error.
 
-Recovery preserves a frozen state only when the recorded PID and verified shim
-identity match. A different PID changes a frozen state to `Unknown`. A missing
-shim is reported as `Stopped` (or `Failed` if a crash report exists), and an
-unverifiable legacy or different live shim is reported as `Unknown`. Repeated
-recovery of the same PID file does not set the state to `Running` just because
-the process is still alive. `Unknown` with a PID stays `Unknown`.
+Recovery preserves `Paused` when the recorded PID matches a verified shim
+identity. A different PID or an unverifiable legacy live shim is reported as
+`Unknown`. A missing shim is reported as `Stopped`, or `Failed` if a crash
+report exists.
+
+Repeated recovery of the verified shim preserves `Paused`. A box recorded as
+`Unknown` with a PID stays `Unknown` when recovery finds a live shim.
 
 ```rust
 pub enum BoxStatus {
@@ -564,9 +559,6 @@ pub enum BoxStatus {
     /// Brief guest freeze + SIGSTOP during disk-only consistency operations
     Paused,
 
-    /// Pause confirmed by the memory-snapshot checkpoint control interface
-    Parked,
-
     /// Init failed; record and rootfs preserved for retry or removal
     Failed,
 }
@@ -576,13 +568,13 @@ pub enum BoxStatus {
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `is_active` | `fn is_active(&self) -> bool` | True if Running, Paused, or Parked |
+| `is_active` | `fn is_active(&self) -> bool` | True if Running or Paused |
 | `is_running` | `fn is_running(&self) -> bool` | True if Running |
 | `is_configured` | `fn is_configured(&self) -> bool` | True if Configured |
 | `is_stopped` | `fn is_stopped(&self) -> bool` | True if Stopped |
 | `is_transient` | `fn is_transient(&self) -> bool` | True if Stopping |
 | `can_start` | `fn can_start(&self) -> bool` | True if Configured, Stopped, or Failed |
-| `can_stop` | `fn can_stop(&self) -> bool` | True if Running, Paused, or Parked |
+| `can_stop` | `fn can_stop(&self) -> bool` | True if Running or Paused |
 | `can_remove` | `fn can_remove(&self) -> bool` | True if Configured, Stopped, Failed, or Unknown |
 | `can_exec` | `fn can_exec(&self) -> bool` | True if Configured, Running, or Stopped |
 
@@ -594,10 +586,10 @@ start()  → Running (VM initialized)
 stop()   → Stopped (VM terminated); a local runtime removes it unless auto_delete is Some(0)
 ```
 
-Calling `stop()` on a `Paused` or `Parked` box terminates the VM without
-thawing it, booting it, or attaching to it. `stop()` first checks the PID file's
-fingerprint against the persisted PID record and signals the shim and waits
-for exit only on a match. If the fingerprint does not match and the process may
+Calling `stop()` on a local `Paused` box terminates the VM without thawing or
+attaching to the guest. Before signaling the shim and waiting for exit, `stop()`
+verifies the live process against the PID file's fingerprint and checks the PID
+against the database record. If either check fails and a candidate process may
 still be alive, `stop()` returns `InvalidState` and leaves the record intact.
 
 Lifecycle paths treat a successful `stop()` return as the only evidence that

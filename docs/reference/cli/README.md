@@ -493,14 +493,10 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 **Synopsis:** `boxlite top [OPTIONS] BOX`
 
 List live guest executions, including the box's init process. The list is read
-from the guest and does not start a configured or stopped box. A paused or parked box is
+from the guest and does not start a configured or stopped box. A paused box is
 rejected with an invalid-state error. Execution IDs are canonical guest IDs and
 can be used by `attach`, `kill`, and `signal`, including from a different CLI
 process.
-
-`parked` means a pause confirmed by the memory-snapshot checkpoint control interface (preserving live VM memory and device state);
-`paused` is the brief guest-freeze + SIGSTOP state used for disk-only consistency (snapshot, clone, and export).
-Neither state allows exec or an implicit cold start.
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
@@ -650,7 +646,12 @@ Start one or more stopped boxes. No options. Prints each started box's name/ID t
 
 **Synopsis:** `boxlite stop BOX [BOX...]`
 
-Stop one or more running boxes. Same shape as `start`.
+Stop one or more running or paused boxes. Same shape as `start`.
+
+For a paused local box, `stop` verifies the shim's identity against the recorded
+PID before signaling it and waits for exit without thawing the guest. If the
+identity cannot be verified and a candidate process may still be alive, `stop`
+returns an invalid-state error and preserves the box record.
 
 ---
 
@@ -751,11 +752,13 @@ existing file `DST` fails.
 | `--follow-symlinks` | `false` | Resolve symlink targets (embedded local runtime only) |
 | `--no-overwrite` | `false` | Refuse to overwrite destination files (embedded local runtime only) |
 
-If a stopped box is safe to resume, it is started temporarily and restored to
-stopped state after the copy succeeds or fails. A job box whose start would run
-or re-run its user-selected main command is refused; start it deliberately
-before copying. `cp` rejects `paused` and `parked` boxes in both directions
-without starting or stopping them.
+A configured or stopped box may boot temporarily if it is safe to start.
+`cp` uses the initial status to decide whether to stop the box after the copy,
+including when the copy fails. If both the copy and stop fail, `cp` reports the
+copy error. Start job boxes deliberately before copying if booting would run or
+re-run their user-selected main command.
+
+`cp` rejects paused boxes in both directions without starting or stopping them.
 
 Paths at or under a mount inside the box are refused in both directions — `/tmp`,
 `/dev/shm`, volumes, and the `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` binds.

@@ -968,7 +968,6 @@ fn parse_box_status(status: &str) -> BoxStatus {
         "running" => BoxStatus::Running,
         "stopping" => BoxStatus::Stopping,
         "stopped" => BoxStatus::Stopped,
-        "parked" => BoxStatus::Parked,
         "paused" => BoxStatus::Paused,
         "failed" => BoxStatus::Failed,
         _ => BoxStatus::Unknown,
@@ -1655,8 +1654,6 @@ mod tests {
 
         // Legacy transient statuses map to Unknown (no longer valid)
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Unknown);
-        resp.status = "parked".to_string();
-        assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Parked);
         resp.status = "paused".to_string();
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Paused);
     }
