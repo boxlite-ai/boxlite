@@ -4,10 +4,43 @@ The internal encryption package protects secret values and routing policy with p
 
 ## Scope
 
-This Go module contains encryption, runner attestation, server configuration,
-write authentication, database initialization, and a migration command. The
-HTTP server entry point, routes, and deployment resources are not yet included.
+This Go module contains `internal/encryption`, `internal/server`,
+`internal/attest` ([runner attestation](#runner-attestation)), and a Secret
+Server skeleton with database initialization and a migration command. Write and
+fetch business endpoints and deployment resources are not yet implemented.
 The existing API encryption service and stored values remain unchanged.
+
+## Server skeleton
+
+Set `SECRET_SERVER_ROLE` to `write`, `fetch`, or `all`; set `ENVIRONMENT`,
+`DATABASE_URL`, `SECRET_MASTER_KEY_ID`, `SECRET_MASTER_KEY_BASE64`, and
+`SECRET_SERVER_AUTH_MODE`. Google mode requires `SECRET_SERVER_AUDIENCE` and,
+for write or all roles, `SECRET_SERVER_ALLOWED_CALLERS`. Dev mode requires
+`SECRET_SERVER_DEV_TOKEN` and is limited to local and dev environments. The
+environment key provider is rejected in production.
+
+The write route group validates Google ID tokens and permits only verified emails
+on the allowlist. The reserved fetch path and all business handlers return 404
+until their separate implementations land. `/health` is liveness; `/ready`
+checks database connectivity. Startup also performs an encryption round trip.
+
+Startup applies migrations and verifies the durable encrypted canary before the
+server listens. A failed migration or key check prevents startup and readiness.
+
+Request logging and OpenTelemetry integration remain open under [#2570](https://github.com/boxlite-ai/boxlite/issues/2570);
+the current service emits only startup and recovery logs. Configuration uses explicit
+environment parsing and validation to keep errors limited to variable names and avoid
+exposing secret values; it does not use envconfig or validator.
+
+For a local run, supply a persistent development key, database URL, and dev token
+through the environment, then run `make run:apps:secret-server`. The role defaults
+to `write`; set `SECRET_SERVER_ROLE=fetch` to select fetch. Do not commit or print
+the key or token. The local database must use the same key across restarts.
+
+To exercise startup and readiness against a disposable PostgreSQL database, set
+`SECRET_TEST_DATABASE_URL` and run `make test:apps:secret-server`. Integration
+tests are skipped when this variable is absent. The configured user must be able
+to create and drop temporary databases.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
@@ -17,8 +50,7 @@ Routing metadata follows the [headers map contract](https://github.com/boxlite-a
 The service configuration and write authentication middleware are available for
 the server skeleton. Google mode validates token signature, audience, expiry,
 issuer, verified email, and the caller allowlist. Dev mode uses an exact bearer
-token and is permitted only in local and dev environments. The server entry
-point and routes are delivered separately.
+token and is permitted only in local and dev environments.
 
 Google-mode bearer tokens with signatures shorter than 32 bytes are rejected
 before validation; signatures and claims still require verification. `PORT` must
@@ -141,17 +173,16 @@ can create schema objects. Migrations are forward-only; deployed application
 versions must tolerate compatible schema changes. The database must use UTF-8
 server encoding. SIGINT and SIGTERM cancel a running migration.
 
-Before serving requests, the future service must call `database.Initialize`.
+Before serving requests, the service calls `database.Initialize`.
 It applies migrations and verifies a durable encrypted canary under a separate
 transaction advisory lock. If the canary is absent but secrets exist, it first
 decrypts an existing secret using AAD version 1.
 
-A wrong key or corrupt ciphertext fails readiness.
-Each secret stores one immutable encrypted value; replace a value by deleting and
-creating a secret with a new ID. Online rotation and version history are not supported.
+A wrong key or corrupt ciphertext prevents startup.
 
 Canary enrollment uses a read-committed transaction even when the database has a
 different default isolation level.
+
 ## Runner attestation
 
 Design: [runner attestation with gcp_iit](https://github.com/boxlite-ai/boxlite/issues/2623).
@@ -220,9 +251,9 @@ make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=
 ```
 
 The unit test target runs with the race detector and `GOWORK=off`. The integration
-target requires infra-local PostgreSQL and permission to create a temporary database.
-It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
-creates a uniquely named database and drops it after the test.
+target requires PostgreSQL and permission to create a temporary database. Set
+`SECRET_TEST_DATABASE_URL` to run it; without that variable, integration tests
+are skipped. Tests create uniquely named databases and drop them afterward.
 The coverage target runs the same tests and writes `target/coverage/secret-server-integration.out`.
 Database and command tests share the temporary database setup and cleanup helper.
 It also checks that SIGTERM cancels the migration command while it waits for a lock.

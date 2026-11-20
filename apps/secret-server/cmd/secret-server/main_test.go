@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -10,14 +14,78 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boxlite-ai/secret-server/internal/database"
+	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/boxlite-ai/secret-server/internal/testdb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3/lock"
 )
 
+func TestWrongKeyDoesNotStartServer(t *testing.T) {
+	if os.Getenv("SECRET_TEST_STARTUP_CHILD") == "1" {
+		os.Args = []string{"secret-server"}
+		main()
+		return
+	}
+	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set SECRET_TEST_DATABASE_URL for startup integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	_, databaseURL := testdb.Create(t, ctx, admin, dsn, false)
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	provider, err := encryption.NewEnvKeyProvider("env:test", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := encryption.NewCipher(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Initialize(ctx, pool, cipher); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.Close()
+	wrong := make([]byte, 32)
+	wrong[0] = 1
+	for name, value := range map[string]string{"SECRET_TEST_STARTUP_CHILD": "1", "DATABASE_URL": databaseURL, "ENVIRONMENT": "local", "SECRET_SERVER_ROLE": "write", "SECRET_SERVER_AUTH_MODE": "dev", "SECRET_SERVER_DEV_TOKEN": "integration-token", "SECRET_MASTER_KEY_ID": "env:test", "SECRET_MASTER_KEY_BASE64": base64.StdEncoding.EncodeToString(wrong), "PORT": port} {
+		t.Setenv(name, value)
+	}
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWrongKeyDoesNotStartServer$")
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil || err == nil || !strings.Contains(string(output), "database initialization failed") {
+		t.Fatalf("wrong-key startup = %v, output %q", err, output)
+	}
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Get("http://" + address + "/ready")
+	if err == nil {
+		response.Body.Close()
+		t.Fatal("server reported readiness with wrong key")
+	}
+}
+
 func TestRunRejectsInvalidArgumentsAndMissingDatabase(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
-	for _, args := range [][]string{nil, {"unknown"}, {"migrate", "extra"}} {
+	for _, args := range [][]string{{"unknown"}, {"migrate", "extra"}} {
 		if err := run(context.Background(), args); err == nil || !strings.Contains(err.Error(), "usage") {
 			t.Errorf("run(%v) = %v; want usage error", args, err)
 		}
@@ -27,11 +95,61 @@ func TestRunRejectsInvalidArgumentsAndMissingDatabase(t *testing.T) {
 	}
 }
 
+func TestRunRejectsInvalidServiceConfig(t *testing.T) {
+	for name, value := range map[string]string{"SECRET_SERVER_ROLE": "invalid-role", "ENVIRONMENT": "local", "DATABASE_URL": "postgres://localhost/test", "SECRET_MASTER_KEY_ID": "env:test", "SECRET_MASTER_KEY_BASE64": base64.StdEncoding.EncodeToString(make([]byte, 32)), "SECRET_SERVER_AUTH_MODE": "dev", "SECRET_SERVER_DEV_TOKEN": "test-token", "SECRET_SERVER_AUDIENCE": "", "SECRET_SERVER_ALLOWED_CALLERS": "", "PORT": "8080", "SHUTDOWN_TIMEOUT_SEC": ""} {
+		t.Setenv(name, value)
+	}
+	if err := run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "SECRET_SERVER_ROLE") {
+		t.Fatalf("run with invalid role = %v", err)
+	}
+}
+
+func TestRunRejectsOccupiedPort(t *testing.T) {
+	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("SECRET_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	_, databaseURL := testdb.Create(t, ctx, admin, dsn, false)
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"SECRET_SERVER_ROLE": "write", "ENVIRONMENT": "local", "DATABASE_URL": databaseURL, "SECRET_MASTER_KEY_ID": "env:test", "SECRET_MASTER_KEY_BASE64": base64.StdEncoding.EncodeToString(make([]byte, 32)), "SECRET_SERVER_AUTH_MODE": "dev", "SECRET_SERVER_DEV_TOKEN": "test-token", "SECRET_SERVER_AUDIENCE": "", "SECRET_SERVER_ALLOWED_CALLERS": "", "PORT": port, "SHUTDOWN_TIMEOUT_SEC": ""} {
+		t.Setenv(name, value)
+	}
+	err = run(ctx, nil)
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "listen" {
+		t.Fatalf("run with occupied port = %v, want listen error", err)
+	}
+}
+
 func TestMigrateUsesDatabaseURL(t *testing.T) {
 	t.Setenv("DATABASE_URL", ":invalid:")
 	err := run(context.Background(), []string{"migrate"})
 	if err == nil || !strings.Contains(err.Error(), "configure database") {
 		t.Fatalf("run with DATABASE_URL = %v, want database configuration error", err)
+	}
+}
+
+func TestMigrateInvalidURLRedactsPassword(t *testing.T) {
+	const password = "fixture-password-marker"
+	t.Setenv("DATABASE_URL", "postgres://localhost:999999/db?password="+password)
+	err := run(context.Background(), []string{"migrate"})
+	if err == nil || strings.Contains(err.Error(), password) {
+		t.Fatalf("migration configuration error = %v; password must be redacted", err)
 	}
 }
 
@@ -50,6 +168,34 @@ func TestMigrateRedactsDatabaseURL(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(string(output), "DATABASE_URL") {
 		t.Fatalf("expected DATABASE_URL configuration error, got %v: %s", err, output)
+	}
+}
+
+func TestIntegration(t *testing.T) {
+	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("SECRET_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	_, databaseURL := testdb.Create(t, ctx, admin, dsn, false)
+	t.Setenv("DATABASE_URL", databaseURL)
+	if err := run(ctx, []string{"migrate"}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var exists bool
+	if err := pool.QueryRow(ctx, "SELECT to_regclass('goose_db_version') IS NOT NULL").Scan(&exists); err != nil || !exists {
+		t.Fatalf("migration table exists = %v, error = %v", exists, err)
 	}
 }
 
