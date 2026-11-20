@@ -70,8 +70,15 @@ impl EventSender {
         self.stopping.store(true, Ordering::SeqCst);
         if let Err(mpsc::SendError(event)) = self.events.send(event) {
             tracing::debug!(?event, "event sent after the VM ended; discarded");
-        } else if let Err(error) = self.waker.wake() {
-            tracing::warn!(%error, "event loop wake-up failed; the event waits for the next recheck");
+        } else {
+            self.wake();
+        }
+    }
+
+    /// Prompts the driver to check its mailbox without latching a stop.
+    pub(crate) fn wake(&self) {
+        if let Err(error) = self.waker.wake() {
+            tracing::warn!(%error, "event loop wake-up failed; waiting for the next recheck");
         }
     }
 
@@ -87,6 +94,8 @@ pub(crate) struct EventLoop {
     readiness: Events,
     events: mpsc::Receiver<Event>,
     sender: EventSender,
+    #[cfg(test)]
+    before_poll: Option<tests::PollGate>,
 }
 
 impl EventLoop {
@@ -105,6 +114,8 @@ impl EventLoop {
                 waker,
                 stopping: Arc::new(AtomicBool::new(false)),
             },
+            #[cfg(test)]
+            before_poll: None,
         })
     }
 
@@ -112,10 +123,10 @@ impl EventLoop {
         self.sender.clone()
     }
 
-    /// The oldest queued event, waiting up to `timeout`, or forever with
-    /// `None`. Returns `Ok(None)` once the timeout passes; a zero timeout
-    /// never enters the poller. The poller is re-entered every [`RECHECK`],
-    /// so an event whose wake-up failed is still found.
+    /// The oldest queued event, waiting up to `timeout`, or indefinitely
+    /// with `None`. Returns `Ok(None)` on a control wake or timeout. A zero
+    /// timeout checks the queue without polling. The queue is rechecked
+    /// every [`RECHECK`] even when a wake fails.
     pub(crate) fn wait(&mut self, timeout: Option<Duration>) -> io::Result<Option<Event>> {
         // A timeout too long to add counts as forever.
         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
@@ -130,8 +141,16 @@ impl EventLoop {
                 },
                 None => RECHECK,
             };
+            #[cfg(test)]
+            if let Some(gate) = self.before_poll.take() {
+                gate.enter();
+            }
             match self.poll.poll(&mut self.readiness, Some(slice)) {
-                Ok(()) => {}
+                Ok(()) => {
+                    if self.readiness.iter().any(|event| event.token() == WAKE) {
+                        return Ok(self.events.try_recv().ok());
+                    }
+                }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }

@@ -35,7 +35,7 @@ boxlite-vmm
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
-| `control`, `lifecycle` | `VmControl` exposes status and stop across threads, and `Lifecycle` coordinates the one-shot run with the shared stop latch |
+| `control`, `lifecycle` | `VmControl` exposes status, pause, resume and stop across threads. `Lifecycle` coordinates the one-shot run, pause epochs and shared stop latch. |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -49,7 +49,7 @@ boxlite-vmm
 | `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
 | `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it after the disks, so it never renumbers them |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
-| `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
+| `events` | `Event`, which ends the VM, `EventSender`, which queues events or wakes the driver for control work, and `EventLoop`, which polls for both |
 
 The Linux x86_64 native engine composes disks, reporting balloon, aggregate
 virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
@@ -478,15 +478,38 @@ socket and guest-memory tests; real-guest qualification remains separate.
 
 `Vm::run(&mut self)` blocks on the thread that owns the VM. Call
 `vm.control()` before the run and pass clones of the `VmControl` to threads
-that need to read `status()` or request `stop()`. Dropping the clones has
-no effect on execution.
+that observe or control execution. Dropping the clones has no effect on execution.
 
 | `VmStatus` | Meaning |
 | --- | --- |
-| `Created` | The VM is ready for its first run. |
+| `Created` | The VM is ready for its first run, with or without an initial pause reservation. |
 | `Running` | The driver has started the run, including vCPU setup. |
+| `Pausing` | Guest entry is closing and the driver is collecting vCPU acknowledgements. |
+| `Paused` | Every vCPU is parked outside the guest. |
 | `Stopping` | A stop was requested or the driver is handling a terminal event. |
 | `Exited` | The run finished teardown, or the owner dropped the VM. |
+
+`pause()` requires an empty userspace chipset. If the VM has devices,
+it returns `Error::Control` with `ControlReason::UnsupportedDevice`. In
+`Created`, the first `pause()` reserves the initial pause and returns immediately.
+The driver enters `Pausing` before releasing the vCPU start gate, so every
+vCPU parks before its first guest entry. The VM reports `Created` until `run`
+starts. A second reservation or a `resume()` in `Created` returns `InvalidState`.
+
+In `Running`, `pause()` requests `Running → Pausing → Paused` and waits up to
+five seconds. If the driver has yet to accept the request, a timeout withdraws
+it and allows a retry. Once the driver accepts it, vCPUs keep parking after a
+timeout. `wait_paused(timeout)` waits for the reserved or active pause epoch
+and leaves the pause in place on `DeadlineTimeout`. A zero timeout checks the
+current state immediately. With no active or reserved pause, the operation
+returns `InvalidState`.
+
+`resume()` returns once the driver reopens the guest entry gate and the VM
+returns to `Running`. It requires `Paused`. A pending mutating request blocks
+other clones from submitting another request. Stop and terminal events release
+parked vCPUs. Pending pause or resume calls and `wait_paused` return
+`TerminalOutcome` when the VM is stopping or has exited. New pause and
+resume calls in those states return `InvalidState`.
 
 `Vm::run` runs on x86_64, against any backend that implements
 `boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend. Before
@@ -500,7 +523,9 @@ nothing mapped.
    vCPU that fails setup sends `VcpuFailed` before it arrives, so the latch
    keeps every vCPU out of the guest, and a thread that fails to start aborts
    the gate, so no worker waits forever.
-2. Each worker then loops: check the stop latch, run, and hand the exit to
+2. Before each guest entry, the worker checks for a pause or stop. To park,
+   it completes pending I/O, notifies the backend of the stop, and acknowledges
+   the current pause epoch. When it can enter, it runs and hands the exit to
    `Chipset::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
    `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never
    returns with its in-kernel irqchip, or a panic caught around the worker
@@ -508,8 +533,9 @@ nothing mapped.
    access and returns without sending.
 3. `EventSender::send` sets the stop latch before it queues, so the vCPU
    that sends, such as the one whose `0xFE` reached the i8042, never enters
-   the guest again. `run` takes the first event from the `EventLoop`, kicks
-   every vCPU, and joins them all before it returns: `StopRequested`,
+   the guest again. `run` takes the first event from the `EventLoop`, opens
+   the start gate for teardown, releases and kicks the vCPUs, and joins them
+   all before it returns. `StopRequested`,
    `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
    `DeviceFailed` its error. Later events are dropped.
 
@@ -616,10 +642,10 @@ are built from. `Vm` owns the chipset they form.
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
   poller. vCPU workers and `StopHandle` send the other events. An event sent
-  after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
-  the oldest event, or `None` at its timeout, and rechecks the queue every
-  second in case a wake-up was lost. Every event ends the VM; the VMM never
-  restarts a guest.
+  after the loop is gone is logged at debug level and discarded.
+  `EventLoop::wait` returns the oldest terminal event or `None` after a
+  control wake or timeout. It rechecks the event queue every second in case
+  a wake-up was lost.
 
 ## Virtio-mmio transport
 
