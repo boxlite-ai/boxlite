@@ -204,15 +204,16 @@ async fn online_disk_growth_keeps_workloads_and_recovers_an_interrupted_filesyst
     let mut control = tokio::net::UnixStream::connect(layout.sockets().vmm_sock())
         .await
         .unwrap();
-    let frame = serde_json::to_vec(
-        &serde_json::json!({"version":1,"op":"resize_disk","block_id":"vda","bytes":24_u64 << 30}),
-    )
-    .unwrap();
-    control
-        .write_all(&(frame.len() as u32).to_le_bytes())
-        .await
-        .unwrap();
-    control.write_all(&frame).await.unwrap();
+    let body = serde_json::json!({"block_id":"vda","bytes":24_u64 << 30}).to_string();
+    let request = format!(
+        "POST /v1/resize-disk HTTP/1.1\r\n\
+         Host: vmm\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    control.write_all(request.as_bytes()).await.unwrap();
     drop(control);
     tokio::time::timeout(Duration::from_secs(15), async {
         while bx
