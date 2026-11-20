@@ -78,12 +78,22 @@ the secret does not. Use `.env.example` for the names and defaults.
 
 ## Runner sizing
 
-`deploy.runners` in the stage declaration requires `size` (`small`, `medium` or `large`) and
-`rootDiskGb`. GCP also accepts optional `dataDiskGb` for a new runner's separate data disk:
+`deploy.runners.size` selects `small`, `medium`, `large`, `xlarge` or `2xlarge`.
+The two largest tiers default to `n4-standard-32` and `n4-standard-64` on GCP,
+and `c8i.4xlarge` and `c8i.8xlarge` on AWS.
+
+In each stage, optional
+`machineTypes` entries override the cloud machine for individual tiers. Choose
+machines that support nested virtualization and the runner's disk configuration.
+For example, a GCP stage can configure its runners as follows:
 
 ```json
 {
-  "size": "large",
+  "size": "xlarge",
+  "machineTypes": {
+    "xlarge": "n4d-standard-32",
+    "2xlarge": "n4d-standard-64"
+  },
   "rootDiskGb": 100,
   "dataDiskGb": 2048
 }
