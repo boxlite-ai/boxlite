@@ -8,7 +8,8 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmHandle`,
+`VmStatus`, `ControlReason`, `Error` and `Result`
 are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
@@ -28,6 +29,8 @@ boxlite-vmm
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `control` | Owned supervisor execution, epoch/ACK parking, owning-thread state capture and handle teardown; `run` and `spawn` share the scoped vCPU driver |
+| `snapshot` | Postcard machine state and streaming version-1 memory images |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -481,7 +484,8 @@ nothing mapped.
    keeps every vCPU out of the guest, and a thread that fails to start aborts
    the gate, so no worker waits forever.
 2. Each worker then loops: check the stop latch, run, and hand the exit to
-   `Chipset::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
+   `Chipset::dispatch`. The guest-entry checkpoint also handles owned pause
+   requests, completing pending I/O before acknowledging a parking epoch. `Shutdown` sends `GuestShutdown` and `Reset` sends
    `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never
    returns with its in-kernel irqchip, or a panic caught around the worker
    sends `VcpuFailed`. A worker that sees the latch completes the pending
@@ -508,6 +512,241 @@ run; a quiesce failure after joining still permits RAM unmapping.
 `Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
 thread, even before `run` starts. A VM runs once: a second `run` fails with
 `AlreadyRan`, since its latch stays set and its vCPUs already exist.
+
+## Owned execution and device-less pause
+
+On Linux x86_64 KVM, `Vm::new_device_less(config)` loads the same kernel,
+RAM and boot data as `Vm::new`, but creates no console, legacy userspace
+devices or balloon. It rejects disks, filesystem, vsock, network and
+`virtio_console` before creating the host VM. The in-kernel interrupt
+controllers and timers remain part of KVM. Ordinary `Vm::new` composition
+is unchanged.
+
+On x86_64, `Vm::spawn(self) -> Result<VmHandle<H>>` consumes a boot-configured VM and
+starts an owned supervisor; boot startup errors arrive through `join`. It uses
+the same single-use driver as blocking `Vm::run`. The non-Clone handle owns
+the supervisor and its scoped vCPU threads:
+
+```rust,ignore
+let vm = Vm::new_device_less(config)?;
+let mut execution = vm.spawn()?;
+execution.pause()?;
+// Every vCPU is out of guest execution and has completed pending I/O.
+execution.export_to_file("memory.bxl")?; // The VM stays Paused.
+execution.resume()?;
+execution.stop();
+let exit = execution.join()?;
+```
+
+- `pause(&mut self)` accepts only Running. Admission enters Pausing until all
+  vCPU ACKs arrive; repeated pause in Pausing or Paused returns `Error::Control`
+  with `ControlReason::InvalidState`. Pause rejects any actual chipset device
+  before publishing a request or kicking vCPUs, including devices absent from
+  configuration flags. `resume`, `export` and `export_to_file` require Paused.
+  During Pausing they return `InvalidState` before queuing a command.
+- Each pause advances a checked epoch. Every owning vCPU completes pending
+  I/O and calls `notify_guest_stopped` before ACK. The supervisor counts
+  distinct vCPU IDs only for that epoch and publishes Paused only after all
+  bits are set. An explicit backend Unsupported default for notification is
+  permitted; real backend failures remain terminal. Parked workers wait on
+  a Condvar and retain an owning-thread command checkpoint.
+- Mailbox commands wake the supervisor while Running, Pausing or Paused; parked
+  workers are notified on transitions and capture requests, not on idle polling
+  passes. Commands, vCPU ACKs and parking stop share the terminal event loop's
+  Waker; the supervisor waits on that poller in every state. A wake without a
+  terminal event returns control to mailbox supervision. Unconsumed commands
+  (including Export) run again immediately; idle waits use a one-second recheck
+  as a lost-wake fault fallback, not a scheduling or teardown latency guarantee.
+  The Condvar serves parked vCPU checkpoints and `wait_paused()` observers.
+- Parking does not expire: late ACKs can still complete the epoch and publish
+  Paused. `pause()` has a five-second caller patience limit. On timeout it returns
+  `DeadlineTimeout`. If the supervisor has not admitted the request, timeout
+  withdraws it from the mailbox: the VM stays Running, `wait_paused` returns
+  InvalidState, and pause may be retried. If already admitted, the pending park
+  remains in Pausing; use `wait_paused(&self, timeout)` or `status()` to continue
+  observing it. Withdrawal and admission are serialized by the mailbox lock.
+  `wait_paused` succeeds immediately in Paused, waits on the Condvar in Pausing,
+  returns DeadlineTimeout if its caller patience expires, InvalidState in
+  Running, and TerminalOutcome in Stopping or Exited. Its timeout also leaves
+  parking in progress. Only terminal stop or failure (including kick failure
+  and worker panic) aborts parking and enters Stopping. External
+  `StopHandle::stop` remains irreversible.
+- `status()` observes Running, Pausing, Paused, Stopping or Exited; terminal stop
+  takes priority over any non-Exited state. `stop()` requests stop without
+  joining; `join(self)` waits for execution and teardown and returns the terminal
+  result. Drop stops and wakes workers, aborts the startup gate and joins before
+  VM/RAM release. Join and Drop can block if the backend cannot stop a vCPU;
+  they never detach it or unmap live RAM.
+
+Pause fences vCPU execution, not host time: KVM clocks/timers continue while
+parked. Export therefore captures the clock and timer state as of the export
+call, not as of the pause before it, so the exported instant is the end of that
+parked interval; a caller that needs a tight bound exports immediately after
+pausing. Restore installs the captured clock without adding the wall-clock time
+spent suspended, so the guest continues from the captured instant and catching
+its wall clock up with real time is the guest's own responsibility. This
+execution boundary targets the **same host, same KVM environment, non-stable
+ABI**; it makes no portable or cross-version compatibility promise. It provides
+no device snapshot or restore API.
+
+`make test:unit:vmm FILTER=control::tests` exercises epoch/ACK state, invalid
+transitions, pending I/O, duplicate/late ACKs, stop races, caller timeouts and actual
+chipset rejection on fake backends. On x86_64 it also exercises the owned
+driver, drop/join mapping order, kick failure and worker panic. The ignored
+KVM test requires Linux x86_64 and `/dev/kvm` and runs an infinite guest with
+no userspace devices through pause/resume/stop.
+
+## Device-less memory export
+
+`VmHandle::export<W: Write + Send + 'static>(&mut self, writer: W) -> Result<W>`
+captures Linux x86_64 state, streams it into the supplied writer and returns the
+same writer after flushing it. Both export methods require a Paused VM with no
+userspace devices. Admission errors use the operation name `export` and report
+`InvalidState` for other lifecycle states or `UnsupportedDevice` for attached
+devices. Other hosts return `Error::Snapshot` with kind `Unsupported` after
+those checks.
+
+The handle queues Export to the supervisor. The supervisor queues one capture
+per vCPU; each parked owning thread calls its own `save_state`. Once all replies
+are collected in contiguous ID order, the supervisor calls the host VM's
+`save_state`, encodes the machine state with Postcard, then streams RAM through
+the writer in chunks of up to 1 MiB. Export packs nonempty, non-overlapping
+RAM regions in ascending GPA order. The header records their combined byte
+length, and the payload skips address gaps such as the x86 MMIO hole.
+The supervisor calls `Write` synchronously. A blocked pipe or socket delays
+subsequent control events, including stop, until the write returns. On error,
+dropping a caller-supplied `BufWriter` may flush buffered bytes.
+
+`VmHandle::export_to_file(&mut self, path: impl AsRef<Path>) -> Result<()>`
+creates a new file with mode `0600` on the first write, after admission, state
+capture and RAM validation. An existing target returns `AlreadyExists` and is
+preserved, including if it appears between admission and the first write. On
+failure, cleanup discards buffered bytes and attempts removal only if the path
+still identifies the incomplete file.
+
+Both methods leave the VM Paused, including on failure, unless an independent
+stop or VM failure ends execution. With `export(writer)`, the caller is
+responsible for cleaning up partial output. A successful flush provides no
+crash-durability guarantee.
+
+All integers are little-endian. Version 1 has no padding, region table,
+checksum, hash, signature, feature negotiation or compatibility metadata:
+
+| Byte range | Contents |
+| --- | --- |
+| `0..8` | Magic `BXLMEM01` |
+| `8..12` | `u32` version, `1` |
+| `12..16` | `u32` vCPU count |
+| `16..24` | `u64` RAM byte length |
+| `24..32` | `u64` machine-state byte length, `M` |
+| `32..32+M` | Postcard: vCPU records (ID + `X86VcpuState`), then `X86VmState` |
+| `32+M..` | Packed RAM bytes in ascending GPA order |
+
+The internal reader checks the magic, version and header vCPU count (1–64).
+It rejects declared lengths that overflow and caps the encoded machine-state
+buffer at 32 MiB + 64 KiB.
+
+`make test:unit:vmm` covers the container, MMIO-hole packing, partial-write/final-flush
+cleanup and handle admission on every host. Linux x86_64 mock tests exercise
+non-Send CPUs, owning-thread capture, out-of-order replies, platform ordering
+and failures that preserve Paused. The ignored export test needs Linux x86_64
+and `/dev/kvm`.
+
+## Device-less memory restore
+
+On Linux x86_64, `Vm::from_state(reader: impl Read)` restores a device-less
+version-1 image produced by `VmHandle::export(writer)`. Pair
+`Vm::from_state_file(path: impl AsRef<Path>)` with `VmHandle::export_to_file(path)`
+to restore from disk. Both return a `Result<VmHandle<KvmVm>>` with the handle
+**Paused** and zero guest entries on success.
+
+```rust,ignore
+let bytes = source.export(Vec::new())?;
+let mut execution = Vm::from_state(bytes.as_slice())?;
+assert_eq!(execution.status(), VmStatus::Paused);
+execution.resume()?; // First guest entry on the destination is permitted here.
+execution.stop();
+execution.join()?;
+```
+
+`Vm::from_state_file` checks the declared total length against the file's size
+before reading the payload. `Vm::from_state` accepts a stream without seeking
+and reports truncation as it reads the header, machine state or RAM. Both validate
+the header, machine state, `X86_LAYOUT` and the KVM physical address limit before
+allocating or reading RAM. The KVM GPA cap is separate from the host's available
+memory budget.
+
+1. Validate the 32-byte header and read the bounded encoded machine state.
+2. Decode its leading Postcard sequence-length varint before deserializing any
+   vCPU record. Require 1–64 records and agreement with the header count.
+3. Decode the machine state and require contiguous, ordered vCPU IDs starting
+   at 0.
+4. Require a nonzero, page-aligned RAM payload. The x86 layout checks that each
+   range fits the host address space and that its end GPA can be computed
+   without overflow. Restore checks the ranges against the prepared KVM
+   handle's GPA limit.
+
+Restore streams packed RAM in ascending GPA order in 1 MiB chunks into fresh
+private-anonymous regions. When the payload exceeds 3 GiB, the remaining bytes
+go into high RAM starting at 4 GiB.
+
+Restore installs captured state without loading a kernel or initramfs or
+applying boot CPUID, MSRs or registers.
+The supervisor installs `X86VmState` first; each fresh vCPU installs its
+`X86VcpuState` on its own owning thread. Initial parking is armed before workers
+start. Only after every configured worker acknowledges that epoch does the
+supervisor publish Paused and return the handle. The caller must `resume()` to
+permit guest execution. Startup failure aborts/wakes the workers and joins them
+before unmapping/dropping the destination; no partial handle is returned.
+
+Images use a non-stable format for device-less VMs on the same host and KVM
+environment. There are no checksums, signatures, CPU-policy checks,
+kernel-version checks or feature negotiation. Keep the source image unchanged
+during import.
+
+Linux x86_64 mock tests cover zero entries before resume, platform-before-CPU
+installation, owning-thread access, admission before host creation, and failure
+cleanup (including backing release). The ignored KVM round-trip tests restore
+Paused and resume from both an in-memory stream and a file. The file round-trip
+verifies counter progress. These tests require Linux x86_64 and `/dev/kvm`.
+
+The ignored
+`kvm_linux_device_less_export_destroy_restore_resume_makes_progress` test also
+needs `VMM_KERNEL` pointing to the pinned kernel from `make vmm:boot:host`
+(the default path is exported by `make`). It boots through `Vm::new_device_less`
+with `console=null` and a generated initramfs whose `/init` repeatedly calls
+`nanosleep`. It polls paused exports for Linux's `/init` log, RAM differences
+and LAPIC or TSC-deadline reprogramming, with a 30-second boot deadline and
+5-second progress deadlines. It then destroys the source, restores Paused,
+checks registers and interrupt controllers, and requires fresh progress after
+resume. Run it through `make test:integration:vmm:kvm` after building the kernel.
+
+Only declared RAM payloads are compared, excluding image headers and machine
+state. Installing KVM's wall-clock MSR can update shared RAM before guest entry,
+so resumed RAM must differ from both the source and a post-import paused export.
+
+The LAPIC fidelity check excludes the source PPR byte at `0xA0`: it is KVM's
+derived shadow of `max(TPR, ISRV)` and can be stale in an export, rather than
+carrying guest state. KVM recomputes PPR on restore. With no guest entry before
+re-export, the restored PPR must follow the SDM priority rule: retain the full
+TPR (including its low nibble) when its priority class is at least ISRV's;
+otherwise use `ISRV & 0xF0`. ISRV is the highest in-service vector, or zero if
+none, read from eight 32-bit ISR registers at 16-byte intervals; reserved bytes
+do not contribute. The full 32-bit APIC_TMCCT (`0x390..=0x393`) is excluded on
+both sides because KVM derives it from host time. Initial count (`0x380`) and
+LVT timer (`0x320`) are compared to detect countdown-mode reprogramming. The
+remaining 1019 bytes must match the source byte for byte, including reserved
+bytes at `0x394..=0x39F`.
+
+The timer check excludes free-running TSC and KVM clock reads. It also excludes
+all four APIC_TMCCT bytes (`0x390..=0x393`) because KVM derives the countdown from
+host time, even while Paused. Countdown-mode reprogramming is detected through
+initial count (`0x380`), LVT timer (`0x320`) and other compared registers;
+IA32_TSC_DEADLINE (MSR `0x6e0`) signals TSC-deadline reprogramming. Dropping
+IA32_TSC_DEADLINE during restore makes the progress check time out on a
+TSC-deadline host. This qualifies device-less kernel/timer progress, not network,
+rootfs, console output or complete Linux functionality; RAM changes alone are
+not a guest health check.
 
 ## Long-mode entry
 
@@ -590,8 +829,10 @@ are built from. `Vm` owns the chipset they form.
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
   poller. vCPU workers and `StopHandle` send the other events. An event sent
   after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
-  the oldest event, or `None` at its timeout, and rechecks the queue every
-  second in case a wake-up was lost. Every event ends the VM; the VMM never
+  the oldest event, or `None` at its timeout or a nonterminal wake, and rechecks
+  the queue every second in case a wake-up was lost. Mailbox commands and ACKs
+  share this Waker without setting the stop latch or queuing an event.
+  Every event ends the VM; the VMM never
   restarts a guest.
 
 ## Virtio-mmio transport
@@ -1088,8 +1329,8 @@ make fmt:check:rust
 
 On Linux x86_64 with read/write access to `/dev/kvm`,
 `make test:integration:vmm:kvm` also runs this crate's hardware tests. A flat
-32-bit guest uses 3072 MiB to fill the low RAM band, reads its last byte, and
-reports it on port `0x3f8`. A 64-bit guest uses 4097 MiB to place a marker above
+32-bit guest fills the 3 GiB low RAM band, reads its last byte, and reports it
+on port `0x3f8`. A 64-bit guest uses 4097 MiB to place a marker above
 4 GiB. Entered through `long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS`
 applied, it reloads its segments from the GDT in RAM, reads markers at RSI and
 at the top of RAM, and stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and

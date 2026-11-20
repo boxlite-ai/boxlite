@@ -73,7 +73,7 @@ impl KvmVcpu {
     }
 }
 
-fn check_written(msrs: &Msrs, written: usize) -> io::Result<()> {
+pub(super) fn check_written(msrs: &Msrs, written: usize) -> io::Result<()> {
     match msrs.as_slice().get(written) {
         Some(rejected) => Err(io::Error::other(format!(
             "KVM wrote {written} of {} MSRs; first rejected index {:#x}",
@@ -126,10 +126,103 @@ fn msr_buffer(entries: &[X86Msr]) -> io::Result<Msrs> {
     Ok(buffer)
 }
 
+/// Probe one index at a time: a short batch read stops at the first unavailable
+/// MSR and would lose every subsequent register (notably CPUID-gated PMU MSRs).
+/// No boot-MSR allowlist: retain every readable index advertised by KVM.
+pub(super) fn snapshot_msrs(
+    fd: &kvm_ioctls::VcpuFd,
+    indices: &[u32],
+) -> io::Result<Vec<kvm_msr_entry>> {
+    let mut entries = Vec::new();
+    for &index in indices {
+        // x2APIC's register window includes write-only EOI/SELF_IPI registers.
+        // LAPIC state is saved/restored via its dedicated ioctl instead.
+        if (0x800..=0xbff).contains(&index) {
+            continue;
+        }
+        let mut msr = Msrs::from_entries(&[kvm_msr_entry {
+            index,
+            ..Default::default()
+        }])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        match fd.get_msrs(&mut msr).map_err(io::Error::from)? {
+            0 => {} // Unavailable under this vCPU's CPUID/MCE configuration.
+            1 => entries.push(msr.as_slice()[0]),
+            _ => return Err(io::Error::other("invalid MSR read count")),
+        }
+    }
+    Ok(entries)
+}
+
+pub(super) fn snapshot_cpuid(entries: &[kvm_cpuid_entry2]) -> io::Result<CpuId> {
+    if entries.is_empty() || entries.len() > KVM_MAX_CPUID_ENTRIES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid CPUID count",
+        ));
+    }
+    CpuId::from_entries(entries).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use kvm_bindings::{KVM_CPUID_FLAG_STATE_READ_NEXT, KVM_CPUID_FLAG_STATEFUL_FUNC};
+
+    #[test]
+    fn snapshot_cpuid_preserves_entries_and_only_checks_count() {
+        let first = kvm_cpuid_entry2 {
+            function: 7,
+            ..Default::default()
+        };
+        let mut second = first;
+        second.index = 1;
+        second.flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX | (1 << 31);
+        second.padding[0] = 1;
+        let entries = [first, second, second];
+        assert_eq!(snapshot_cpuid(&entries).unwrap().as_slice(), &entries);
+        assert!(snapshot_cpuid(&[]).is_err());
+        assert!(snapshot_cpuid(&vec![first; KVM_MAX_CPUID_ENTRIES + 1]).is_err());
+    }
+
+    #[test]
+    fn snapshot_cpuid_accepts_counts_just_below_and_at_the_limit() {
+        let entry = kvm_cpuid_entry2 {
+            function: 7,
+            eax: 42,
+            ..Default::default()
+        };
+        for len in [1, KVM_MAX_CPUID_ENTRIES - 1, KVM_MAX_CPUID_ENTRIES] {
+            let entries = vec![entry; len];
+            assert_eq!(snapshot_cpuid(&entries).unwrap().as_slice(), entries);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_msrs_skips_x2apic_and_unavailable_indices_without_losing_later_values() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(
+            vm.supported_cpuid(),
+            &[X86Msr {
+                index: 0xc0000102,
+                value: 0x12345678,
+            }],
+        )
+        .unwrap();
+        assert!(snapshot_msrs(&cpu.fd, &[]).unwrap().is_empty());
+        let entries = snapshot_msrs(
+            &cpu.fd,
+            &[0x7ff, 0x800, 0xbff, 0xc00, 0x10, u32::MAX, 0xc0000102],
+        )
+        .unwrap();
+        assert_eq!(
+            entries.iter().map(|e| e.index).collect::<Vec<_>>(),
+            [0x10, 0xc0000102]
+        );
+        assert_eq!(entries[1].data, 0x12345678);
+    }
 
     #[test]
     fn supported_cpuid_omits_unrepresentable_stateful_entries() {

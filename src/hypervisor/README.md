@@ -22,7 +22,8 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `arm64` | `Arm64Vcpu`, `Arm64BootRegisters` and `CpuOnResult`: the arm64 boot registers and the VMM's answer to `CPU_ON` |
 | `hvf` | macOS arm64: the VM and its in-kernel GICv3, memory, vCPU execution and kicks, with `syndrome` decoding exceptions and emulating trapped system registers, and `psci` serving PSCI 0.2 |
-| `kvm` | x86_64 VM creation, memory slots, registers, CPUID/MSRs, execution, kicks and pending-I/O completion; arm64 follows |
+| `x86` | Boot configuration and Linux x86_64 VM/vCPU state images with Serde encoding |
+| `kvm` | x86_64 VM creation, memory slots, registers, CPUID/MSRs, execution, kicks, pending-I/O completion and paused-state transfer; arm64 follows |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
 Three boundaries decide placement when a case is ambiguous: KVM memory-slot
@@ -67,11 +68,68 @@ MSRs are explicit index/value writes. A short KVM write is an error identifying
 the first rejected MSR, never a successful partially configured CPU. Host feature
 discovery is a ceiling, not permission to add unsupported instructions.
 
-These three methods form the x86_64 extension traits `X86Vm`
+These boot methods form the x86_64 extension traits `X86Vm`
 (`supported_cpuid`) and `X86Vcpu` (`set_cpu_features`, `set_boot_registers`),
 which `KvmVm` and `KvmVcpu` implement, so the VMM's vCPU workers and its mock
 backend use one interface. On arm64, `Arm64Vcpu` sets MPIDR_EL1 (`set_mpidr`) and
 the entry PC, X0 and PSTATE (`set_boot_registers`).
+
+## Linux x86_64 paused state
+
+`X86Vm::save_state` / `restore_state` and `X86Vcpu::save_state` /
+`restore_state` transfer owned `X86VmState` and `X86VcpuState` images. KVM also
+exposes these methods directly. They support the **same host and KVM environment
+only**, with a **non-stable ABI**; they do not promise portable migration.
+The types implement Serde for Postcard encoding; the VMM owns machine-state
+assembly, RAM, devices and persistence. There is no file container, checksum,
+signature or compatibility negotiation in this crate.
+
+| Image | Captured state |
+| --- | --- |
+| `X86VmState` | PIC master/slave, IOAPIC, every created PIT (including unused reset state), and KVM clock |
+| `X86VcpuState` | regs, sregs, FPU, CPUID, all KVM-advertised readable MSRs, complete host-sized XSAVE, XCRs, debug registers, events, MP state, LAPIC and TSC frequency |
+
+KVM caches the advertised MSR index list at VM creation and shares it with
+its vCPUs; capture still probes readability under each vCPU's CPUID/MCE state.
+
+Stop all vCPUs and IRQ producers and complete userspace I/O with
+`complete_pending_io` before capture. `save_state` never enters the guest.
+`Vcpu::notify_guest_stopped`, called on the stopped vCPU's owning thread,
+notifies an enabled KVM pvclock about the pause; an inactive pvclock is a no-op.
+Other backends report unsupported for these operations.
+
+KVM VM-state ioctl failures return `Error::VmState` with operation `"save"` or
+`"restore"`; its display identifies the state transfer, not VM creation.
+Its `source()` is the original `io::Error`, preserving `raw_os_error()` and
+`kind()` without a message wrapper. Unsupported `X86Vm` default methods retain
+`Error::CreateVm` with `Unsupported` and no errno.
+
+Restore into an identically configured VM and fresh, never-entered vCPUs, with
+RAM available before register restore; do not enter a vCPU until all state is
+installed. Writes are not transactional: discard the destination after any
+error. CPUID/MSR writes rejected by KVM, including short MSR writes, fail the
+restore. Decoding bounds flexible arrays; kvm-bindings zero-fills and
+pads/truncates ABI buffers. Restore allocates XSAVE storage from the local KVM size
+and checks the captured XSAVE length against it. CPU policy, kernel release,
+register-set identity, duplicates and ordering are not compatibility-checked.
+
+The LAPIC image represents x2APIC MSRs. Nested virtualization, Hyper-V SynIC,
+guest-debug configuration, IRQ routing and device/irqfd configuration are outside
+these images. Paged 32-bit PAE guests are unsupported because KVM SREGS omits
+cached PDPTRs; callers must exclude this mode, which these primitives do not
+validate. Do not enable dynamic host XSTATE permissions after vCPU creation.
+KVM timers make platform capture non-atomic; PIT restore rebases host load
+timestamps, so exact sub-tick phase is not preserved. Restoring the KVM clock
+excludes snapshot downtime.
+
+`make test:unit:vmm` checks VM-state error construction, display and cause
+preservation without hardware, and includes Postcard round trips, truncated input
+and flexible-array bounds on Linux x86_64, without `/dev/kvm`.
+`make test:integration:vmm:kvm` also exercises platform and vCPU restoration
+with KVM, including errno preservation through both VM-state ioctl failure
+paths and executing AVX loads/stores across a vCPU restore on an AVX-capable host.
+
+## Host execution
 
 macOS arm64 exports `HvfVm` and thread-bound `HvfVcpu`, which implement `Vm`,
 `Vcpu` and `Arm64Vcpu` on Hypervisor.framework with the in-kernel GICv3 of

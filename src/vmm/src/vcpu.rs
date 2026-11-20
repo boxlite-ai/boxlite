@@ -11,7 +11,7 @@ use std::{
     sync::{Condvar, Mutex, PoisonError},
 };
 
-use boxlite_hypervisor::{Vcpu, VcpuExit, X86BootRegisters, X86Vcpu, X86Vm};
+use boxlite_hypervisor::{Vcpu, VcpuExit, X86Vcpu, X86Vm};
 
 use crate::{
     chipset::Chipset,
@@ -52,12 +52,13 @@ impl StartGate {
 pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) host_vm: &'a H,
     pub(crate) vcpu_count: u8,
-    pub(crate) boot_regs: &'a X86BootRegisters,
+    pub(crate) startup: &'a crate::vm::Startup,
     pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
     /// The kick handle of every configured vCPU, for the thread that stops them.
     pub(crate) kicks: &'a Mutex<Vec<<H::Vcpu as Vcpu>::Handle>>,
     pub(crate) gate: &'a StartGate,
+    pub(crate) parking: &'a crate::control::Parking,
 }
 
 impl<H: X86Vm> Workers<'_, H> {
@@ -88,11 +89,19 @@ impl<H: X86Vm> Workers<'_, H> {
 
     fn configure(&self, id: u8) -> Result<H::Vcpu> {
         let mut vcpu = self.host_vm.create_vcpu(id.into())?;
-        let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
-        vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
-        // The other vCPUs wait in their reset state for INIT and SIPI.
-        if id == 0 {
-            vcpu.set_boot_registers(self.boot_regs)?;
+        match self.startup {
+            crate::vm::Startup::Boot(registers) => {
+                let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
+                vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
+                // The other vCPUs wait in their reset state for INIT and SIPI.
+                if id == 0 {
+                    vcpu.set_boot_registers(registers)?;
+                }
+            }
+            #[cfg(target_os = "linux")]
+            crate::vm::Startup::Restore(machine) => {
+                vcpu.restore_state(&machine.vcpus[id as usize].state)?;
+            }
         }
         self.kicks
             .lock()
@@ -108,6 +117,12 @@ impl<H: X86Vm> Workers<'_, H> {
         loop {
             // Checked before every entry: a stop that lands earlier still
             // returns from the next entry at once, since its kick is pending.
+            if self.sender.is_stopping() {
+                vcpu.complete_pending_io()?;
+                return Ok(None);
+            }
+            self.parking.checkpoint(id, vcpu)?;
+            // A terminal stop may have woken this parked worker.
             if self.sender.is_stopping() {
                 vcpu.complete_pending_io()?;
                 return Ok(None);

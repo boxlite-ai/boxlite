@@ -28,6 +28,13 @@ pub(crate) type BootRegisters = boxlite_hypervisor::X86BootRegisters;
 #[cfg(not(target_arch = "x86_64"))]
 pub(crate) type BootRegisters = ();
 
+/// The initialization contract for fresh, never-entered vCPUs.
+pub(crate) enum Startup {
+    Boot(BootRegisters),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    Restore(Box<crate::snapshot::state::MachineState>),
+}
+
 /// How a VM ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -43,7 +50,7 @@ pub enum VmExit {
 /// Stops a VM from any thread; [`Vm::run`] then returns
 /// [`VmExit::StopRequested`] unless the VM had already ended.
 #[derive(Clone, Debug)]
-pub struct StopHandle(EventSender);
+pub struct StopHandle(pub(crate) EventSender);
 
 impl StopHandle {
     /// Asks the VM to stop and returns without waiting.
@@ -54,7 +61,7 @@ impl StopHandle {
 
 /// Where a VM is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum VmState {
+pub(crate) enum VmState {
     /// Built; [`Vm::run`] has not started.
     Created,
     /// [`Vm::run`] has started. A VM runs once, so it never leaves this state.
@@ -65,22 +72,22 @@ enum VmState {
 pub struct Vm<H: HostVm> {
     // Devices drop before the host VM, and the host VM drops before the RAM.
     // `Drop` can take these fields to close a fresh VM before releasing RAM.
-    chipset: Option<Chipset>,
+    pub(crate) chipset: Option<Chipset>,
     /// Runs every virtio device's events on one thread; `run` and `Drop` shut
     /// them down before the RAM is released.
-    workers: Option<VirtioWorkers>,
+    pub(crate) workers: Option<VirtioWorkers>,
     /// The worker writing the guest console to the caller's sink; `run`
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
     /// `Sync`; `run` reaches it through `&mut self`.
-    console: Mutex<Option<ConsoleWorker>>,
-    events: Mutex<EventLoop>,
-    sender: EventSender,
-    boot_regs: BootRegisters,
-    vcpu_count: u8,
-    state: VmState,
+    pub(crate) console: Mutex<Option<ConsoleWorker>>,
+    pub(crate) events: Mutex<EventLoop>,
+    pub(crate) sender: EventSender,
+    pub(crate) startup: Startup,
+    pub(crate) vcpu_count: u8,
+    pub(crate) state: VmState,
     fresh_vm: bool,
-    host_vm: Option<Arc<H>>,
-    ram: GuestRam,
+    pub(crate) host_vm: Option<Arc<H>>,
+    pub(crate) ram: GuestRam,
 }
 
 impl<H: HostVm> std::fmt::Debug for Vm<H> {
@@ -95,6 +102,43 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
+    /// Restores a device-less image from a reader on the same host and KVM environment.
+    /// Returns Paused; no guest instruction executes until `resume` succeeds.
+    pub fn from_state(
+        mut reader: impl std::io::Read,
+    ) -> Result<crate::VmHandle<boxlite_hypervisor::KvmVm>> {
+        crate::snapshot::restore::from_kvm_reader(&mut reader, None)
+    }
+
+    /// Restores a device-less image from a file and returns a Paused handle.
+    pub fn from_state_file(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<crate::VmHandle<boxlite_hypervisor::KvmVm>> {
+        crate::snapshot::restore::from_kvm_path(path.as_ref())
+    }
+
+    /// Builds a Linux x86_64 KVM VM without userspace devices or a console.
+    /// Device configuration is rejected before creating the host VM.
+    pub fn new_device_less(config: VmConfig) -> Result<Self> {
+        use crate::{boot, cpu_features::preflight_x86};
+
+        config.validate_device_less()?;
+        let prepared = boxlite_hypervisor::KvmVm::prepare()?;
+        let leaf = preflight_x86(
+            config.memory_mib,
+            prepared.supported_cpuid(),
+            boot::BOOT_LEAF,
+        )?;
+        Self::build(
+            config,
+            move || boxlite_hypervisor::KvmVm::from_prepared(prepared),
+            true,
+            VirtioWorkers::new,
+            move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
+            |_, _, _| Ok(()),
+        )
+    }
+
     /// Validates `config` and preflights the RAM layout and boot leaf against
     /// KVM before spawning the console worker and building the VM.
     /// `devices::add_all` adds the legacy devices and one virtio-blk device
@@ -186,11 +230,41 @@ impl<H: HostVm> Vm<H> {
     {
         let mut config = config;
         config.validate()?;
+        let ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
+        #[cfg(target_arch = "x86_64")]
+        let startup = Startup::Boot(BootRegisters::default());
+        #[cfg(not(target_arch = "x86_64"))]
+        let startup = Startup::Boot(());
+        let mut vm = Self::with_ram(
+            ram,
+            config.vcpu_count,
+            host_vm,
+            fresh_vm,
+            create_workers,
+            |chipset, ctx| devices(chipset, ctx, &mut config),
+            startup,
+        )?;
+        vm.startup = Startup::Boot(boot(&vm.ram, &config)?);
+        Ok(vm)
+    }
+
+    /// Assembles a VM around allocated RAM. A fresh backend has no independent
+    /// vCPUs, so closing it after a failed registration releases its mappings.
+    pub(crate) fn with_ram(
+        mut ram: GuestRam,
+        vcpu_count: u8,
+        host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
+        fresh_vm: bool,
+        create_workers: impl FnOnce(EventSender) -> std::io::Result<VirtioWorkers>,
+        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>) -> Result<()>,
+        startup: Startup,
+    ) -> Result<Self>
+    where
+        H: 'static,
+    {
         let events = EventLoop::new().map_err(Error::EventLoop)?;
         let sender = events.sender();
-        // Allocating first keeps the drop order safe on every early return:
-        // locals drop in reverse order, so the host VM goes before the RAM.
-        let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
+        // The host VM local drops before the RAM argument on early returns.
         let host_vm = Arc::new(host_vm()?);
         // No worker thread starts before a virtio device activates, so an
         // early return leaves nothing running.
@@ -202,7 +276,6 @@ impl<H: HostVm> Vm<H> {
                 memory: ram.memory(),
                 workers: &workers,
             },
-            &mut config,
         )?;
         let chipset = chipset.build()?;
         if let Err(error) = ram.map(&*host_vm) {
@@ -217,128 +290,25 @@ impl<H: HostVm> Vm<H> {
             return Err(error);
         }
 
-        let mut vm = Self {
+        Ok(Self {
             chipset: Some(chipset),
             workers: Some(workers),
             console: Mutex::new(None),
             events: Mutex::new(events),
             sender,
-            boot_regs: BootRegisters::default(),
-            vcpu_count: config.vcpu_count,
+            startup,
+            vcpu_count,
             state: VmState::Created,
             fresh_vm,
             host_vm: Some(host_vm),
             ram,
-        };
-        vm.boot_regs = boot(&vm.ram, &config)?;
-        Ok(vm)
+        })
     }
 
     /// A handle that stops this VM from another thread, even before
     /// [`run`](Self::run) starts.
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.sender.clone())
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
-    /// Runs every vCPU on its own thread until the first event ends the VM,
-    /// stops and joins them all, shuts the virtio workers down, and returns
-    /// how the VM ended. Workers that do not shut down fail a run that
-    /// otherwise ended cleanly. A VM runs once; a second call fails with
-    /// [`Error::AlreadyRan`].
-    pub fn run(&mut self) -> Result<VmExit> {
-        use std::{sync::PoisonError, thread};
-
-        use boxlite_hypervisor::VcpuHandle as _;
-
-        use crate::vcpu::{StartGate, Workers};
-
-        if self.state != VmState::Created {
-            return Err(Error::AlreadyRan);
-        }
-        self.state = VmState::Exited;
-        let gate = StartGate::default();
-        let kicks = Mutex::new(Vec::new());
-        let vcpus = Workers {
-            host_vm: self.host_vm.as_deref().expect("live VM has a host VM"),
-            vcpu_count: self.vcpu_count,
-            boot_regs: &self.boot_regs,
-            chipset: self.chipset.as_ref().expect("live VM has a chipset"),
-            sender: &self.sender,
-            kicks: &kicks,
-            gate: &gate,
-        };
-        let events = self
-            .events
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
-        let event = thread::scope(|scope| {
-            for id in 0..vcpus.vcpu_count {
-                let vcpus = &vcpus;
-                let spawned = thread::Builder::new()
-                    .name(format!("vcpu{id}"))
-                    .spawn_scoped(scope, move || vcpus.run(id));
-                if let Err(source) = spawned {
-                    let vcpu = id.into();
-                    vcpus
-                        .sender
-                        .send(Event::VcpuFailed(Error::SpawnVcpu { vcpu, source }));
-                    gate.abort();
-                    break;
-                }
-            }
-            let event = events.wait(None);
-            if event.is_err() {
-                // Without an event the stop latch is still open; close it so
-                // the vCPUs stop and the scope can join them.
-                vcpus.sender.send(Event::StopRequested);
-            }
-            // Wake every vCPU still in the guest; a vCPU still being
-            // configured sees the latch before its first entry.
-            for kick in kicks.lock().unwrap_or_else(PoisonError::into_inner).iter() {
-                if let Err(error) = kick.kick() {
-                    tracing::warn!(%error, "failed to kick a vCPU");
-                }
-            }
-            event
-        });
-        // No vCPU notifies a queue any more. Stop the virtio devices before the
-        // console finishes, so a device's last output still reaches the sink.
-        let workers = self.workers.as_ref().expect("live VM has virtio workers");
-        let shutdown = workers.shutdown().map_err(Error::from);
-        let console = self
-            .console
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(console) = console {
-            console.finish();
-            let dropped = console.dropped_bytes();
-            if dropped > 0 {
-                tracing::warn!(dropped, "dropped guest console output");
-            }
-        }
-        let ended = match event {
-            Ok(Some(Event::StopRequested)) => Ok(VmExit::StopRequested),
-            Ok(Some(Event::GuestShutdown)) => Ok(VmExit::GuestShutdown),
-            Ok(Some(Event::GuestReset)) => Ok(VmExit::GuestReset),
-            Ok(Some(Event::VcpuFailed(error) | Event::DeviceFailed(error))) => Err(error),
-            Ok(None) => unreachable!("a wait without a timeout returns an event"),
-            Err(error) => Err(Error::EventLoop(error)),
-        };
-        // The error that ended the VM stays the one the caller sees.
-        match (ended, shutdown) {
-            (ended, Ok(())) => ended,
-            (Ok(exit), Err(error)) => {
-                tracing::warn!(?exit, "the VM ended, but virtio shutdown failed");
-                Err(error)
-            }
-            (Err(ended), Err(error)) => {
-                tracing::warn!(%error, "virtio shutdown failed");
-                Err(ended)
-            }
-        }
     }
 }
 
