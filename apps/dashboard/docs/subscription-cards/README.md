@@ -59,6 +59,33 @@ plans. Verify unchanged confirmation targets, exact catalogue prices, missing
 facts versus unsupported, and retention reference points. Inspect desktop light
 and dark themes, sticky headers, keyboard focus and narrow horizontal scrolling.
 
+### Scroll overflow regression
+
+The comparison scroll container establishes a positioning containing block. This
+keeps absolute screen-reader labels inside its clipping boundary, so the page
+ends after the documentation link even when the table scrolls internally.
+Keep the hidden caption and unspecified-value text; removing them loses semantics.
+
+With the mock catalogue and expanded sidebar, use CSS viewports 1450×643,
+1160×514 and 966×429 (100%, 125% and 150% equivalents for that initial viewport).
+At 1160×514, scroll outside the table to the page end: the documentation link must
+remain visible rather than scrolling into an empty screen. Focus the table and
+use arrow keys, then scroll to the last row and rightmost column; the feature
+column and plan header remain pinned and Custom remains reachable. Repeat with
+collapsed navigation and both themes.
+
+Browser regression: compare document scrollHeight against the documentation
+link's bottom in document coordinates plus 48px of allowed page padding, or the
+viewport height if larger. Before the fix this failed (1829px versus a content
+bottom of 589px); afterward the same assertion passed (613px). This measures
+rendered overflow rather than checking for a CSS declaration. Browser zoom menus
+and non-Chromium engines were not exercised; the viewport equivalents were.
+
+Screenshots use synthetic mock data at the same 1160×514 CSS viewport:
+[before: blank outer scroll](../../../../docs/contributing/investigations/assets/billing-plan-scroll/before.png),
+[after: bounded outer scroll](../../../../docs/contributing/investigations/assets/billing-plan-scroll/after.png),
+and [light theme: final row and Custom column](../../../../docs/contributing/investigations/assets/billing-plan-scroll/end-light.png).
+
 ## Local preview
 
 `http://127.0.0.1:3198/dashboard/billing?preview=subscription-cards&tab=plans`
