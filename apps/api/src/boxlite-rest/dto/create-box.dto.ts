@@ -21,6 +21,7 @@ import {
   Min,
   IsIn,
   MaxLength,
+  Matches,
   MinLength,
   Validate,
   ValidateIf,
@@ -82,6 +83,10 @@ export class OutboundNetworkSpecDto {
   @Validate(IsNetworkAllowEntryConstraint, { each: true })
   @Validate(IsOutboundPolicyCombinationConstraint)
   allow_net?: string[]
+
+  @IsOptional()
+  @Matches(/^[a-z0-9][a-z0-9-]{0,62}$/)
+  proxy?: string | null
 }
 
 // Rejects any non-empty inbound allowlist: no layer enforces it yet (the

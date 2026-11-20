@@ -151,7 +151,10 @@ export class BoxliteBoxController {
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
-    let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
+    let box = await this.boxService.create(createBoxDto, organization, ctx, {
+      maxCreatedBoxes,
+      ...(dto.network?.outbound?.proxy !== undefined ? { outboundProxy: dto.network.outbound.proxy } : {}),
+    })
     if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
@@ -424,9 +427,14 @@ export class BoxliteBoxController {
       { mode: dto.mode, allow_net: dto.allow_net ?? [] },
       authContext.organizationId,
       matches,
+      ...(dto.proxy === undefined ? [] : ([dto.proxy] as const)),
     )
     response.setHeader('ETag', `"${outboundRecord(box).revision}"`)
-    return { mode: box.outboundEnabled ? 'enabled' : 'disabled', allow_net: box.outboundAllowNet ?? [] }
+    return {
+      mode: box.outboundEnabled ? 'enabled' : 'disabled',
+      allow_net: box.outboundAllowNet ?? [],
+      ...(dto.proxy === undefined ? {} : { proxy: dto.proxy }),
+    }
   }
 
   private isStartAlreadyInProgress(box: Box): boolean {

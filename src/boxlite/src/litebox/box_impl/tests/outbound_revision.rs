@@ -160,10 +160,11 @@ async fn fixture(reply: Reply) -> (StartFixture, RevisionBackend) {
         entered: Default::default(),
         legacy_calls: Default::default(),
     };
-    let fixture = running_box_for_start_test_with_live(Arc::new(StartGate::default()), |live| {
-        live.network = Some(Arc::new(backend.clone()))
-    })
-    .await;
+    let fixture =
+        running_box_for_start_test_with_live(Arc::new(StartGate::default()), |_, live| {
+            live.network = Some(Arc::new(backend.clone()))
+        })
+        .await;
     *backend.probe.lock().unwrap() = Some((
         fixture.box_impl.runtime.layout.db_dir().join("boxlite.db"),
         fixture.box_impl.id().to_string(),

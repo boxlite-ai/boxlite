@@ -34,7 +34,7 @@ async fn outbound_update_does_not_block_stop_on_pending_container_start() {
 
     let gate = Arc::new(StartGate::default());
     let backend = OutboundPolicyBackend::default();
-    let fixture = running_box_for_start_test_with_live(Arc::clone(&gate), |live| {
+    let fixture = running_box_for_start_test_with_live(Arc::clone(&gate), |_, live| {
         live.network = Some(Arc::new(backend.clone()));
     })
     .await;

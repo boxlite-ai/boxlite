@@ -326,7 +326,7 @@ export class RunnerService {
     if (runner.apiVersion !== '0') return false
     try {
       const adapter = await this.runnerAdapterFactory.create(runner)
-      return (await adapter.supportsProtectedBootstrap?.()) === true
+      return (await adapter.supportsProtectedBootstrap?.(true)) === true
     } catch {
       return false
     }

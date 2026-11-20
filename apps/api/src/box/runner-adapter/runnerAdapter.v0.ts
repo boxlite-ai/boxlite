@@ -20,10 +20,26 @@ import {
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
+import type { BoxVolume } from '../dto/box.dto'
 import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
-import { checkedBootReceipt, enrolledRunnerAgent, ProtectedBootKey, ProtectedBootRoute } from './protected-runner'
+import {
+  checkedBootReceipt,
+  enrolledRunnerAgent,
+  ProtectedBootControl,
+  ProtectedBootKey,
+  ProtectedBootRoute,
+} from './protected-runner'
+import {
+  checkedManagedReceipt,
+  checkedManagedSnapshot,
+  checkedSealedEvidence,
+  ManagedCommand,
+  ManagedReceipt,
+  ManagedSnapshot,
+  sameManagedSnapshot,
+} from './protected-outbound'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -248,19 +264,58 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  async supportsProtectedBootstrap(): Promise<boolean> {
+  async supportsProtectedBootstrap(recovery = false, volumeRestart = false): Promise<boolean> {
     if (!this.bootstrapApi) return false
     try {
       const { data } = await this.bootstrapApi.get('/v1/outbound-proxy/bootstrap', { timeout: 3000 })
+      const required = recovery
+        ? [
+            'start',
+            'receipt',
+            'retire',
+            'release-gate',
+            'seal-gate',
+            'managed-route',
+            'unbound-start',
+            'remove-retired',
+          ]
+        : ['start', 'receipt', 'retire']
+      if (volumeRestart) required.push('restart-volumes')
       return (
         data.runner_id === this.runner.id &&
         data.version === 1 &&
         Array.isArray(data.operations) &&
-        ['start', 'receipt', 'retire'].every((operation) => data.operations.includes(operation))
+        required.every((operation) => data.operations.includes(operation))
       )
     } catch {
       return false
     }
+  }
+
+  get protectedBootstrap(): ProtectedBootControl | undefined {
+    return this.bootstrapApi ? this : undefined
+  }
+
+  async prepareProtectedBox(box: Box, image: string, metadata: Record<string, string>, nestedVirtualization: boolean) {
+    if (!this.bootstrapApi || box.runnerId !== this.runner.id) throw new Error('Protected Runner enrollment is missing')
+    return this.createBox(box, image, metadata, nestedVirtualization, true)
+  }
+
+  async startProtectedBox(
+    boxId: string,
+    key: ProtectedBootKey,
+    route: ProtectedBootRoute | null,
+    generation?: string,
+    restart?: boolean,
+    restartVolumes?: BoxVolume[],
+  ) {
+    return this.protectedBootOperation(boxId, '', key, {
+      ...route,
+      key,
+      recovery_generation: generation,
+      restart,
+      restart_volumes: restartVolumes,
+    })
   }
 
   async createProtectedBox(
@@ -268,17 +323,17 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     image: string,
     key: ProtectedBootKey,
     loadRoute: () => Promise<ProtectedBootRoute>,
+    recoveryGeneration?: string,
   ) {
     if (
       box.runnerId !== this.runner.id ||
       key.runner_id !== this.runner.id ||
-      !(await this.supportsProtectedBootstrap())
+      !(await this.supportsProtectedBootstrap(recoveryGeneration !== undefined))
     ) {
       throw new Error('Runner does not qualify for protected bootstrap')
     }
-    await this.createBox(box, image, undefined, false, true)
-    const route = await loadRoute()
-    return this.protectedBootOperation(box.id, '', key, { ...route, key })
+    await this.prepareProtectedBox(box, image, {}, false)
+    return this.startProtectedBox(box.id, key, await loadRoute(), recoveryGeneration)
   }
 
   async readProtectedBoot(boxId: string, key: ProtectedBootKey, expectedEpoch?: string) {
@@ -289,6 +344,78 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     return this.protectedBootOperation(boxId, '/retire', key, key, expectedEpoch)
   }
 
+  async removeRetiredEpoch(boxId: string, key: ProtectedBootKey, epoch: string | null) {
+    const evidence = await this.postProtectedOutbound(boxId, '/bootstrap/remove-retired', key.runner_id, { key, epoch })
+    const receipt = checkedBootReceipt(evidence, boxId, key, epoch)
+    if (receipt.outcome !== 'retired') throw new Error('Protected Runner removal is unconfirmed')
+    return receipt
+  }
+
+  async managedOutbound(boxId: string, epoch: string, command: ManagedCommand): Promise<ManagedReceipt> {
+    const evidence = await this.postProtectedOutbound(boxId, '/managed-route', this.runner.id, {
+      runner_id: this.runner.id,
+      epoch,
+      command,
+    })
+    return checkedManagedReceipt(evidence, boxId, this.runner.id, epoch)
+  }
+
+  async changeProtectedBootGate(
+    boxId: string,
+    key: ProtectedBootKey,
+    epoch: string,
+    generation: string,
+    action: 'release' | 'seal',
+    outbound?: ManagedSnapshot,
+  ): Promise<void> {
+    await this.readGateChange(boxId, key, epoch, generation, action, outbound)
+  }
+
+  async sealProtectedEpoch(boxId: string, key: ProtectedBootKey, epoch: string, generation: string) {
+    const receipt = await this.readGateChange(boxId, key, epoch, generation, 'seal')
+    return checkedSealedEvidence(receipt.evidence, epoch)
+  }
+
+  private async readGateChange(
+    boxId: string,
+    key: ProtectedBootKey,
+    epoch: string,
+    generation: string,
+    action: 'release' | 'seal',
+    outbound?: ManagedSnapshot,
+  ) {
+    const evidence = await this.postProtectedOutbound(boxId, `/bootstrap/${action}-gate`, key.runner_id, {
+      key,
+      epoch,
+      generation,
+      outbound,
+    })
+    const response = evidence as {
+      box_id?: unknown
+      receipt?: {
+        boot?: unknown
+        generation?: unknown
+        closed?: unknown
+        sealed?: unknown
+        outbound?: unknown
+        evidence?: unknown
+      }
+    } | null
+    const receipt = response?.receipt
+    const boot = checkedBootReceipt({ box_id: response?.box_id, receipt: receipt?.boot }, boxId, key, epoch)
+    const sealing = action === 'seal'
+    if (
+      boot.outcome !== 'confirmed' ||
+      receipt?.generation !== generation ||
+      receipt.closed !== sealing ||
+      receipt.sealed !== sealing ||
+      (outbound && !sameManagedSnapshot(checkedManagedSnapshot(receipt.outbound, epoch), outbound))
+    ) {
+      throw new Error('Runner did not confirm the exact protected recovery gate change')
+    }
+    return receipt
+  }
+
   private async protectedBootOperation(
     boxId: string,
     suffix: '' | '/receipt' | '/retire',
@@ -296,21 +423,35 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     body: unknown,
     expectedEpoch?: string,
   ) {
-    if (!this.bootstrapApi || key.runner_id !== this.runner.id)
-      throw new Error('Protected Runner enrollment is missing')
-    let evidence: unknown
-    try {
-      const path = `/v1/boxes/${encodeURIComponent(boxId)}/network/outbound/bootstrap${suffix}`
-      evidence = (await this.bootstrapApi.post(path, body)).data
-    } catch {
-      // Axios errors retain the request body, including the proxy credential.
-      throw new Error('Protected Runner bootstrap outcome is unconfirmed')
-    }
+    const evidence = await this.postProtectedOutbound(boxId, `/bootstrap${suffix}`, key.runner_id, body)
     const receipt = checkedBootReceipt(evidence, boxId, key, expectedEpoch)
     if ((!suffix && receipt.outcome !== 'confirmed') || (suffix === '/retire' && receipt.outcome !== 'retired')) {
       throw new Error('Unexpected protected bootstrap outcome')
     }
     return receipt
+  }
+
+  private async postProtectedOutbound(
+    boxId: string,
+    suffix:
+      | '/bootstrap'
+      | '/bootstrap/receipt'
+      | '/bootstrap/retire'
+      | '/bootstrap/release-gate'
+      | '/bootstrap/seal-gate'
+      | '/bootstrap/remove-retired'
+      | '/managed-route',
+    runnerId: string,
+    body: unknown,
+  ): Promise<unknown> {
+    if (!this.bootstrapApi || runnerId !== this.runner.id) throw new Error('Protected Runner enrollment is missing')
+    try {
+      const path = `/v1/boxes/${encodeURIComponent(boxId)}/network/outbound${suffix}`
+      return (await this.bootstrapApi.post(path, body, suffix === '/bootstrap' ? undefined : { timeout: 10_000 })).data
+    } catch {
+      // Axios errors retain the request body, including the proxy credential.
+      throw new Error('Protected Runner outbound outcome is unconfirmed')
+    }
   }
 
   async runnerInfo(signal?: AbortSignal): Promise<RunnerInfo> {

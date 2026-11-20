@@ -716,6 +716,25 @@ impl BoxNetworkBackend for RestBox {
             .await
     }
 
+    async fn update_outbound_proxy(
+        &self,
+        config: OutboundNetworkConfig,
+        proxy: Option<&str>,
+    ) -> BoxliteResult<()> {
+        #[derive(serde::Serialize)]
+        struct Replace<'a> {
+            #[serde(flatten)]
+            config: OutboundNetworkConfig,
+            proxy: Option<&'a str>,
+        }
+        self.client
+            .put_no_content(
+                &format!("/boxes/{}/network/outbound", self.box_id_str()),
+                &Replace { config, proxy },
+            )
+            .await
+    }
+
     async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel> {
         let descriptor = self.tunnel_endpoint(target, options).await?;
         let endpoint = descriptor.uri;

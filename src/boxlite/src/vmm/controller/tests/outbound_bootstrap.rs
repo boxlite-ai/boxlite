@@ -47,7 +47,7 @@ fn outbound_bootstrap_protected_wire_requires_route_and_policy() {
             policy: Default::default(),
             revision: OutboundRevision::fresh(),
         },
-        route: ManagedProxyRoute {
+        route: Some(ManagedProxyRoute {
             binding: ManagedProxyIdentity {
                 registration_id: OutboundRevision::parse("reg-one").unwrap(),
                 registration_revision: OutboundRevision::parse("7").unwrap(),
@@ -62,7 +62,8 @@ fn outbound_bootstrap_protected_wire_requires_route_and_policy() {
                 username: "test-user".into(),
                 password: "secret-proof-credential".into(),
             }),
-        },
+        }),
+        recovery_gate: None,
     };
     let wire = encode_protected_launch(&spec, &network).unwrap();
     assert!(
@@ -74,9 +75,10 @@ fn outbound_bootstrap_protected_wire_requires_route_and_policy() {
     };
     assert!(instance.network_backend_spec.unwrap().outbound_disabled);
     assert_eq!(decoded.policy, network.policy);
-    assert_eq!(decoded.route.binding, network.route.binding);
+    let route = decoded.route.as_ref().unwrap();
+    assert_eq!(route.binding, network.route.as_ref().unwrap().binding);
     assert_eq!(
-        decoded.route.credential.as_ref().unwrap().password,
+        route.credential.as_ref().unwrap().password,
         "secret-proof-credential"
     );
     assert!(!format!("{decoded:?}").contains("secret-proof-credential"));

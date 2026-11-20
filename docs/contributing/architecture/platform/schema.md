@@ -530,6 +530,7 @@ or `archived`.
 | `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
 | `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
 | `outboundControl` | `jsonb` | nullable private revision and pending-attempt metadata; omitted from ordinary entity reads |
+| `outboundControlDueAt` | `timestamptz` | nullable deadline for the outbound reconciliation worker; indexed with Box ID when set |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |
 | `daemonVersion` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
@@ -548,6 +549,19 @@ The nullable column preserves existing policies, using revision `initial` when m
 
 The column is private storage, separate from the public Box DTO.
 Dedicated policy and status resources expose revision and completion state through the [outbound durability contract](../outbound-contract.md#cloud-durable-intent).
+
+The managed record also tracks bootstrap claims, the attested Runner epoch,
+and pending updates, rollback, unbind, and retirement evidence for that epoch.
+Cloud updates reconciliation deadlines within the same transaction as the record.
+
+`outbound_proxy_reference` pins a registration revision for each Box by kind
+(`committed`, `pending`, or `retained`). Each reference carries its Runner,
+attempt, epoch, and purpose (`legacy`, `bootstrap`, or `update`). Only a pending
+bootstrap reference can omit its epoch, while the Runner is still being attested.
+
+`outbound_proxy_registration.rollout_check_after` schedules the next check of a
+pending rollout. Its partial index lets the worker scan due registrations in
+bounded batches, including registrations with offline Boxes.
 
 **Unique:** `(organizationId, name)`.
 

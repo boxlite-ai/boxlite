@@ -3,7 +3,10 @@
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 
-use crate::net::{OutboundRevision, OutboundSnapshot, gvproxy::ManagedProxyRoute};
+use crate::net::{
+    OutboundRevision, OutboundSnapshot,
+    gvproxy::{ManagedProxyRoute, ManagedRecoveryGateId},
+};
 
 use super::InstanceSpec;
 
@@ -20,7 +23,8 @@ pub enum ShimNetworkLaunch {
 #[derive(Debug)]
 pub struct ProtectedNetworkLaunch {
     pub policy: OutboundSnapshot,
-    pub route: ManagedProxyRoute,
+    pub route: Option<ManagedProxyRoute>,
+    pub recovery_gate: Option<ManagedRecoveryGateId>,
 }
 
 /// Encode a versioned record whose top-level shape cannot boot an old shim.
@@ -32,15 +36,18 @@ pub fn encode_protected_launch(
     struct Record<'a> {
         version: u8,
         instance: &'a InstanceSpec,
-        route: &'a ManagedProxyRoute,
+        route: Option<&'a ManagedProxyRoute>,
         policy: &'a OutboundSnapshot,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        recovery_gate: Option<&'a ManagedRecoveryGateId>,
     }
 
     serde_json::to_string(&Record {
         version: PROTECTED_VERSION,
         instance,
-        route: &network.route,
+        route: network.route.as_ref(),
         policy: &network.policy,
+        recovery_gate: network.recovery_gate.as_ref(),
     })
     .map_err(|_| BoxliteError::Engine("Failed to serialize protected shim launch".into()))
 }
@@ -74,8 +81,9 @@ fn decode_protected(
         #[serde(rename = "version")]
         _version: u8,
         instance: InstanceSpec,
-        route: ManagedProxyRoute,
+        route: Option<ManagedProxyRoute>,
         policy: OutboundSnapshot,
+        recovery_gate: Option<ManagedRecoveryGateId>,
     }
 
     if value.get("version").and_then(serde_json::Value::as_u64) != Some(PROTECTED_VERSION.into()) {
@@ -87,9 +95,13 @@ fn decode_protected(
         instance,
         route,
         policy,
+        recovery_gate,
         ..
     } = serde_json::from_str(json)
         .map_err(|_| BoxliteError::Engine("Invalid protected shim launch".into()))?;
+    if value.get("route").is_none() {
+        return Err(BoxliteError::Engine("Invalid protected shim launch".into()));
+    }
     policy.policy.validate()?;
     let Some(spec) = instance.network_backend_spec.as_ref() else {
         return Err(BoxliteError::Engine(
@@ -107,6 +119,10 @@ fn decode_protected(
     }
     Ok((
         instance,
-        ShimNetworkLaunch::Protected(Box::new(ProtectedNetworkLaunch { policy, route })),
+        ShimNetworkLaunch::Protected(Box::new(ProtectedNetworkLaunch {
+            policy,
+            route,
+            recovery_gate,
+        })),
     ))
 }

@@ -322,6 +322,28 @@ Runtime gives the private pipe five seconds to transmit the launch record. A tim
 
 The protected receipt requires Guest readiness and exact installed policy, registration, and epoch evidence from gvproxy. Until an authorized bootstrap settles, policy-only changes and legacy recovery cannot replace the protected route. Cloud registry transactions and live rotation use their respective [registry and runtime-update slices](#acceptance-and-ownership).
 
+An authorized recovery launch can supply a gate generation. The bridge closes Guest egress before attaching the NIC and retains the gate across policy replacement. The enrolled Runner can release the gate only with matching boot attempt, epoch, generation, policy revision, and route evidence.
+
+Sealing records a durable release fence, closes ingress, and waits for admitted UDP writes before returning success. Runtime preserves the fence across reopening and retains a confirmed recovery attempt until it proves both sealing and termination. A replacement Runner reaching `STARTED` leaves the previous assignment intact when the previous Runner still holds an outbound proxy reference.
+
+For a running gated epoch, complete route updates reserve the predecessor and candidate under the Runtime Box lock. A successful unbind records a durable marker alongside its new revision. Both policy-only writes remain blocked until Cloud commits the exact unbound state and Runtime confirms release of the marker.
+
+If Runtime cannot persist a live candidate, it can restore the same predecessor route under a fresh revision. Cloud requires matching installed and durable readback, the exact failed attempt and predecessor, and cleared Runtime pending state before adopting that revision. The database transaction keeps the predecessor pin and removes only the abandoned candidate pin.
+
+If Cloud cannot finalize a confirmed update, it reacquires the Box lock and reads primary state. When the exact candidate remains installed and Cloud still owns the original pending attempt, it reserves one restoration to the pinned predecessor. Cloud retains the failed candidate's pin until restoration is confirmed or the epoch is sealed and terminated.
+
+Cloud reserves a named binding with the Box before first boot. The Runner first prepares the Box without a Guest network, and Cloud verifies the assigned Runner and pinned registration again before supplying the route. A lost boot reply leaves the pin in place until exact readback or retirement settles it.
+
+Cloud admits up to sixteen Boxes per reconciliation tick. Pending settlements and registry rollouts each get up to eight slots when both have due work. Either can use unused slots from the other.
+
+An eligible unbound Box uses the same managed bridge with an explicit unbound route. For a running Box on an older bridge, stop it and request a start before binding. Once it has started, send a complete outbound replacement naming the registration.
+
+The rollout worker scans due work every 30 seconds. A tick claims up to 16 Boxes, checks up to 16 registry markers, and backs off unreachable Boxes by desired version. Registry PATCH returns the new registry revision while the committed and installed Box versions may still reflect the prior route.
+
+For stop, deletion, or reassignment, Cloud saves the authenticated sealed snapshot before acting on termination. The Runner deletes only the exact retired attempt and keeps a receipt in SQLite so a lost removal reply can be retried. Recovery starts a fresh epoch with the pinned version and opens egress only after Cloud confirms the fresh gate and the prior epoch's termination.
+
+Read `GET /boxes/{box_id}/network/outbound/status` for the desired, committed, pending, and installed proxy identities. An unknown readback leaves the installed identity empty, and the policy fields retain Cloud's last committed view. With the Rust REST SDK, use `create_with_outbound_proxy` or `update_outbound_proxy` for a name or explicit unbind.
+
 ```mermaid
 sequenceDiagram
     participant Cloud
@@ -359,13 +381,39 @@ sequenceDiagram
     end
 ```
 
+```mermaid
+sequenceDiagram
+    participant Cloud
+    participant Old as Previous enrolled Runner
+    participant New as Assigned enrolled Runner
+    participant Bridge as New Runtime and gvproxy
+    Cloud->>Old: Seal exact old epoch and drain admitted writes
+    Old-->>Cloud: Return sealed durable and pending evidence
+    Cloud->>Cloud: Persist evidence and keep previous ownership
+    Cloud->>Old: Terminate exact old attempt
+    alt Exact termination confirmed
+        Old-->>Cloud: Return terminal receipt
+        Cloud->>Cloud: Resolve references and retire previous assignment
+        Cloud->>New: Start with pinned route and fresh gate generation
+        New->>Bridge: Close egress before connecting Guest network
+        New-->>Cloud: Attest fresh epoch and installed route
+        Cloud->>Cloud: Confirm fresh epoch and pinned route
+        Cloud->>New: Release exact attested gate
+        New->>Bridge: Open egress under confirmed policy
+    else Termination still uncertain
+        Cloud->>Cloud: Retain old evidence and withhold new gate release
+    end
+```
+
 The Registry integration pins the exact registration revision to the Box, assigned Runner, and attempt before dispatch. The pending reference can omit the epoch until Runtime allocates it. An exact successful receipt promotes the reference and records that epoch atomically.
 
 Once known, the epoch also has to match readback or retirement evidence. An exact retirement receipt can omit the epoch when Runtime retired the attempt before allocation. Any uncertain result keeps the pending reference in place.
 
 On a disposable Linux KVM host, add loopback aliases `11.23.0.1` through `11.23.0.5` as `/32` addresses. Set `BOXLITE_TEST_PROTECTED_BOOT_TLS` to the directory containing `host.pem` and `host.key`. Trust the certificate issuer on the host and include `resolver.test` and `protected.test` in the certificate.
 
-Run `make test:integration:runner FILTER=TestIntegrationProtectedBootTCPPaths`. The test runs `curl --noproxy '*'` in the Guest and checks the CONNECT requests and application traffic received by the fixtures.
+Run `make test:integration:runner FILTER=TestIntegrationProtectedBootTCPPaths`. Its recovery subtest restarts a Box with a closed gate. It checks Guest TCP, UDP, and DNS before and after an authenticated HTTPS release.
+
+The proxy test runs `curl --noproxy '*'` in the Guest and checks CONNECT and application requests received by the fixtures.
 
 ## Acceptance and ownership
 

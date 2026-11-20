@@ -39,6 +39,7 @@ use crate::{BoxID, BoxInfo};
 mod operations;
 pub(crate) mod outbound;
 mod protected;
+mod protected_outbound;
 pub(crate) use operations::{BoxEvent, BoxRun};
 use operations::{StopCommit, StopReason};
 
@@ -1492,15 +1493,18 @@ impl BoxImpl {
         match (protection, &protected) {
             (None, None) => {}
             (Some(record), None) if adopting_running => {
-                let active = record.active.ok_or_else(|| {
+                let active = record.active.as_ref().ok_or_else(|| {
                     BoxliteError::InvalidState("Missing protected bootstrap attempt".into())
                 })?;
-                self.verify_protected_boot(&active).await?;
+                let expected = self.protected_outbound_durable(&record, active)?;
+                self.verify_protected_boot(active, &expected).await?;
             }
             (Some(record), Some(network))
                 if !adopting_running
                     && record.active.as_ref().is_some_and(|active| {
-                        active.binding() == network.route.binding
+                        network.route.as_ref().map(|route| &route.binding)
+                            == active.binding().as_ref()
+                            && active.gate_id() == network.recovery_gate
                             && active.key.policy == network.policy
                     }) => {}
             _ => {
@@ -2026,6 +2030,8 @@ mod tests {
     mod outbound_recovery;
     mod outbound_revision;
     mod protected_boot;
+    #[cfg(feature = "gvproxy")]
+    mod protected_outbound;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network
@@ -2217,12 +2223,12 @@ mod tests {
     }
 
     async fn running_box_for_start_test(gate: Arc<StartGate>) -> StartFixture {
-        running_box_for_start_test_with_live(gate, |_| {}).await
+        running_box_for_start_test_with_live(gate, |_, _| {}).await
     }
 
     async fn running_box_for_start_test_with_live(
         gate: Arc<StartGate>,
-        configure: impl FnOnce(&mut LiveState),
+        configure: impl FnOnce(&BoxImpl, &mut LiveState),
     ) -> StartFixture {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
@@ -2290,7 +2296,7 @@ mod tests {
             #[cfg(target_os = "linux")]
             None,
         );
-        configure(&mut live);
+        configure(&box_impl, &mut live);
         assert!(box_impl.live.set(live).is_ok(), "install live state");
 
         StartFixture {

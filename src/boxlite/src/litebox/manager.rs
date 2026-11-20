@@ -96,6 +96,29 @@ impl BoxManager {
         Ok(())
     }
 
+    pub(crate) fn protected_retirements(
+        &self,
+        selector: &BoxID,
+        runner_box_name: Option<&str>,
+    ) -> BoxliteResult<Vec<super::protected_boot::ProtectedBootReceipt>> {
+        self.store
+            .protected_retirements(selector.as_str(), runner_box_name)
+    }
+
+    pub(crate) fn remove_protected_box(
+        &self,
+        id: &BoxID,
+        record: &super::protected_boot::ProtectedBootState,
+        runner_box_name: Option<&str>,
+    ) -> BoxliteResult<()> {
+        self.store
+            .delete_protected(id.as_str(), record, runner_box_name)
+    }
+
+    pub(crate) fn lookup_exact_box_id(&self, selector: &BoxID) -> BoxliteResult<Option<BoxID>> {
+        self.store.lookup_exact_id(selector.as_str())
+    }
+
     /// Get a box by exact ID.
     pub fn box_by_id(&self, id: &BoxID) -> BoxliteResult<Option<(BoxConfig, BoxState)>> {
         self.store.load(id.as_str())
@@ -216,6 +239,16 @@ impl BoxManager {
         boot: &super::protected_boot::ProtectedBootState,
     ) -> BoxliteResult<()> {
         self.store.save_protected_boot(id.as_str(), boot)
+    }
+
+    pub(crate) fn save_protected_outbound(
+        &self,
+        id: &BoxID,
+        boot: &super::protected_boot::ProtectedBootState,
+        snapshot: Option<&crate::net::OutboundSnapshot>,
+    ) -> BoxliteResult<()> {
+        self.store
+            .save_protected_outbound(id.as_str(), boot, snapshot)
     }
 
     /// Load box state from the database.

@@ -128,7 +128,7 @@ impl BoxImpl {
     ) -> BoxliteResult<OutboundReplaceOutcome> {
         candidate.policy.validate()?;
         self.with_operation(async {
-            if self.runtime.box_manager.protected_boot(self.id())?.is_some() {
+            if self.runtime.box_manager.protected_boot(self.id())?.is_some_and(|record| record.requires_complete_route()) {
                 return Err(BoxliteError::InvalidState("Protected Box requires a complete authorized route".into()));
             }
             if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {

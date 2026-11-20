@@ -339,6 +339,21 @@ impl BoxliteRuntime {
         self.backend.create(options, name).await
     }
 
+    /// Create a Cloud Box with an explicit outbound proxy selection.
+    ///
+    /// Use a registration name to bind it, or None to send explicit unbound.
+    pub async fn create_with_outbound_proxy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        proxy: Option<&str>,
+    ) -> BoxliteResult<LiteBox> {
+        options.sanitize_create()?;
+        self.backend
+            .create_with_outbound_proxy(options, name, proxy)
+            .await
+    }
+
     /// Get an existing box by name, or create a new one if it doesn't exist.
     ///
     /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
@@ -386,6 +401,18 @@ impl BoxliteRuntime {
     /// Remove a box completely by ID or name.
     pub async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
         self.backend.remove(id_or_name, force).await
+    }
+
+    /// Remove an exact retired protected epoch by local ID or Runner Box name.
+    #[doc(hidden)]
+    pub async fn remove_retired_protected(
+        &self,
+        selector: &str,
+        request: &crate::litebox::protected_boot::ProtectedRemoveRequest,
+    ) -> BoxliteResult<crate::litebox::protected_boot::ProtectedBootReceipt> {
+        let id = crate::BoxID::parse(selector)
+            .ok_or_else(|| BoxliteError::InvalidArgument("Invalid Box ID".into()))?;
+        self.backend.remove_retired_protected(&id, request).await
     }
 
     /// Import a box from a `.boxlite` archive.

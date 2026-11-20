@@ -436,12 +436,21 @@ impl BoxOptions {
     }
 }
 
-#[async_trait::async_trait]
-impl RuntimeBackend for RestRuntime {
-    async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+impl RestRuntime {
+    async fn create_box_with_proxy_option(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        proxy: Option<Option<&str>>,
+    ) -> BoxliteResult<LiteBox> {
         // A checkpoint source carries no other option: the server restores
         // the saved box, so this never builds a `CreateBoxRequest`.
         if let Some(checkpoint) = options.checkpoint_source()? {
+            if proxy.is_some() {
+                return Err(BoxliteError::InvalidArgument(
+                    "A checkpoint Box inherits its outbound policy".into(),
+                ));
+            }
             return self
                 .create_from_checkpoint(checkpoint, name.as_deref())
                 .await;
@@ -472,11 +481,32 @@ impl RuntimeBackend for RestRuntime {
             self.client.require_privileged_enabled().await?;
         }
 
-        let req = CreateBoxRequest::from_options(&options, name);
+        let req = if proxy.is_some() {
+            CreateBoxRequest::from_options_with_proxy(&options, name, proxy)
+        } else {
+            CreateBoxRequest::from_options(&options, name)
+        };
         let resp = self.client.create_box(&req).await?;
         let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
+    }
+}
+
+#[async_trait::async_trait]
+impl RuntimeBackend for RestRuntime {
+    async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        self.create_box_with_proxy_option(options, name, None).await
+    }
+
+    async fn create_with_outbound_proxy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        proxy: Option<&str>,
+    ) -> BoxliteResult<LiteBox> {
+        self.create_box_with_proxy_option(options, name, Some(proxy))
+            .await
     }
 
     async fn get_or_create(
@@ -773,6 +803,70 @@ mod tests {
 
     const BOXES_PAGE: &str = r#"{"boxes":[{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"first","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}],"next_page_token":"cursor+/="}"#;
     const BOXES_LAST_PAGE: &str = r#"{"boxes":[{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R6","name":"last","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}],"next_page_token":""}"#;
+
+    #[tokio::test]
+    async fn outbound_proxy_requests_preserve_omitted_null_and_named_wire_shapes() {
+        let (port, server) = capture_server(vec![
+            (201, BOX_RESPONSE),
+            (201, BOX_RESPONSE),
+            (201, BOX_RESPONSE),
+            (200, "{}"),
+            (200, "{}"),
+            (200, "{}"),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let bx = runtime.create(BoxOptions::default(), None).await.unwrap();
+        for proxy in [None, Some("build-egress")] {
+            runtime
+                .create_with_outbound_proxy(BoxOptions::default(), None, proxy)
+                .await
+                .unwrap();
+        }
+        let handle = bx.network();
+        handle
+            .update_outbound(crate::runtime::options::OutboundNetworkConfig::default())
+            .await
+            .unwrap();
+        for proxy in [None, Some("build-egress")] {
+            handle
+                .update_outbound_proxy(
+                    crate::runtime::options::OutboundNetworkConfig::default(),
+                    proxy,
+                )
+                .await
+                .unwrap();
+        }
+        let captured = server.await.unwrap();
+        let mut bodies = Vec::new();
+        for (index, (headers, body)) in captured.into_iter().enumerate() {
+            let expected = if index < 3 {
+                "POST /v1/boxes HTTP/1.1"
+            } else {
+                "PUT /v1/boxes/01HJK4TNRPQSXYZ8WM6NCVT9R5/network/outbound HTTP/1.1"
+            };
+            assert_eq!(headers.lines().next(), Some(expected));
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("content-type: application/json")
+            );
+            bodies.push(serde_json::from_str::<serde_json::Value>(&body).unwrap());
+        }
+        assert_eq!(bodies[0]["network"], serde_json::json!({"mode": "enabled"}));
+        assert_eq!(
+            bodies[1]["network"]["outbound"].get("proxy"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(bodies[2]["network"]["outbound"]["proxy"], "build-egress");
+        assert_eq!(
+            bodies[3],
+            serde_json::json!({"mode": "enabled", "allow_net": []})
+        );
+        assert_eq!(bodies[4].get("proxy"), Some(&serde_json::Value::Null));
+        assert_eq!(bodies[5]["proxy"], "build-egress");
+    }
 
     #[tokio::test]
     async fn boxes_pagination_collects_pages_and_encodes_camel_case_token() {

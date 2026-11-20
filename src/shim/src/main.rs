@@ -156,9 +156,12 @@ fn run_shim(
                 GvproxyInstance::from_config_with_revision(spec, &revision)?
             }
             ShimNetworkLaunch::Ordinary(None) => GvproxyInstance::from_config(spec)?,
-            ShimNetworkLaunch::Protected(network) => {
-                GvproxyInstance::from_managed_config(spec, &network.policy, &network.route)?
-            }
+            ShimNetworkLaunch::Protected(network) => GvproxyInstance::from_managed_network(
+                spec,
+                &network.policy,
+                network.route.as_ref(),
+                network.recovery_gate.as_ref(),
+            )?,
         };
         config.network_backend_endpoint = Some(endpoint);
         timing("gvproxy created");

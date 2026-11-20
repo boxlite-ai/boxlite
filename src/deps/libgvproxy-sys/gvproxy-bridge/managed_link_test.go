@@ -31,7 +31,7 @@ func TestManagedLinkFragmentOwnerThroughRealTap(t *testing.T) {
 	owners := make(chan tcpip.PacketOwner, 8)
 	tap := startNetworkWithSeams(t, cfg, networkSeams{
 		beforeAttach: func(ctx context.Context, policy *outboundPolicyController) {
-			gateway, err := policy.installManagedNetwork(ctx, route.work, nil)
+			gateway, err := policy.installManagedNetwork(ctx, route.work, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

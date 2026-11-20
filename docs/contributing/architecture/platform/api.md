@@ -1243,6 +1243,30 @@ runtime and its microVMs.
 The runner Swagger files contain historical routes that are no longer
 registered by `server.go`; this catalog follows runtime registration.
 
+### Protected outbound control
+
+An enrolled HTTPS Runner V0 advertises operations at
+`GET /v1/outbound-proxy/bootstrap`. These routes require the Runner bearer token
+and exact `X-BoxLite-Runner-Id` matching the enrollment.
+
+| Method | Path | Authority and result |
+| ------ | ---- | -------------------- |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/bootstrap` | Starts the exact attempt, optionally with a closed recovery gate. An unbound launch omits the registration pair. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/bootstrap/release-gate` | Opens the matching confirmed generation and epoch after verifying the installed route and revision. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/bootstrap/seal-gate` | Fences the exact epoch, drains admitted UDP writes, and returns durable route and recovery evidence. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/bootstrap/remove-retired` | Removes the exact retired attempt only after termination is proved, with a durable receipt for retries. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/managed-route` | Prepares and applies managed updates in the attested epoch. Restoration requires lineage from the last applied attempt. |
+
+Removal replies are keyed by the native Box identity, the Runner Box name,
+and the exact retired attempt. A retry returns its saved receipt if the name
+is in use again and leaves the new Box intact.
+
+Runners advertising `restart-volumes` refresh the declared mounts for a volume-backed protected restart.
+A volume-backed managed Box waits for that capability before restarting.
+The Runner rejects malformed `restart_volumes` arrays before admitting the boot attempt.
+
+A confirmed startup or readback queues its resolved image digest and size for BoxSync.
+
 ## Preview proxy API
 
 **Service:** `apps/proxy` · **Base host:** `proxy.<domain>` and
