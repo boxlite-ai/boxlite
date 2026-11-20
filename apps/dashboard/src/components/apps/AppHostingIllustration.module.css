@@ -1,0 +1,97 @@
+.scene {
+  --hosting-motion: 4.8s;
+}
+.box {
+  animation: hosting-box var(--hosting-motion) ease-in-out both;
+}
+.idea {
+  animation: hosting-idea var(--hosting-motion) ease-in-out both;
+}
+.code {
+  animation: hosting-code var(--hosting-motion) ease-in-out both;
+}
+.window {
+  animation: hosting-window var(--hosting-motion) ease-in-out both;
+}
+.flow {
+  stroke-dasharray: 3 9;
+  animation: hosting-flow var(--hosting-motion) ease-out both;
+}
+@keyframes hosting-box {
+  0%,
+  15% {
+    transform: translateY(8px);
+    opacity: 0.45;
+  }
+  55% {
+    transform: translateY(-7px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes hosting-idea {
+  0% {
+    opacity: 0.3;
+    transform: translateY(4px);
+  }
+  20%,
+  45% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+  100% {
+    opacity: 0.8;
+    transform: translateY(0);
+  }
+}
+@keyframes hosting-code {
+  0%,
+  12% {
+    opacity: 0;
+    transform: translate(-10px, 6px);
+  }
+  45%,
+  100% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+@keyframes hosting-window {
+  0%,
+  35% {
+    opacity: 0;
+    transform: translate(-12px, 14px);
+  }
+  75% {
+    opacity: 1;
+    transform: translate(0, -4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+@keyframes hosting-flow {
+  0% {
+    stroke-dashoffset: 84;
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.7;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.45;
+  }
+}
+.static * {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene * {
+    animation: none;
+  }
+}
