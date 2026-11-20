@@ -136,7 +136,34 @@ pub fn is_cgroup_v2_available() -> bool {
 /// - Root: `/sys/fs/cgroup/boxlite/{box_id}`
 /// - User: `/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/boxlite/{box_id}`
 pub fn cgroup_path(box_id: &str) -> PathBuf {
-    get_cgroup_base().join(BOXLITE_CGROUP).join(box_id)
+    box_cgroup_root().join(box_id)
+}
+
+pub(super) fn box_cgroup_root() -> PathBuf {
+    get_cgroup_base().join(BOXLITE_CGROUP)
+}
+
+pub(super) fn contains_pid(box_id: &BoxID, pid: u32) -> std::io::Result<bool> {
+    let expected = pid.to_string();
+    let processes = fs::read_to_string(cgroup_path(box_id.as_str()).join("cgroup.procs"))?;
+    Ok(processes
+        .split_ascii_whitespace()
+        .any(|candidate| candidate == expected))
+}
+
+pub(super) fn populated(path: &Path) -> std::io::Result<bool> {
+    match fs::read_to_string(path.join("cgroup.events")) {
+        Ok(events) if events.lines().any(|line| line == "populated 0") => Ok(false),
+        Ok(events) if events.lines().any(|line| line == "populated 1") => Ok(true),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "missing cgroup population state",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !path.try_exists()? => {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Kill every process in a box's cgroup via cgroup v2 `cgroup.kill`.

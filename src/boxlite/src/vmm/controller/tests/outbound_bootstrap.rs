@@ -30,6 +30,25 @@ printf '%s\n' '{"admission":true,"deny":false,"port":true,"capacity":false}'"#,
 }
 
 #[tokio::test]
+async fn outbound_bootstrap_platform_probe_rejects_old_shim_reply() {
+    let directory = tempfile::tempdir().unwrap();
+    let request = br#"{"platform_cidrs_probe":1}"#;
+    let shim = write_probe(
+        directory.path(),
+        r#"test "$(cat)" = '{"platform_cidrs_probe":1}' || exit 3
+printf '%s\n' true"#,
+    );
+    assert!(probe_shim_at::<bool>(shim, request).await.unwrap());
+
+    let shim = write_probe(
+        directory.path(),
+        r#"cat >/dev/null
+printf '%s\n' '{"admission":true,"deny":true,"port":true,"capacity":true}'"#,
+    );
+    assert!(probe_shim_at::<bool>(shim, request).await.is_err());
+}
+
+#[tokio::test]
 async fn outbound_bootstrap_probe_reaps_child_on_caller_cancellation() {
     use std::time::Duration;
     let directory = tempfile::tempdir().unwrap();
@@ -76,11 +95,14 @@ fn outbound_bootstrap_keeps_public_spec_shape_and_adds_private_identity() {
         serde_json::from_value(wire["outbound_revision"].clone()).unwrap();
     let public = serde_json::to_value(&spec).unwrap();
     let legacy: serde_json::Value =
-        serde_json::from_str(&serialize_shim_config(&spec, None).unwrap()).unwrap();
+        serde_json::from_str(&serialize_shim_config(&spec, None, None, &[], None).unwrap())
+            .unwrap();
     assert_eq!(legacy, public, "existing launch requests changed shape");
     assert!(public.get("outbound_revision").is_none());
-    let mut seeded: serde_json::Value =
-        serde_json::from_str(&serialize_shim_config(&spec, Some(&revision)).unwrap()).unwrap();
+    let mut seeded: serde_json::Value = serde_json::from_str(
+        &serialize_shim_config(&spec, Some(&revision), None, &[], None).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         seeded
             .as_object_mut()
@@ -91,4 +113,29 @@ fn outbound_bootstrap_keeps_public_spec_shape_and_adds_private_identity() {
     );
     assert_eq!(seeded, public);
     assert_eq!(seeded["network_backend_spec"]["outbound_disabled"], true);
+
+    let complete: OutboundBootstrap = serde_json::from_value(serde_json::json!({
+        "snapshot": {"admission": "legacy", "revision": "initial",
+                     "policy": {"mode": "enabled", "allow_net": [], "deny_net": []}},
+        "requirements": {"admission": false, "deny": false, "port": false, "capacity": false}
+    }))
+    .unwrap();
+    let protected = ["192.0.2.0/24".to_owned()];
+    for bootstrap in [None, Some(&complete)] {
+        let launch: serde_json::Value = serde_json::from_str(
+            &serialize_shim_config(&spec, None, bootstrap, &protected, None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            launch["platform_protected_cidrs"],
+            serde_json::json!(protected)
+        );
+        if bootstrap.is_some() {
+            assert_eq!(launch["config"], public);
+            assert_eq!(
+                launch["outbound_v1"],
+                serde_json::to_value(&complete).unwrap()
+            );
+        }
+    }
 }

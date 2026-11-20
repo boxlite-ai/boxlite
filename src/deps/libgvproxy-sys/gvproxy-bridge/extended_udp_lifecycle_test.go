@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -301,6 +302,129 @@ func TestExtendedUDPSlotCapIncludesPendingDials(t *testing.T) {
 	waitUDPCondition(t, "a new dial after releasing capacity", func() bool { return attempts.Load() == maxExtendedUDPFlows+1 })
 	tap.cancel()
 	waitUDPCondition(t, "all canceled UDP slots", func() bool { return len(tap.policy.udpFlows.slots) == 0 })
+}
+
+func TestCloudLegacyUDPAtFlowCapacity(t *testing.T) {
+	const original, literal = "192.0.2.83", "203.0.113.82"
+	const flowCount, rounds = 256, 4
+	const batchSize = 16
+	const excess = guestSrcPort + flowCount
+	target, port := newUDPTestTarget(t)
+	cfg := testGvproxyConfig()
+	first := make(chan net.Conn, 1)
+	tap := startNetworkWithSeams(t, cfg, networkSeams{
+		cloud: true,
+		nat:   map[string]string{original: literal},
+		dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := target.dial(ctx, network, address)
+			if err == nil && target.dials.Load() == 1 {
+				first <- conn
+			}
+			return conn, err
+		},
+	})
+	const firstPayload = "round 0 flow 0"
+	tap.send(t, udpFrameFrom(t, cfg.GuestIP, original, guestSrcPort, port, []byte(firstPayload)))
+	target.echo(t, tap, original, guestSrcPort, port, firstPayload)
+	target.requireDial(t, literal, port)
+
+	for round := range rounds {
+		start := 0
+		if round == 0 {
+			start = 1
+		}
+		for offset := start; offset < flowCount; offset += batchSize {
+			// Keep each batch below the guest reply queue capacity. Verify all
+			// replies before sending the next batch through the same live flows.
+			count := min(batchSize, flowCount-offset)
+			pending := make(map[uint16]string, count)
+			for index := offset; index < offset+count; index++ {
+				source := guestSrcPort + uint16(index)
+				payload := fmt.Sprintf("round %d flow %d", round, index)
+				pending[source] = payload
+				tap.send(t, udpFrameFrom(t, cfg.GuestIP, original, source, port, []byte(payload)))
+			}
+			echoCloudUDPBatch(t, tap, target, original, port, pending)
+			if round == 0 {
+				for range count {
+					target.requireDial(t, literal, port)
+				}
+			}
+		}
+		if slots := len(tap.policy.udpFlows.slots); slots != flowCount {
+			t.Fatalf("round %d left %d live flows, want %d", round, slots, flowCount)
+		}
+	}
+	if dials := target.dials.Load(); dials != flowCount {
+		t.Fatalf("host dials = %d, want one for each of %d live flows", dials, flowCount)
+	}
+	assertUDPPolicyDrop(t, tap, target, original, excess, port, "flow-capacity")
+	if dials := target.dials.Load(); dials != flowCount {
+		t.Fatalf("excess flow reached the host dialer: %d dials", dials)
+	}
+	select {
+	case conn := <-first:
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("no host connection for the first flow")
+	}
+	waitUDPCondition(t, "one released Cloud UDP slot", func() bool {
+		return guestUDPEndpoint(t, tap, original, guestSrcPort, port) == nil &&
+			len(tap.policy.udpFlows.slots) == flowCount-1
+	})
+	tap.send(t, udpFrameFrom(t, cfg.GuestIP, original, excess, port, []byte("readmitted")))
+	target.echo(t, tap, original, excess, port, "readmitted")
+	target.requireDial(t, literal, port)
+	t.Logf("Received %d replies across %d live flows, then rejected and readmitted the next flow", flowCount*rounds, flowCount)
+}
+
+func echoCloudUDPBatch(t *testing.T, tap *guestTap, target *udpTestTarget, original string, port uint16, pending map[uint16]string) {
+	t.Helper()
+	hostPending := make(map[string]struct{}, len(pending))
+	for _, payload := range pending {
+		hostPending[payload] = struct{}{}
+	}
+	if err := target.conn.SetReadDeadline(time.Now().Add(forwardWindow)); err != nil {
+		t.Fatal(err)
+	}
+	for len(hostPending) > 0 {
+		var buffer [128]byte
+		n, peer, err := target.conn.ReadFromUDP(buffer[:])
+		if err != nil {
+			t.Fatalf("%d packets did not reach the host listener: %v", len(hostPending), err)
+		}
+		payload := string(buffer[:n])
+		if _, expected := hostPending[payload]; !expected {
+			t.Fatalf("unexpected host datagram %q", payload)
+		}
+		delete(hostPending, payload)
+		if _, err := target.conn.WriteToUDP(buffer[:n], peer); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	timeout := time.NewTimer(forwardWindow)
+	defer timeout.Stop()
+	for len(pending) > 0 {
+		select {
+		case frame := <-tap.frames:
+			for source, payload := range pending {
+				got, ok := guestUDPPayload(frame, original, port, source)
+				if !ok {
+					continue
+				}
+				if string(got) != payload {
+					t.Fatalf("guest port %d received %q, want %q", source, got, payload)
+				}
+				delete(pending, source)
+				break
+			}
+		case <-timeout.C:
+			t.Fatalf("%d packets did not reach the guest", len(pending))
+		}
+	}
 }
 
 func TestExtendedUDPBackpressureReleasesFlow(t *testing.T) {

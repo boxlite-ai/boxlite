@@ -12,6 +12,7 @@ import (
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"golang.org/x/net/dns/dnsmessage"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 )
 
 func udpServiceConfig() GvproxyConfig {
@@ -51,6 +52,11 @@ func requireUDPServiceReplies(t *testing.T, tap *guestTap, cfg GvproxyConfig) {
 
 	discover := udpDHCPDiscover(t, cfg)
 	tap.send(t, udpFrameFrom(t, "0.0.0.0", "255.255.255.255", 68, 67, discover.ToBytes()))
+	requireDHCPOffer(t, tap, cfg, discover)
+}
+
+func requireDHCPOffer(t *testing.T, tap *guestTap, cfg GvproxyConfig, discover *dhcpv4.DHCPv4) {
+	t.Helper()
 	reply, err := dhcpv4.FromBytes(readGuestUDP(t, tap, cfg.GatewayIP, 67, 68))
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +65,82 @@ func requireUDPServiceReplies(t *testing.T, tap *guestTap, cfg GvproxyConfig) {
 		!reply.YourIPAddr.Equal(net.ParseIP(cfg.GuestIP)) {
 		t.Fatalf("unexpected registered DHCP offer: %s", reply.Summary())
 	}
+}
+
+func TestCloudDHCPScopePrecedesServiceDemux(t *testing.T) {
+	t.Run("legacy", func(t *testing.T) { checkCloudDHCPScope(t, nil) })
+	t.Run("extended", func(t *testing.T) { checkCloudDHCPScope(t, &trustedTCPRules{}) })
+}
+
+func checkCloudDHCPScope(t *testing.T, rules *trustedTCPRules) {
+	t.Helper()
+	const ordinary = "192.0.2.84"
+	cfg := udpServiceConfig()
+	tap := startNetworkWithSeams(t, cfg, networkSeams{cloud: true, tcp: rules})
+	if guestUDPEndpoint(t, tap, ordinary, 68, 67) == nil {
+		t.Fatal("expected real wildcard DHCP listener to match the unapproved destination")
+	}
+	requireUDPServiceReplies(t, tap, cfg)
+	discover := udpDHCPDiscover(t, cfg)
+	tap.send(t, udpFrameFrom(t, cfg.GuestIP, cfg.GatewayIP, 68, 67, discover.ToBytes()))
+	requireDHCPOffer(t, tap, cfg, discover)
+
+	for _, tc := range []struct {
+		name        string
+		destination string
+		sourcePort  uint16
+		fragmented  bool
+	}{
+		{name: "outside gateway", destination: ordinary, sourcePort: 68},
+		{name: "unapproved source port", destination: cfg.GatewayIP, sourcePort: 69},
+		{name: "fragmented outside gateway", destination: ordinary, sourcePort: 68, fragmented: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := tap.policy.stack.Stats()
+			dropped := stats.IP.IPTablesInputDropped.Value()
+			received := stats.UDP.PacketsReceived.Value()
+			frame := udpFrameFrom(t, cfg.GuestIP, tc.destination, tc.sourcePort, 67, discover.ToBytes())
+			if tc.fragmented {
+				first, last := fragmentGuestDatagram(frame)
+				tap.send(t, last)
+				tap.send(t, first)
+			} else {
+				tap.send(t, frame)
+			}
+			requireUDPServiceReplies(t, tap, cfg)
+			if got := stats.UDP.PacketsReceived.Value() - received; got != 2 {
+				t.Errorf("UDP packet count = %d, want only the two valid service probes", got)
+			}
+			if got := stats.IP.IPTablesInputDropped.Value() - dropped; got != 1 {
+				t.Errorf("pre-demux drops = %d, want 1", got)
+			}
+		})
+	}
+
+	discover = udpDHCPDiscover(t, cfg)
+	first, last := fragmentGuestDatagram(udpFrameFrom(t, cfg.GuestIP, cfg.GatewayIP, 68, 67, discover.ToBytes()))
+	tap.send(t, last)
+	tap.send(t, first)
+	requireDHCPOffer(t, tap, cfg, discover)
+}
+
+func fragmentGuestDatagram(frame []byte) ([]byte, []byte) {
+	const headerLength = header.EthernetMinimumSize + header.IPv4MinimumSize
+	// Preserve the UDP header and checksum in the first fragment.
+	fragOffset := uint16(header.UDPMinimumSize)
+	first := append([]byte(nil), frame[:headerLength+int(fragOffset)]...)
+	last := append(append([]byte(nil), frame[:headerLength]...), frame[headerLength+int(fragOffset):]...)
+	update := func(packet []byte, flags uint8, offset uint16) {
+		ip := header.IPv4(packet[header.EthernetMinimumSize:])
+		ip.SetID(1234)
+		ip.SetFlagsFragmentOffset(flags, offset)
+		ip.SetTotalLength(uint16(len(ip)))
+		ip.SetChecksum(0)
+		ip.SetChecksum(^ip.CalculateChecksum())
+	}
+	update(first, header.IPv4FlagMoreFragments, 0)
+	update(last, 0, fragOffset)
+	return first, last
 }
 
 func closeDHCPTestEndpoint(t *testing.T, tap *guestTap, original string) {

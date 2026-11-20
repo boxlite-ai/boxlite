@@ -90,14 +90,9 @@ impl Sandbox for BwrapSandbox {
             .ro_bind_if_exists("/lib64", "/lib64")
             .ro_bind_if_exists("/bin", "/bin")
             .ro_bind_if_exists("/sbin", "/sbin")
-            // DNS resolver config: gvproxy runs in this shim. It forwards the
-            // guest's DNS queries to the host resolver, and it re-resolves
-            // every `allow_net` hostname at connect time to decide where to
-            // dial. Both read these, for the box's whole lifetime. Without
-            // them the sandbox has no /etc/resolv.conf, every lookup fails,
-            // and allow-listed hosts neither resolve nor connect — the
-            // allowlist silently blocks everything whenever the jailer is
-            // enabled (#645).
+            // Local gvproxy uses these files for guest DNS and hostname
+            // routing throughout the box's lifetime (#645). Cloud gvproxy
+            // uses the resolver endpoints from the operator inventory.
             .ro_bind_if_exists("/etc/resolv.conf", "/etc/resolv.conf")
             .ro_bind_if_exists("/etc/hosts", "/etc/hosts")
             .ro_bind_if_exists("/etc/nsswitch.conf", "/etc/nsswitch.conf");

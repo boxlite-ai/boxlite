@@ -23,7 +23,7 @@ export interface OutboundNetworkSpec {
      */
     'mode': NetworkMode;
     /**
-     * Outbound allowlist in force; empty means unrestricted egress
+     * Box-level outbound allowlist. Host protection applies even when it is empty.
      */
     'allow_net': Array<string>;
 }

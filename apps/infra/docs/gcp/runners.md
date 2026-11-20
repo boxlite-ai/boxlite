@@ -82,6 +82,61 @@ The attachment is fixed at creation too: a host that existed before its disk doe
 and that disk stays unattached, and billed, until the host is destroyed and recreated; a `--replace`
 would carry the ignored attachment over.
 
+## Guarded Runner pool
+
+Use a dedicated GCP Runner pool and qualify its exact image and running kernel
+before opening placement. Verify active BPF LSM, cgroup v2, kernel BTF, bpffs,
+and `bpftool` on the intended host.
+
+Confirm the kernel can run the pinned lease renewal program.
+
+Run `make test:platform-guard-bpf` on an isolated host with the same kernel.
+On the target Runner, test Cloud launch, detached reattachment, and expiry.
+
+Build with `make build:platform-guard` and install the artifacts on the Runner.
+
+- Place the binary at `/usr/local/bin/boxlite-platform-guard`.
+- Place the BPF object at `/usr/lib/boxlite/deadline.bpf.o`.
+- Install the [systemd service unit](../../../runner/platform-guard/boxlite-platform-guard.service).
+
+Enable the guard service and configure Runner to start after it.
+The root service retains live pins and records across service restarts on the
+same boot. It reclaims retired pins once the cgroup is confirmed empty.
+
+Publish `/etc/boxlite/platform-guard/inventory.json` in a root-owned directory
+outside Box mounts. Give only root write access and replace the file atomically.
+
+Include all four protected network groups and approved IPv4 resolver endpoints
+with explicit ports. Use an RFC 3339 expiry and an inventory revision independent
+of Box rule revisions.
+
+```json
+{
+  "version": 1,
+  "revision": "canary-12",
+  "expires_at": "2030-01-01T00:00:00Z",
+  "protected_networks": {
+    "node": ["192.0.2.0/25"],
+    "control_plane": ["198.51.100.0/24"],
+    "metadata": ["169.254.169.254/32"],
+    "services": []
+  },
+  "resolver_endpoints": ["192.0.2.53:53"]
+}
+```
+
+Set `BOXLITE_PLATFORM_GUARD_PROFILE=cloud` and `BOXLITE_REQUIRE_CLOUD_GUARD=1`
+in the guarded Runner's service environment. Startup requires a valid
+inventory, a successful kernel attachment probe, and proof for each running
+networked Box. A Box without proof is stopped through its cgroup, and an
+unconfirmed stop or populated untracked cgroup blocks Runner startup.
+
+Check the private gvproxy control endpoint `GET /network/platform-guard/status`
+for the active operator revision and digest. Record the GCP image and kernel
+identifiers with positive and negative guard results before admitting work.
+For binary rollback, drain the guarded pool and keep placement closed until
+running and new Boxes have verified equivalent protection.
+
 ## Verify and recover
 
 Inspect both assignments (only the first for a single-runner stage), including every binary and

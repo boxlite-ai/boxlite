@@ -33,8 +33,10 @@ use crash_capture::CrashCapture;
 #[allow(unused_imports)]
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-use boxlite::net::gvproxy::GvproxyInstance;
-use boxlite::net::{OutboundBootstrap, OutboundRevision};
+use boxlite::net::gvproxy::{CloudGuardBootstrap, GvproxyInstance};
+use boxlite::net::{
+    NetworkBackendEndpoint, NetworkBackendSpec, OutboundBootstrap, OutboundRevision,
+};
 
 fn parse_config(json: &str) -> BoxliteResult<(InstanceSpec, Option<OutboundRevision>)> {
     let value: serde_json::Value = serde_json::from_str(json)
@@ -54,6 +56,9 @@ fn parse_config(json: &str) -> BoxliteResult<(InstanceSpec, Option<OutboundRevis
 struct CompleteLaunch {
     config: InstanceSpec,
     outbound_v1: OutboundBootstrap,
+    #[serde(default)]
+    platform_protected_cidrs: Vec<String>,
+    cloud_guard: Option<CloudGuardBootstrap>,
 }
 
 fn parse_complete_launch(value: serde_json::Value) -> BoxliteResult<CompleteLaunch> {
@@ -130,13 +135,26 @@ fn main() -> BoxliteResult<()> {
         println!("{reply}");
         return Ok(());
     }
-    let (config, outbound_revision, outbound) = if value.get("outbound_v1").is_some() {
-        let launch = parse_complete_launch(value)?;
-        (launch.config, None, Some(launch.outbound_v1))
-    } else {
-        let (config, revision) = parse_config(&config_json)?;
-        (config, revision, None)
-    };
+    if value.get("platform_cidrs_probe").is_some() {
+        if value != serde_json::json!({"platform_cidrs_probe": 1}) {
+            return Err(BoxliteError::InvalidArgument(
+                "invalid platform CIDR capability probe".into(),
+            ));
+        }
+        println!("{}", GvproxyInstance::supports_platform_cidrs());
+        return Ok(());
+    }
+    if value.get("cloud_guard_probe").is_some() {
+        if value != serde_json::json!({"cloud_guard_probe": 1}) {
+            return Err(BoxliteError::InvalidArgument(
+                "invalid Cloud guard capability probe".into(),
+            ));
+        }
+        println!("{}", GvproxyInstance::supports_cloud_guard());
+        return Ok(());
+    }
+    let launch = parse_launch(&config_json, value)?;
+    let config = &launch.config;
     timing("config parsed");
 
     // Initialize logging using box_dir derived from exit_file path.
@@ -165,10 +183,18 @@ fn main() -> BoxliteResult<()> {
 
     // Run the shim and handle errors
     run_shim(
-        config,
-        outbound_revision.as_ref(),
-        outbound.as_ref(),
-        timing,
+        launch,
+        |spec, launch| {
+            GvproxyInstance::from_host_launch(
+                spec,
+                launch.revision.as_ref(),
+                launch.outbound.as_ref(),
+                &launch.protected_cidrs,
+                launch.cloud_guard.as_ref(),
+            )
+        },
+        |config| run_vmm(config, &timing),
+        &timing,
     )
     .inspect_err(|e| {
         let info = ExitInfo::Error {
@@ -183,43 +209,85 @@ fn main() -> BoxliteResult<()> {
     })
 }
 
-#[allow(unused_mut)]
-fn run_shim(
-    mut config: InstanceSpec,
-    revision: Option<&OutboundRevision>,
-    outbound: Option<&OutboundBootstrap>,
-    timing: impl Fn(&str),
+struct ShimLaunch {
+    config: InstanceSpec,
+    revision: Option<OutboundRevision>,
+    outbound: Option<OutboundBootstrap>,
+    protected_cidrs: Vec<String>,
+    cloud_guard: Option<CloudGuardBootstrap>,
+}
+
+fn parse_launch(json: &str, value: serde_json::Value) -> BoxliteResult<ShimLaunch> {
+    if value.get("outbound_v1").is_some() {
+        let launch = parse_complete_launch(value)?;
+        return Ok(ShimLaunch {
+            config: launch.config,
+            revision: None,
+            outbound: Some(launch.outbound_v1),
+            protected_cidrs: launch.platform_protected_cidrs,
+            cloud_guard: launch.cloud_guard,
+        });
+    }
+    let (config, revision) = parse_config(json)?;
+    let protected_cidrs = value
+        .get("platform_protected_cidrs")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| BoxliteError::InvalidArgument("invalid platform-protected CIDR list".into()))?
+        .unwrap_or_default();
+    let cloud_guard = serde_json::from_value(value.get("cloud_guard").cloned().unwrap_or_default())
+        .map_err(|_| BoxliteError::InvalidArgument("invalid Cloud guard launch".into()))?;
+    Ok(ShimLaunch {
+        config,
+        revision,
+        outbound: None,
+        protected_cidrs,
+        cloud_guard,
+    })
+}
+
+fn run_shim<Backend>(
+    mut launch: ShimLaunch,
+    start_network: impl FnOnce(
+        &NetworkBackendSpec,
+        &ShimLaunch,
+    ) -> BoxliteResult<(Backend, NetworkBackendEndpoint)>,
+    start_vm: impl FnOnce(InstanceSpec) -> BoxliteResult<()>,
+    timing: &impl Fn(&str),
 ) -> BoxliteResult<()> {
-    tracing::debug!(
-        shares = ?config.fs_shares.shares(),
-        "Filesystem shares configured"
-    );
-    tracing::debug!(
-        entrypoint = ?config.guest_entrypoint.executable,
-        "Guest entrypoint configured"
-    );
+    let config = &launch.config;
+    tracing::debug!(shares = ?config.fs_shares.shares(), "Filesystem shares configured");
+    tracing::debug!(entrypoint = ?config.guest_entrypoint.executable, "Guest entrypoint configured");
 
-    // =========================================================================
-    // Network backend (gvproxy) + Seccomp
-    // =========================================================================
-
-    // Stand up the network backend (gvproxy) from the provisioning spec if present.
-    // gvproxy provides virtio-net (eth0) to the guest - required even without port mappings.
-    // The gvproxy instance is leaked intentionally - it must live for the entire
-    // duration of the VM. When the shim process exits, OS cleans up all resources.
-    if let Some(ref spec) = config.network_backend_spec {
-        let (gvproxy, endpoint) = match (outbound, revision) {
-            (Some(outbound), _) => GvproxyInstance::from_complete_config(spec, outbound)?,
-            (None, Some(revision)) => GvproxyInstance::from_config_with_revision(spec, revision)?,
-            (None, None) => GvproxyInstance::from_config(spec)?,
-        };
-        config.network_backend_endpoint = Some(endpoint);
+    let cloud_guard = launch.cloud_guard.as_ref();
+    if cloud_guard.is_some_and(|guard| guard.r#box != config.box_id)
+        || (cloud_guard.is_some()
+            && (config.network_backend_spec.is_none() || config.disable_network))
+    {
+        return Err(BoxliteError::InvalidArgument(
+            "Cloud guard launch must match the Box and its network backend".into(),
+        ));
+    }
+    if let Some(spec) = &config.network_backend_spec {
+        let (gvproxy, endpoint) = start_network(spec, &launch)?;
+        if let Some(guard) = cloud_guard {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(guard.confirm_gvproxy(&spec.socket_path))?;
+            timing("Cloud gvproxy confirmed");
+        }
+        launch.config.network_backend_endpoint = Some(endpoint);
         timing("gvproxy created");
 
-        // Leak to keep networking alive for VM lifetime (OS cleans up on exit)
+        // Keep gvproxy alive for the lifetime of the VM process.
         Box::leak(Box::new(gvproxy));
     }
+    start_vm(launch.config)
+}
 
+fn run_vmm(config: InstanceSpec, timing: &impl Fn(&str)) -> BoxliteResult<()> {
     // Apply VMM seccomp filter with TSYNC (covers all threads including gvproxy)
     #[cfg(target_os = "linux")]
     {

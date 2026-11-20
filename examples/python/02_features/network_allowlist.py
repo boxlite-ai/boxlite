@@ -3,10 +3,13 @@
 Network Allowlist Example — Connect-Time Egress Filtering
 
 Demonstrates NetworkSpec for controlling outbound network access:
-  1. Default (Enabled, empty allow_net): full internet access
-  2. Allowlist: every name resolves; only listed hosts can be connected to
+  1. Default (enabled, empty allow_net): no Box-level allowlist
+  2. Allowlist: DNS queries still work, and Box rules restrict connections
   3. Disabled: no network interface at all
   4. Explicitly enabled: same as default
+
+Host protection applies to all examples. Use a Local runtime that can reach
+example.com and github.com for the positive controls.
 
 Usage:
     make dev:python && python examples/python/02_features/network_allowlist.py
@@ -18,12 +21,12 @@ import logging
 import boxlite
 
 
-async def test_default_full_access():
-    """Test 1: Default = full internet access."""
-    print("\n--- Test 1: Default (full access) ---")
+async def test_default_empty_allowlist():
+    """Test 1: Control destinations are reachable with an empty Box allowlist."""
+    print("\n--- Test 1: Default (empty Box allowlist) ---")
 
     async with boxlite.SimpleBox(image="alpine:latest") as sandbox:
-        # Any host should resolve
+        # The public control host should resolve
         result = await sandbox.exec("nslookup", "example.com")
         print(f"  nslookup example.com: exit={result.exit_code}")
         assert result.exit_code == 0, f"should resolve, got exit={result.exit_code}"
@@ -34,21 +37,20 @@ async def test_default_full_access():
         assert result.exit_code == 0
         print("  result: resolved to real IP")
 
-        # Preflight for Test 2, which reads a failed connection to this host as
-        # the allowlist refusing it. That only follows if the host answers when
-        # nothing is filtering.
+        # Control for Test 2. Verify host policy allows this destination before
+        # testing the Box allowlist.
         result = await sandbox.exec(
             "wget", "-q", "-O-", "--timeout=5", "http://github.com/"
         )
         print(f"  wget http://github.com/: exit={result.exit_code}")
-        assert result.exit_code == 0, "github.com must be reachable with full access"
+        assert result.exit_code == 0, "github.com must be reachable for this control"
         print("  result: connected")
 
     print("  PASS")
 
 
 async def test_allowlist_filtering():
-    """Test 2: Allowlist = every name resolves, only listed hosts connect."""
+    """Test 2: The Box allowlist restricts connections independently of DNS."""
     print("\n--- Test 2: Allowlist (network.allow_net=[example.com]) ---")
 
     async with boxlite.SimpleBox(
@@ -70,7 +72,7 @@ async def test_allowlist_filtering():
             "DNS is not filtered; the name must resolve"
         )
         assert "0.0.0.0" not in result.stdout, "the sinkhole answer is gone"
-        print("  result: resolves to a real address (DNS is unrestricted)")
+        print("  result: resolves to a real address (Box allowlist applies at connect)")
 
         # Control in the same box: the listed host really is reachable, so the
         # refusal below is the allowlist and not a broken network.
@@ -81,8 +83,7 @@ async def test_allowlist_filtering():
         assert result.exit_code == 0, "allowed host should be reachable"
         print("  result: connected (allowed)")
 
-        # Test 1 already reached this host with full access, so the refusal
-        # below is the allowlist and not a host that happens to be down.
+        # Test 1 established that this host is reachable without a Box rule.
         result = await sandbox.exec(
             "wget", "-q", "-O-", "--timeout=3", "http://github.com/"
         )
@@ -144,11 +145,11 @@ async def main():
     print("=" * 60)
     print()
     print("NetworkSpec options:")
-    print("  NetworkSpec(mode='enabled', allow_net=[])      -> full access")
+    print("  NetworkSpec(mode='enabled', allow_net=[])      -> no Box allowlist")
     print("  NetworkSpec(mode='enabled', allow_net=[...])   -> restricted egress")
     print("  NetworkSpec(mode='disabled')                   -> no network at all")
 
-    await test_default_full_access()
+    await test_default_empty_allowlist()
     await test_allowlist_filtering()
     await test_disabled_no_network()
     await test_enabled_explicit()

@@ -351,10 +351,13 @@ Supplying it together with `outbound` raises `ValueError`. `spec.mode` and
 `allow_net` restricts both TCP and UDP egress. Hostname entries are enforced by
 inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
 holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP
-open. A host matched by a configured `Secret` is additionally reachable on port
-443 without a rule of its own, so `allow_net` is not the only egress gate. The
-connection is dialed by name, and under a non-empty `allow_net` an answer in a
-private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it.
+open.
+
+A configured `Secret` can permit TCP port 443 without a matching Box rule.
+With a non-empty `allow_net`, Local hostname routing requires a matching
+IP or CIDR rule for private, loopback, or CGNAT answers. Host protection,
+including the [Cloud platform guard](../../docs/concepts/networking.md#cloud-platform-guard),
+applies even with an empty allowlist.
 
 `mode="disabled"` removes the guest network interface entirely.
 

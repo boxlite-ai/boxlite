@@ -163,15 +163,16 @@ func TestExtendedUDPOriginalAndTranslatedDestinations(t *testing.T) {
 	for _, tt := range []struct {
 		name, original, translated string
 		rules                      trustedTCPRules
+		cloud                      bool
 		reason                     outboundReason
 	}{
 		{name: "Local exact loopback", original: ordinary, translated: "127.0.0.1", rules: trustedTCPRules{allow: []string{ordinary + ":8080"}}},
 		{name: "Local empty allowed control", original: ordinary, translated: public},
 		{name: "Local forbidden original only", original: link, translated: public, reason: outboundPlatformDeny},
 		{name: "Local forbidden translation only", original: ordinary, translated: link, reason: outboundPlatformDeny},
-		{name: "Cloud empty allowed control", original: ordinary, translated: public, rules: trustedTCPRules{cloud: true}},
-		{name: "Cloud private original only", original: private, translated: public, rules: trustedTCPRules{cloud: true}, reason: outboundPlatformDeny},
-		{name: "Cloud loopback translation only", original: ordinary, translated: "127.0.0.1", rules: trustedTCPRules{cloud: true}, reason: outboundPlatformDeny},
+		{name: "Cloud empty allowed control", original: ordinary, translated: public, cloud: true},
+		{name: "Cloud private original only", original: private, translated: public, cloud: true, reason: outboundPlatformDeny},
+		{name: "Cloud loopback translation only", original: ordinary, translated: "127.0.0.1", cloud: true, reason: outboundPlatformDeny},
 		{name: "Pre NAT user deny", original: ordinary, translated: public, rules: trustedTCPRules{deny: []string{ordinary + ":8080"}}, reason: outboundUserDeny},
 		{name: "CIDR matched at actual port", original: ordinary, translated: public, rules: trustedTCPRules{allow: []string{"192.0.2.0/24:8080"}}},
 		{name: "Port restriction", original: ordinary, translated: public, rules: trustedTCPRules{allow: []string{"192.0.2.0/24:8081"}}, reason: outboundAllowMiss},
@@ -186,7 +187,7 @@ func TestExtendedUDPOriginalAndTranslatedDestinations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			target, _ := newUDPTestTarget(t)
 			tap := startNetworkWithSeams(t, testGvproxyConfig(), networkSeams{
-				tcp: &tt.rules, nat: map[string]string{tt.original: tt.translated}, dial: target.dial,
+				cloud: tt.cloud, tcp: &tt.rules, nat: map[string]string{tt.original: tt.translated}, dial: target.dial,
 			})
 			if tt.reason != "" {
 				assertUDPPolicyDrop(t, tap, target, tt.original, guestSrcPort, port, tt.reason)
@@ -238,7 +239,7 @@ func TestExtendedUDPEmptyTrustedSnapshotChecksBothAddresses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			target, _ := newUDPTestTarget(t)
 			tap := startNetworkWithSeams(t, testGvproxyConfig(), networkSeams{
-				tcp: &trustedTCPRules{cloud: tt.cloud}, dial: target.dial,
+				cloud: tt.cloud, tcp: &trustedTCPRules{}, dial: target.dial,
 				nat: map[string]string{
 					tt.deniedOriginal: checkedLiteral, originalAllowed: checkedLiteral,
 					originalTranslated: tt.deniedLiteral,

@@ -12,10 +12,11 @@ fn outbound_bootstrap_ffi_serializes_private_revision_without_changing_public_co
     let config = GvproxyConfig::new("/tmp/boxlite-bootstrap/net.sock".into());
     let original = serde_json::to_value(&config).unwrap();
     let legacy: serde_json::Value =
-        serde_json::from_str(&serialize_config(&config, None).unwrap()).unwrap();
+        serde_json::from_str(&serialize_config(&config, None, &[], None).unwrap()).unwrap();
     assert_eq!(legacy, original);
     let mut seeded: serde_json::Value =
-        serde_json::from_str(&serialize_config(&config, Some(&revision)).unwrap()).unwrap();
+        serde_json::from_str(&serialize_config(&config, Some(&revision), &[], None).unwrap())
+            .unwrap();
     assert_eq!(
         seeded
             .as_object_mut()

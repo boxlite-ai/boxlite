@@ -831,10 +831,9 @@ impl BoxOptions {
         // switch but only gates the HOST jailer's own network grants (macOS
         // seatbelt, Linux Landlock). Left alone with the default
         // `network.mode="enabled"` it does not take the guest offline — it
-        // starves the running network backend instead, so the box either
-        // fails to start or, with the jailer off, keeps full internet access
-        // while the config reads as network-free. Name the real option rather
-        // than let either outcome through.
+        // can prevent the network backend from starting. Without a jailer,
+        // the guest network remains enabled. Require the guest network
+        // setting to express the intended behavior.
         if !self.advanced.security.network_enabled
             && matches!(self.network, NetworkSpec::Enabled { .. })
         {
@@ -1480,8 +1479,8 @@ impl NetworkConfig {
 /// overloading outbound network mode.
 ///
 /// Outbound examples:
-/// - `Enabled { allow_net: [] }` — full internet access (default)
-/// - `Enabled { allow_net: ["api.openai.com"] }` — only listed hosts reachable
+/// - `Enabled { allow_net: [] }` — enabled with no Box allowlist (default)
+/// - `Enabled { allow_net: ["api.openai.com"] }` — Box hostname restriction
 /// - `Disabled` — no network interface at all
 ///
 /// Supported `allow_net` patterns:
@@ -1500,14 +1499,12 @@ impl NetworkConfig {
 ///   otherwise a guest could sidestep the rule by addressing the resolved IP
 ///   directly. QUIC/HTTP3 to such a host falls back to TCP; add the IP or
 ///   CIDR to `allow_net` to keep UDP open.
-/// - A host matched by a configured [`Secret`] is additionally reachable on
-///   port 443 without a rule of its own, so `allow_net` is not the only
-///   egress gate. That connection is dialed by name, and under a non-empty
-///   `allow_net` an answer in a private, loopback or CGNAT range is refused
-///   unless an IP or CIDR rule covers it.
+/// - A configured [`Secret`] can permit TCP port 443 without a Box rule for
+///   the name. With a non-empty allowlist, Local hostname routing requires
+///   a matching IP or CIDR rule for private, loopback, or CGNAT answers.
 ///
-/// The gateway's DNS resolver and DHCP are unaffected: they are internal
-/// services, not egress.
+/// Host protection applies to all egress. Gateway DNS and DHCP operate
+/// independently of the Box allowlist and stop when the Cloud guard expires.
 /// Guest egress policy. Untouched by the outbound/inbound split — same
 /// name, same variants, same wire form — so existing literals, match arms
 /// and persisted box configs keep working. It is the outbound half of
@@ -1515,9 +1512,8 @@ impl NetworkConfig {
 /// field `BoxOptions::inbound_network`, which reuses this same type.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NetworkSpec {
-    /// Network enabled. Empty `allow_net` = full access.
-    /// Non-empty = only listed hosts/IPs allowed; others are refused when the
-    /// guest connects. DNS is not filtered.
+    /// Network enabled. A non-empty `allow_net` restricts Box egress.
+    /// Host protection applies even when the Box allowlist is empty.
     Enabled {
         #[serde(default)]
         allow_net: Vec<String>,
@@ -1526,7 +1522,7 @@ pub enum NetworkSpec {
     Disabled,
 }
 
-/// The outbound default: full egress.
+/// The outbound default enables networking with an empty Box allowlist.
 impl Default for NetworkSpec {
     fn default() -> Self {
         Self::Enabled {

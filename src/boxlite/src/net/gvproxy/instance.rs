@@ -10,6 +10,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::ffi;
 use super::logging;
+use super::platform::CloudGuardBootstrap;
 use super::stats::NetworkStats;
 
 /// Safe wrapper for gvproxy library with automatic resource management
@@ -60,19 +61,21 @@ impl GvproxyInstance {
     /// [`NetworkBackendSpec`]: super::super::NetworkBackendSpec
     #[cfg(test)]
     pub(crate) fn new(config: super::config::GvproxyConfig) -> BoxliteResult<Self> {
-        Self::new_with_policy(config, None, None)
+        Self::new_with_policy(config, None, None, &[], None)
     }
 
     fn new_with_policy(
         config: super::config::GvproxyConfig,
         revision: Option<&OutboundRevision>,
         outbound: Option<&OutboundBootstrap>,
+        protected_cidrs: &[String],
+        cloud_guard: Option<&CloudGuardBootstrap>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
         let socket_path = config.socket_path.clone();
-        let id = ffi::create_instance(&config, revision, outbound)?;
+        let id = ffi::create_instance(&config, revision, outbound, protected_cidrs, cloud_guard)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
@@ -96,7 +99,7 @@ impl GvproxyInstance {
     pub fn from_config(
         spec: &super::super::NetworkBackendSpec,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        Self::from_seed(spec, None, None)
+        Self::from_config_with_outbound(spec, None, None, &[])
     }
 
     /// Restore a Runtime-owned snapshot identity while provisioning networking.
@@ -104,7 +107,7 @@ impl GvproxyInstance {
         spec: &super::super::NetworkBackendSpec,
         revision: &OutboundRevision,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        Self::from_seed(spec, Some(revision), None)
+        Self::from_config_with_outbound(spec, Some(revision), None, &[])
     }
 
     /// Install a committed policy and check the launch capability requirements.
@@ -113,7 +116,7 @@ impl GvproxyInstance {
         spec: &super::super::NetworkBackendSpec,
         outbound: &OutboundBootstrap,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        Self::from_seed(spec, None, Some(outbound))
+        Self::from_config_with_outbound(spec, None, Some(outbound), &[])
     }
 
     /// Capabilities advertised by the Go archive statically linked into this process.
@@ -122,11 +125,44 @@ impl GvproxyInstance {
         ffi::outbound_capabilities()
     }
 
-    fn from_seed(
+    #[doc(hidden)]
+    pub fn supports_platform_cidrs() -> bool {
+        ffi::supports_platform_cidrs()
+    }
+
+    #[doc(hidden)]
+    pub fn supports_cloud_guard() -> bool {
+        ffi::supports_cloud_guard()
+    }
+
+    #[doc(hidden)]
+    pub fn from_config_with_outbound(
         spec: &super::super::NetworkBackendSpec,
         revision: Option<&OutboundRevision>,
         outbound: Option<&OutboundBootstrap>,
+        protected_cidrs: &[String],
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
+        Self::from_host_launch(spec, revision, outbound, protected_cidrs, None)
+    }
+
+    #[doc(hidden)]
+    pub fn from_host_launch(
+        spec: &super::super::NetworkBackendSpec,
+        revision: Option<&OutboundRevision>,
+        outbound: Option<&OutboundBootstrap>,
+        protected_cidrs: &[String],
+        cloud_guard: Option<&CloudGuardBootstrap>,
+    ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
+        if cloud_guard.is_some() && !Self::supports_cloud_guard() {
+            return Err(BoxliteError::Unsupported(
+                "gvproxy does not support the Cloud platform guard".into(),
+            ));
+        }
+        if !protected_cidrs.is_empty() && !Self::supports_platform_cidrs() {
+            return Err(BoxliteError::Unsupported(
+                "gvproxy does not support host-protected CIDRs".into(),
+            ));
+        }
         let secrets = spec.secrets.iter().map(Into::into).collect();
 
         // Derive gvproxy's control socket as a sibling of the data socket, so the
@@ -143,7 +179,8 @@ impl GvproxyInstance {
             config = config.with_ca(cert.to_string(), key.to_string());
         }
 
-        let instance = Self::new_with_policy(config, revision, outbound)?;
+        let instance =
+            Self::new_with_policy(config, revision, outbound, protected_cidrs, cloud_guard)?;
 
         let connection_type = if cfg!(target_os = "macos") {
             super::super::ConnectionType::UnixDgram

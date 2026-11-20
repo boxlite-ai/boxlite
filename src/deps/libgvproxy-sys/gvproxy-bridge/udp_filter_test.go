@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
-	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -81,6 +80,7 @@ func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 type networkSeams struct {
 	ca            *BoxCA
 	secretMatcher *SecretHostMatcher
+	cloud         bool
 	tcp           *trustedTCPRules
 	resolve       resolveFunc
 	dial          dialFunc
@@ -100,12 +100,26 @@ func refuseDial(_ context.Context, network, addr string) (net.Conn, error) {
 }
 
 // startNetworkWithSeams is startNetworkWith's body with the seams exposed. It
-// mirrors gvproxy_create: buildTapConfig → virtualnetwork.New →
-// installOutboundHandlers with the same filter and dialer a box gets.
+// mirrors gvproxy_create with the same network and outbound policy constructor.
 func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) *guestTap {
 	t.Helper()
 
-	if seams.resolve == nil {
+	if seams.cloud {
+		guard, err := compilePlatformGuard(cfg.PlatformProtectedCIDRs, true, cfg.Subnet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.guard = guard
+		if cfg.cloudInventoryDirectory == "" {
+			// These forwarding-only tests have no upstream DNS service.
+			cfg.cloudInventoryDirectory = t.TempDir()
+			writeCloudInventory(t, cfg.cloudInventoryDirectory, testCloudInventory([]string{"127.0.0.1:1"}))
+			if seams.resolve == nil {
+				seams.resolve = refuseResolve
+			}
+		}
+	}
+	if !seams.cloud && seams.resolve == nil {
 		seams.resolve = refuseResolve
 	}
 	if seams.dial == nil {
@@ -127,13 +141,9 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 		tapConfig.NAT[original] = translated
 	}
 
-	vn, err := virtualnetwork.New(tapConfig)
-	if err != nil {
-		t.Fatalf("virtualnetwork.New: %v", err)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	policy, err := newOutboundPolicyController(ctx, vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet, tcp: seams.tcp}, cfg.OutboundRevision)
+	vn, policy, err := newGvproxyNetwork(ctx, tapConfig, cfg, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet, tcp: seams.tcp})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +159,10 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	// complete snapshot consumed by the already-installed stable handlers.
 	snapshot := *policy.active.Load()
 	dialer := *snapshot.dialer
-	dialer.resolve, dialer.dial, dialer.connect = seams.resolve, seams.dial, seams.connect
+	if seams.resolve != nil {
+		dialer.resolve = seams.resolve
+	}
+	dialer.dial, dialer.connect = seams.dial, seams.connect
 	snapshot.dialer = &dialer
 	policy.publish(&snapshot, "confirmed")
 
@@ -160,7 +173,7 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	accepted := make(chan struct{})
 	go func() {
 		defer close(accepted)
-		_ = runGuestLink(ctx, stackSide, 4, cfg.RateLimit, vn.AcceptQemu)
+		_ = policy.guard.runGuestLink(ctx, stackSide, 4, cfg.RateLimit, vn.AcceptQemu)
 	}()
 	nic := policy.nic
 	t.Cleanup(func() {
@@ -608,9 +621,8 @@ func TestStartupPerformsNoDNSLookups(t *testing.T) {
 	}
 }
 
-// TestEmptyAllowlistForwardsUDP guards the other direction: an empty
-// allow_net is documented as full internet access, so the new UDP handler
-// must not turn the default configuration into a blackhole.
+// TestEmptyAllowlistForwardsUDP verifies the default Local network forwards
+// UDP to the test destination with an empty Box allowlist.
 func TestEmptyAllowlistForwardsUDP(t *testing.T) {
 	conn, port := listenUDP(t)
 	tap := startNetwork(t, nil)
@@ -630,13 +642,11 @@ func TestEmptyAllowlistForwardsUDP(t *testing.T) {
 	}
 }
 
-// TestUnfilteredNetworkForwardsUnlistedTCP pins the consequence of
-// main.go:437 logging an OverrideTCPHandler failure and continuing: the box
-// keeps the upstream default handler, which forwards everything. It is the
-// same network minus the override, so a failed override is a fully open box.
+// TestUnfilteredNetworkForwardsUnlistedTCP verifies the default Local network
+// forwards TCP to the test destination with an empty Box allowlist.
 func TestUnfilteredNetworkForwardsUnlistedTCP(t *testing.T) {
 	ln, port := listenTCP(t)
-	tap := startNetwork(t, nil) // no allow_net → no OverrideTCPHandler call
+	tap := startNetwork(t, nil)
 
 	accepted := make(chan net.Conn, 1)
 	go func() {
@@ -652,6 +662,6 @@ func TestUnfilteredNetworkForwardsUnlistedTCP(t *testing.T) {
 	case conn := <-accepted:
 		_ = conn.Close()
 	case <-time.After(forwardWindow):
-		t.Fatal("default handler did not forward TCP — harness is not delivering frames to the stack")
+		t.Fatal("default Local network did not forward TCP to the test listener")
 	}
 }

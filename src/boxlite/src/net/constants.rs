@@ -13,22 +13,21 @@ pub const GATEWAY_IP: &str = "192.168.127.1";
 /// Guest IP address (assigned via DHCP static lease)
 pub const GUEST_IP: &str = "192.168.127.2";
 
-/// Built-in DNS label for reaching host loopback services from inside the box.
+/// Built-in DNS label for the virtual host endpoint.
 pub const HOST_ALIAS_LABEL: &str = "host";
 
-/// Built-in DNS zone for reaching host loopback services from inside the box.
+/// Built-in DNS zone for the virtual host endpoint.
 pub const HOST_ALIAS_ZONE: &str = "boxlite.internal.";
 
-/// Built-in DNS hostname for reaching host loopback services from inside the box.
+/// Built-in DNS hostname for the virtual host endpoint.
 pub const HOST_HOSTNAME: &str = "host.boxlite.internal";
 
 /// Virtual host IP address exposed inside the guest as the host endpoint.
 ///
-/// gvproxy NATs traffic sent to this IP to `127.0.0.1` on the host.
-/// The built-in [`HOST_HOSTNAME`] alias resolves to this address.
-/// Egress to this address is governed by `allow_net`: add `"192.168.127.254"`,
-/// or a CIDR covering it, to reach it under a non-empty allowlist. The DNS
-/// record is always served.
+/// The gateway serves [`HOST_HOSTNAME`] at this address while DNS is active.
+/// Local gvproxy maps permitted connections to `127.0.0.1` on the host. A
+/// non-empty Box allowlist must cover this address with an IP or CIDR rule.
+/// The Cloud platform guard denies connections to the alias.
 pub const HOST_IP: &str = "192.168.127.254";
 
 /// Guest IP with subnet prefix (for static IP assignment in guest)
