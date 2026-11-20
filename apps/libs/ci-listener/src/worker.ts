@@ -42,14 +42,18 @@ export interface WorkerState {
 /** Host adapters use this marker only for a known original Box ID under verified original authority. */
 export class ConfirmedWorkerAbsent extends Error {
   readonly confirmedBoxAbsent = true
-  constructor() {
+  constructor(readonly creation?: { boxId: string; effect: string }) {
     super('Original CI Box is confirmed absent')
   }
 }
 
 /** A trusted host recorded that this exact creation operation produced no Box. */
 export class ConfirmedWorkerCreationRejected extends Error {
-  constructor(readonly rejectedCreationEffect: string) {
+  constructor(
+    readonly rejectedCreationEffect: string,
+    readonly reason: 'admission' | 'before-persistence' | 'undispatched' | 'recorded' = 'recorded',
+    readonly platformStatus?: number,
+  ) {
     super('Original CI Box creation was definitively rejected')
     if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(rejectedCreationEffect))
       throw new Error('Original CI creation operation required')

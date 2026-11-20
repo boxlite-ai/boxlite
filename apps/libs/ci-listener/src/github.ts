@@ -76,14 +76,7 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       body: options.json === undefined ? undefined : JSON.stringify(options.json),
     })
     status = response.status
-    if (status === 403 || status === 429) {
-      const after = response.headers.get('retry-after'),
-        reset = response.headers.get('x-ratelimit-reset')
-      if (after && /^\d{1,10}$/.test(after)) retryAt = Date.now() + Number(after) * 1000
-      if (response.headers.get('x-ratelimit-remaining') === '0' && reset && /^\d{1,12}$/.test(reset))
-        retryAt = Math.max(retryAt ?? 0, Number(reset) * 1000)
-      if (status === 429 && retryAt === undefined) retryAt = Date.now() + 60000
-    }
+    retryAt = githubRetryAt(response)
     if (!response.ok || options.response === 'empty' || options.response === 'no-content') {
       await response.body?.cancel()
       if (!response.ok || (options.response === 'no-content' && status !== 204))
@@ -95,25 +88,7 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       await response.body?.cancel()
       throw new Error('GitHub pagination header limit')
     }
-    if (!response.body) throw new Error('Missing GitHub JSON response')
-    const reader = response.body.getReader(),
-      chunks: Uint8Array[] = []
-    let bytes = 0
-    try {
-      for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        bytes += chunk.value.byteLength
-        if (bytes > 1_048_576) {
-          await reader.cancel()
-          throw new Error('GitHub response limit')
-        }
-        chunks.push(chunk.value)
-      }
-    } finally {
-      reader.releaseLock()
-    }
-    const text = Buffer.concat(chunks).toString('utf8')
+    const text = await readGitHubBody(response)
     if (options.response !== 'page') return JSON.parse(text)
     // Decimal IDs may change under Number#toString even when their binary value is exact.
     const data: unknown = JSON.parse(text, (_key, value: unknown, context?: { source?: string }) =>
@@ -122,7 +97,15 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
         : value,
     )
     return { data, link }
-  } catch {
+  } catch (error) {
+    if (
+      method === 'GET' &&
+      options.signal?.aborted &&
+      (status === undefined || (status >= 200 && status < 300)) &&
+      (error === options.signal.reason || (error instanceof Error && error.name === 'AbortError'))
+    ) {
+      throw options.signal.reason
+    }
     // A successful-but-unreadable POST can still have produced a remote effect.
     throw new GitHubRequestError(
       status,
@@ -130,4 +113,39 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       retryAt,
     )
   }
+}
+
+export function githubRetryAt(response: Response): number | undefined {
+  let retryAt: number | undefined
+  if (response.status === 403 || response.status === 429) {
+    const after = response.headers.get('retry-after'),
+      reset = response.headers.get('x-ratelimit-reset')
+    if (after && /^\d{1,10}$/.test(after)) retryAt = Date.now() + Number(after) * 1000
+    if (response.headers.get('x-ratelimit-remaining') === '0' && reset && /^\d{1,12}$/.test(reset))
+      retryAt = Math.max(retryAt ?? 0, Number(reset) * 1000)
+    if (response.status === 429 && retryAt === undefined) retryAt = Date.now() + 60000
+  }
+  return retryAt
+}
+
+export async function readGitHubBody(response: Response, maxBytes = 1_048_576): Promise<string> {
+  if (!response.body) throw new Error('Missing GitHub JSON response')
+  const reader = response.body.getReader(),
+    chunks: Uint8Array[] = []
+  let bytes = 0
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > maxBytes) {
+        await reader.cancel()
+        throw new Error('GitHub response limit')
+      }
+      chunks.push(chunk.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }

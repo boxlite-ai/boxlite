@@ -26,15 +26,20 @@ export type EffectKind =
 export interface Allocation {
   scope: string
   name: string
-  job: JobNotice
+  job: JobNotice | null
   /** Capacity belongs to this label set; job is provenance, not an assignment. */
-  supply?: { labels: string[] }
+  supply?: { labels: string[]; scaleSet?: number }
   createdAt: number
   box: { phase: ResourcePhase; id: string | null }
-  runner: { phase: ResourcePhase; id: number | null; registeredAt?: number }
+  runner: { phase: ResourcePhase; id: number | null; registeredAt?: number; worked?: true }
   delivery: 'none' | 'requested' | 'done'
   closing: boolean
   effect: { id: string; kind: EffectKind } | null
+}
+/** Capacity this worker can back when an outstanding scale set request is redelivered. */
+export function retryCapacity(value: Allocation): 'unavailable' | 'reserved' | 'dispatched' {
+  if (!value.supply?.scaleSet || value.closing || value.box.phase === 'absent') return 'unavailable'
+  return value.box.phase === 'none' ? 'reserved' : 'dispatched'
 }
 export const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -124,10 +129,6 @@ export function decodeAllocation(value: unknown): Allocation {
     !/^scope\/[a-f0-9]{64}$/.test(value.scope) ||
     typeof value.name !== 'string' ||
     !/^ci-jit-[a-f0-9]{32}$/.test(value.name) ||
-    !object(value.job) ||
-    !positive(value.job.repository) ||
-    !positive(value.job.run) ||
-    !positive(value.job.job) ||
     !Number.isSafeInteger(value.createdAt) ||
     (value.createdAt as number) < 0 ||
     !object(value.box) ||
@@ -136,6 +137,12 @@ export function decodeAllocation(value: unknown): Allocation {
     typeof value.closing !== 'boolean'
   )
     throw new StateCorrupt()
+  let job: JobNotice | null = null
+  if (value.job !== null) {
+    if (!object(value.job) || !positive(value.job.repository) || !positive(value.job.run) || !positive(value.job.job))
+      throw new StateCorrupt()
+    job = { repository: value.job.repository, run: value.job.run, job: value.job.job }
+  }
   let supply: Allocation['supply']
   if (value.supply !== undefined) {
     if (
@@ -152,8 +159,11 @@ export function decodeAllocation(value: unknown): Allocation {
     } catch {
       throw new StateCorrupt()
     }
-    supply = { labels: [...labels] }
+    const set = value.supply.scaleSet
+    if (set !== undefined && (!positive(set) || job)) throw new StateCorrupt()
+    supply = { labels: [...labels], ...(positive(set) ? { scaleSet: set } : {}) }
   }
+  if (!job && !supply?.scaleSet) throw new StateCorrupt()
   for (const [kind, resource] of [
     ['box', value.box],
     ['runner', value.runner],
@@ -172,6 +182,11 @@ export function decodeAllocation(value: unknown): Allocation {
     )
       throw new StateCorrupt()
   }
+  if (
+    value.runner.worked !== undefined &&
+    (value.runner.worked !== true || !supply?.scaleSet || !positive(value.runner.id))
+  )
+    throw new StateCorrupt()
   if (
     value.runner.registeredAt !== undefined &&
     (!Number.isSafeInteger(value.runner.registeredAt) || (value.runner.registeredAt as number) < 0)
@@ -210,13 +225,14 @@ export function decodeAllocation(value: unknown): Allocation {
   return {
     scope: value.scope,
     name: value.name,
-    job: { repository: value.job.repository, run: value.job.run, job: value.job.job },
+    job,
     ...(supply ? { supply } : {}),
     createdAt: value.createdAt as number,
     box: { phase: value.box.phase as ResourcePhase, id: value.box.id as string | null },
     runner: {
       phase: value.runner.phase as ResourcePhase,
       id: value.runner.id as number | null,
+      ...(value.runner.worked === true ? { worked: true as const } : {}),
       ...(value.runner.registeredAt === undefined ? {} : { registeredAt: value.runner.registeredAt as number }),
     },
     delivery: value.delivery as Allocation['delivery'],
