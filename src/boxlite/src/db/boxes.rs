@@ -508,6 +508,34 @@ mod tests {
     }
 
     #[test]
+    fn legacy_status_rows_load_after_migrating_from_v10() {
+        let (store, dir) = create_test_db();
+        let db_path = dir.path().join("test.db");
+        let config = create_test_config(TEST_ID_1);
+        store.save(&config, &BoxState::new()).unwrap();
+        drop(store);
+
+        // Rewind to schema v10 with a state row an older build left behind.
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            let mut json = serde_json::to_value(BoxState::new()).unwrap();
+            json["status"] = "starting".into();
+            conn.execute(
+                "UPDATE box_state SET status = 'starting', json = ?1 WHERE id = ?2",
+                params![json.to_string(), TEST_ID_1],
+            )
+            .unwrap();
+            conn.execute("UPDATE schema_version SET version = 10 WHERE id = 1", [])
+                .unwrap();
+        }
+
+        let reopened = BoxStore::new(Database::open(&db_path).unwrap());
+        let (_, state) = reopened.load(TEST_ID_1).unwrap().unwrap();
+        assert_eq!(state.status, BoxStatus::Configured);
+        assert_eq!(reopened.list_all().unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_save_and_load_config() {
         let (store, _dir) = create_test_db();
         let config = create_test_config(TEST_ID_1);
