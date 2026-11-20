@@ -19,8 +19,9 @@ import (
 // Both stats must succeed, and the home filesystem's device number must
 // equal the device node's own. The infra boot script formats the data disk
 // whole — no partition table — so the exact device-number equality is the
-// precise condition, and a partition-backed home would read as a mismatch.
-// That is the fail-safe direction: expansion is withheld, not misattributed.
+// precise condition; a home sitting on a partition of the data disk would
+// fail it. That is the fail-safe direction: expansion is withheld, not
+// misattributed.
 func verifyHomeOnDataDisk(homeDir, devicePath string) error {
 	var home, dev syscall.Stat_t
 	if err := syscall.Stat(homeDir, &home); err != nil {

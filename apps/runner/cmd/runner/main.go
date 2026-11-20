@@ -188,7 +188,7 @@ func run() int {
 
 	// Grow the data disk filesystem whenever the block device gets larger
 	// (hyperdisk LLD §5.1). No-op on hosts without the data disk device.
-	// The same resolved path feeds the healthcheck's backing gate, so both
+	// The same resolved path feeds the healthcheck's disk-identity gate, so both
 	// readers agree on which device is the data disk.
 	dataDiskDevicePath := cfg.DataDiskDevice
 	if dataDiskDevicePath == "" {

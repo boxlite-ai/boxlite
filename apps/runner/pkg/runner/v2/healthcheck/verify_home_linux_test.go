@@ -14,10 +14,10 @@ import (
 )
 
 // The Linux gate against real stats: a directory the device does not
-// carry must mismatch, and an absent device must read as such. A matching
+// carry must fail the check, and an absent device must read as such. A
 // pair cannot be fabricated without a real block device, so the pass path
 // stays with the host-level coverage (contract tests inject the hook).
-func TestVerifyHomeOnDataDiskDetectsMismatch(t *testing.T) {
+func TestVerifyHomeOnDataDiskRejectsWrongDevices(t *testing.T) {
 	home := t.TempDir()
 
 	if err := verifyHomeOnDataDisk(home, filepath.Join(home, "absent-device")); err == nil {

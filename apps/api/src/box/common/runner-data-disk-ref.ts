@@ -4,7 +4,7 @@
  */
 
 /**
- * Identifies the cloud data disk backing a runner's `BOXLITE_HOME` filesystem,
+ * Identifies the cloud data disk carrying a runner's `BOXLITE_HOME` filesystem,
  * as reported by the runner itself in each healthcheck. The runner sends the
  * identity only while its own check confirms the device actually carries the
  * BoxLite home, and a heartbeat without one clears the stored identity — the
