@@ -3,7 +3,16 @@ import { createHash, randomUUID } from 'node:crypto'
 import { JobNotice } from '../jobs'
 import { Json, StateConflict, StateCorrupt, StateRecord } from '../state/database'
 import { ExecutionLease, ListenerState, StateChange, StateCheck } from '../state/store'
-import { Allocation, decodeAllocation, decodeScope, ExecutionScope, object, positive, scopeKey } from './model'
+import {
+  Allocation,
+  decodeAllocation,
+  decodeScope,
+  ExecutionScope,
+  object,
+  positive,
+  retryCapacity,
+  scopeKey,
+} from './model'
 import { CapacityPolicy, captureCapacity } from '../capacity'
 
 interface ScopeRow {
@@ -419,9 +428,14 @@ export class ExecutionJournal {
     if (!delivery[previous.delivery].includes(value.delivery) || (previous.closing && !value.closing))
       throw new Error('CI allocation cannot move backwards')
     const changes: StateChange[] = [{ key, expected: version, payload: json(value) }]
-    if (previous.box.phase !== 'absent' && value.box.phase === 'absent') {
+    const released = previous.box.phase !== 'absent' && value.box.phase === 'absent'
+    const capacityChanged = retryCapacity(previous) !== retryCapacity(value)
+    if (released || capacityChanged) {
       const target = await this.scope(lease, value.scope)
-      changes.push(...this.charge(await this.usage(Object.values(domains(target.scope)), lease), -1))
+      // A retry relies on both the assigned workers and the undispatched reservations in this scope.
+      if (capacityChanged)
+        changes.push({ key: target.activity.key, expected: target.activity.version, payload: target.activity.payload })
+      if (released) changes.push(...this.charge(await this.usage(Object.values(domains(target.scope)), lease), -1))
     }
     const records = await this.state.commit(lease, changes, checks)
     return { record: records.find((record) => record.key === key)!, value }
