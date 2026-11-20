@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import suppress
 
 import pytest
 
@@ -69,14 +70,10 @@ async def test_local_volume_shared_by_boxes_clone_and_import(shared_runtime):
     finally:
         for handle in (box, clone, imported):
             if handle is not None:
-                try:
+                with suppress(Exception):
                     await shared_runtime.remove(handle.id, force=True)
-                except Exception:
-                    pass
-        try:
+        with suppress(Exception):
             await shared_runtime.volumes.remove(volume.id)
-        except Exception:
-            pass
         try:
             os.remove(archive_path)
         except FileNotFoundError:
