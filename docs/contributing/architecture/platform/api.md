@@ -559,6 +559,12 @@ the write contract's normalization: ASCII lowercase becomes uppercase, and each
 other character outside `[A-Z0-9_]` becomes `_`. For example, `open-ai` conflicts
 with `OPEN_AI`. Disabled forwarding preserves the existing name behavior.
 
+Before transfer, enabled forwarding also rejects batches above 64 secrets,
+normalized names outside 1–64 characters, and values outside 1–65,536 UTF-8 bytes.
+An explicitly empty placeholder is rejected; an omitted placeholder still gets
+the default above. These input errors return HTTP 400 naming the invalid field,
+without acquiring Secret Server credentials or sending a POST.
+
 Only a complete 200/201 name-to-ID mapping permits insertion. UUID uniqueness is
 case-insensitive: differently cased spellings of the same ID are rejected.
 The box's `secrets`

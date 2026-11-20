@@ -24,10 +24,22 @@ export class SecretServerClient {
   ): Promise<BoxSecret[]> {
     if (!this.config.get('secretServer.enabled') || secrets.length === 0) return secrets
 
+    if (secrets.length > 64) throw new BadRequestError('secrets must contain at most 64 entries')
     // Match the write contract's ASCII name normalization before any remote side effect.
     const names = new Set<string>()
-    for (const { name } of secrets) {
+    for (const [index, { name, value, placeholder }] of secrets.entries()) {
       const normalized = name.replace(/[a-z]/g, (letter) => letter.toUpperCase()).replace(/[^A-Z0-9_]/gu, '_')
+      if (normalized.length < 1 || normalized.length > 64) {
+        throw new BadRequestError(`secrets[${index}].name must normalize to 1–64 characters`)
+      }
+      if (
+        typeof value !== 'string' ||
+        Buffer.byteLength(value, 'utf8') < 1 ||
+        Buffer.byteLength(value, 'utf8') > 65536
+      ) {
+        throw new BadRequestError(`secrets[${index}].value must contain 1–65536 UTF-8 bytes`)
+      }
+      if (placeholder === '') throw new BadRequestError(`secrets[${index}].placeholder must not be empty`)
       if (names.has(normalized)) throw new BadRequestError('Secret names must be unique after normalization')
       names.add(normalized)
     }
