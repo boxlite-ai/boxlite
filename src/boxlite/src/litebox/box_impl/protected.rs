@@ -2,9 +2,12 @@
 
 use super::{BoxImpl, BoxStatus};
 use crate::litebox::protected_boot::{
-    ProtectedBootAttempt, ProtectedBootKey, ProtectedBootOutcome, ProtectedBootReceipt,
-    ProtectedBootRequest,
+    BootRecoveryGate, ProtectedBootAttempt, ProtectedBootKey, ProtectedBootOutcome,
+    ProtectedBootReceipt, ProtectedBootRequest, ProtectedGateReceipt, ProtectedGateRequest,
+    ProtectedSealedEvidence,
 };
+use crate::litebox::protected_outbound::ProtectedRouteSnapshot;
+use crate::net::gvproxy::{GvproxyBackend, RecoveryGateAction};
 use crate::net::{NetworkBackendConfig, OutboundApplicationState, OutboundRevision};
 use crate::runtime::options::NetworkSpec;
 use crate::util::{PidFileReader, PidRecord, process_start_time};
@@ -26,7 +29,7 @@ impl BoxImpl {
         &self,
         request: ProtectedBootRequest,
     ) -> BoxliteResult<ProtectedBootReceipt> {
-        request.key.policy.policy.validate()?;
+        request.key.validate()?;
         self.with_operation(async {
             let manager = &self.runtime.box_manager;
             let mut record = manager.protected_boot(self.id())?.unwrap_or_default();
@@ -39,7 +42,10 @@ impl BoxImpl {
                 return Err(conflict("Protected bootstrap attempt is retired"));
             }
             if let Some(active) = record.active.as_ref() {
-                if active.key != key {
+                if active.key != key
+                    || active.recovery_gate.as_ref().map(|gate| &gate.generation)
+                        != request.recovery_generation.as_ref()
+                {
                     return Err(conflict(
                         "A different protected bootstrap attempt is admitted",
                     ));
@@ -48,7 +54,15 @@ impl BoxImpl {
             }
             {
                 let state = self.state.read();
-                if !self.can_admit_protected_boot(state.status, !record.retired.is_empty())
+                let restart = request.restart
+                    && request.recovery_generation.is_some()
+                    && state.status == BoxStatus::Stopped
+                    && !self.config.options.removes_on_stop()
+                    && (record.retired.iter().any(|retired| retired.epoch.is_some())
+                        || (key.registration_id.is_none() && record.retired.is_empty()));
+                if !(restart || self.can_admit_protected_boot(state.status, !record.retired.is_empty()))
+                    || record.outbound.pending.is_some()
+                    || record.outbound.unbind_settlement.is_some()
                     || state.pid.is_some()
                     || has_shim(&self.layout.pid_file_path())
                 {
@@ -63,14 +77,232 @@ impl BoxImpl {
                 spawning: false,
                 owner: None,
                 confirmed: false,
+                recovery_gate: request.recovery_generation.clone().map(|generation| BootRecoveryGate {
+                    generation,
+                    seal_requested: false,
+                    seal_confirmed: false,
+                    released: false,
+                    evidence: None,
+                }),
             };
-            let launch = request.into_launch(attempt.binding());
+            let launch = request.into_launch(&attempt)?;
+            record.outbound = Default::default();
+            record.removable_attempt = None;
             record.active = Some(attempt);
             manager.save_protected_boot(self.id(), &record)?;
             self.start_with_network(Some(launch)).await?;
             self.confirm_protected_boot(&key).await
         })
         .await
+    }
+
+    pub(crate) async fn change_protected_gate(
+        &self,
+        request: ProtectedGateRequest,
+        action: RecoveryGateAction,
+    ) -> BoxliteResult<ProtectedGateReceipt> {
+        self.with_operation(async {
+            let manager = &self.runtime.box_manager;
+            let mut record = manager.protected_boot(self.id())?.unwrap_or_default();
+            if matches!(action, RecoveryGateAction::Seal) {
+                return self.seal_protected_gate(&mut record, request).await;
+            }
+            let initial = record
+                .active
+                .as_ref()
+                .ok_or_else(|| conflict("Missing protected epoch"))?;
+            let outbound = self.protected_outbound_durable(&record, initial)?;
+            if request
+                .outbound
+                .as_ref()
+                .is_some_and(|claimed| claimed != &outbound)
+                || (request.outbound.is_none()
+                    && (outbound.snapshot != initial.key.policy
+                        || outbound.binding != initial.binding()))
+            {
+                return Err(conflict("Protected recovery route differs"));
+            }
+            let attempt = record
+                .active
+                .as_mut()
+                .filter(|attempt| {
+                    attempt.confirmed
+                        && attempt.key == request.key
+                        && attempt.epoch == request.epoch
+                })
+                .ok_or_else(|| conflict("Protected recovery attempt differs"))?;
+            let id = attempt
+                .gate_id()
+                .filter(|id| id.generation == request.generation)
+                .ok_or_else(|| conflict("Protected recovery gate generation differs"))?;
+            let gate = attempt
+                .recovery_gate
+                .as_mut()
+                .ok_or_else(|| conflict("Protected recovery gate is missing"))?;
+            if gate.seal_requested || record.outbound.pending.is_some() {
+                return Err(conflict("Protected recovery gate is retired"));
+            }
+            let boot = attempt.receipt(ProtectedBootOutcome::Confirmed);
+            let backend = self.protected_bridge();
+            Self::verify_protected_bridge(
+                &backend,
+                attempt,
+                self.verify_protected_owner(attempt)?,
+                &outbound,
+            )
+            .await?;
+            backend
+                .change_recovery_gate(
+                    &id,
+                    &outbound.snapshot.revision,
+                    outbound.binding.as_ref(),
+                    action,
+                )
+                .await?;
+            let attempt = record
+                .active
+                .as_mut()
+                .ok_or_else(|| conflict("Protected recovery attempt is missing"))?;
+            let observed = Self::verify_protected_bridge(
+                &backend,
+                attempt,
+                self.verify_protected_owner(attempt)?,
+                &outbound,
+            )
+            .await?;
+            let gate = observed
+                .recovery_gate
+                .filter(|gate| !gate.closed && !gate.sealed)
+                .ok_or_else(|| conflict("Protected recovery gate change is unconfirmed"))?;
+            let stored = attempt
+                .recovery_gate
+                .as_mut()
+                .ok_or_else(|| conflict("Protected recovery gate is missing"))?;
+            stored.released = true;
+            manager.save_protected_boot(self.id(), &record)?;
+            Ok(ProtectedGateReceipt {
+                boot,
+                generation: gate.generation,
+                closed: gate.closed,
+                sealed: gate.sealed,
+                outbound,
+                evidence: None,
+            })
+        })
+        .await
+    }
+
+    async fn seal_protected_gate(
+        &self,
+        record: &mut crate::litebox::protected_boot::ProtectedBootState,
+        request: ProtectedGateRequest,
+    ) -> BoxliteResult<ProtectedGateReceipt> {
+        let attempt = record
+            .active
+            .as_ref()
+            .filter(|attempt| {
+                attempt.key == request.key
+                    && attempt.epoch == request.epoch
+                    && attempt
+                        .recovery_gate
+                        .as_ref()
+                        .is_some_and(|gate| gate.generation == request.generation)
+            })
+            .ok_or_else(|| conflict("Protected recovery attempt differs"))?;
+        let boot = attempt.receipt(ProtectedBootOutcome::Confirmed);
+        if let Some(evidence) = attempt
+            .recovery_gate
+            .as_ref()
+            .and_then(|gate| gate.evidence.clone())
+        {
+            return Ok(ProtectedGateReceipt {
+                boot,
+                generation: request.generation,
+                closed: true,
+                sealed: true,
+                outbound: evidence.durable.clone(),
+                evidence: Some(evidence),
+            });
+        }
+        let durable = self.protected_outbound_durable(record, attempt)?;
+        let owner = self.verify_protected_owner(attempt)?;
+        let id = attempt
+            .gate_id()
+            .ok_or_else(|| conflict("Protected recovery gate is missing"))?;
+        let manager = &self.runtime.box_manager;
+        let backend = self.protected_bridge();
+        let observed = backend.managed_proxy_status().await?;
+        if !observed
+            .recovery_gate
+            .as_ref()
+            .is_some_and(|gate| gate.epoch == id.epoch && gate.generation == id.generation)
+            || observed
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.epoch != id.epoch)
+            || !owns_shim(owner)
+        {
+            return Err(conflict("Installed protected epoch is unconfirmed"));
+        }
+        let stored = record
+            .active
+            .as_mut()
+            .and_then(|attempt| attempt.recovery_gate.as_mut())
+            .ok_or_else(|| conflict("Protected recovery gate is missing"))?;
+        stored.seal_requested = true;
+        manager.save_protected_boot(self.id(), record)?;
+        backend
+            .change_recovery_gate(
+                &id,
+                &observed.status.snapshot.revision,
+                observed.binding.as_ref(),
+                RecoveryGateAction::Seal,
+            )
+            .await?;
+        let sealed = backend.managed_proxy_status().await?;
+        if !sealed.recovery_gate.as_ref().is_some_and(|gate| {
+            gate.epoch == id.epoch && gate.generation == id.generation && gate.closed && gate.sealed
+        }) || sealed.status.snapshot != observed.status.snapshot
+            || sealed.binding != observed.binding
+            || !owns_shim(owner)
+        {
+            return Err(conflict("Protected epoch sealing is unconfirmed"));
+        }
+        let evidence = ProtectedSealedEvidence {
+            durable: durable.clone(),
+            installed: (sealed.status.application_state == OutboundApplicationState::Confirmed)
+                .then_some(ProtectedRouteSnapshot {
+                    snapshot: sealed.status.snapshot,
+                    binding: sealed.binding,
+                }),
+            pending: record
+                .outbound
+                .pending
+                .as_ref()
+                .map(|pending| pending.update.clone()),
+            rollback: record.outbound.rollback.clone(),
+            unbind_settlement: record.outbound.unbind_settlement.clone(),
+            ordinary_pending: manager
+                .outbound_control(self.id())?
+                .is_some_and(|control| control.pending.is_some()),
+        };
+        let stored = record
+            .active
+            .as_mut()
+            .and_then(|attempt| attempt.recovery_gate.as_mut())
+            .ok_or_else(|| conflict("Protected recovery gate is missing"))?;
+        stored.seal_confirmed = true;
+        stored.released = false;
+        stored.evidence = Some(evidence.clone());
+        manager.save_protected_boot(self.id(), record)?;
+        Ok(ProtectedGateReceipt {
+            boot,
+            generation: request.generation,
+            closed: true,
+            sealed: true,
+            outbound: durable,
+            evidence: Some(evidence),
+        })
     }
 
     pub(crate) async fn protected_boot_receipt(
@@ -83,18 +315,16 @@ impl BoxImpl {
                 .box_manager
                 .protected_boot(self.id())?
                 .unwrap_or_default();
-            if let Some(receipt) = record
-                .retired
-                .into_iter()
-                .find(|receipt| &receipt.key == key)
-            {
-                return Ok(receipt);
+            if let Some(receipt) = record.retired.iter().find(|receipt| &receipt.key == key) {
+                return Ok(receipt.clone());
             }
             let active = record
                 .active
+                .as_ref()
                 .filter(|active| &active.key == key && active.confirmed)
                 .ok_or_else(|| conflict("Protected startup is unconfirmed"))?;
-            self.verify_protected_boot(&active).await?;
+            let expected = self.protected_outbound_durable(&record, active)?;
+            self.verify_protected_boot(active, &expected).await?;
             Ok(active.receipt(ProtectedBootOutcome::Confirmed))
         })
         .await
@@ -104,7 +334,7 @@ impl BoxImpl {
         &self,
         key: ProtectedBootKey,
     ) -> BoxliteResult<ProtectedBootReceipt> {
-        key.policy.policy.validate()?;
+        key.validate()?;
         self.with_operation(async {
             let manager = &self.runtime.box_manager;
             let mut record = manager.protected_boot(self.id())?.unwrap_or_default();
@@ -120,8 +350,11 @@ impl BoxImpl {
                 };
             }
             let state = self.state.read();
+            let legacy_unbound_restart = key.registration_id.is_none() && state.status == BoxStatus::Stopped
+                && !self.config.options.removes_on_stop();
             if record.active.is_none()
                 && !self.can_admit_protected_boot(state.status, !record.retired.is_empty())
+                && !legacy_unbound_restart
             {
                 return Err(conflict(
                     "Protected bootstrap requires a fresh Guest network and disabled automatic removal",
@@ -135,9 +368,15 @@ impl BoxImpl {
             }
             let epoch = match record.active.take() {
                 Some(attempt) => {
-                    if attempt.key != key || !termination_confirmed(self.id(), &attempt) {
+                    if attempt.key != key
+                        || (attempt.confirmed && attempt.recovery_gate.as_ref().is_some_and(|gate| !gate.seal_confirmed))
+                        || !termination_confirmed(self.id(), &attempt)
+                    {
                         return Err(conflict("Protected bootstrap retirement is unconfirmed"));
                     }
+                    // Sealed evidence belongs to the terminated epoch. Keep the retirement receipt
+                    // and persisted policy, and discard authorizations that cannot cross a restart.
+                    record.outbound = Default::default();
                     Some(attempt.epoch)
                 }
                 None => None,
@@ -147,6 +386,7 @@ impl BoxImpl {
                 epoch,
                 outcome: ProtectedBootOutcome::Retired,
             };
+            record.removable_attempt = Some(receipt.key.attempt_id.clone());
             record.retired.push(receipt.clone());
             manager.save_protected_boot(self.id(), &record)?;
             Ok(receipt)
@@ -167,16 +407,27 @@ impl BoxImpl {
     ) -> BoxliteResult<ProtectedBootReceipt> {
         let manager = &self.runtime.box_manager;
         let mut record = manager.protected_boot(self.id())?.unwrap_or_default();
+        let active = record
+            .active
+            .as_ref()
+            .ok_or_else(|| conflict("Missing protected epoch"))?;
+        let expected = self.protected_outbound_durable(&record, active)?;
         let attempt = record
             .active
             .as_mut()
             .filter(|attempt| &attempt.key == key)
             .ok_or_else(|| conflict("Protected bootstrap attempt differs"))?;
-        self.verify_protected_boot(attempt).await?;
+        self.verify_protected_boot(attempt, &expected).await?;
         let receipt = attempt.receipt(ProtectedBootOutcome::Confirmed);
         if !attempt.confirmed {
             attempt.confirmed = true;
-            manager.save_protected_boot(self.id(), &record)?;
+            if attempt.recovery_gate.is_some() {
+                record.outbound.committed = Some(expected.clone());
+                manager.save_protected_outbound(self.id(), &record, Some(&expected.snapshot))?;
+                self.state.write().outbound_policy = Some(expected.snapshot.policy);
+            } else {
+                manager.save_protected_boot(self.id(), &record)?;
+            }
         }
         Ok(receipt)
     }
@@ -184,7 +435,22 @@ impl BoxImpl {
     pub(super) async fn verify_protected_boot(
         &self,
         attempt: &ProtectedBootAttempt,
+        expected: &ProtectedRouteSnapshot,
     ) -> BoxliteResult<()> {
+        Self::verify_protected_bridge(
+            &self.protected_bridge(),
+            attempt,
+            self.verify_protected_owner(attempt)?,
+            expected,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub(super) fn verify_protected_owner(
+        &self,
+        attempt: &ProtectedBootAttempt,
+    ) -> BoxliteResult<PidRecord> {
         let owner = attempt
             .owner
             .ok_or_else(|| conflict("Missing protected bootstrap process owner"))?;
@@ -192,25 +458,51 @@ impl BoxImpl {
         if state.status != BoxStatus::Running || state.pid != Some(owner.pid) || !owns_shim(owner) {
             return Err(conflict("Protected Guest readiness is unconfirmed"));
         }
-        let backend = crate::net::gvproxy::GvproxyBackend::from_config(&NetworkBackendConfig {
+        Ok(owner)
+    }
+
+    pub(super) fn protected_bridge(&self) -> GvproxyBackend {
+        GvproxyBackend::from_config(&NetworkBackendConfig {
             outbound_disabled: true,
             socket_path: self.layout.net_backend_socket_path(),
             ca_dir: self.layout.ca_dir(),
             allow_net: Vec::new(),
             secrets: Vec::new(),
             rate_limit: Default::default(),
-        });
+        })
+    }
+
+    async fn verify_protected_bridge(
+        backend: &GvproxyBackend,
+        attempt: &ProtectedBootAttempt,
+        owner: PidRecord,
+        expected: &ProtectedRouteSnapshot,
+    ) -> BoxliteResult<crate::net::gvproxy::ManagedProxyStatus> {
         let observed = backend.managed_proxy_status().await?;
+        let gate_matches = match (attempt.gate_id(), &observed.recovery_gate) {
+            (Some(id), Some(gate)) => {
+                gate.epoch == id.epoch
+                    && gate.generation == id.generation
+                    && (attempt.confirmed || (gate.closed && !gate.sealed))
+            }
+            (None, None) => true,
+            _ => false,
+        };
         if observed.status.application_state != OutboundApplicationState::Confirmed
-            || observed.status.snapshot != attempt.key.policy
-            || observed.binding != attempt.binding()
+            || observed.status.snapshot != expected.snapshot
+            || observed.binding != expected.binding
+            || !observed
+                .capabilities
+                .iter()
+                .any(|capability| capability == "managed-proxy-v1")
+            || !gate_matches
             || !owns_shim(owner)
         {
             return Err(conflict(
                 "Installed proxy snapshot does not confirm protected startup",
             ));
         }
-        Ok(())
+        Ok(observed)
     }
 }
 

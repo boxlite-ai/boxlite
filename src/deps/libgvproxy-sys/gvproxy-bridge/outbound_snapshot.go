@@ -12,15 +12,16 @@ import (
 // Published snapshots are immutable. A flow keeps its filter and dialer even
 // when a replacement publishes another snapshot or changes application state.
 type outboundSnapshot struct {
-	policy   outboundPolicy
-	revision string
-	filter   *AllowNetFilter
-	dialer   *egressDialer
-	proxyDNS *proxyDNSResolver
-	udpRelay *managedUDP
-	managed  bool
-	blockAll bool
-	state    string
+	policy       outboundPolicy
+	revision     string
+	filter       *AllowNetFilter
+	dialer       *egressDialer
+	proxyDNS     *proxyDNSResolver
+	udpRelay     *managedUDP
+	managed      bool
+	blockAll     bool
+	recoveryGate *recoveryGate
+	state        string
 }
 
 type snapshotSource func() *outboundSnapshot
@@ -44,12 +45,15 @@ func (p *outboundPolicyController) compileRoute(policy outboundPolicy, revision 
 		policy: policy, revision: revision, filter: filter, dialer: dialer,
 		proxyDNS: route, managed: p.newUDPRelay != nil,
 	}
+	if previous := p.active.Load(); previous != nil {
+		next.recoveryGate = previous.recoveryGate
+	}
 	next.configureResolution(p.dnsWork)
 	return next, nil
 }
 
 func (s *outboundSnapshot) ingressClosed() bool {
-	return s.blockAll || s.policy.Mode == "disabled"
+	return s.blockAll || s.policy.Mode == "disabled" || (s.recoveryGate != nil && s.recoveryGate.Closed)
 }
 
 func (s *outboundSnapshot) configureResolution(work *dnsLookupWork) {

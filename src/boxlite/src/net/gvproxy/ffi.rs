@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::{ManagedProxyRoute, config::GvproxyConfig};
+use super::{ManagedProxyRoute, ManagedRecoveryGateId, config::GvproxyConfig};
 use libgvproxy_sys::{
     gvproxy_create, gvproxy_create_managed, gvproxy_destroy, gvproxy_free_string,
     gvproxy_get_stats, gvproxy_get_version,
@@ -30,17 +30,26 @@ pub fn create_instance(
 pub(super) fn create_managed_instance(
     config: &GvproxyConfig,
     revision: &crate::net::OutboundRevision,
-    route: &ManagedProxyRoute,
+    route: Option<&ManagedProxyRoute>,
+    recovery_gate: Option<&ManagedRecoveryGateId>,
 ) -> BoxliteResult<i64> {
-    create(config, Some(revision), Some(route))
+    let route_json = serde_json::to_vec(&route)
+        .ok()
+        .and_then(|bytes| CString::new(bytes).ok())
+        .ok_or_else(|| BoxliteError::Network("Invalid managed proxy route".into()))?;
+    create(config, Some(revision), Some((route_json, recovery_gate)))
 }
 
 fn create(
     config: &GvproxyConfig,
     revision: Option<&crate::net::OutboundRevision>,
-    route: Option<&ManagedProxyRoute>,
+    managed: Option<(CString, Option<&ManagedRecoveryGateId>)>,
 ) -> BoxliteResult<i64> {
-    let json = serialize_config(config, revision)?;
+    let json = serialize_config(
+        config,
+        revision,
+        managed.as_ref().and_then(|(_, gate)| *gate),
+    )?;
 
     let c_json = CString::new(json)
         .map_err(|e| BoxliteError::Network(format!("Invalid JSON string: {}", e)))?;
@@ -50,11 +59,7 @@ fn create(
     // message (e.g. "listen tcp 0.0.0.0:27380: bind: address already in use"
     // instead of an opaque "gvproxy_create failed").
     let mut err_ptr: *mut std::os::raw::c_char = std::ptr::null_mut();
-    let id = if let Some(route) = route {
-        let route_json = serde_json::to_vec(route)
-            .ok()
-            .and_then(|bytes| CString::new(bytes).ok())
-            .ok_or_else(|| BoxliteError::Network("Invalid managed proxy route".into()))?;
+    let id = if let Some((route_json, _)) = &managed {
         // SAFETY: Both strings live through the synchronous FFI call, which copies them.
         unsafe { gvproxy_create_managed(c_json.as_ptr(), route_json.as_ptr(), &mut err_ptr) }
     } else {
@@ -74,7 +79,7 @@ fn create(
             unsafe { gvproxy_free_string(err_ptr) };
             s
         };
-        return Err(BoxliteError::Network(if route.is_some() {
+        return Err(BoxliteError::Network(if managed.is_some() {
             "Managed gvproxy startup failed".into()
         } else {
             format!("gvproxy_create failed: {detail}")
@@ -89,6 +94,7 @@ fn create(
 fn serialize_config(
     config: &GvproxyConfig,
     revision: Option<&crate::net::OutboundRevision>,
+    recovery_gate: Option<&ManagedRecoveryGateId>,
 ) -> BoxliteResult<String> {
     #[derive(serde::Serialize)]
     struct Startup<'a> {
@@ -96,10 +102,13 @@ fn serialize_config(
         config: &'a GvproxyConfig,
         #[serde(skip_serializing_if = "Option::is_none")]
         outbound_revision: Option<&'a crate::net::OutboundRevision>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        recovery_gate: Option<&'a ManagedRecoveryGateId>,
     }
     serde_json::to_string(&Startup {
         config,
         outbound_revision: revision,
+        recovery_gate,
     })
     .map_err(|e| BoxliteError::Network(format!("Failed to serialize config: {e}")))
 }

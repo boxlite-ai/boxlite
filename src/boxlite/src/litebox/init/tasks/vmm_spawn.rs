@@ -449,7 +449,13 @@ async fn spawn_vm(
     if let Some(network) = protected {
         let box_id = box_id.clone();
         let runtime = inputs.runtime.clone();
-        let epoch = network.route.binding.epoch.clone();
+        let epoch = network
+            .recovery_gate
+            .as_ref()
+            .map(|gate| &gate.epoch)
+            .or_else(|| network.route.as_ref().map(|route| &route.binding.epoch))
+            .cloned()
+            .ok_or_else(|| BoxliteError::InvalidState("Protected launch has no epoch".into()))?;
         controller = controller.with_protected_network(network, move |event| {
             let mut stored = runtime
                 .box_manager

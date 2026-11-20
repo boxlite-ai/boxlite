@@ -16,7 +16,7 @@ use std::sync::{
 
 use crate::litebox::box_impl::outbound::OutboundControl;
 use crate::litebox::config::BoxConfig;
-use crate::litebox::protected_boot::ProtectedBootState;
+use crate::litebox::protected_boot::{ProtectedBootReceipt, ProtectedBootState};
 use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -107,6 +107,49 @@ impl BoxStore {
         let rows_affected =
             db_err!(conn.execute("DELETE FROM box_config WHERE id = ?1", params![box_id],))?;
         Ok(rows_affected > 0)
+    }
+
+    pub(crate) fn protected_retirements(
+        &self,
+        selector: &str,
+        runner_box_name: Option<&str>,
+    ) -> BoxliteResult<Vec<ProtectedBootReceipt>> {
+        let conn = self.db.conn();
+        let mut query = db_err!(conn.prepare(
+            "SELECT receipts FROM protected_boot_retirement
+             WHERE box_id = ?1 OR box_name = ?1 OR box_name = ?2",
+        ))?;
+        let rows = db_err!(query.query_map(params![selector, runner_box_name], |row| {
+            row.get::<_, String>(0)
+        }))?;
+        let mut receipts = Vec::new();
+        for row in rows {
+            receipts.extend(decode_protected_retirements(&db_err!(row)?)?);
+        }
+        Ok(receipts)
+    }
+
+    pub(crate) fn delete_protected(
+        &self,
+        box_id: &str,
+        boot: &ProtectedBootState,
+        runner_box_name: Option<&str>,
+    ) -> BoxliteResult<()> {
+        let receipts = serde_json::to_string(&boot.retired).map_err(|_| {
+            BoxliteError::Database("Cannot encode retired protected attempts".into())
+        })?;
+        let mut conn = self.db.conn();
+        let tx = db_err!(conn.transaction())?;
+        db_err!(tx.execute(
+            "INSERT INTO protected_boot_retirement (box_id, box_name, receipts)
+             SELECT id, COALESCE(?3, name), ?2 FROM box_config WHERE id = ?1
+             ON CONFLICT(box_id) DO UPDATE SET box_name = excluded.box_name, receipts = excluded.receipts",
+            params![box_id, receipts, runner_box_name],
+        ))?;
+        if db_err!(tx.execute("DELETE FROM box_config WHERE id = ?1", params![box_id]))? != 1 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        db_err!(tx.commit())
     }
 
     // ========================================================================
@@ -280,6 +323,9 @@ impl BoxStore {
         box_id: &str,
         boot: &ProtectedBootState,
     ) -> BoxliteResult<()> {
+        if boot.outbound.committed.is_some() {
+            return self.save_protected_outbound(box_id, boot, None);
+        }
         let record = serde_json::to_string(boot).map_err(|_| {
             BoxliteError::Database("Failed to encode protected bootstrap state".into())
         })?;
@@ -287,6 +333,42 @@ impl BoxStore {
             "UPDATE box_state SET json = json_set(json, '$.protected_boot', json(?1), \
              '$.outbound_policy', json('{\"mode\":\"disabled\"}')) WHERE id = ?2",
             params![record, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn save_protected_outbound(
+        &self,
+        box_id: &str,
+        boot: &ProtectedBootState,
+        snapshot: Option<&crate::net::OutboundSnapshot>,
+    ) -> BoxliteResult<()> {
+        let record = serde_json::to_string(boot).map_err(|_| {
+            BoxliteError::Database("Failed to encode protected outbound state".into())
+        })?;
+        let policy = snapshot
+            .map(|snapshot| serde_json::to_string(&snapshot.policy))
+            .transpose()
+            .map_err(|_| {
+                BoxliteError::Database("Failed to encode protected outbound policy".into())
+            })?;
+        let control = snapshot
+            .map(|snapshot| {
+                serde_json::to_string(&OutboundControl {
+                    revision: snapshot.revision.clone(),
+                    pending: None,
+                })
+            })
+            .transpose()
+            .map_err(|_| {
+                BoxliteError::Database("Failed to encode protected outbound revision".into())
+            })?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(+                CASE WHEN ?1 IS NULL THEN json ELSE json_set(json, '$.outbound_policy', json(?1), +                  '$.outbound_control', json(?2)) END, '$.protected_boot', json(?3)) WHERE id = ?4",
+            params![policy, control, record, box_id],
         ))?;
         if changed == 0 {
             return Err(BoxliteError::NotFound(box_id.into()));
@@ -309,6 +391,20 @@ impl BoxStore {
         // Serialize state
         let state_json = serde_json::to_string(state)
             .map_err(|e| BoxliteError::Database(format!("Failed to serialize state: {}", e)))?;
+        let retired = load_protected_retirements(&tx, config.id.as_str())?;
+        let protection = if retired.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&ProtectedBootState {
+                    retired,
+                    ..Default::default()
+                })
+                .map_err(|_| {
+                    BoxliteError::Database("Cannot restore retired protected attempts".into())
+                })?,
+            )
+        };
 
         // Insert config (name has UNIQUE constraint, will fail on duplicate)
         db_err!(tx.execute(
@@ -323,8 +419,9 @@ impl BoxStore {
 
         // Insert state
         db_err!(tx.execute(
-            "INSERT INTO box_state (id, status, pid, json) VALUES (?1, ?2, ?3, ?4)",
-            params![config.id, state.status.as_str(), state.pid, state_json],
+            "INSERT INTO box_state (id, status, pid, json) VALUES
+             (?1, ?2, ?3, CASE WHEN ?5 IS NULL THEN ?4 ELSE json_set(?4, '$.protected_boot', json(?5)) END)",
+            params![config.id, state.status.as_str(), state.pid, state_json, protection],
         ))?;
 
         // Commit transaction
@@ -343,6 +440,20 @@ impl BoxStore {
             (Some(c), Some(s)) => Ok(Some((c, s))),
             _ => Ok(None),
         }
+    }
+
+    pub(crate) fn lookup_exact_id(&self, selector: &str) -> BoxliteResult<Option<BoxID>> {
+        let stored: Option<String> = db_err!(self.db.conn().query_row(
+            "SELECT id FROM box_config WHERE id = ?1 OR name = ?1 ORDER BY (id = ?1) DESC LIMIT 1",
+            params![selector],
+            |row| row.get(0),
+        ).optional())?;
+        stored
+            .map(|id| {
+                BoxID::parse(&id)
+                    .ok_or_else(|| BoxliteError::Database("Invalid persisted Box ID".into()))
+            })
+            .transpose()
     }
 
     /// List all boxes as (config, state) pairs.
@@ -474,6 +585,30 @@ impl BoxStore {
 
         Ok(reset_ids)
     }
+}
+
+fn load_protected_retirements(
+    conn: &rusqlite::Connection,
+    box_id: &str,
+) -> BoxliteResult<Vec<ProtectedBootReceipt>> {
+    let saved: Option<String> = db_err!(
+        conn.query_row(
+            "SELECT receipts FROM protected_boot_retirement WHERE box_id = ?1",
+            params![box_id],
+            |row| row.get(0),
+        )
+        .optional()
+    )?;
+    saved
+        .as_deref()
+        .map(decode_protected_retirements)
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+fn decode_protected_retirements(receipts: &str) -> BoxliteResult<Vec<ProtectedBootReceipt>> {
+    serde_json::from_str(receipts)
+        .map_err(|_| BoxliteError::Database("Cannot read retired protected attempts".into()))
 }
 
 fn validate_outbound_control(

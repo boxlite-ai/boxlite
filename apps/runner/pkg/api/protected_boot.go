@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strconv"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -13,6 +14,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+// Match Runtime's opaque Box IDs, including both Cloud IDs and local UUIDs.
+var protectedBoxID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // ProtectedBootConfig is fixed by deployment for one enrolled HTTPS V0 Runner.
 type ProtectedBootConfig struct {
@@ -24,20 +28,40 @@ type ProtectedBootConfig struct {
 type protectedBootKey struct {
 	RunnerID             string                   `json:"runner_id"`
 	AttemptID            string                   `json:"attempt_id"`
-	RegistrationID       string                   `json:"registration_id"`
-	RegistrationRevision string                   `json:"registration_revision"`
+	RegistrationID       *string                  `json:"registration_id"`
+	RegistrationRevision *string                  `json:"registration_revision"`
 	Policy               boxlite.OutboundSnapshot `json:"policy"`
 }
 
 type protectedBootRoute struct {
-	Key        protectedBootKey `json:"key"`
-	Scheme     string           `json:"scheme"`
-	Host       string           `json:"host"`
-	Port       uint16           `json:"port"`
-	Credential *struct {
+	Key                protectedBootKey `json:"key"`
+	Scheme             *string          `json:"scheme,omitempty"`
+	Host               *string          `json:"host,omitempty"`
+	Port               *uint16          `json:"port,omitempty"`
+	RecoveryGeneration string           `json:"recovery_generation,omitempty"`
+	Restart            bool             `json:"restart,omitempty"`
+	Credential         *struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	} `json:"credential,omitempty"`
+}
+
+type protectedBootGate struct {
+	Key        protectedBootKey `json:"key"`
+	Epoch      string           `json:"epoch"`
+	Generation string           `json:"generation"`
+	Outbound   json.RawMessage  `json:"outbound,omitempty"`
+}
+
+type protectedOutboundControl struct {
+	RunnerID string          `json:"runner_id"`
+	Epoch    string          `json:"epoch"`
+	Command  json.RawMessage `json:"command"`
+}
+
+type protectedBootRemoval struct {
+	Key   protectedBootKey `json:"key"`
+	Epoch json.RawMessage  `json:"epoch"`
 }
 
 func (c ProtectedBootConfig) validPin() bool {
@@ -72,27 +96,32 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"runner_id": c.RunnerID, "version": 1,
-			"operations": []string{"start", "receipt", "retire"},
+			"operations": []string{"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired"},
 		})
 	})
 	path := "/boxes/:boxId/network/outbound/bootstrap"
 	protected.POST(path, c.handleBoot(boxlite.ProtectedBootStart))
 	protected.POST(path+"/receipt", c.handleBoot(boxlite.ProtectedBootRead))
 	protected.POST(path+"/retire", c.handleBoot(boxlite.ProtectedBootRetire))
+	protected.POST(path+"/release-gate", c.handleBoot(boxlite.ProtectedBootReleaseGate))
+	protected.POST(path+"/seal-gate", c.handleBoot(boxlite.ProtectedBootSealGate))
+	protected.POST(path+"/remove-retired", c.handleBoot(boxlite.ProtectedBootRemove))
+	protected.POST("/boxes/:boxId/network/outbound/managed-route", c.handleBoot(boxlite.ProtectedOutboundControl))
 }
 
 func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		boxID := ctx.Param("boxId")
-		if err := uuid.Validate(boxID); err != nil {
+		if !protectedBoxID.MatchString(boxID) {
 			ctx.Status(http.StatusBadRequest)
 			return
 		}
-		decode := json.NewDecoder(http.MaxBytesReader(ctx.Writer, ctx.Request.Body, 64<<10))
+		decode := json.NewDecoder(http.MaxBytesReader(ctx.Writer, ctx.Request.Body, 128<<10))
 		decode.DisallowUnknownFields()
 		var key protectedBootKey
 		var payload any = &key
-		if operation == boxlite.ProtectedBootStart {
+		switch operation {
+		case boxlite.ProtectedBootStart:
 			var route protectedBootRoute
 			if decode.Decode(&route) != nil {
 				ctx.Status(http.StatusBadRequest)
@@ -107,9 +136,48 @@ func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation
 				DoHURL     string `json:"doh_url"`
 				DoHAddress string `json:"doh_address"`
 			}{route, c.DoHURL, c.DoHAddress}
-		} else if decode.Decode(&key) != nil {
-			ctx.Status(http.StatusBadRequest)
-			return
+		case boxlite.ProtectedBootReleaseGate, boxlite.ProtectedBootSealGate:
+			var gate protectedBootGate
+			if decode.Decode(&gate) != nil || gate.Epoch == "" || gate.Generation == "" {
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
+			if gate.Key.Policy.Policy.AllowNet == nil {
+				gate.Key.Policy.Policy.AllowNet = []string{}
+			}
+			key = gate.Key
+			payload = gate
+		case boxlite.ProtectedOutboundControl:
+			var control protectedOutboundControl
+			if decode.Decode(&control) != nil || control.Epoch == "" || len(control.Command) == 0 {
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
+			key.RunnerID = control.RunnerID
+			payload = struct {
+				protectedOutboundControl
+				DoHURL     string `json:"doh_url"`
+				DoHAddress string `json:"doh_address"`
+			}{control, c.DoHURL, c.DoHAddress}
+		case boxlite.ProtectedBootRemove:
+			var removal protectedBootRemoval
+			if decode.Decode(&removal) != nil || len(removal.Epoch) == 0 {
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
+			if removal.Key.Policy.Policy.AllowNet == nil {
+				removal.Key.Policy.Policy.AllowNet = []string{}
+			}
+			key = removal.Key
+			payload = struct {
+				protectedBootRemoval
+				RunnerBoxName string `json:"runner_box_name"`
+			}{removal, boxID}
+		default:
+			if decode.Decode(&key) != nil {
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
 		}
 		if key.Policy.Policy.AllowNet == nil {
 			key.Policy.Policy.AllowNet = []string{}

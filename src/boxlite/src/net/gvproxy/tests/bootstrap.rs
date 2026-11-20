@@ -12,10 +12,10 @@ fn outbound_bootstrap_ffi_serializes_private_revision_without_changing_public_co
     let config = GvproxyConfig::new("/tmp/boxlite-bootstrap/net.sock".into());
     let original = serde_json::to_value(&config).unwrap();
     let legacy: serde_json::Value =
-        serde_json::from_str(&serialize_config(&config, None).unwrap()).unwrap();
+        serde_json::from_str(&serialize_config(&config, None, None).unwrap()).unwrap();
     assert_eq!(legacy, original);
     let mut seeded: serde_json::Value =
-        serde_json::from_str(&serialize_config(&config, Some(&revision)).unwrap()).unwrap();
+        serde_json::from_str(&serialize_config(&config, Some(&revision), None).unwrap()).unwrap();
     assert_eq!(
         seeded
             .as_object_mut()
@@ -105,7 +105,10 @@ async fn outbound_bootstrap_real_bridge_restores_identity_and_enforces_cas() {
 
 #[tokio::test]
 async fn outbound_bootstrap_ffi_installs_exact_managed_route() {
-    use crate::net::gvproxy::{GvproxyBackend, GvproxyInstance, ManagedProxyIdentity};
+    use crate::net::gvproxy::{
+        GvproxyBackend, GvproxyInstance, ManagedProxyIdentity, ManagedRecoveryGateId,
+        RecoveryGateAction,
+    };
     use crate::net::{
         NetworkBackend, NetworkBackendConfig, OutboundApplicationState, OutboundRevision,
         OutboundSnapshot,
@@ -146,13 +149,75 @@ async fn outbound_bootstrap_ffi_installs_exact_managed_route() {
         },
         revision: OutboundRevision::fresh(),
     };
-    let (_instance, _) = GvproxyInstance::from_managed_config(&spec, &snapshot, &route).unwrap();
+    let gate = ManagedRecoveryGateId {
+        epoch: binding.epoch.clone(),
+        generation: OutboundRevision::fresh(),
+    };
+    let (_instance, _) =
+        GvproxyInstance::from_managed_network(&spec, &snapshot, Some(&route), Some(&gate)).unwrap();
     let observed = backend.managed_proxy_status().await.unwrap();
     assert_eq!(
         observed.status.application_state,
         OutboundApplicationState::Confirmed
     );
     assert_eq!(observed.status.snapshot, snapshot);
-    assert_eq!(observed.binding, binding);
+    assert_eq!(observed.binding.as_ref(), Some(&binding));
+    assert!(
+        observed
+            .capabilities
+            .iter()
+            .any(|value| value == "managed-proxy-v1")
+    );
+    let observed_gate = observed.recovery_gate.unwrap();
+    assert_eq!(observed_gate.epoch, gate.epoch);
+    assert_eq!(observed_gate.generation, gate.generation);
+    assert!(observed_gate.closed && !observed_gate.sealed);
+    backend
+        .change_recovery_gate(
+            &gate,
+            &snapshot.revision,
+            Some(&binding),
+            RecoveryGateAction::Release,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !backend
+            .managed_proxy_status()
+            .await
+            .unwrap()
+            .recovery_gate
+            .unwrap()
+            .closed
+    );
+    backend
+        .change_recovery_gate(
+            &gate,
+            &snapshot.revision,
+            Some(&binding),
+            RecoveryGateAction::Seal,
+        )
+        .await
+        .unwrap();
+    assert!(
+        backend
+            .managed_proxy_status()
+            .await
+            .unwrap()
+            .recovery_gate
+            .unwrap()
+            .sealed
+    );
+    assert!(
+        backend
+            .change_recovery_gate(
+                &gate,
+                &snapshot.revision,
+                Some(&binding),
+                RecoveryGateAction::Release
+            )
+            .await
+            .is_err()
+    );
     assert!(spec.outbound_disabled && spec.allow_net.is_empty());
 }

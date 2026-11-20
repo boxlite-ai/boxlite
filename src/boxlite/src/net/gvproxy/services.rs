@@ -29,7 +29,8 @@ use tokio::net::UnixStream;
 
 use crate::net::{
     BoxInternalTunnel, DnsZoneSpec, Forward, NetworkBackend, NetworkBackendConfig,
-    NetworkBackendSpec, NetworkBackendStats, TransportProtocol,
+    NetworkBackendSpec, NetworkBackendStats, OutboundReplaceOutcome, OutboundReplacement,
+    OutboundRevision, TransportProtocol,
 };
 
 /// Upper bound on a single control exchange. A bound-but-unserved socket (the
@@ -118,6 +119,62 @@ impl GvproxyBackend {
         }
         serde_json::from_str(&body)
             .map_err(|_| BoxliteError::Network("Invalid managed proxy status".into()))
+    }
+
+    pub(crate) async fn change_recovery_gate(
+        &self,
+        gate: &super::ManagedRecoveryGateId,
+        revision: &crate::net::OutboundRevision,
+        binding: Option<&super::ManagedProxyIdentity>,
+        action: super::RecoveryGateAction,
+    ) -> BoxliteResult<()> {
+        #[derive(serde::Serialize)]
+        struct Request<'a> {
+            #[serde(flatten)]
+            gate: &'a super::ManagedRecoveryGateId,
+            revision: &'a crate::net::OutboundRevision,
+            binding: Option<&'a super::ManagedProxyIdentity>,
+            action: super::RecoveryGateAction,
+        }
+        let body = serde_json::to_string(&Request {
+            gate,
+            revision,
+            binding,
+            action,
+        })
+        .map_err(|_| BoxliteError::Network("Invalid managed recovery gate request".into()))?;
+        let (status, _) = self
+            .request(Method::PUT, "/network/outbound/recovery-gate", Some(body))
+            .await?;
+        match status {
+            204 => Ok(()),
+            409 | 412 => Err(BoxliteError::InvalidState(
+                "Managed recovery gate ownership changed".into(),
+            )),
+            _ => Err(BoxliteError::Network(
+                "Managed recovery gate change is unconfirmed".into(),
+            )),
+        }
+    }
+
+    pub(crate) async fn replace_managed_route(
+        &self,
+        replacement: &OutboundReplacement,
+        epoch: &OutboundRevision,
+        route: Option<&super::ManagedProxyRoute>,
+    ) -> BoxliteResult<OutboundReplaceOutcome> {
+        #[derive(serde::Serialize)]
+        struct Request<'a> {
+            #[serde(flatten)]
+            policy: &'a crate::runtime::options::OutboundNetworkConfig,
+            proxy_route: Option<&'a super::ManagedProxyRoute>,
+        }
+        let body = serde_json::to_string(&Request {
+            policy: &replacement.candidate().policy,
+            proxy_route: route,
+        })
+        .map_err(|_| BoxliteError::Internal("Invalid managed proxy replacement".into()))?;
+        self.replace_snapshot(replacement, body, Some(epoch)).await
     }
 
     /// One-shot HTTP/1.1 request to the services socket. Returns `(status, body)`.
@@ -364,6 +421,86 @@ fn bind_conflict_error(context: &str, status: u16, body: &str) -> BoxliteError {
     BoxliteError::AlreadyExists(format!("{context} returned {status}: {}", body.trim()))
 }
 
+impl GvproxyBackend {
+    async fn replace_snapshot(
+        &self,
+        replacement: &OutboundReplacement,
+        body: String,
+        epoch: Option<&OutboundRevision>,
+    ) -> BoxliteResult<OutboundReplaceOutcome> {
+        let candidate = replacement.candidate();
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("if-match", format!("\"{}\"", replacement.expected())),
+            (
+                "x-boxlite-outbound-revision",
+                candidate.revision.to_string(),
+            ),
+        ] {
+            headers.insert(
+                name,
+                value.parse().map_err(|e| {
+                    BoxliteError::Internal(format!("build outbound revision header: {e}"))
+                })?,
+            );
+        }
+        if let Some(epoch) = epoch {
+            headers.insert(
+                "x-boxlite-managed-epoch",
+                epoch
+                    .to_string()
+                    .parse()
+                    .map_err(|_| BoxliteError::Internal("Invalid managed network epoch".into()))?,
+            );
+        }
+        let (status, headers, body) = self
+            .request_with_headers(
+                Method::PUT,
+                "/network/outbound/snapshot",
+                Some(body),
+                headers,
+            )
+            .await?;
+        match status {
+            404 | 405 => {
+                return Err(BoxliteError::Unsupported(
+                    "backend lacks revisioned outbound control".into(),
+                ));
+            }
+            412 => return Ok(OutboundReplaceOutcome::PreconditionFailed),
+            200 => {}
+            _ if epoch.is_some() => {
+                return Err(BoxliteError::Network(format!(
+                    "Managed snapshot application is unconfirmed (HTTP {status})"
+                )));
+            }
+            _ => {
+                return Err(BoxliteError::Network(format!(
+                    "replace outbound snapshot returned {status}: {body}"
+                )));
+            }
+        }
+        let tags = headers.get_all(hyper::header::ETAG);
+        let mut tags = tags.iter();
+        let expected = format!("\"{}\"", candidate.revision);
+        if tags.next().and_then(|tag| tag.to_str().ok()) != Some(expected.as_str())
+            || tags.next().is_some()
+        {
+            return Err(BoxliteError::Network("outbound acknowledgement revision is missing, malformed, or mismatched; application is uncertain".into()));
+        }
+        let applied: crate::runtime::options::OutboundNetworkConfig = serde_json::from_str(&body)
+            .map_err(|e| {
+            BoxliteError::Network(format!(
+                "invalid outbound acknowledgement; application is uncertain: {e}"
+            ))
+        })?;
+        if applied != candidate.policy {
+            return Err(BoxliteError::Network("outbound acknowledgement policy differs from the candidate; application is uncertain".into()));
+        }
+        Ok(OutboundReplaceOutcome::Applied)
+    }
+}
+
 #[async_trait]
 impl NetworkBackend for GvproxyBackend {
     async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshotStatus> {
@@ -413,65 +550,9 @@ impl NetworkBackend for GvproxyBackend {
         &self,
         replacement: &crate::net::OutboundReplacement,
     ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
-        use crate::net::OutboundReplaceOutcome;
-        let candidate = replacement.candidate();
-        let mut headers = HeaderMap::new();
-        for (name, value) in [
-            ("if-match", format!("\"{}\"", replacement.expected())),
-            (
-                "x-boxlite-outbound-revision",
-                candidate.revision.to_string(),
-            ),
-        ] {
-            headers.insert(
-                name,
-                value.parse().map_err(|e| {
-                    BoxliteError::Internal(format!("build outbound revision header: {e}"))
-                })?,
-            );
-        }
-        let body = serde_json::to_string(&candidate.policy)
+        let body = serde_json::to_string(&replacement.candidate().policy)
             .map_err(|e| BoxliteError::Internal(e.to_string()))?;
-        let (status, headers, body) = self
-            .request_with_headers(
-                Method::PUT,
-                "/network/outbound/snapshot",
-                Some(body),
-                headers,
-            )
-            .await?;
-        match status {
-            404 | 405 => {
-                return Err(BoxliteError::Unsupported(
-                    "backend lacks revisioned outbound control".into(),
-                ));
-            }
-            412 => return Ok(OutboundReplaceOutcome::PreconditionFailed),
-            200 => {}
-            _ => {
-                return Err(BoxliteError::Network(format!(
-                    "replace outbound snapshot returned {status}: {body}"
-                )));
-            }
-        }
-        let tags = headers.get_all(hyper::header::ETAG);
-        let mut tags = tags.iter();
-        let expected = format!("\"{}\"", candidate.revision);
-        if tags.next().and_then(|tag| tag.to_str().ok()) != Some(expected.as_str())
-            || tags.next().is_some()
-        {
-            return Err(BoxliteError::Network("outbound acknowledgement revision is missing, malformed, or mismatched; application is uncertain".into()));
-        }
-        let applied: crate::runtime::options::OutboundNetworkConfig = serde_json::from_str(&body)
-            .map_err(|e| {
-            BoxliteError::Network(format!(
-                "invalid outbound acknowledgement; application is uncertain: {e}"
-            ))
-        })?;
-        if applied != candidate.policy {
-            return Err(BoxliteError::Network("outbound acknowledgement policy differs from the candidate; application is uncertain".into()));
-        }
-        Ok(OutboundReplaceOutcome::Applied)
+        self.replace_snapshot(replacement, body, None).await
     }
 
     async fn set_outbound(
