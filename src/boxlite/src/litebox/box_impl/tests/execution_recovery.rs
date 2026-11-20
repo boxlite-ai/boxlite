@@ -343,8 +343,8 @@ async fn recovered_frozen_standin(
         std::fs::write(layout.pid_file_path(), pid.to_string()).unwrap();
     }
     assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
-    // No handles were handed out by the first runtime; leave the shim for recovery.
-    runtime.shutdown(None).await.unwrap();
+    // Simulate an unclean exit by skipping Drop cleanup so the shim stays alive for recovery.
+    runtime.shutdown_token.cancel();
     drop(runtime);
     let recovered = RuntimeImpl::new_for_test(options).unwrap();
     (home, recovered, child, id, pid)

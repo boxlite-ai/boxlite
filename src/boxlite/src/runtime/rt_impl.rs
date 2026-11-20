@@ -97,7 +97,10 @@ fn shim_pid_was_reused(
     })
 }
 
-fn shim_pid_file_may_be_alive(pid_path: &std::path::Path, candidate: Option<PidRecord>) -> bool {
+pub(crate) fn shim_pid_file_may_be_alive(
+    pid_path: &std::path::Path,
+    candidate: Option<PidRecord>,
+) -> bool {
     match candidate {
         Some(record) if (1..=i32::MAX as u32).contains(&record.pid) => {
             unverified_shim_may_be_alive(record.pid)
@@ -847,16 +850,17 @@ impl RuntimeImpl {
     /// * `timeout` - Seconds before force-kill. None=10s, Some(-1)=infinite
     ///
     /// # Returns
-    /// Ok(()) if all boxes stopped successfully, Err if any box failed to stop.
+    /// Ok(()) if shutdown is complete, Err if a box failed to stop or cleanup remains pending.
     pub async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
-        // Check if already shut down (idempotent)
-        if self.shutdown_token.is_cancelled() {
+        if self.shutdown_token.is_cancelled() && !self.sync_cleanup_pending.load(Ordering::Acquire)
+        {
             return Ok(());
         }
 
         tracing::info!("Initiating runtime shutdown");
 
-        // Cancel the shutdown token - marks shutdown and signals all in-flight operations
+        // Mark cleanup pending before cancellation becomes visible to other callers.
+        self.sync_cleanup_pending.store(true, Ordering::Release);
         self.shutdown_token.cancel();
 
         // Collect all active non-detached boxes
@@ -870,6 +874,14 @@ impl RuntimeImpl {
         };
 
         if active_boxes.is_empty() {
+            // Weak handles can disappear after a failed stop. Leave persisted
+            // cleanup to shutdown_sync, which can find boxes without handles.
+            if self.has_pending_non_detached_shutdown() {
+                return Err(BoxliteError::Internal(
+                    "Runtime shutdown still has pending synchronous cleanup".into(),
+                ));
+            }
+            self.sync_cleanup_pending.store(false, Ordering::Release);
             tracing::info!("No active boxes to shutdown");
             return Ok(());
         }
@@ -893,8 +905,6 @@ impl RuntimeImpl {
             }
         });
 
-        // Drop must retry if this await is cancelled or any stop is incomplete.
-        self.sync_cleanup_pending.store(true, Ordering::Release);
         let results = futures::future::join_all(stop_futures).await;
 
         // Check for errors
@@ -916,6 +926,11 @@ impl RuntimeImpl {
         }
 
         if errors.is_empty() {
+            if self.has_pending_non_detached_shutdown() {
+                return Err(BoxliteError::Internal(
+                    "Runtime shutdown still has pending synchronous cleanup".into(),
+                ));
+            }
             self.sync_cleanup_pending.store(false, Ordering::Release);
             tracing::info!("Runtime shutdown complete");
             Ok(())
@@ -925,6 +940,32 @@ impl RuntimeImpl {
                 errors.join(", ")
             )))
         }
+    }
+
+    fn has_pending_non_detached_shutdown(&self) -> bool {
+        let Ok(boxes) = self.box_manager.all_boxes(true) else {
+            return true;
+        };
+        boxes.into_iter().any(|(config, state)| {
+            if config.options.detach {
+                return false;
+            }
+            if state.status.is_active()
+                || state.pid.is_some()
+                || (config.options.removes_on_stop() && state.status == BoxStatus::Stopped)
+            {
+                return true;
+            }
+            if state.status != BoxStatus::Unknown {
+                return false;
+            }
+            let Ok(layout) = self.layout.box_layout(config.id.as_str(), false) else {
+                return true;
+            };
+            let pid_path = layout.pid_file_path();
+            let candidate = PidFileReader::at(&pid_path).read().ok();
+            shim_pid_file_may_be_alive(&pid_path, candidate)
+        })
     }
 
     /// Synchronous shutdown for atexit/Drop contexts.
@@ -2914,7 +2955,52 @@ mod tests {
     // ====================================================================
 
     #[tokio::test]
-    async fn test_async_shutdown_times_out_stopping_paused_shim() {
+    async fn test_first_async_shutdown_reports_recovered_paused_box_without_handles() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+        let config = test_running_box_config(false, &runtime, pid);
+        let mut state = running_state(pid);
+        state.status = BoxStatus::Paused;
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        runtime.recover_boxes().unwrap();
+        let state = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!((state.status, state.pid), (BoxStatus::Paused, Some(pid)));
+        assert!(!runtime.sync_cleanup_pending.load(Ordering::Acquire));
+
+        let result = runtime.shutdown(None).await;
+
+        assert!(
+            matches!(result, Err(BoxliteError::Internal(_))),
+            "{result:?}"
+        );
+        assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    #[allow(deprecated)]
+    async fn test_async_shutdown_keeps_stopped_auto_remove_box_pending() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config(false);
+        config.options.auto_delete = None;
+        config.options.auto_remove = true;
+        let mut state = BoxState::new();
+        state.mark_stop();
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        // Simulate a previous shutdown that stopped the box but failed to remove it.
+        runtime.sync_cleanup_pending.store(true, Ordering::Release);
+
+        let result = runtime.shutdown(None).await;
+
+        assert!(
+            matches!(result, Err(BoxliteError::Internal(_))),
+            "{result:?}"
+        );
+        assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn test_async_shutdown_retries_after_paused_shim_timeout() {
         use std::time::{Duration, Instant};
 
         let (runtime, _dir) = create_test_runtime();
@@ -2941,6 +3027,94 @@ mod tests {
         );
         assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
         assert!(child.0.try_wait().unwrap().is_none());
+
+        runtime.shutdown(None).await.unwrap();
+
+        assert!(!pid_may_be_alive(pid), "retry left the paused shim alive");
+        let state = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!((state.status, state.pid), (BoxStatus::Stopped, None));
+        assert!(!runtime.sync_cleanup_pending.load(Ordering::Acquire));
+    }
+
+    async fn get_paused_shim_handle(runtime: &SharedRuntimeImpl, pid: u32) -> LiteBox {
+        let config = test_running_box_config(false, runtime, pid);
+        let mut state = running_state(pid);
+        state.status = BoxStatus::Paused;
+        state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        runtime.get(config.id.as_str()).await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_async_shutdown_keeps_cleanup_pending_after_one_handle_is_dropped() {
+        let (runtime, _dir) = create_test_runtime();
+        let (orphan_pid, orphan) = spawn_sigterm_ignoring_process();
+        let _orphan = ChildGuard(orphan);
+        let (retained_pid, retained) = spawn_sigterm_ignoring_process();
+        let _retained = ChildGuard(retained);
+        let orphan_handle = get_paused_shim_handle(&runtime, orphan_pid).await;
+        let retained_handle = get_paused_shim_handle(&runtime, retained_pid).await;
+
+        let result = runtime.shutdown(Some(1)).await;
+        assert!(
+            matches!(&result, Err(BoxliteError::Internal(message)) if message.matches(": timeout").count() == 2),
+            "expected both shims to time out, got {result:?}"
+        );
+        drop(orphan_handle);
+
+        let result = runtime.shutdown(None).await;
+
+        assert!(!pid_may_be_alive(retained_pid));
+        assert_eq!(
+            retained_handle.info().await.unwrap().status,
+            BoxStatus::Stopped
+        );
+        assert!(pid_may_be_alive(orphan_pid));
+        assert!(
+            matches!(result, Err(BoxliteError::Internal(_))),
+            "{result:?}"
+        );
+        assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn test_async_shutdown_keeps_cleanup_pending_without_handles() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_sigterm_ignoring_process();
+        let mut child = ChildGuard(child);
+        let handle = get_paused_shim_handle(&runtime, pid).await;
+        let id = handle.id().clone();
+
+        let result = runtime.shutdown(Some(1)).await;
+        assert!(
+            matches!(&result, Err(BoxliteError::Internal(message)) if message.contains(": timeout")),
+            "expected the shim to time out, got {result:?}"
+        );
+        drop(handle);
+
+        let result = runtime.shutdown(None).await;
+
+        assert!(pid_may_be_alive(pid));
+        assert!(
+            matches!(result, Err(BoxliteError::Internal(_))),
+            "{result:?}"
+        );
+        assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
+
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        runtime
+            .get(id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .stop()
+            .await
+            .unwrap();
+
+        runtime.shutdown(None).await.unwrap();
+
+        assert!(!runtime.sync_cleanup_pending.load(Ordering::Acquire));
     }
 
     #[tokio::test]

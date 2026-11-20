@@ -38,9 +38,10 @@ impl BoxImpl {
         let current = self.runtime.box_manager.update_box(self.id())?;
         {
             let mut state = self.state.write();
-            if self.live.initialized()
-                && current.status == BoxStatus::Running
-                && (state.status != BoxStatus::Running
+            if (self.live.initialized()
+                || (self.shutdown_token.is_cancelled() && !state.status.is_active()))
+                && current.status.is_active()
+                && (!state.status.is_active()
                     || state.pid != current.pid
                     || state.started_at != current.started_at)
             {

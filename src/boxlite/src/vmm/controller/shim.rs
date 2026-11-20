@@ -96,22 +96,29 @@ impl ShimHandler {
         pid_file: &Path,
     ) -> BoxliteResult<()> {
         let Some(shim) = Self::verified_stop_shim(box_id, persisted_pid, pid_file)? else {
+            crate::jailer::reap_box(box_id);
             return Ok(());
         };
 
         let pid = shim.identity().pid;
-        Self::from_pid(pid, box_id.clone()).stop()?;
-        // The attached handler can return immediately after sending SIGKILL.
-        let deadline = Instant::now() + SHIM_EXIT_TIMEOUT;
-        while pid_may_be_alive(pid) {
-            if Instant::now() >= deadline {
-                return Err(BoxliteError::Internal(format!(
-                    "Box {box_id} shim (PID {pid}) did not exit"
-                )));
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        if Self::wait_for_attached_exit_sync(
+            pid,
+            GRACEFUL_SHUTDOWN_TIMEOUT,
+            Duration::from_millis(50),
+        ) || Self::attached_shim_has_exited(pid)
+        {
+            crate::jailer::reap_box(box_id);
+            return Ok(());
         }
-        Ok(())
+
+        Self::kill_verified_shim(box_id, pid_file, shim)?;
+        crate::jailer::reap_box(box_id);
+        Self::wait_for_attached_exit_sync(pid, SHIM_EXIT_TIMEOUT, Duration::from_millis(10))
+            .then_some(())
+            .ok_or_else(|| {
+                BoxliteError::Internal(format!("Box {box_id} shim (PID {pid}) did not exit"))
+            })
     }
 
     /// Stop a verified shim while the caller holds lifecycle admission.
@@ -122,6 +129,7 @@ impl ShimHandler {
         pid_file: &Path,
     ) -> BoxliteResult<()> {
         let Some(shim) = Self::verified_stop_shim(box_id, persisted_pid, pid_file)? else {
+            crate::jailer::reap_box(box_id);
             return Ok(());
         };
 
@@ -132,17 +140,14 @@ impl ShimHandler {
             Self::wait_for_attached_exit(pid, Duration::from_millis(50)),
         )
         .await
-        .is_err()
-            && pid_may_be_alive(pid)
+        .is_ok()
+            || Self::attached_shim_has_exited(pid)
         {
-            if PidFileReader::at(pid_file).verified_shim() != Some(shim) {
-                return Err(BoxliteError::InvalidState(format!(
-                    "Cannot verify live shim identity for box {box_id}"
-                )));
-            }
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            crate::jailer::reap_box(box_id);
+            return Ok(());
         }
 
+        Self::kill_verified_shim(box_id, pid_file, shim)?;
         crate::jailer::reap_box(box_id);
         tokio::time::timeout(
             SHIM_EXIT_TIMEOUT,
@@ -152,13 +157,40 @@ impl ShimHandler {
         .map_err(|_| BoxliteError::Internal(format!("Box {box_id} shim (PID {pid}) did not exit")))
     }
 
-    async fn wait_for_attached_exit(pid: u32, poll_interval: Duration) {
-        loop {
-            let mut status = 0;
-            let result = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
-            if result > 0 || (result < 0 && !pid_may_be_alive(pid)) {
-                return;
+    fn kill_verified_shim(
+        box_id: &BoxID,
+        pid_file: &Path,
+        shim: ShimPidRecord,
+    ) -> BoxliteResult<()> {
+        if PidFileReader::at(pid_file).verified_shim() != Some(shim) {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot verify live shim identity for box {box_id}"
+            )));
+        }
+        unsafe { libc::kill(shim.identity().pid as i32, libc::SIGKILL) };
+        Ok(())
+    }
+
+    fn attached_shim_has_exited(pid: u32) -> bool {
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
+        result > 0 || (result < 0 && !pid_may_be_alive(pid))
+    }
+
+    fn wait_for_attached_exit_sync(pid: u32, timeout: Duration, poll_interval: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while !Self::attached_shim_has_exited(pid) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
             }
+            std::thread::sleep(poll_interval.min(remaining));
+        }
+        true
+    }
+
+    async fn wait_for_attached_exit(pid: u32, poll_interval: Duration) {
+        while !Self::attached_shim_has_exited(pid) {
             tokio::time::sleep(poll_interval).await;
         }
     }
@@ -544,6 +576,40 @@ mod tests {
                 .iter()
                 .all(|result| matches!(result, Err(BoxliteError::InvalidState(_)))),
             "expected invalid PID errors for 0 and u32::MAX, got {results:?}"
+        );
+    }
+
+    #[test]
+    fn stop_verified_rechecks_identity_after_sigterm() {
+        use std::io::Read;
+
+        let home = tempfile::tempdir().unwrap();
+        let pid_file = home.path().join("shim.pid");
+        let box_id = crate::runtime::id::BoxIDMint::mint();
+        let mut child = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "trap 'rm -f \"$1\"; exec sleep 300' TERM; printf x; while :; do sleep 0.05; done",
+                "sh",
+            ])
+            .arg(&pid_file)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdout.take().unwrap().read_exact(&mut [0]).unwrap();
+        let pid = child.id();
+        let start_time = crate::util::process_start_time(pid).unwrap();
+        std::fs::write(&pid_file, format!("{pid}\n{start_time}\n")).unwrap();
+
+        let result = ShimHandler::stop_verified(&box_id, Some(pid), &pid_file);
+        let alive = pid_may_be_alive(pid);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(!pid_file.exists(), "stand-in did not handle SIGTERM");
+        assert!(
+            matches!(result, Err(BoxliteError::InvalidState(_))) && alive,
+            "verified stop returned {result:?}, stand-in alive: {alive}"
         );
     }
 

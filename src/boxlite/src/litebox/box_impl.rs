@@ -33,7 +33,7 @@ use crate::portal::GuestSession;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
-use crate::util::{PidFileReader, process::pid_may_be_alive};
+use crate::util::PidFileReader;
 use crate::vmm::controller::{ShimHandler, VmmHandler};
 use crate::{BoxID, BoxInfo};
 
@@ -1662,12 +1662,16 @@ impl BoxImpl {
 
     // Called with refreshed state under lifecycle admission.
     pub(super) fn reject_unknown_shim_for_disk_work(&self, state: &BoxState) -> BoxliteResult<()> {
-        if state.status == BoxStatus::Unknown
-            && (state.pid.is_some()
-                || PidFileReader::at(self.layout.pid_file_path())
-                    .read()
-                    .is_ok_and(|record| pid_may_be_alive(record.pid)))
-        {
+        if state.status != BoxStatus::Unknown {
+            return Ok(());
+        }
+        let pid_file = self.layout.pid_file_path();
+        let shim_may_be_alive = state.pid.is_some()
+            || crate::runtime::rt_impl::shim_pid_file_may_be_alive(
+                &pid_file,
+                PidFileReader::at(&pid_file).read().ok(),
+            );
+        if shim_may_be_alive {
             return Err(BoxliteError::InvalidState(format!(
                 "Cannot operate on disks of box {}: shim state is unknown",
                 self.id()
@@ -2462,6 +2466,325 @@ mod tests {
 
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
         assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_handle_cannot_stop_restarted_paused_box() {
+        let home = TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let (_child, id, pid) = running_box_with_standin(&runtime, false, 0, Vec::new());
+        let (config, mut restarted) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+        let mut stopped = restarted.clone();
+        stopped.mark_stop();
+        let token = runtime.shutdown_token.child_token();
+        token.cancel();
+        let old_handle = BoxImpl::new(config, stopped, Arc::clone(&runtime), token);
+        let live = LiveState::new(
+            Box::new(InfoTestHandler(0)),
+            GuestSession::new(BoxTransport::tcp(0)),
+            None,
+            None,
+            BoxMetricsStorage::new(),
+            Disk::new(home.path().join("container.qcow2"), DiskFormat::Qcow2, true),
+            None,
+            #[cfg(target_os = "linux")]
+            None,
+        );
+        assert!(old_handle.live.set(live).is_ok());
+        restarted.mark_started();
+        restarted.status = BoxStatus::Paused;
+        runtime.box_manager.save_box(&id, &restarted).unwrap();
+
+        let result = old_handle.stop().await;
+        let alive = is_process_alive(pid);
+        assert!(
+            matches!(result, Err(BoxliteError::Stopped(_))) && alive,
+            "stale stop returned {result:?}, restarted shim alive: {alive}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_handle_without_live_state_cannot_stop_restarted_paused_box() {
+        let home = TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let (_child, id, pid) = running_box_with_standin(&runtime, false, 0, Vec::new());
+        let mut state = runtime.box_manager.update_box(&id).unwrap();
+        state.status = BoxStatus::Paused;
+        runtime.box_manager.save_box(&id, &state).unwrap();
+        let old_handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+        let old_box = old_handle
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .unwrap();
+        assert!(!old_box.live.initialized());
+
+        old_handle.stop().await.unwrap();
+        assert!(!is_process_alive(pid));
+        assert!(!old_box.live.initialized());
+        assert!(old_box.shutdown_token.is_cancelled());
+        assert_eq!(old_box.state.read().status, BoxStatus::Stopped);
+
+        // Publish a replacement shim and its paused state without booting a VM.
+        let replacement = ChildGuard(
+            std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap(),
+        );
+        let replacement_pid = replacement.0.id();
+        let mut state = runtime.box_manager.update_box(&id).unwrap();
+        state.mark_started();
+        state.status = BoxStatus::Paused;
+        state.pid = Some(replacement_pid);
+        PidFileWriter::at(&old_box.layout.pid_file_path())
+            .unwrap()
+            .write_shim(&ShimPidRecord::with_runtime_port_control(PidRecord {
+                pid: replacement_pid,
+                start_time: Some(crate::util::process_start_time(replacement_pid).unwrap()),
+            }))
+            .unwrap();
+        runtime.box_manager.save_box(&id, &state).unwrap();
+        let new_handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+
+        let result = old_handle.stop().await;
+        let alive = is_process_alive(replacement_pid);
+        assert!(
+            matches!(result, Err(BoxliteError::Stopped(_))) && alive,
+            "stale stop returned {result:?}, restarted shim alive: {alive}"
+        );
+        new_handle.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn spent_configured_handle_cannot_stop_new_shim() {
+        let home = TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let old_handle = runtime
+            .create(
+                BoxOptions {
+                    auto_delete: Some(0),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let id = old_handle.id();
+        let old_box = old_handle
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .unwrap();
+        old_handle.stop().await.unwrap();
+        assert_eq!(old_box.state.read().status, BoxStatus::Configured);
+        assert!(!old_box.live.initialized());
+        assert!(old_box.shutdown_token.is_cancelled());
+
+        // Supply the shim and Running state that a real VM boot would publish.
+        let shim = ChildGuard(
+            std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap(),
+        );
+        let pid = shim.0.id();
+        let pid_file = old_box.layout.pid_file_path();
+        std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
+        PidFileWriter::at(&pid_file)
+            .unwrap()
+            .write_shim(&ShimPidRecord::with_runtime_port_control(PidRecord {
+                pid,
+                start_time: Some(crate::util::process_start_time(pid).unwrap()),
+            }))
+            .unwrap();
+        let mut state = runtime.box_manager.update_box(id).unwrap();
+        state.status = BoxStatus::Running;
+        state.pid = Some(pid);
+        state.mark_started();
+        runtime.box_manager.save_box(id, &state).unwrap();
+        let new_handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+        let new_box = new_handle
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .unwrap();
+
+        let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+        let gate = Arc::new(StartGate::default());
+        gate.release.add_permits(1);
+        let server = tokio::spawn(
+            Server::builder()
+                .add_service(ContainerServer::new(StartStubGuest { gate }))
+                .serve_with_incoming(futures::stream::iter([Ok::<_, std::io::Error>(server_io)])),
+        );
+        let mut client_io = Some(client_io);
+        let channel = Endpoint::from_static("http://start-guest")
+            .connect_with_connector(tower::service_fn(move |_: tonic::transport::Uri| {
+                let stream = client_io.take().unwrap();
+                std::future::ready(Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(
+                    stream,
+                )))
+            }))
+            .await
+            .unwrap();
+        let mut live = LiveState::new(
+            Box::new(InfoTestHandler(pid)),
+            GuestSession::new(BoxTransport::tcp(0)),
+            None,
+            None,
+            BoxMetricsStorage::new(),
+            Disk::new(home.path().join("container.qcow2"), DiskFormat::Qcow2, true),
+            None,
+            #[cfg(target_os = "linux")]
+            None,
+        );
+        live.test_guest_channel = Some(channel);
+        assert!(new_box.live.set(live).is_ok());
+        new_handle.start().await.unwrap();
+        wait_for_background_starts(&new_box, 1).await;
+        assert!(new_box.container_start.initialized());
+        server.abort();
+
+        // A paused shim is stopped directly, so a stale stop can signal it.
+        state.status = BoxStatus::Paused;
+        runtime.box_manager.save_box(id, &state).unwrap();
+
+        let result = old_handle.stop().await;
+        let alive = is_process_alive(pid);
+        assert!(
+            matches!(result, Err(BoxliteError::Stopped(_))) && alive,
+            "stale stop returned {result:?}, new shim alive: {alive}"
+        );
+    }
+
+    #[tokio::test]
+    async fn paused_handle_can_stop_its_shim() {
+        let home = TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let (_child, id, pid) = running_box_with_standin(&runtime, false, 0, Vec::new());
+        let mut state = runtime.box_manager.update_box(&id).unwrap();
+        state.status = BoxStatus::Paused;
+        runtime.box_manager.save_box(&id, &state).unwrap();
+        let handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+
+        handle.stop().await.unwrap();
+
+        assert!(!is_process_alive(pid));
+        assert_eq!(
+            runtime.box_manager.update_box(&id).unwrap().status,
+            BoxStatus::Stopped
+        );
+    }
+
+    #[tokio::test]
+    async fn paused_handle_with_live_state_can_stop_matching_shim() {
+        let home = TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let (_child, id, pid) = running_box_with_standin(&runtime, false, 0, Vec::new());
+        let (config, mut state) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+        state.mark_started();
+        state.status = BoxStatus::Paused;
+        runtime.box_manager.save_box(&id, &state).unwrap();
+        let handle = BoxImpl::new(
+            config,
+            state,
+            Arc::clone(&runtime),
+            runtime.shutdown_token.child_token(),
+        );
+        let live = LiveState::new(
+            Box::new(InfoTestHandler(pid)),
+            GuestSession::new(BoxTransport::tcp(0)),
+            None,
+            None,
+            BoxMetricsStorage::new(),
+            Disk::new(home.path().join("container.qcow2"), DiskFormat::Qcow2, true),
+            None,
+            #[cfg(target_os = "linux")]
+            None,
+        );
+        assert!(handle.live.set(live).is_ok());
+
+        handle.stop().await.unwrap();
+
+        assert!(!is_process_alive(pid));
+        let state = runtime.box_manager.update_box(&id).unwrap();
+        assert_eq!((state.status, state.pid), (BoxStatus::Stopped, None));
+    }
+
+    #[tokio::test]
+    async fn unknown_shim_disk_work_rejects_unreadable_pid_file() {
+        let home = TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let handle = runtime.create(BoxOptions::default(), None).await.unwrap();
+        let box_impl = handle
+            .box_backend
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .ok()
+            .unwrap();
+        let mut state = box_impl.state.read().clone();
+        state.status = BoxStatus::Unknown;
+        assert_eq!(state.pid, None);
+        runtime.box_manager.save_box(box_impl.id(), &state).unwrap();
+        let pid_file = box_impl.layout.pid_file_path();
+        std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
+
+        box_impl.with_quiesce_async(async { Ok(()) }).await.unwrap();
+
+        for contents in ["invalid pid", "0\n", &format!("{}\n", u32::MAX)] {
+            std::fs::write(&pid_file, contents).unwrap();
+            let result = box_impl.with_quiesce_async(async { Ok(()) }).await;
+            assert!(
+                matches!(result, Err(BoxliteError::InvalidState(_))),
+                "PID file {contents:?}: {result:?}"
+            );
+        }
+
+        let pid = std::process::id();
+        let start_time = crate::util::process_start_time(pid).unwrap();
+        std::fs::write(&pid_file, format!("{pid}\n{start_time}\n")).unwrap();
+        let result = box_impl.with_quiesce_async(async { Ok(()) }).await;
+        assert!(
+            matches!(result, Err(BoxliteError::InvalidState(_))),
+            "{result:?}"
+        );
+
+        std::fs::write(&pid_file, format!("{pid}\n{}\n", start_time + 1)).unwrap();
+        box_impl.with_quiesce_async(async { Ok(()) }).await.unwrap();
     }
 
     // Regression test for the silent-orphan bug in stop().
