@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { GitHubExecutionBackend } from './execution/backend'
+import { WorkQueue } from './execution/work-queue'
 import { ExecutionJournal } from './execution/journal'
 import { scopeKey, decodeScope, ExecutionScope } from './execution/model'
 import { Listener, ListenerHost } from './listener'
@@ -241,6 +242,8 @@ const scenarios = [
   'reconciles acquired and replayed demand',
   'continues assigning workers when the event observer throws',
   'traces a failed poll with its scale set and HTTP status',
+  'starts confirmed jobs when the planner first reads after the poll fails',
+  'cancels disconnected reservations when GitHub confirms zero before dispatch',
   'backs off failed Box startup',
   'backs off a Box exit without a status code',
   'checks an organization runner group',
@@ -613,6 +616,89 @@ for (const storage of ['sqlite', 'postgres'])
             await scans.finish(claim, { success: true, intervalMs: 60_000 })
           }
           fixture.rejectNextPoll = scenario === 'traces a failed poll with its scale set and HTTP status'
+          if (
+            scenario === 'starts confirmed jobs when the planner first reads after the poll fails' ||
+            scenario === 'cancels disconnected reservations when GitHub confirms zero before dispatch'
+          ) {
+            const cancel = scenario === 'cancels disconnected reservations when GitHub confirms zero before dispatch'
+            const deferredWorkers = new Set<string>()
+            let zeroVisible = false
+            const enqueue = WorkQueue.prototype.enqueue
+            const dispatch = jest.spyOn(WorkQueue.prototype, 'enqueue').mockImplementation(function (
+              this: WorkQueue,
+              key,
+              revision,
+              run,
+            ) {
+              if (key.startsWith('worker/') && !deferredWorkers.has(key)) {
+                deferredWorkers.add(key)
+                if (!cancel) return false
+                return enqueue.call(this, key, revision, async (wait) => {
+                  await until(() => zeroVisible)
+                  return run(wait)
+                })
+              }
+              return enqueue.call(this, key, revision, run)
+            })
+            fixture.target = 2
+            let firstRead = false
+            let pollFailed = false
+            const targets = ScaleSetController.prototype.targets
+            const reads = jest.spyOn(ScaleSetController.prototype, 'targets').mockImplementation(function (
+              this: ScaleSetController,
+            ) {
+              const result = targets.call(this)
+              firstRead = true
+              if (fixture.sessions.length > 1 && result.some((target) => target.assigned === 0)) zeroVisible = true
+              return result
+            })
+            const recover = journal.activeScopes
+            let firstCycle = true
+            const cycles = jest.spyOn(ExecutionJournal.prototype, 'activeScopes').mockImplementation(async function (
+              this: ExecutionJournal,
+              ...args
+            ) {
+              if (!firstCycle) await until(() => pollFailed)
+              firstCycle = false
+              return recover.apply(this, args)
+            })
+            fetch.mockImplementation(async (input, opts = {}) => {
+              const path = new URL(String(input)).pathname
+              if (path.endsWith('/9/sessions') && opts.method === 'POST') await until(() => firstRead)
+              if (path === '/messages' && !pollFailed)
+                return cancel
+                  ? new Response(null, { status: 503 })
+                  : new Response(null, { status: 429, headers: { 'retry-after': '60' } })
+              return fixture.fetch(input, opts)
+            })
+            report.mockImplementation((_error, _operation, context) => {
+              if (context?.stage === 'poll') pollFailed = true
+            })
+            try {
+              stop = start()
+              await until(() => pollFailed)
+              if (cancel) {
+                await until(() => deferredWorkers.size > 0)
+                expect(await journal.used(scope.organization)).toBe(2)
+                fixture.target = 0
+                await until(async () => zeroVisible && (await journal.used(scope.organization)) === 0)
+                expect(observe).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'ci-worker-box-known' }))
+                expect(delivered.size).toBe(0)
+              } else {
+                await until(() => delivered.size === 2)
+                expect(fixture.sessions).toHaveLength(1)
+                expect(await journal.used(scope.organization)).toBe(2)
+                expect(deferredWorkers.size).toBe(2)
+              }
+            } finally {
+              pollFailed = true
+              zeroVisible = true
+              dispatch.mockRestore()
+              reads.mockRestore()
+              cycles.mockRestore()
+            }
+            return
+          }
           stop = start()
           if (fixture.discoverCustom && !scanOnly) {
             await until(() => fixture.requests.includes('GET /messages/default'))

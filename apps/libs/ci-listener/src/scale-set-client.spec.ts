@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { ActionsScaleSets } from './scale-set-client'
+import { ScaleSetDiagnostics } from './scale-set-diagnostics'
 import { ScaleSetWork } from './scale-set-controller'
 
 describe('GitHub Actions scale set transport', () => {
@@ -22,6 +23,8 @@ describe('GitHub Actions scale set transport', () => {
   })
   afterEach(() => jest.restoreAllMocks())
   const json = (value: unknown) => new Response(JSON.stringify(value))
+  const jsonWithRateLimit = () =>
+    new Response(JSON.stringify({ message: 'API rate limit exceeded for private caller' }), { status: 403 })
   const admin = () => requests.mockResolvedValueOnce(json({ url: base, token: jwt }))
   const session = (token = 'queue-token') =>
     json({ sessionId, messageQueueUrl: queue, messageQueueAccessToken: token, statistics: { totalAssignedJobs: 2 } })
@@ -74,6 +77,77 @@ describe('GitHub Actions scale set transport', () => {
     expect(await active.poll(8, 3)).toBeNull()
     expect(registration).toHaveBeenCalledTimes(1)
     expect(new Headers(requests.mock.calls.at(-1)[1].headers).get('authorization')).toBe('Bearer refreshed')
+  })
+  it.each([
+    [
+      'rate limit',
+      () =>
+        new Response('private upstream text', {
+          status: 429,
+          headers: {
+            'retry-after': '7',
+            'x-ratelimit-remaining': '0',
+            'x-github-request-id': 'A123:BC45:1234:2345:ABCDEF12',
+          },
+        }),
+      {
+        reason: 'http',
+        httpStatus: 429,
+        retryAfterSeconds: 7,
+        rateLimitRemaining: 0,
+        githubRequestId: 'A123:BC45:1234:2345:ABCDEF12',
+      },
+    ],
+    [
+      'rate limit message',
+      () => jsonWithRateLimit(),
+      { reason: 'http', httpStatus: 403, githubMessage: 'API rate limit exceeded' },
+    ],
+    [
+      'redirect',
+      () => new Response(null, { status: 307, headers: { location: 'https://private.example/' } }),
+      { reason: 'http', httpStatus: 307 },
+    ],
+    [
+      'connection reset',
+      () => {
+        throw new TypeError('private endpoint', { cause: Object.assign(new Error(), { code: 'ECONNRESET' }) })
+      },
+      { reason: 'transport', transportCode: 'ECONNRESET' },
+    ],
+    ['invalid JSON', () => new Response('private invalid JSON'), { reason: 'response-json', httpStatus: 200 }],
+    [
+      'wrong message type',
+      () => json({ messageId: 1, messageType: 'private remote value' }),
+      { reason: 'message-type', httpStatus: 200, valueType: 'string' },
+    ],
+    [
+      'invalid job ID',
+      () =>
+        json({
+          messageId: 1,
+          messageType: 'RunnerScaleSetJobMessages',
+          body: JSON.stringify([{ messageType: 'JobAssigned', runnerRequestId: -1 }]),
+        }),
+      { reason: 'job-request-id', httpStatus: 200, valueType: 'number' },
+    ],
+  ] as const)('diagnoses poll failure for %s', async (_case, reply, expected) => {
+    const client = new ActionsScaleSets(scope, registration)
+    admin()
+    requests.mockResolvedValueOnce(session())
+    const active = await client.open(42, 'owner')
+    requests.mockImplementationOnce(async () => reply())
+    const failure = await active.poll(32).catch((error: unknown) => error)
+    const log = new ScaleSetDiagnostics({
+      scope: 'test',
+      organization: 'tenant',
+      installation: 1,
+      label: 'boxlite',
+      scaleSet: 42,
+      messageId: null,
+    }).failure(failure, 'poll')
+    expect(log).toMatchObject(expected)
+    expect(JSON.stringify(log)).not.toMatch(/private|queue-token|https:/)
   })
   it('rejects a service address outside GitHub before making an authenticated service request', async () => {
     const client = new ActionsScaleSets(scope, registration)

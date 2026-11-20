@@ -94,7 +94,14 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const capacity = testCapacity({ account: size, tenant: size })
       const labels = ['boxlite']
       const [check] = await state.read(['journal/format'], lease)
-      const target = { id: 9, labels, held: 0, assigned: size, check }
+      const target = {
+        id: 9,
+        labels,
+        held: 0,
+        assigned: size,
+        check,
+        delivery: { covered: 0, waitingForDispatch: true, offline: false },
+      }
       const create = jest.fn(async ({ name }: { name: string }) => ({ box_id: name, status: 'created' }))
       const backend = {
         admit: async () => {},
@@ -699,6 +706,34 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const snapshot = await inspectJournal(state, lease)
       expect(snapshot.allocations.size).toBe(1)
       expect([...snapshot.scopes.values()].reduce((sum, row) => sum + row.active.length, 0)).toBe(1)
+    })
+    it('shares thirty BoxLite account slots between two competing GitHub repositories', async () => {
+      const other = structuredClone(definition)
+      if (other.runners.kind !== 'repository') throw new Error('fixture')
+      const owner = { id: 8, login: 'other' }
+      other.installation = { id: 2, account: { ...owner, type: 'User' } }
+      other.runners.repository = { ...other.runners.repository, id: 22, owner }
+      const second = await journal.define(lease, other)
+      const policy = { limits: [{ domain: 'organization' as const, maximum: 30 }] }
+      const reserve = (scope: string) =>
+        journal.reserve(lease, scope, null, policy, { labels: ['boxlite'], scaleSet: 9 })
+      const existing = await Promise.all([reserve(key), reserve(second)])
+      const competing = await Promise.all(Array.from({ length: 62 }, (_, i) => reserve(i % 2 ? key : second)))
+      const slots = [...existing, ...competing].filter((row) => row !== undefined)
+      expect(slots).toHaveLength(30)
+      expect(new Set(slots.map((row) => row.record.key)).size).toBe(30)
+      expect(new Set(slots.map((row) => row.value.scope))).toEqual(new Set([key, second]))
+      expect(await journal.used(definition.organization)).toBe(30)
+      const first = slots[0]
+      const closed = await journal.advance(lease, first.record.key, first.record.version, {
+        box: { phase: 'absent', id: null },
+        runner: { phase: 'absent', id: null },
+        closing: true,
+      })
+      await journal.release(lease, closed.record.key, closed.record.version)
+      const replacements = await Promise.all([reserve(key), reserve(second)])
+      expect(replacements.filter(Boolean)).toHaveLength(1)
+      expect(await journal.used(definition.organization)).toBe(30)
     })
     it('enforces tenant quota across different GitHub accounts', async () => {
       await journal.reserve(lease, key, demand, testCapacity({ account: 2, tenant: 1 }))

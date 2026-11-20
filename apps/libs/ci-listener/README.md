@@ -498,6 +498,13 @@ Workers provisioned directly from assigned demand emit `ci-worker-reserved`. Use
 
 A confirmed Box creation rejection records whether admission failed, the platform rejected creation before persistence, or recovery proved the create was never dispatched. A replayed rejection uses `recorded` because the original platform status is only available on the live attempt.
 
+
+A confirmed assignment remains available during a failed message poll. A planner pass reserves the difference between the assigned count and existing workers, up to the BoxLite account's available slots. Multiple GitHub scopes spend the same account quota. If 70 jobs are assigned, 20 already have workers and the account has 40 free slots, at most 40 new reservations can commit.
+
+While disconnected, the listener credits each committed reservation against that observation, including across partial passes. A reservation that the execution queue could not dispatch keeps its original identity and target until its Box creation intent is durable. New GitHub statistics, including zero, supersede the old target.
+
+For a failed poll, inspect `reason` first. An HTTP response supplies `httpStatus`; a rejected message also identifies its failing field and the observed value type. A connection failure can supply a recognized `transportCode`. GitHub's validated request ID, numeric `retryAfterSeconds`, quota headers and recognized error message are recorded when present. The listener's `retryAt` includes its own backoff, so that timestamp alone cannot establish provider throttling.
+
 ## Independent repository compensation
 
 Every Listener replica runs two compensation lanes alongside the single execution

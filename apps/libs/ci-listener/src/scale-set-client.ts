@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { githubPollMessage, PollMessageError, ScaleSetPollError } from './scale-set-poll-error'
 import { GitHubRequestError, githubRetryAt, readGitHubBody } from './github'
 import { object, positive } from './execution/model'
 import { JitRegistration, RunnerEffect, RunnerIdentity } from './runners'
@@ -49,17 +50,82 @@ interface Call {
   poll?: boolean
   signal?: AbortSignal
 }
+function pollRequestId(value: unknown): RequestId {
+  try {
+    return requestId(value)
+  } catch {
+    throw new PollMessageError('job-request-id', value)
+  }
+}
+function pollMessage(raw: unknown): SetMessage {
+  if (!object(raw) || !natural(raw.messageId))
+    throw new PollMessageError('message-id', object(raw) ? raw.messageId : raw)
+  if (raw.messageType !== 'RunnerScaleSetJobMessages') throw new PollMessageError('message-type', raw.messageType)
+  if (raw.body !== undefined && typeof raw.body !== 'string') throw new PollMessageError('message-body', raw.body)
+  let events: unknown
+  try {
+    events = typeof raw.body === 'string' && raw.body ? decode(raw.body) : []
+  } catch {
+    throw new PollMessageError('message-body', raw.body)
+  }
+  if (!Array.isArray(events)) throw new PollMessageError('message-body', events)
+  const available: SetMessage['available'] = []
+  const worked: RunnerIdentity[] = []
+  const settledRequests: RequestId[] = []
+  for (const event of events) {
+    if (!object(event) || typeof event.messageType !== 'string')
+      throw new PollMessageError('event-type', object(event) ? event.messageType : event)
+    if (['JobAssigned', 'JobStarted', 'JobCompleted'].includes(event.messageType) && event.runnerRequestId != null)
+      settledRequests.push(pollRequestId(event.runnerRequestId))
+    if (event.messageType === 'JobStarted' || event.messageType === 'JobCompleted') {
+      if (
+        positive(event.runnerId) &&
+        typeof event.runnerName === 'string' &&
+        /^ci-jit-[a-f0-9]{32}$/.test(event.runnerName)
+      )
+        worked.push({ id: event.runnerId, name: event.runnerName })
+      continue
+    }
+    if (event.messageType !== 'JobAvailable') continue
+    if (
+      typeof event.ownerName !== 'string' ||
+      typeof event.repositoryName !== 'string' ||
+      !Array.isArray(event.requestLabels) ||
+      !event.requestLabels.every((label) => typeof label === 'string')
+    )
+      throw new PollMessageError('job-available', event.requestLabels)
+    available.push({
+      id: pollRequestId(event.runnerRequestId),
+      owner: event.ownerName,
+      repository: event.repositoryName,
+      labels: event.requestLabels,
+    })
+  }
+  if (raw.statistics != null && (!object(raw.statistics) || !natural(raw.statistics.totalAssignedJobs)))
+    throw new PollMessageError('statistics', object(raw.statistics) ? raw.statistics.totalAssignedJobs : raw.statistics)
+  return {
+    id: raw.messageId,
+    assigned: raw.statistics == null ? undefined : assigned(raw.statistics),
+    available,
+    worked,
+    settledRequests,
+  }
+}
+function request(url: URL, authorization: string, call: Call & { poll: true }): Promise<SetMessage | null>
+function request(url: URL, authorization: string, call?: Call): Promise<unknown>
 async function request(url: URL, authorization: string, call: Call = {}): Promise<unknown> {
   const method = call.method ?? 'GET'
   const deadline = AbortSignal.timeout(call.poll ? 120_000 : 15_000)
   const signal = call.signal ? AbortSignal.any([deadline, call.signal]) : deadline
-  let status: number | undefined
+  let response: Response | undefined
+  let readingBody = false
+  let decoding = false
   try {
     signal.throwIfAborted()
-    const response = await fetch(url.toString(), {
+    response = await fetch(url.toString(), {
       method,
       signal,
-      redirect: 'error',
+      redirect: call.poll ? 'manual' : 'error',
       body: call.body,
       headers: {
         Accept: 'application/json',
@@ -69,8 +135,10 @@ async function request(url: URL, authorization: string, call: Call = {}): Promis
         ...call.headers,
       },
     })
-    status = response.status
+    const status = response.status
     if (!response.ok || status === 204 || (call.poll && status === 202)) {
+      if (call.poll && status !== 202)
+        throw new ScaleSetPollError('http', response, undefined, await githubPollMessage(response))
       await response.body?.cancel()
       if (status === 204 && method === 'DELETE') return undefined
       if (status === 202 && call.poll) return null
@@ -80,11 +148,28 @@ async function request(url: URL, authorization: string, call: Call = {}): Promis
       await response.body?.cancel()
       throw new GitHubRequestError(status, true)
     }
-    return decode(await readGitHubBody(response))
+    readingBody = true
+    const body = await readGitHubBody(response)
+    decoding = true
+    const raw = decode(body)
+    return call.poll ? pollMessage(raw) : raw
   } catch (error) {
     if (method === 'GET' && call.signal?.aborted) throw call.signal.reason
     if (error instanceof GitHubRequestError) throw error
-    throw new GitHubRequestError(status, method !== 'GET')
+    if (call.poll) {
+      const reason =
+        error instanceof PollMessageError
+          ? error.field
+          : deadline.aborted
+            ? 'timeout'
+            : decoding
+              ? 'response-json'
+              : readingBody
+                ? 'response-read'
+                : 'transport'
+      throw new ScaleSetPollError(reason, response, error)
+    }
+    throw new GitHubRequestError(response?.status, method !== 'GET')
   }
 }
 function list(value: unknown): unknown[] {
@@ -357,8 +442,8 @@ export class ScaleSetSession {
     }
   }
   async poll(capacity: number, last?: number, signal?: AbortSignal): Promise<SetMessage | null> {
-    if (!natural(capacity) || (last !== undefined && !natural(last))) return invalid()
-    const raw = await this.withToken(() => {
+    if (!natural(capacity) || (last !== undefined && !natural(last))) throw new ScaleSetPollError('poll-arguments')
+    return this.withToken(() => {
       const url = new URL(this.data.queue)
       if (last !== undefined && last > 0) url.searchParams.set('lastMessageId', String(last))
       return request(url, 'Bearer ' + this.data.token, {
@@ -366,55 +451,10 @@ export class ScaleSetSession {
         poll: true,
         headers: { Accept: 'application/json; api-version=6.0-preview', 'X-ScaleSetMaxCapacity': String(capacity) },
       })
-    }, signal)
-    if (raw === null) return null
-    if (
-      !object(raw) ||
-      !natural(raw.messageId) ||
-      raw.messageType !== 'RunnerScaleSetJobMessages' ||
-      (raw.body !== undefined && typeof raw.body !== 'string')
-    )
-      return invalid()
-    const events = typeof raw.body === 'string' && raw.body ? decode(raw.body) : []
-    if (!Array.isArray(events)) return invalid()
-    const available: SetMessage['available'] = []
-    const worked: RunnerIdentity[] = []
-    const settledRequests: RequestId[] = []
-    for (const event of events) {
-      if (!object(event) || typeof event.messageType !== 'string') return invalid()
-      if (['JobAssigned', 'JobStarted', 'JobCompleted'].includes(event.messageType) && event.runnerRequestId != null)
-        settledRequests.push(requestId(event.runnerRequestId))
-      if (event.messageType === 'JobStarted' || event.messageType === 'JobCompleted') {
-        if (
-          positive(event.runnerId) &&
-          typeof event.runnerName === 'string' &&
-          /^ci-jit-[a-f0-9]{32}$/.test(event.runnerName)
-        )
-          worked.push({ id: event.runnerId, name: event.runnerName })
-        continue
-      }
-      if (event.messageType !== 'JobAvailable') continue
-      if (
-        typeof event.ownerName !== 'string' ||
-        typeof event.repositoryName !== 'string' ||
-        !Array.isArray(event.requestLabels) ||
-        !event.requestLabels.every((label) => typeof label === 'string')
-      )
-        return invalid()
-      available.push({
-        id: requestId(event.runnerRequestId),
-        owner: event.ownerName,
-        repository: event.repositoryName,
-        labels: event.requestLabels,
-      })
-    }
-    return {
-      id: raw.messageId,
-      assigned: raw.statistics == null ? undefined : assigned(raw.statistics),
-      available,
-      worked,
-      settledRequests,
-    }
+    }, signal).catch((error: unknown) => {
+      if (signal?.aborted || error instanceof ScaleSetPollError) throw error
+      throw new ScaleSetPollError('token-refresh', undefined, error)
+    })
   }
   async acquire(ids: RequestId[], signal?: AbortSignal): Promise<RequestId[]> {
     const unique = new Set(ids.map((id) => String(requestId(id))))

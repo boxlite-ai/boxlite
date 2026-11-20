@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { GitHubRequestError } from './github'
+import { ScaleSetPollError } from './scale-set-poll-error'
 
 type Stage =
   | 'session'
@@ -32,7 +33,8 @@ type Progress =
   | { event: 'ci-scale-set-acquired'; attempted: number; accepted: number }
 
 export type ScaleSetEvent = SetContext & Progress & { level: 'info' }
-export type ScaleSetFailure = SetContext & { stage: Stage; httpStatus?: number; retryAt?: number }
+export type ScaleSetFailure = SetContext &
+  Partial<ScaleSetPollError['details']> & { stage: Stage; httpStatus?: number; retryAt?: number }
 
 /** One context per active session. On rejection keep the innermost operation for the session's error report. */
 export class ScaleSetDiagnostics {
@@ -55,6 +57,7 @@ export class ScaleSetDiagnostics {
     return {
       ...this.context,
       stage,
+      ...(error instanceof ScaleSetPollError ? error.details : {}),
       ...(error instanceof GitHubRequestError && error.status !== undefined ? { httpStatus: error.status } : {}),
     }
   }

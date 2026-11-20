@@ -14,6 +14,7 @@ import { ConfirmedWorkerAbsent, WorkerState } from '../worker'
 import { ExecutionJournal } from './journal'
 import { ExecutionScope } from './model'
 import { PoolBackend, WorkerPool } from './pool'
+import { WorkQueue } from './work-queue'
 
 describe('CI shared worker lifecycle', () => {
   const definition: ExecutionScope = {
@@ -151,21 +152,47 @@ describe('CI shared worker lifecycle', () => {
   })
   const tick = async () => {
     const [proof] = await state.read(['journal/format'], lease)
-    await pool.balanceScaleSets(
-      lease,
-      [{ id: 9, labels: ['boxlite'], held: 0, assigned: 1, check: proof }],
-      limits,
-      new AbortController().signal,
-    )
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      held: 0,
+      assigned: 1,
+      check: proof,
+      delivery: { covered: 0, waitingForDispatch: true, offline: false },
+    }
+    await pool.balanceScaleSets(lease, [target], limits, new AbortController().signal)
   }
   const reconcile = () => pool.balanceScaleSets(lease, [], limits, new AbortController().signal)
+  it('reserves 32 confirmed jobs in one pass when the BoxLite account has 32 free slots', async () => {
+    const [proof] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      held: 0,
+      assigned: 32,
+      check: proof,
+      delivery: { covered: 0, waitingForDispatch: true, offline: false },
+    }
+    const capacity = { limits: [{ domain: 'organization' as const, maximum: 32 }] }
+    await pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+    expect(await journal.used(definition.organization)).toBe(32)
+  })
   it('recovers a stopped worker while new admission is denied', async () => {
     await tick()
     const [box] = boxes.values()
     box.status = 'stopped'
     jest.mocked(backend.admit).mockRejectedValue(new Error('Admission revoked'))
     const [proof] = await state.read(['journal/format'], lease)
-    const targets = [{ id: 9, labels: ['boxlite'], held: 0, assigned: 2, check: proof }]
+    const targets = [
+      {
+        id: 9,
+        labels: ['boxlite'],
+        held: 0,
+        assigned: 2,
+        check: proof,
+        delivery: { covered: 0, waitingForDispatch: true, offline: false },
+      },
+    ]
     for (let i = 0; i < 2; i++) {
       await pool.balanceScaleSets(lease, targets, limits, new AbortController().signal).catch(() => {})
     }
@@ -177,6 +204,78 @@ describe('CI shared worker lifecycle', () => {
     await reconcile()
     await reconcile()
   }
+  it('uses each disconnected assignment once when quota frees during backoff', async () => {
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      held: 0,
+      assigned: 3,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: true },
+    }
+    const capacity = { limits: [{ domain: 'organization' as const, maximum: 1 }] }
+    const balance = () => pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+    const completeJobs = async () => {
+      for (const { record, value } of (await rows()).allocations.values()) {
+        await journal.advance(lease, record.key, record.version, { runner: { ...value.runner, worked: true } })
+      }
+      await finishBox()
+    }
+    await balance()
+    expect(await journal.used(definition.organization)).toBe(1)
+    await completeJobs()
+    capacity.limits[0].maximum = 3
+    await balance()
+    expect(await journal.used(definition.organization)).toBe(2)
+    await completeJobs()
+    await balance()
+    expect(backend.workers.create).toHaveBeenCalledTimes(3)
+    expect(await journal.used(definition.organization)).toBe(0)
+  })
+  it('dispatches the original slot after the execution queue was full during poll backoff', async () => {
+    const queue = new WorkQueue(
+      1,
+      (error) => {
+        throw error
+      },
+      1,
+    )
+    let unblock!: () => void
+    const busy = new Promise<void>((resolve) => {
+      unblock = resolve
+    })
+    queue.enqueue('busy', '1', () => busy)
+    const pending = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      held: 0,
+      assigned: 1,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: true },
+    }
+    const balance = () => pending.balanceScaleSets(lease, [target], limits, new AbortController().signal)
+    try {
+      await balance()
+      expect(await journal.used(definition.organization)).toBe(1)
+      expect(backend.workers.create).not.toHaveBeenCalled()
+      expect(target.delivery.waitingForDispatch).toBe(true)
+      unblock()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await balance()
+      await queue.close()
+      await balance()
+      expect(target.delivery.waitingForDispatch).toBe(false)
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(await journal.used(definition.organization)).toBe(1)
+    } finally {
+      unblock()
+      await queue.close()
+      await pending.close()
+    }
+  })
   it.each(['delayed', 'install-success'])(
     'Docker bootstrap waits for the API before runner startup: %s',
     async (scenario) => {
