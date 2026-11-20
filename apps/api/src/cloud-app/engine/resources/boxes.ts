@@ -178,6 +178,8 @@ export class BoxProvisioner {
   async waitForSupervisor(env: EnvRow, log: Logger, signal?: AbortSignal): Promise<void> {
     const { supervisor, timing } = this.ctx
     const deadline = Date.now() + timing.supervisorReadyMs
+    const readinessTimeout = AbortSignal.timeout(timing.supervisorReadyMs)
+    const probeSignal = signal ? AbortSignal.any([signal, readinessTimeout]) : readinessTimeout
     let lastErr = ''
     log('waiting for the supervisor to answer')
     while (Date.now() < deadline) {
@@ -186,10 +188,14 @@ export class BoxProvisioner {
       try {
         // Any 200 counts: `ok` only turns true once a release is live, which a fresh Box has not.
         // An answer to the control secret without `version` is protocol 2 (protocol 1 refuses it).
-        version = (await supervisor.health(env.box_url!, env.control_secret)).version ?? SUPERVISOR_PROTOCOL
+        version =
+          (await supervisor.health(env.box_url!, env.control_secret, probeSignal)).version ?? SUPERVISOR_PROTOCOL
       } catch (err) {
         lastErr = (err as Error).message
       }
+      signal?.throwIfAborted()
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
       if (version !== undefined) {
         if (version >= SUPERVISOR_PROTOCOL) return
         throw fail(
@@ -198,7 +204,7 @@ export class BoxProvisioner {
           'check that SV_BIN_DIR on the control plane holds the current supervisor build, then deploy again',
         )
       }
-      await sleep(timing.pollMs)
+      await sleep(Math.min(timing.pollMs, remaining))
     }
     throw fail(
       'deploy_failed',

@@ -1,8 +1,7 @@
 import { posix } from 'node:path'
 import type { VolumeSpec } from '@boxlite-ai/cloud-app-shared'
-import type { EnvRow } from './db'
 import { fail } from './errors'
-import { controlHeaders } from './supervisor'
+import { supervisorControlHeaders, type TunnelHeaders } from './supervisor'
 
 /** Same per-file limit as source uploads. */
 export const VOLUME_FILE_MAX = 50 * 1024 * 1024
@@ -35,18 +34,38 @@ export function volumePath(
   return { volume, rel, abs }
 }
 
-/**
- * `/.boxlite/sv/*` takes the control secret (`X-BoxLite-Control`) only; the gateway refuses control
- * calls that carry the forwarding secret (F3). Every env has a control secret (db migration 5). One
- * helper for all control calls lives in supervisor.ts; re-exported here for existing importers.
- */
-export { controlHeaders } from './supervisor'
+type VolumeFileTarget = ReturnType<typeof volumePath> & { boxUrl: string; controlSecret: string }
 
-function gatewayUrl(env: EnvRow, abs: string, overwrite = false, recursive = false): string {
-  const q = new URLSearchParams({ path: abs })
-  if (overwrite) q.set('overwrite', '1')
-  if (recursive) q.set('recursive', '1')
-  return `${env.box_url}/.boxlite/sv/files?${q}`
+async function requestFile(
+  target: VolumeFileTarget,
+  method: 'GET' | 'PUT' | 'DELETE',
+  tunnelHeaders?: TunnelHeaders,
+  params?: Record<string, string>,
+  body?: ArrayBuffer,
+): Promise<Response> {
+  const query = new URLSearchParams({ path: target.abs, ...params })
+  const signal = AbortSignal.timeout(method === 'GET' ? 60_000 : 120_000)
+  const headers = await supervisorControlHeaders(target.boxUrl, target.controlSecret, tunnelHeaders, signal).catch(
+    () => {
+      throw fail('unavailable', 'the Box tunnel credentials are unavailable')
+    },
+  )
+  if (body !== undefined) headers['content-type'] = 'application/octet-stream'
+  try {
+    return await fetch(`${target.boxUrl}/.boxlite/sv/files?${query}`, {
+      method,
+      headers,
+      body,
+      signal,
+      redirect: 'manual',
+    })
+  } catch (err) {
+    throw fail(
+      'unavailable',
+      `cannot reach the Box: ${(err as Error).message}`,
+      'rerun in 30 s; the Box may be waking up',
+    )
+  }
 }
 
 /** Maps the gateway's file errors to contract errors; an old supervisor answers a plain 404 `not_found`. */
@@ -58,10 +77,12 @@ async function gatewayError(
 ): Promise<never> {
   let code = ''
   let message = ''
+  let tunnelRejected = false
   try {
-    const body = (await res.json()) as { error?: string; message?: string }
+    const body = (await res.json()) as { code?: string; error?: string; message?: string }
     code = body.error ?? ''
     message = body.message ?? ''
+    tunnelRejected = body.code === 'TUNNEL_ACCESS_DENIED'
   } catch {
     // non-JSON: fall through to the generic error
   }
@@ -100,7 +121,7 @@ async function gatewayError(
       `name what is inside it: \`boxlite-app app volume ls ${volume}\``,
     )
   // An older supervisor has no DELETE (405) or no file access at all (404).
-  if (code === 'not_found' || res.status === 404 || res.status === 405)
+  if (!tunnelRejected && (code === 'not_found' || res.status === 404 || res.status === 405))
     throw fail(
       'not_supported_yet',
       'this Box runs a supervisor without file access',
@@ -114,72 +135,32 @@ async function gatewayError(
 }
 
 /** GET through the Box tunnel: a JSON listing for a directory, the bytes for a file. */
-export async function readVolume(env: EnvRow, volume: string, rel: string, abs: string): Promise<Response> {
-  let res: Response
-  try {
-    res = await fetch(gatewayUrl(env, abs), { headers: controlHeaders(env), signal: AbortSignal.timeout(60_000) })
-  } catch (err) {
-    throw fail(
-      'unavailable',
-      `cannot reach the Box: ${(err as Error).message}`,
-      'rerun in 30 s; the Box may be waking up',
-    )
-  }
-  if (!res.ok) return await gatewayError(res, volume, rel)
+export async function readVolume(target: VolumeFileTarget, tunnelHeaders?: TunnelHeaders): Promise<Response> {
+  const res = await requestFile(target, 'GET', tunnelHeaders)
+  if (!res.ok) return await gatewayError(res, target.volume.name, target.rel)
   return res
 }
 
 export async function writeVolume(
-  env: EnvRow,
-  volume: string,
-  rel: string,
-  abs: string,
+  target: VolumeFileTarget,
   body: ArrayBuffer,
   overwrite: boolean,
+  tunnelHeaders?: TunnelHeaders,
 ): Promise<{ bytes: number; replaced: boolean }> {
-  let res: Response
-  try {
-    res = await fetch(gatewayUrl(env, abs, overwrite), {
-      method: 'PUT',
-      headers: { ...controlHeaders(env), 'content-type': 'application/octet-stream' },
-      body,
-      signal: AbortSignal.timeout(120_000),
-    })
-  } catch (err) {
-    throw fail(
-      'unavailable',
-      `cannot reach the Box: ${(err as Error).message}`,
-      'rerun in 30 s; the Box may be waking up',
-    )
-  }
-  if (!res.ok) return await gatewayError(res, volume, rel, 'write')
+  const res = await requestFile(target, 'PUT', tunnelHeaders, overwrite ? { overwrite: '1' } : undefined, body)
+  if (!res.ok) return await gatewayError(res, target.volume.name, target.rel, 'write')
   const out = (await res.json()) as { bytes?: number; replaced?: boolean }
   return { bytes: out.bytes ?? body.byteLength, replaced: out.replaced === true }
 }
 
 /** Deletes a file, or a folder with `recursive`; the supervisor refuses the volume itself. */
 export async function removeVolume(
-  env: EnvRow,
-  volume: string,
-  rel: string,
-  abs: string,
+  target: VolumeFileTarget,
   recursive: boolean,
+  tunnelHeaders?: TunnelHeaders,
 ): Promise<{ removed: 'file' | 'directory' }> {
-  let res: Response
-  try {
-    res = await fetch(gatewayUrl(env, abs, false, recursive), {
-      method: 'DELETE',
-      headers: controlHeaders(env),
-      signal: AbortSignal.timeout(120_000),
-    })
-  } catch (err) {
-    throw fail(
-      'unavailable',
-      `cannot reach the Box: ${(err as Error).message}`,
-      'rerun in 30 s; the Box may be waking up',
-    )
-  }
-  if (!res.ok) return await gatewayError(res, volume, rel, 'remove')
+  const res = await requestFile(target, 'DELETE', tunnelHeaders, recursive ? { recursive: '1' } : undefined)
+  if (!res.ok) return await gatewayError(res, target.volume.name, target.rel, 'remove')
   const out = (await res.json()) as { removed?: 'file' | 'directory' }
   return { removed: out.removed ?? 'file' }
 }

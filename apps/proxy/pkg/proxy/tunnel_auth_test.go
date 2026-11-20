@@ -4,7 +4,9 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,10 +14,63 @@ import (
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/proxy/cmd/proxy/config"
 )
 
 const privateTestURL = "https://3000-d-416243644566313233343536.proxy.test/"
 const privateTestToken = "blt_test-external-token"
+
+func TestPrivateTunnelStripsTokenOnSupervisorRequests(t *testing.T) {
+	const boxID = "AbCdEf123456"
+	const controlHeader = "X-BoxLite-Control"
+	const controlSecret = "supervisor-test-secret"
+	for _, test := range []struct{ method, path string }{
+		{http.MethodGet, ".boxlite/sv/health"},
+		{http.MethodGet, ".boxlite/sv/files"},
+		{http.MethodPut, ".boxlite/sv/files"},
+		{http.MethodDelete, ".boxlite/sv/files"},
+	} {
+		t.Run(test.method+"/"+test.path, func(t *testing.T) {
+			configuration := apiclient.NewConfiguration()
+			configuration.Servers[0].URL = "https://api.test"
+			grant, err := json.Marshal(tunnelGrant{ID: "private", BoxID: boxID, Port: 3000, Generation: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			configuration.HTTPClient = &http.Client{Transport: previewRoundTripper(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPost || r.URL.Path != "/preview/"+boxID+"/tunnels/3000/access" {
+					t.Fatalf("unexpected Preview request: %s %s", r.Method, r.URL.Path)
+				}
+				var proof struct {
+					Token string `json:"token"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&proof); err != nil || proof.Token != privateTestToken {
+					t.Fatalf("Preview did not receive the tunnel token: %v", err)
+				}
+				if r.Header.Get(controlHeader) != "" {
+					t.Fatal("the Supervisor control secret reached Preview")
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(grant))}, nil
+			})}
+			p := &Proxy{
+				apiclient: apiclient.NewAPIClient(configuration),
+				config:    &config.Config{ProxyApiKey: "proxy-test-signing-key-with-32-bytes"},
+			}
+			request := httptest.NewRequest(test.method, privateTestURL+test.path, nil)
+			request.Header.Set(accessTokenHeader, privateTestToken)
+			request.Header.Set(controlHeader, controlSecret)
+			if err := p.authorizeTunnel(httptest.NewRecorder(), request, boxID, 3000); err != nil {
+				t.Fatal(err)
+			}
+			if request.Header.Get(accessTokenHeader) != "" {
+				t.Fatal("the tunnel token reached the guest request")
+			}
+			if request.Header.Get(controlHeader) != controlSecret {
+				t.Fatal("the control secret was lost before reaching the Supervisor")
+			}
+		})
+	}
+}
 
 func privateAuthProxy(t *testing.T) (*Proxy, *tunnelGrant) {
 	t.Helper()
