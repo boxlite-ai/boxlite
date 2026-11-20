@@ -132,6 +132,8 @@ pub struct RuntimeImpl {
     // ========================================================================
     /// Box manager with integrated persistence (has internal RwLock)
     pub(crate) box_manager: BoxManager,
+    /// Local managed-volume storage
+    pub(crate) local_volume_store: crate::volumes::LocalVolumeStore,
     /// Image management (has internal RwLock via ImageStore)
     pub(crate) image_manager: ImageManager,
 
@@ -217,6 +219,11 @@ pub struct SynchronizedState {
 /// the cost of some unused — but sparse, so cheap on disk — space in every
 /// cached image disk.
 const IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
+
+pub(crate) struct CloneDependency {
+    pub base_disk_id: crate::BaseDiskID,
+    pub source_admission: Arc<crate::lock::OwnedLockGuard>,
+}
 
 impl RuntimeImpl {
     // ========================================================================
@@ -330,6 +337,19 @@ impl RuntimeImpl {
         let snapshot_store = crate::db::SnapshotStore::new(db.clone());
         let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
         let box_store = BoxStore::new(db);
+        let box_manager = BoxManager::new(box_store);
+        let local_volume_store =
+            crate::volumes::LocalVolumeStore::new(layout.volumes_dir(), box_manager.clone())
+                .map_err(|error| {
+                    BoxliteError::Storage(format!(
+                        "Failed to initialize local volume store: {error}"
+                    ))
+                })?;
+        // Reconcile staging/trash left by a crashed volume operation before
+        // any box can start and refer to a volume.
+        local_volume_store.recover().map_err(|error| {
+            BoxliteError::Storage(format!("Failed to recover local volume store: {error}"))
+        })?;
 
         // Initialize lock manager for per-entity multiprocess-safe locking
         let lock_manager: Arc<dyn LockManager> =
@@ -363,7 +383,8 @@ impl RuntimeImpl {
                 active_boxes_by_id: HashMap::new(),
                 active_boxes_by_name: HashMap::new(),
             }),
-            box_manager: BoxManager::new(box_store),
+            box_manager,
+            local_volume_store,
             image_manager,
             layout,
             image_disk_mgr,
@@ -488,10 +509,20 @@ impl RuntimeImpl {
         options.validate_secrets()?;
 
         // Initialize box variables with defaults
-        let (config, mut state) = self.init_box_variables(&options, name.clone());
+        let (mut config, mut state) = self.init_box_variables(&options, name.clone());
 
         // Persist Configured state only after both lock namespaces are allocated.
-        if let Err(e) = self.persist_box_with_locks(&config, &mut state) {
+        // Persisting a new box also registers its selected volume holders.
+        // Clone/import re-registers volume holders before the new box persists.
+        if let Err(e) = self
+            .persist_box_with_locks(
+                &mut config,
+                &mut state,
+                crate::volumes::VolumeReferenceMode::Selector,
+                None,
+            )
+            .await
+        {
             // TOCTOU race recovery: lookup_box (line ~268) and add_box are
             // separate non-atomic operations. Between them, another concurrent
             // caller can complete the full create path and persist first:
@@ -518,8 +549,9 @@ impl RuntimeImpl {
 
         // Create LiteBox handle with shared BoxImpl
         // This also checks in-memory cache for duplicate names
+        let box_id = config.id.clone();
         let (box_impl, inserted) = self.get_or_create_box_impl(config, state);
-        if !inserted {
+        if !inserted && box_impl.id() != &box_id {
             return Err(BoxliteError::InvalidArgument(
                 "box with this name already exists".into(),
             ));
@@ -1367,6 +1399,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         initial_status: BoxStatus,
         resolved_image: Option<crate::images::ResolvedImage>,
+        clone_dependency: Option<CloneDependency>,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
@@ -1387,7 +1420,7 @@ impl RuntimeImpl {
         })?;
 
         let engine_kind = options.advanced.engine.unwrap_or_default();
-        let config = BoxConfig {
+        let mut config = BoxConfig {
             id: box_id.clone(),
             name,
             created_at: now,
@@ -1401,7 +1434,15 @@ impl RuntimeImpl {
         state.set_status(initial_status);
         state.resolved_image = resolved_image;
 
-        if let Err(e) = self.persist_box_with_locks(&config, &mut state) {
+        if let Err(e) = self
+            .persist_box_with_locks(
+                &mut config,
+                &mut state,
+                crate::volumes::VolumeReferenceMode::CanonicalId,
+                clone_dependency,
+            )
+            .await
+        {
             let _ = std::fs::remove_dir_all(&config.box_home);
             config.sockets().remove();
             return Err(e);
@@ -1414,10 +1455,12 @@ impl RuntimeImpl {
 
     /// Allocate the paired namespaces before publishing the persisted lock ID.
     /// A numeric ID stays unavailable until its disk namespace is clean.
-    fn persist_box_with_locks(
-        &self,
-        config: &BoxConfig,
+    async fn persist_box_with_locks(
+        self: &Arc<Self>,
+        config: &mut BoxConfig,
         state: &mut BoxState,
+        mode: crate::volumes::VolumeReferenceMode,
+        clone_dependency: Option<CloneDependency>,
     ) -> BoxliteResult<()> {
         let id = self.lock_manager.allocate()?;
         if let Err(e) = self.disk_lock_manager.allocate_and_retrieve(id) {
@@ -1426,10 +1469,51 @@ impl RuntimeImpl {
             return Err(e);
         }
         state.set_lock_id(id);
-        if let Err(e) = self.box_manager.add_box(config, state) {
+
+        let store = self.local_volume_store.clone();
+        let runtime = Arc::clone(self);
+        let mut persisted_config = config.clone();
+        let state_for_persist = state.clone();
+        let (base_disk_id, source_admission) = clone_dependency
+            .map(|dependency| {
+                (
+                    Some(dependency.base_disk_id),
+                    Some(dependency.source_admission),
+                )
+            })
+            .unwrap_or((None, None));
+        let persist_task = tokio::task::spawn_blocking(move || {
+            let _runtime = runtime;
+            let _source_admission = source_admission;
+            let result = match base_disk_id {
+                Some(ref id) => store.add_clone_box_with_resolved_volumes(
+                    &mut persisted_config,
+                    &state_for_persist,
+                    mode,
+                    id,
+                ),
+                None => store.add_box_with_resolved_volumes(
+                    &mut persisted_config,
+                    &state_for_persist,
+                    mode,
+                ),
+            };
+            (persisted_config, result)
+        });
+        let (persisted_config, persist_result) = match persist_task.await {
+            Ok(result) => result,
+            Err(error) => {
+                self.free_box_locks(id);
+                return Err(BoxliteError::Internal(format!(
+                    "box persist task failed: {error}"
+                )));
+            }
+        };
+        if let Err(e) = persist_result {
             self.free_box_locks(id);
             return Err(e);
         }
+        *config = persisted_config;
         Ok(())
     }
 
@@ -1922,28 +2006,6 @@ fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
         ));
     }
 
-    // `resolve_user_volumes` catches this too, but only once boot is under way
-    // — after the image is pulled and the box record exists. Fail here instead,
-    // mirroring `BoxOptions::sanitize_remote`'s mount rules on the REST side.
-    if let Some(volume) = options
-        .volumes
-        .iter()
-        .find_map(|volume| volume.managed_volume.as_deref())
-    {
-        return Err(BoxliteError::Unsupported(format!(
-            "managed volume {volume:?} is only supported by REST runtimes; the local runtime has \
-             no volume backend to resolve it against"
-        )));
-    }
-
-    // The local runtime shares no typed mounts yet(TODO): refused here, before
-    // the image pull and the box record, rather than dropped at boot.
-    if !options.mounts.is_empty() {
-        return Err(BoxliteError::Unsupported(
-            "typed mounts are not supported by the local runtime yet".into(),
-        ));
-    }
-
     Ok(())
 }
 
@@ -2089,35 +2151,65 @@ impl super::images::ImageBackend for LocalRuntime {
     }
 }
 
-// Named-volume operations (separate from RuntimeBackend). The concrete backend
-// is not yet implemented: the local filesystem store was removed in favor of a
-// future managed volume backend, so every operation returns `Unsupported`.
+// Named-volume operations (separate from RuntimeBackend).
+// Each volume action performs filesystem work on a blocking thread while
+// retaining an async shutdown check on the caller thread.
 #[async_trait::async_trait]
 impl super::volumes::VolumeBackend for LocalRuntime {
-    async fn create_volume(
-        &self,
-        _name: Option<&str>,
-    ) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        Err(volumes_unsupported())
+    async fn create_volume(&self, name: Option<&str>) -> BoxliteResult<crate::volumes::VolumeInfo> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot create volume: runtime is shut down".into(),
+            ));
+        }
+        let store = self.0.local_volume_store.clone();
+        let name = name.map(str::to_owned);
+        tokio::task::spawn_blocking(move || store.create(name.as_deref()))
+            .await
+            .map_err(|error| {
+                BoxliteError::Internal(format!("volume create task failed: {error}"))
+            })?
     }
 
     async fn list_volumes(&self) -> BoxliteResult<Vec<crate::volumes::VolumeInfo>> {
-        Err(volumes_unsupported())
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot list volumes: runtime is shut down".into(),
+            ));
+        }
+        let store = self.0.local_volume_store.clone();
+        tokio::task::spawn_blocking(move || store.list())
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("volume list task failed: {error}")))?
     }
 
-    async fn get_volume(&self, _id: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        Err(volumes_unsupported())
+    async fn get_volume(&self, id: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot get volume: runtime is shut down".into(),
+            ));
+        }
+        let store = self.0.local_volume_store.clone();
+        let id = id.to_owned();
+        tokio::task::spawn_blocking(move || store.get(&id))
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("volume get task failed: {error}")))?
     }
 
-    async fn remove_volume(&self, _id: &str, _force: bool) -> BoxliteResult<()> {
-        Err(volumes_unsupported())
+    async fn remove_volume(&self, id: &str, force: bool) -> BoxliteResult<()> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot remove volume: runtime is shut down".into(),
+            ));
+        }
+        let store = self.0.local_volume_store.clone();
+        let id = id.to_owned();
+        tokio::task::spawn_blocking(move || store.remove(&id, force))
+            .await
+            .map_err(|error| {
+                BoxliteError::Internal(format!("volume remove task failed: {error}"))
+            })?
     }
-}
-
-/// Error returned by every named-volume operation until a volume backend is
-/// wired up.
-fn volumes_unsupported() -> BoxliteError {
-    BoxliteError::Unsupported("named volumes are not supported yet".to_string())
 }
 
 // ============================================================================
@@ -2143,7 +2235,8 @@ mod tests {
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::backend::RuntimeBackend;
     use crate::runtime::images::ImageBackend;
-    use crate::runtime::options::RootfsSpec;
+    use crate::runtime::options::{RootfsSpec, VolumeSpec};
+    use crate::runtime::volumes::VolumeBackend;
     use crate::vmm::guest_binary::GuestBinary;
     use tempfile::TempDir;
 
@@ -2198,14 +2291,9 @@ mod tests {
         assert!(sanitize_local_options(&features, options).await.is_ok());
     }
 
-    /// The local runtime has no volume backend. `resolve_user_volumes` also
-    /// refuses a managed volume, but only once boot is under way — after the
-    /// image is pulled and the box record exists. This guard is the whole
-    /// reason the failure is cheap, so it needs its own test: without it every
-    /// suite still passes and the rejection silently moves back to boot time.
     #[tokio::test]
-    async fn local_runtime_rejects_managed_volumes_before_boot() {
-        use crate::runtime::options::VolumeSpec;
+    async fn local_runtime_sanitizes_managed_mounts_but_rejects_mixed_mount_lists() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
 
         let features = ExperimentalFeatures::default();
         let host_bind = BoxOptions {
@@ -2218,14 +2306,25 @@ mod tests {
             volumes: vec![VolumeSpec::managed_volume("my-data", "/data")],
             ..Default::default()
         };
-        let error = sanitize_local_options(&features, managed)
-            .await
-            .expect_err("a managed volume has no local backend to resolve against");
+        assert!(sanitize_local_options(&features, managed).await.is_ok());
+        let typed = BoxOptions {
+            mounts: vec![MountSpec::volume_mount("my-data", "/data")],
+            ..Default::default()
+        };
+        assert!(sanitize_local_options(&features, typed).await.is_ok());
 
-        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        let message = error.to_string();
-        assert!(message.contains("my-data"), "{message}");
-        assert!(message.contains("REST runtime"), "{message}");
+        let mixed = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("my-data", "/data")],
+            mounts: vec![MountSpec::volume_mount("my-data", "/data")],
+            ..Default::default()
+        };
+        let error = sanitize_local_options(&features, mixed)
+            .await
+            .expect_err("non-empty volumes and mounts must be rejected");
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
     }
 
     /// The bundled guest kernel brings up at most `MAX_CPUS` vCPUs. Without
@@ -2324,22 +2423,17 @@ mod tests {
             .expect("a custom kernel sets its own vCPU ceiling");
     }
 
-    /// Until the local runtime shares typed mounts, create refuses them rather
-    /// than booting a box without them.
     #[tokio::test]
-    async fn local_runtime_refuses_typed_mounts_until_it_shares_them() {
+    async fn local_runtime_sanitizes_typed_bind_mounts() {
         use crate::runtime::options::MountSpec;
 
         let options = BoxOptions {
             mounts: vec![MountSpec::bind_mount("/tmp/data", "/data")],
             ..Default::default()
         };
-        let error = sanitize_local_options(&ExperimentalFeatures::default(), options)
+        sanitize_local_options(&ExperimentalFeatures::default(), options)
             .await
-            .expect_err("the local runtime shares no typed mounts yet");
-
-        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        assert!(error.to_string().contains("typed mounts"), "{error}");
+            .expect("typed bind mounts share the local resolution path");
     }
 
     #[test]
@@ -2510,6 +2604,167 @@ mod tests {
         };
         let runtime = RuntimeImpl::new_for_test(options).expect("Failed to create runtime");
         (runtime, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn local_volume_crud_uses_canonical_ids_without_implicit_creation() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        let missing_id = uuid::Uuid::new_v4().to_string();
+
+        let error = local
+            .get_volume(&missing_id)
+            .await
+            .expect_err("an unknown canonical id must be NotFound");
+        assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
+
+        let created = local
+            .create_volume(Some("workspace"))
+            .await
+            .expect("create a local volume");
+        assert_eq!(created.name, "workspace");
+        assert_eq!(
+            created.id,
+            uuid::Uuid::parse_str(&created.id).unwrap().to_string()
+        );
+        assert_eq!(created.size_bytes, None);
+
+        let error = local
+            .create_volume(Some("workspace"))
+            .await
+            .expect_err("a duplicate name must be rejected");
+        assert!(matches!(error, BoxliteError::AlreadyExists(_)), "{error:?}");
+
+        let fetched = local
+            .get_volume(&created.id)
+            .await
+            .expect("get by canonical id");
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.name, created.name);
+        assert_eq!(fetched.created_at, created.created_at);
+        assert_eq!(local.list_volumes().await.unwrap().len(), 1);
+
+        local
+            .remove_volume(&created.id, false)
+            .await
+            .expect("remove");
+        let error = local
+            .get_volume(&created.id)
+            .await
+            .expect_err("the removed id must be NotFound");
+        assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
+        assert!(local.list_volumes().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn local_volume_remove_rejects_persisted_holders_even_with_force() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        let volume = local.create_volume(Some("workspace")).await.unwrap();
+        let box_id = BoxIDMint::mint();
+        let config = BoxConfig {
+            id: box_id.clone(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume(&volume.id, "/workspace")],
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: runtime.layout.boxes_dir().join(box_id.as_str()),
+        };
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .expect("seed a volume holder");
+
+        for force in [false, true] {
+            let error = local
+                .remove_volume(&volume.id, force)
+                .await
+                .expect_err("a persisted box must prevent volume removal");
+            assert!(matches!(error, BoxliteError::InvalidState(_)), "{error:?}");
+            local.get_volume(&volume.id).await.expect("payload remains");
+        }
+
+        runtime.box_manager.remove_box(&box_id).unwrap();
+        local
+            .remove_volume(&volume.id, true)
+            .await
+            .expect("remove after holder deletion");
+    }
+
+    #[tokio::test]
+    async fn local_box_create_persists_canonical_volume_id_and_rejects_duplicates() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        let volume = local.create_volume(Some("workspace")).await.unwrap();
+        let litebox = RuntimeBackend::create(
+            &local,
+            BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume("workspace", "/workspace")],
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("create a box from a volume name");
+        let (config, _) = runtime
+            .box_manager
+            .box_by_id(litebox.id())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            config.options.volumes[0].managed_volume.as_deref(),
+            Some(volume.id.as_str())
+        );
+        assert!(config.options.volumes[0].host_path.is_empty());
+
+        let before = runtime.box_manager.all_box_configs().unwrap().len();
+        let error = RuntimeBackend::create(
+            &local,
+            BoxOptions {
+                volumes: vec![
+                    VolumeSpec::managed_volume(&volume.id, "/one"),
+                    VolumeSpec::managed_volume("workspace", "/two"),
+                ],
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .err()
+        .expect("aliases of one volume are still a duplicate mount");
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        let typed_error = RuntimeBackend::create(
+            &local,
+            BoxOptions {
+                mounts: vec![
+                    crate::runtime::options::MountSpec::volume_mount(&volume.id, "/one"),
+                    crate::runtime::options::MountSpec::volume_mount("workspace", "/two"),
+                ],
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .err()
+        .expect("typed aliases of one volume are also duplicates");
+        assert!(
+            matches!(typed_error, BoxliteError::InvalidArgument(_)),
+            "{typed_error:?}"
+        );
+        assert_eq!(runtime.box_manager.all_box_configs().unwrap().len(), before);
     }
 
     fn secret_without_hosts() -> crate::runtime::options::Secret {
@@ -3849,12 +4104,12 @@ mod tests {
     // Remove box clone dependency guard (Fix #7)
     // ====================================================================
 
-    #[test]
-    fn test_remove_box_blocked_by_clone_dependency() {
+    #[tokio::test]
+    async fn test_remove_box_blocked_by_clone_dependency() {
         let (runtime, _dir) = create_test_runtime();
 
         // Create box A with a disk.
-        let config_a = test_box_config_in_layout(false, &runtime);
+        let mut config_a = test_box_config_in_layout(false, &runtime);
         let mut state_a = BoxState::new();
         let disks_a = config_a.box_home.join("disks");
         std::fs::create_dir_all(&disks_a).unwrap();
@@ -3864,7 +4119,13 @@ mod tests {
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
 
         runtime
-            .persist_box_with_locks(&config_a, &mut state_a)
+            .persist_box_with_locks(
+                &mut config_a,
+                &mut state_a,
+                crate::volumes::VolumeReferenceMode::CanonicalId,
+                None,
+            )
+            .await
             .unwrap();
 
         // Create box B.
@@ -3913,11 +4174,11 @@ mod tests {
         assert!(msg.contains(&config_b.id.to_string()));
     }
 
-    #[test]
-    fn test_remove_box_succeeds_when_no_dependents() {
+    #[tokio::test]
+    async fn test_remove_box_succeeds_when_no_dependents() {
         let (runtime, _dir) = create_test_runtime();
 
-        let config = test_box_config_in_layout(false, &runtime);
+        let mut config = test_box_config_in_layout(false, &runtime);
         let mut state = BoxState::new();
         let disks_dir = config.box_home.join("disks");
         std::fs::create_dir_all(&disks_dir).unwrap();
@@ -3926,7 +4187,15 @@ mod tests {
         let disk = disks_dir.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk, None);
 
-        runtime.persist_box_with_locks(&config, &mut state).unwrap();
+        runtime
+            .persist_box_with_locks(
+                &mut config,
+                &mut state,
+                crate::volumes::VolumeReferenceMode::CanonicalId,
+                None,
+            )
+            .await
+            .unwrap();
 
         // The socket binding symlink must be removed with the box.
         config.sockets().ensure().unwrap();
@@ -3941,19 +4210,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_remove_box_with_force_ignores_dependents() {
+    #[tokio::test]
+    async fn test_remove_box_with_force_ignores_dependents() {
         let (runtime, _dir) = create_test_runtime();
 
         // Create box A.
-        let config_a = test_box_config_in_layout(false, &runtime);
+        let mut config_a = test_box_config_in_layout(false, &runtime);
         let mut state_a = BoxState::new();
         let disks_a = config_a.box_home.join("disks");
         std::fs::create_dir_all(&disks_a).unwrap();
         let disk_a = disks_a.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
         runtime
-            .persist_box_with_locks(&config_a, &mut state_a)
+            .persist_box_with_locks(
+                &mut config_a,
+                &mut state_a,
+                crate::volumes::VolumeReferenceMode::CanonicalId,
+                None,
+            )
+            .await
             .unwrap();
 
         // Create box B.

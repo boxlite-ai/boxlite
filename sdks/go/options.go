@@ -364,8 +364,8 @@ func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 // managedVolume is the volume's server-assigned id or its name — the server
 // resolves either.
 //
-// Managed volumes need a REST runtime; the local runtime has no volume backend
-// and rejects one at create.
+// LocalRuntime resolves managed volumes through `LocalVolumeStore`; REST
+// runtimes resolve them on the server.
 func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.checkpointOverride = true

@@ -99,6 +99,41 @@ mod tests {
     const LEGACY_SSH_CONFIGURATION: &[u8] = b"\x0a\x0e127.0.0.1:2222\x12\x08test-key\x1a\x04root";
 
     #[test]
+    fn legacy_bind_mount_wire_decodes_with_unspecified_kind() {
+        use prost::Message;
+        for (wire, subpath) in [(&[][..], ""), (&b"\x32\x08app.conf"[..], "app.conf")] {
+            let decoded = super::BindMount::decode(wire).expect("decode old host request");
+            assert_eq!(decoded.subpath, subpath);
+            assert_eq!(decoded.kind, super::BindMountKind::Unspecified as i32);
+        }
+    }
+
+    #[test]
+    fn bind_mount_kind_is_additive_for_legacy_guests() {
+        use prost::Message;
+
+        #[derive(prost::Message)]
+        struct LegacyBindMount {
+            #[prost(string, tag = "6")]
+            subpath: String,
+        }
+
+        for (kind, subpath) in [
+            (super::BindMountKind::WholeDirectory, ""),
+            (super::BindMountKind::SingleFile, "app.conf"),
+        ] {
+            let mount = super::BindMount {
+                kind: kind as i32,
+                subpath: subpath.to_string(),
+                ..Default::default()
+            };
+            let legacy = LegacyBindMount::decode(mount.encode_to_vec().as_slice())
+                .expect("old guest decodes the mount and ignores kind");
+            assert_eq!(legacy.subpath, subpath);
+        }
+    }
+
+    #[test]
     fn ssh_configuration_legacy_fields_decode_without_config() {
         use prost::Message;
         let decoded = super::SshControlRequest::decode(LEGACY_SSH_CONFIGURATION)

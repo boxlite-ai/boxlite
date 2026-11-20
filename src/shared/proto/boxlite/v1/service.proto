@@ -218,6 +218,7 @@ message PingRequest {}
 
 message PingResponse {
   string version = 1;  // Guest agent version
+  bool safe_managed_volume_sub_path = 2;  // Supports pinned managed-volume subdirectories
 }
 
 message ShutdownRequest {}
@@ -374,6 +375,31 @@ message CACert {
   string pem = 1;  // PEM-encoded X.509 certificate
 }
 
+enum BindMountKind {
+  // Compatibility mode for requests from hosts predating the kind field.
+  // The guest uses the legacy rule: empty subpath means a whole directory,
+  // while non-empty subpath means a single file. New hosts must set an explicit kind.
+  // Example: an old host sends subpath="app.conf" without kind to mount one file.
+  BIND_MOUNT_KIND_UNSPECIFIED = 0;
+
+  // Mount an entire host directory or a whole managed-volume payload.
+  // subpath must be empty.
+  // Examples: -v /host/data:/data or -v workspace:/workspace.
+  BIND_MOUNT_KIND_WHOLE_DIRECTORY = 1;
+
+  // Mount one host file staged in its own shared directory.
+  // subpath contains the file name within that directory.
+  // Example: -v /host/app.conf:/etc/app.conf sends subpath="app.conf".
+  BIND_MOUNT_KIND_SINGLE_FILE = 2;
+
+  // Mount one existing relative directory inside a managed-volume payload.
+  // subpath contains the relative directory path. The guest resolves and pins
+  // it without following symlinks; older guests must be rejected by the version gate.
+  // Example: source=workspace,target=/workspace,sub_path=team/backend sends
+  // subpath="team/backend".
+  BIND_MOUNT_KIND_MANAGED_SUB_DIRECTORY = 3;
+}
+
 // Bind mount from guest volume to container path
 // Uses convention-based paths: /run/boxlite/shared/containers/{container_id}/volumes/{volume_name}
 message BindMount {
@@ -389,10 +415,12 @@ message BindMount {
   // guest applies mount_setattr(MOUNT_ATTR_IDMAP) to remap transparently.
   uint32 owner_uid = 4;
   uint32 owner_gid = 5;
-  // For a single-file mount, the file name within the shared volume dir; the
-  // guest bind-mounts {volume_dir}/{subpath} rather than the whole dir. Empty
-  // for a whole-directory mount.
+  // SINGLE_FILE: file name within the staged share directory.
+  // MANAGED_SUB_DIRECTORY: relative directory inside the volume payload.
+  // Empty for WHOLE_DIRECTORY. UNSPECIFIED retains the legacy interpretation.
   string subpath = 6;
+  // Explicit payload interpretation. Old hosts omit this field.
+  BindMountKind kind = 7;
 }
 
 message ContainerInitResponse {
@@ -410,6 +438,8 @@ enum ContainerInitErrorKind {
   // Zero keeps errors from older guests, which omit this field, internal.
   CONTAINER_INIT_ERROR_KIND_INTERNAL = 0;
   CONTAINER_INIT_ERROR_KIND_UNSUPPORTED = 1;
+  CONTAINER_INIT_ERROR_KIND_INVALID_ARGUMENT = 2;
+  CONTAINER_INIT_ERROR_KIND_NOT_FOUND = 3;
 }
 
 message ContainerInitError {

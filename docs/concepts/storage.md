@@ -27,8 +27,14 @@ Image Layers          Rootfs Builder              Box Rootfs
 
 | Type           | Description              | Use Case                             |
 |----------------|--------------------------|--------------------------------------|
-| **virtiofs**   | Host directory mount     | Sharing files with Box               |
-| **QCOW2 disk** | Copy-on-write disk image | Box files, kept while the Box exists |
+| **virtiofs bind** | Caller-selected host directory or file | Sharing a specific host path with a box |
+| **Named local volume** | BoxLite-managed directory shared over virtio-fs | Persistent data shared independently of box lifecycle |
+| **QCOW2 disk** | Copy-on-write disk image | Box-private root filesystem, kept while the box exists |
+
+Named volume identity and payload are separate: `{volume-id}/.metadata.json` stores id, name, and
+creation time, while only `{volume-id}/_data/` is exposed to the guest. Box configuration stores the
+canonical id rather than the host path. Volume removal is blocked while any persisted box
+configuration references that id. See [Mounting volumes](../guides/volumes.md).
 
 **QCOW2 features:**
 

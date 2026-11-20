@@ -79,6 +79,18 @@ impl GuestInterface {
         ensure_guest_version(&response.version, minimum)
     }
 
+    /// Fail before initialization if the guest cannot pin managed-volume subdirectories.
+    pub async fn require_safe_volume_sub_path(&mut self) -> BoxliteResult<()> {
+        let response = self.client.ping(PingRequest {}).await?.into_inner();
+        if response.safe_managed_volume_sub_path {
+            return Ok(());
+        }
+        Err(BoxliteError::Unsupported(
+            "guest does not support safe managed-volume sub_path mounts; recreate the box with the current runtime"
+                .into(),
+        ))
+    }
+
     /// Shutdown the guest agent.
     pub async fn shutdown(&mut self) -> BoxliteResult<()> {
         let _response = self.client.shutdown(ShutdownRequest {}).await?;
@@ -119,7 +131,7 @@ fn parse_guest_version(version: &str) -> Option<GuestVersion> {
     parts.next().is_none().then_some(parsed)
 }
 
-fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
+pub(crate) fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
     let (major, minor, patch) = minimum;
     let Some(reported) = parse_guest_version(version) else {
         return Err(BoxliteError::Unsupported(format!(

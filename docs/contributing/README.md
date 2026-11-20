@@ -29,6 +29,7 @@ How to build, test, and change the code.
 - [CLI development](development/cli.md): building, testing, and extending the `boxlite` CLI.
 - [E2E local CI runbook](development/e2e-local.md): the self-hosted runner behind `e2e-local.yml`.
 - [REST API testing](development/rest-api-testing.md): API-key and OIDC coverage across the SDK, CLI, API, runner, and VM.
+- [Local volume testing](development/local-volume-testing.md): unit, guest, real-VM, and Python compatibility checks for local managed volumes.
 - [macOS sandbox debugging](development/macos-sandbox-debugging.md): find and fix Seatbelt denials.
 
 ## Investigations

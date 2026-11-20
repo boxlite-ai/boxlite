@@ -851,6 +851,12 @@ impl BoxOptions {
             port.validate_publishable()?;
         }
 
+        if !self.volumes.is_empty() && !self.mounts.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "volumes and mounts cannot both be non-empty".into(),
+            ));
+        }
+
         for volume in &self.volumes {
             volume.validate()?;
         }
@@ -1066,8 +1072,8 @@ pub struct VolumeSpec {
     /// Managed volume to mount, addressed by its server-assigned id **or** by
     /// its name — the server resolves either.
     ///
-    /// Managed volumes need a REST runtime, since the local runtime has no
-    /// volume backend to resolve a reference against.
+    /// LocalRuntime resolves references through `LocalVolumeStore`; a REST
+    /// runtime resolves them on the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_volume: Option<String>,
 
@@ -1143,8 +1149,7 @@ impl VolumeSpec {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MountType {
-    /// A managed volume, by server-assigned id or by name. REST runtimes only:
-    /// the local runtime has no volume backend to resolve one against.
+    /// A managed volume, addressed by runtime-assigned id or by name.
     Volume,
     /// A host directory or file. Local runtime only: over REST the path would
     /// name the server's filesystem, not the caller's.

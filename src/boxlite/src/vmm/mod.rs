@@ -229,6 +229,9 @@ pub struct InstanceSpec {
     pub kernel: Option<PreparedKernel>,
     /// Filesystem shares from host to guest
     pub fs_shares: FsShares,
+    /// Managed-volume paths granted to the host-side jailer before spawn.
+    #[serde(skip)]
+    pub volume_access: Vec<crate::jailer::PathAccess>,
     /// Block device attachments via virtio-blk
     pub block_devices: BlockDevices,
     /// Guest agent entrypoint (e.g., /boxlite/bin/boxlite-guest)
