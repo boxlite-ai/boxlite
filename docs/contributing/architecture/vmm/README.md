@@ -558,6 +558,10 @@ logged.
   the host-only `vmm.sock`, which stays open across transient accept errors.
   The shim routes requests by `block_id` through
   [`VmControl`](../../../../src/vmm/README.md#virtio-block-device).
+- **Runtime resize.** `LiteBox::resize` persists observed disk capacity, then
+  asks the guest to wait for the new capacity and run `resize2fs`. Queries
+  recover allocation from the image, and a retry or native restart can
+  complete the filesystem step.
 - **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
   The host kernel enforces the shim's configured or inherited
   [`RLIMIT_FSIZE` soft limit](../../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).

@@ -40,15 +40,14 @@ pub(crate) use crate::litebox::box_impl::LiveState;
 
 /// What a completed build hands back.
 ///
-/// A struct rather than a tuple because the third element is unlike the other
-/// two: `live` and `guard` are the box, `resolved_image` is a fact about it the
-/// caller records.
+/// Live resources stay guarded until the caller persists the observed state.
 pub(crate) struct BuiltBox {
     pub(crate) live: LiveState,
     pub(crate) guard: types::CleanupGuard,
     /// Present when this build made a new disk from a registry image; see
     /// [`crate::litebox::state::BoxState::resolved_image`].
     pub(crate) resolved_image: Option<crate::images::ResolvedImage>,
+    pub(crate) resources: Option<crate::BoxResources>,
 }
 
 use crate::litebox::BoxStatus;
@@ -253,6 +252,7 @@ impl BoxBuilder {
             ctx.guard.disarm();
         }
         ctx.outbound_policy = state.outbound_policy.clone();
+        ctx.resources = state.resources;
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);
 
@@ -264,6 +264,12 @@ impl BoxBuilder {
             let pipeline_metrics = PipelineExecutor::execute(pipeline, Arc::clone(&ctx)).await?;
 
             let mut ctx = ctx.lock().await;
+            if ctx.config.engine_kind == crate::vmm::VmmKind::Native {
+                let layout = ctx.layout.as_ref().ok_or_else(|| {
+                    BoxliteError::Internal("filesystem task must run first".into())
+                })?;
+                ctx.resources = Some(crate::BoxResources::from_disk(&layout.disk_path())?);
+            }
             let total_create_duration_ms = total_start.elapsed().as_millis();
             let handler = ctx
                 .guard
@@ -337,6 +343,7 @@ impl BoxBuilder {
                 live: live_state,
                 guard,
                 resolved_image: ctx.resolved_image.take(),
+                resources: ctx.resources,
             })
         };
 

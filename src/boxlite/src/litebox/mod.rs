@@ -16,6 +16,7 @@ pub(crate) mod local_snapshot;
 mod manager;
 mod network;
 pub(crate) mod ports;
+mod resize;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod ssh;
@@ -35,9 +36,10 @@ pub use network::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, NetworkHandle, SocketAddress, TunnelForwarder,
     TunnelOptions,
 };
+pub use resize::ResizeOptions;
 pub use snapshot::SnapshotHandle;
 pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
-pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
+pub use state::{BoxResources, BoxState, BoxStatus, HealthState, HealthStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
@@ -50,7 +52,7 @@ use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use config::BoxConfig;
 
 /// LiteBox - Handle to a box.
@@ -112,6 +114,20 @@ impl LiteBox {
     /// Also called implicitly by exec() if the box is not running.
     pub async fn start(&self) -> BoxliteResult<()> {
         self.box_backend.start().await
+    }
+
+    /// Grow a running native Linux box's root disk, or query its allocation.
+    ///
+    /// Explicit targets are 1–1024 GiB and cannot shrink the disk. Retrying the
+    /// same target completes a pending filesystem grow. Once started, the
+    /// operation continues if the caller cancels its wait. Errors after device
+    /// growth report partial completion; the larger disk remains allocated.
+    pub async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources> {
+        options.validate()?;
+        let backend = Arc::clone(&self.box_backend);
+        tokio::spawn(async move { backend.resize(options).await })
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("resize task failed: {error}")))?
     }
 
     pub async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {

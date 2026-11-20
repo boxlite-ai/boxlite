@@ -198,6 +198,10 @@ impl BoxManager {
         Ok(())
     }
 
+    pub fn save_resources(&self, id: &BoxID, resources: &super::BoxResources) -> BoxliteResult<()> {
+        self.store.update_resources(id.as_str(), resources)
+    }
+
     pub fn save_outbound(
         &self,
         id: &BoxID,

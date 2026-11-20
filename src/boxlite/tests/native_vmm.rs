@@ -8,6 +8,7 @@ use boxlite::experimental::custom_kernel::{self, KernelFormat, KernelOptions};
 use boxlite::experimental::{ExperimentalFeature, RuntimeBuilder, native_vmm};
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite_test_utils::home::PerTestBoxHome;
+use futures::StreamExt;
 
 /// Console lines the boot must reach, in order.
 const PROGRESS: &[&str] = &[
@@ -102,4 +103,201 @@ async fn first_box_runs_boxlite_guest_as_pid_1_on_the_ext4_root() {
         .remove(bx.id().as_str(), true)
         .await
         .expect("remove the native box");
+}
+
+async fn shell_output(bx: &boxlite::LiteBox, script: &str) -> String {
+    let mut execution = bx
+        .exec(boxlite::BoxCommand::new("sh").args(["-c", script]))
+        .await
+        .unwrap();
+    let mut output = String::new();
+    if let Some(mut stdout) = execution.stdout() {
+        while let Some(chunk) = stdout.next().await {
+            output.push_str(&chunk);
+        }
+    }
+    assert_eq!(
+        execution.wait().await.unwrap().exit_code,
+        0,
+        "script: {script}"
+    );
+    output
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 with /dev/kvm, VMM_KERNEL and a native runtime"]
+async fn online_disk_growth_keeps_workloads_and_recovers_an_interrupted_filesystem_step() {
+    use boxlite::{BoxliteError, ResizeOptions};
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+
+    let kernel = std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL");
+    let home = PerTestBoxHome::new();
+    let runtime = native_runtime(&home);
+    let mut options = common::alpine_opts();
+    options.disk_size_gb = Some(10);
+    custom_kernel::configure(
+        &mut options,
+        KernelOptions::new(kernel).with_format(KernelFormat::Elf),
+    );
+    native_vmm::configure(&mut options);
+    let bx = runtime.create(options, None).await.unwrap();
+    bx.start().await.unwrap();
+    assert_eq!(
+        bx.resize(ResizeOptions::default())
+            .await
+            .unwrap()
+            .disk_size_gb,
+        10
+    );
+    assert!(matches!(
+        bx.resize(ResizeOptions {
+            disk_size_gb: Some(9)
+        })
+        .await,
+        Err(BoxliteError::InvalidArgument(_))
+    ));
+    let workload = bx.exec(boxlite::BoxCommand::new("sh").args([
+        "-c", "touch /tmp/resize-running; while [ ! -e /tmp/resize-finished ]; do sleep 0.01; done; exit 23",
+    ])).await.unwrap();
+    shell_output(
+        &bx,
+        "while [ ! -e /tmp/resize-running ]; do sleep 0.01; done",
+    )
+    .await;
+    assert_eq!(
+        bx.resize(ResizeOptions {
+            disk_size_gb: Some(20)
+        })
+        .await
+        .unwrap()
+        .disk_size_gb,
+        20
+    );
+    let capacity = shell_output(&bx, "df -Pk / | awk 'NR==2 {print $2}'")
+        .await
+        .trim()
+        .parse::<u64>()
+        .unwrap();
+    assert!(
+        capacity > 19 * 1024 * 1024,
+        "filesystem capacity: {capacity} KiB"
+    );
+    shell_output(&bx, "touch /tmp/resize-finished; dd if=/dev/zero of=/past-old-end bs=1M seek=11264 count=1 2>/dev/null; sync").await;
+    assert_eq!(
+        workload.wait().await.unwrap().exit_code,
+        23,
+        "the in-flight workload survived growth"
+    );
+    bx.resize(ResizeOptions {
+        disk_size_gb: Some(20),
+    })
+    .await
+    .unwrap();
+
+    // Lose the host after sending device growth: no reply is read, no guest RPC runs.
+    let layout = boxlite::runtime::layout::BoxFilesystemLayout::new(
+        home.path.join("boxes").join(bx.id().as_str()),
+        Default::default(),
+        false,
+    );
+    let mut control = tokio::net::UnixStream::connect(layout.sockets().vmm_sock())
+        .await
+        .unwrap();
+    let frame = serde_json::to_vec(
+        &serde_json::json!({"version":1,"op":"resize_disk","block_id":"vda","bytes":24_u64 << 30}),
+    )
+    .unwrap();
+    control
+        .write_all(&(frame.len() as u32).to_le_bytes())
+        .await
+        .unwrap();
+    control.write_all(&frame).await.unwrap();
+    drop(control);
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while bx
+            .resize(ResizeOptions::default())
+            .await
+            .unwrap()
+            .disk_size_gb
+            != 24
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("query recovers the device growth without its reply");
+    assert_eq!(
+        shell_output(&bx, "df -Pk / | awk 'NR==2 {print $2}'")
+            .await
+            .trim()
+            .parse::<u64>()
+            .unwrap(),
+        capacity,
+        "query must leave the filesystem step pending"
+    );
+
+    let id = bx.id().to_string();
+    bx.stop().await.unwrap();
+    let restarted = runtime.get(&id).await.unwrap().unwrap();
+    restarted.start().await.unwrap();
+    assert_eq!(
+        restarted
+            .resize(ResizeOptions::default())
+            .await
+            .unwrap()
+            .disk_size_gb,
+        24
+    );
+    let capacity = shell_output(&restarted, "df -Pk / | awk 'NR==2 {print $2}'")
+        .await
+        .trim()
+        .parse::<u64>()
+        .unwrap();
+    assert!(
+        capacity > 23 * 1024 * 1024,
+        "restart completed ext4 growth: {capacity} KiB"
+    );
+    // Materialize more than the original 20 GiB file-size limit after restart.
+    tokio::time::timeout(Duration::from_secs(180), shell_output(&restarted,
+        "dd if=/dev/zero of=/grow-fill bs=1M count=21504 2>/dev/null && sync && rm /grow-fill /past-old-end",
+    )).await.expect("write beyond the old shim file-size limit");
+    restarted.stop().await.unwrap();
+    runtime.remove(&id, true).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 with /dev/kvm, VMM_KERNEL and a native runtime"]
+async fn custom_disk_size_is_available_on_first_native_boot() {
+    use futures::StreamExt;
+    let kernel = std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL");
+    let home = PerTestBoxHome::new();
+    let runtime = native_runtime(&home);
+    let mut options = common::alpine_opts();
+    options.disk_size_gb = Some(20);
+    custom_kernel::configure(
+        &mut options,
+        KernelOptions::new(kernel).with_format(KernelFormat::Elf),
+    );
+    native_vmm::configure(&mut options);
+    let bx = runtime.create(options, None).await.unwrap();
+    bx.start()
+        .await
+        .expect("a mounted root disk must support resize2fs at boot");
+    let mut execution = bx
+        .exec(boxlite::BoxCommand::new("sh").args(["-c", "df -Pk / | awk 'NR==2 {print $2}'"]))
+        .await
+        .unwrap();
+    let mut output = String::new();
+    let mut stdout = execution.stdout().unwrap();
+    while let Some(chunk) = stdout.next().await {
+        output.push_str(&chunk);
+    }
+    assert_eq!(execution.wait().await.unwrap().exit_code, 0);
+    assert!(
+        output.trim().parse::<u64>().unwrap() > 19 * 1024 * 1024,
+        "filesystem must use the configured 20 GiB: {output}"
+    );
+    bx.stop().await.unwrap();
+    runtime.remove(bx.id().as_str(), true).await.unwrap();
 }

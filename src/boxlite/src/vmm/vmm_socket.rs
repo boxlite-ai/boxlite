@@ -168,6 +168,76 @@ fn read_frame(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
     Ok(frame)
 }
 
+/// Request an absolute disk capacity through the native shim's host-only channel.
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub(crate) async fn grow_disk(
+    path: &Path,
+    block_id: &str,
+    bytes: u64,
+) -> boxlite_shared::BoxliteResult<()> {
+    use boxlite_shared::BoxliteError;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let exchange = async {
+        let mut stream = tokio::net::UnixStream::connect(path).await?;
+        let request = ControlRequest {
+            version: VERSION,
+            op: ControlOp::ResizeDisk {
+                block_id: block_id.to_owned(),
+                bytes,
+            },
+        };
+        let frame = serde_json::to_vec(&request)?;
+        let length = u32::try_from(frame.len())
+            .ok()
+            .filter(|length| *length <= MAX_FRAME)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "control frame too large")
+            })?;
+        stream.write_all(&length.to_le_bytes()).await?;
+        stream.write_all(&frame).await?;
+        let length = stream.read_u32_le().await?;
+        if length > MAX_FRAME {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "oversized control reply",
+            ));
+        }
+        let mut frame = vec![0; length as usize];
+        stream.read_exact(&mut frame).await?;
+        Ok::<ControlResponse, io::Error>(serde_json::from_slice(&frame)?)
+    };
+    // The worker waits up to ten seconds; allow the bounded exchange to outlast it.
+    let response = tokio::time::timeout(Duration::from_secs(15), exchange)
+        .await
+        .map_err(|_| {
+            BoxliteError::Engine(
+                "disk resize reply timed out; allocation may have changed; retry the target".into(),
+            )
+        })?
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
+                BoxliteError::Unsupported(
+                    "shim has no disk control channel; restart with the current runtime".into(),
+                )
+            }
+            _ => BoxliteError::Engine(format!(
+                "disk control exchange failed; allocation may have changed: {error}"
+            )),
+        })?;
+    match response {
+        Ok(ControlReply::DiskSize(actual)) if actual == bytes => Ok(()),
+        Ok(ControlReply::DiskSize(actual)) => Err(BoxliteError::Engine(format!(
+            "shim reported {actual} disk bytes, requested {bytes}"
+        ))),
+        Err(ControlError::Unsupported(message)) => Err(BoxliteError::Unsupported(message)),
+        Err(ControlError::InvalidInput(message)) => Err(BoxliteError::InvalidArgument(message)),
+        Err(ControlError::Failed(message)) => Err(BoxliteError::Engine(format!(
+            "disk resize completion is unknown: {message}; query allocation or retry the target"
+        ))),
+    }
+}
+
 fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> io::Result<()> {
     let length = u32::try_from(frame.len())
         .ok()

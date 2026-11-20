@@ -160,3 +160,33 @@ fn resize_requires_a_block_id_and_rejects_index_only_requests() {
         assert!(matches!(response, Err(ControlError::InvalidInput(_))));
     }
 }
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+#[tokio::test]
+async fn resize_client_validates_replies_and_reports_unsupported_shims() {
+    use boxlite_shared::BoxliteError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    assert!(matches!(
+        grow_disk(&path, "vda", 4096).await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+    serve(&path, |op| match op {
+        ControlOp::ResizeDisk {
+            block_id,
+            bytes: 4096 | 8192,
+        } if block_id == "vda" => Ok(ControlReply::DiskSize(4096)),
+        _ => Err(ControlError::Unsupported("old engine".into())),
+    })
+    .unwrap();
+    grow_disk(&path, "vda", 4096).await.unwrap();
+    assert!(matches!(
+        grow_disk(&path, "vda", 8192).await,
+        Err(BoxliteError::Engine(_))
+    ));
+    assert!(matches!(
+        grow_disk(&path, "vda", 16384).await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+}
