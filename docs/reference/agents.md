@@ -215,6 +215,14 @@ Retention is read from `idempotency_retention_seconds` using checked decimal
 conversion to `time.Duration`, without a float64 intermediate. Sub-nanosecond
 fractions are truncated; negative or out-of-range values return an error.
 
+The core emits retention seconds as an exact decimal JSON number built from
+integer seconds and nanoseconds, including Go's maximum duration
+(`9223372036.854775807` seconds). Its JSON values retain integer and decimal
+precision during parsing and serialization; Go keeps opaque payloads as
+`json.RawMessage`. Values already constructed as floating-point numbers retain
+that type's precision limits. Wait timeouts cross the C ABI as `double` seconds
+and do not promise exact nanosecond representation for large durations.
+
 Go calls and getters use the C SDK and these converters. One runtime drainer
 dispatches asynchronous completions; getters copy their JSON synchronously.
 Both event methods return `Unsupported`; subscriptions are a separate delivery step.
