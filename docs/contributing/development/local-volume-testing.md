@@ -138,14 +138,16 @@ continue to the final report with that coverage marked as blocked.
 For REST API changes, start a real `boxlite serve` process and drive its volume endpoints:
 
 ```bash
-SETUP_DONE=1 make test:integration:cli FILTER=volume_crud_over_rest
+make test:e2e:serve:volume
 ```
 
-Confirm that `volume_crud_over_rest` ran. It creates a named volume through the Rust REST client,
-checks list and get metadata, verifies the invalid-id and missing-volume error classes, removes the
-volume, and confirms that both get and list reflect the removal. Unlike the local CLI scenarios,
-this case does not boot a VM; it verifies server startup, routing, persistence-backed CRUD, and
-HTTP error mapping.
+This Make entry runs `volume_crud_over_rest` with the CLI integration target and skips rebuilding
+runtime artifacts when `SETUP_DONE=1` is already set. Confirm that `volume_crud_over_rest` ran. It
+creates a named volume through the Rust REST client, checks list and get metadata, verifies the
+invalid-id and missing-volume error classes, removes the volume, and confirms that both get and
+list reflect the removal. Unlike the local CLI scenarios, this case does not boot a VM; it verifies
+server startup, routing, persistence-backed CRUD, and HTTP error mapping. CI runs this case in the
+`REST Server E2E (Linux)` job.
 
 REST coverage is complete when this named test runs; it does not replace the real-VM coverage above
 when the mount or guest protocol changes.

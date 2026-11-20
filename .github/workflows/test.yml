@@ -509,6 +509,42 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
 
+  # The volume REST lifecycle needs a real server process and its runtime
+  # artifacts, but not a VM or persistent E2E runner.
+  serve-rest-e2e:
+    name: REST Server E2E (Linux)
+    needs: changes
+    if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ needs.changes.outputs.rust-toolchain }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Enable unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Enable KVM access for the runtime warm-up
+        run: sudo chmod a+rw /dev/kvm
+
+      - name: Prepare runtime dependencies
+        run: |
+          make setup:submodules
+          make setup:build
+
+      - name: Run volume REST lifecycle E2E
+        timeout-minutes: 20
+        run: make test:e2e:serve:volume
+
   # Python SDK unit tests
   python:
     name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
@@ -1020,7 +1056,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, secret-server-postgres, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, serve-rest-e2e, python, node, go, secret-server-postgres, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}
