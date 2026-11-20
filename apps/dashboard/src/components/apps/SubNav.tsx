@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { ResourceSectionHeading } from '@/components/ResourceLayout'
 import { Spinner } from '@/components/ui/spinner'
@@ -10,11 +11,7 @@ import { cn } from '@/lib/utils'
 import { useAppsScope } from '@/lib/apps/client'
 import type { ReactNode } from 'react'
 
-// Below Overview every App tab is a workbench: a feature with a few screens,
-// one job each. The screens are listed in a vertical rail on the left and the
-// chosen screen fills the right. The rail is the console's segmented control
-// (ui/tabs "segmented") stood on end: square bordered segments sharing edges,
-// the chosen one lifted onto the page surface with a brighter outline.
+// Secondary screens use the shared segmented control and keyboard tab navigation.
 
 export interface SubNavItem<T extends string> {
   id: T
@@ -39,46 +36,34 @@ export function Workbench<T extends string>({
 }) {
   if (items.length === 0) return <>{children}</>
   return (
-    <div className="flex min-w-0 flex-col gap-4 md:flex-row md:gap-6">
-      <nav
-        role="tablist"
-        aria-orientation="vertical"
-        // Narrow panes fall back to a scrolling row; the vertical rail needs the width.
-        // Narrow panes fall back to a scrolling row; the vertical rail needs the width.
-        className="flex shrink-0 overflow-x-auto bg-card md:w-[200px] md:flex-col md:self-start md:overflow-visible"
+    <Tabs value={value} onValueChange={(next) => onChange(next as T)} className="min-w-0 gap-6">
+      <TabsList
+        variant="segmented"
+        className="max-w-full shrink-0 self-start overflow-x-auto overflow-y-hidden"
+        aria-label="Section"
       >
-        {items.map((item) => {
-          const active = value === item.id
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              disabled={item.disabled}
-              onClick={() => onChange(item.id)}
-              className={cn(
-                '-ml-px flex h-9 shrink-0 items-center justify-between gap-3 whitespace-nowrap border border-border px-4 text-left font-sans text-body outline-none transition-colors first:ml-0 focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-35 md:-mt-px md:ml-0 md:first:mt-0',
-                active
-                  ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-                item.danger && 'text-destructive hover:text-destructive',
-              )}
-            >
-              <span className="truncate">{item.label}</span>
-              {item.count !== undefined && (
-                <span className="shrink-0 text-meta font-normal tabular-nums text-muted-foreground">{item.count}</span>
-              )}
-            </button>
-          )
-        })}
-      </nav>
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
+        {items.map((item) => (
+          <TabsTrigger
+            key={item.id}
+            value={item.id}
+            disabled={item.disabled}
+            className={cn('gap-2 font-sans', item.danger && 'text-destructive')}
+          >
+            {item.label}
+            {item.count !== undefined && <span className="tabular-nums text-muted-foreground">{item.count}</span>}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {items.map((item) => (
+        <TabsContent key={item.id} value={item.id} className="min-w-0">
+          {item.id === value && children}
+        </TabsContent>
+      ))}
+    </Tabs>
   )
 }
 
-/** A screen inside the workbench: a ▸ TITLE row with its actions, then the body. */
+/** A screen inside the workbench: a shared section heading with its actions, then the body. */
 export function Screen({
   title,
   actions,

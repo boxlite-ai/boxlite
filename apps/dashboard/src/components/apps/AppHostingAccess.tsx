@@ -1,8 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { Button } from '@/components/ui/button'
-import { AgentApp } from '@/components/ui/icon'
+import { AppHostingIllustration } from './AppHostingIllustration'
 
 /** Presentation fixture only. Server-side eligibility is a separate API contract. */
 export function hasMockAppHostingAccess(): boolean {
@@ -21,19 +20,20 @@ export function AppHostingAccess() {
         <h1 className="resource-title">App hosting</h1>
         <p className="text-body text-muted-foreground">Turn your ideas into live apps.</p>
       </header>
-      <ResourceEmptyState
-        icon={<AgentApp />}
-        title="From your agent to a live app."
-        description="Your coding agent builds and ships. BoxLite keeps your apps running."
-      >
-        <div className="flex max-w-md flex-col items-center gap-5">
-          <p className="text-body text-muted-foreground">
-            App hosting is in early access. Get access before creating your first app.
+      <section className="flex flex-1 flex-col items-center justify-center gap-4 py-6 text-center">
+        <AppHostingIllustration className="max-h-64 max-w-xl" />
+        <div className="max-w-lg space-y-3">
+          <h2 className="font-display text-section font-semibold">From insight to a cloud app.</h2>
+          <p className="text-body leading-relaxed text-muted-foreground">
+            Bring an idea to your coding agent. Build it, deploy it, and let BoxLite keep it running.
           </p>
+        </div>
+        <div className="flex flex-col items-center gap-4">
+          <p className="text-meta text-muted-foreground">App hosting is in early access.</p>
           {/* UI only: application submission is intentionally not connected. */}
           <Button type="button">Get early access</Button>
         </div>
-      </ResourceEmptyState>
+      </section>
     </main>
   )
 }

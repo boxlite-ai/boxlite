@@ -75,12 +75,14 @@ export function HoverActions({ children, className }: { children: ReactNode; cla
   return <span className={cn('flex items-center justify-end gap-[6px]', className)}>{children}</span>
 }
 
-/** Label / value with a dotted leader, as on box details. Keep it in a narrow column. */
+/** Aligned resource facts with technical values kept in monospace. */
 export function SpecRow({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
   return (
-    <div className="mb-[6px] flex items-baseline gap-2 font-sans text-body" title={title}>
+    <div
+      className="flex items-baseline justify-between gap-4 border-b border-border/50 py-2 last:border-0 font-sans text-body"
+      title={title}
+    >
       <span className="whitespace-nowrap text-muted-foreground">{label}</span>
-      <span className="-translate-y-1 flex-1 border-b border-dotted border-border" />
       <span className="min-w-0 max-w-[66%] truncate font-mono text-right text-foreground">{children}</span>
     </div>
   )
@@ -141,18 +143,19 @@ export function PromptBlock({ label, text, compact }: { label?: string; text: st
         >
           {text}
         </pre>
-        <button
+        <Button
           type="button"
           onClick={() => {
             copyText(text)
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           }}
-          className="inline-flex shrink-0 items-center gap-1.5 border border-border px-[9px] py-[5px] font-sans text-meta text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+          variant="outline"
+          size="sm"
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
           {copied ? 'Copied' : 'Copy'}
-        </button>
+        </Button>
       </div>
     </div>
   )
