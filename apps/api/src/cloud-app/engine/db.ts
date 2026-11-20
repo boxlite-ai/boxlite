@@ -87,7 +87,7 @@ export interface EnvRow {
   box_volumes: string | null
   /** The forwarding secret: X-BoxLite-Gateway on proxied end-user traffic only (supervisor.ts forwardHeaders). */
   forward_secret: string
-  /** X-BoxLite-Control on the CP's own /.boxlite/sv/* calls only (supervisor.ts controlHeaders). */
+  /** X-BoxLite-Control on the CP's own /.boxlite/sv/* calls only. */
   control_secret: string
   access_override: string | null
   next_deployment: number

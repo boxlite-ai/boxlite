@@ -6,6 +6,8 @@ export interface JsonRequest {
   headers?: Record<string, string>
   body?: unknown
   timeoutMs?: number
+  signal?: AbortSignal
+  redirect?: RequestRedirect
 }
 
 /**
@@ -28,7 +30,8 @@ export async function requestJson<T>(service: string, req: JsonRequest): Promise
       method: req.method,
       headers,
       body,
-      signal: AbortSignal.timeout(req.timeoutMs ?? 30_000),
+      signal: req.signal ?? AbortSignal.timeout(req.timeoutMs ?? 30_000),
+      redirect: req.redirect,
     })
   } catch (err) {
     throw new UpstreamError(service, 0, `${req.method} ${redactUrl(req.url)} failed: ${(err as Error).message}`)
