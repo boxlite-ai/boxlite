@@ -105,6 +105,13 @@ export class BillingApiClient {
       cycleFrom: new Date(plan.cycleFrom),
       cycleTo: new Date(plan.cycleTo),
       ...(plan.dueAt && { dueAt: new Date(plan.dueAt) }),
+      ...(plan.trial && {
+        trial: {
+          ...plan.trial,
+          startedAt: new Date(plan.trial.startedAt),
+          endsAt: new Date(plan.trial.endsAt),
+        },
+      }),
     }
   }
 
@@ -155,6 +162,15 @@ export class BillingApiClient {
     }
 
     return paymentMethods
+  }
+
+  public async setDefaultPaymentMethod(organizationId: string, paymentMethodId: string): Promise<void> {
+    await this.axiosInstance.post(`/organization/${organizationId}/payment-methods/${paymentMethodId}/default`)
+  }
+
+  /** Removing the default card promotes another saved card server-side. */
+  public async removePaymentMethod(organizationId: string, paymentMethodId: string): Promise<void> {
+    await this.axiosInstance.delete(`/organization/${organizationId}/payment-methods/${paymentMethodId}`)
   }
 
   public async listPlans(): Promise<Plan[]> {

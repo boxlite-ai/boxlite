@@ -163,6 +163,8 @@ pub struct RuntimeImpl {
     /// Provides locks for individual entities (boxes, volumes, etc.) that work
     /// across multiple processes. Similar to Podman's lock manager.
     pub(crate) lock_manager: Arc<dyn LockManager>,
+    /// Shared disk admission in a separate namespace, using persisted lifecycle IDs.
+    pub(crate) disk_lock_manager: Arc<dyn LockManager>,
     sync_cleanup_pending: AtomicBool,
 
     /// Abstract factory for boxes' network control backends (the one place a
@@ -339,6 +341,9 @@ impl RuntimeImpl {
                 ))
             })?);
 
+        let disk_lock_manager: Arc<dyn LockManager> =
+            Arc::new(FileLockManager::new(layout.disk_locks_dir())?);
+
         tracing::debug!(
             lock_dir = %layout.locks_dir().display(),
             "Initialized lock manager"
@@ -369,6 +374,7 @@ impl RuntimeImpl {
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
+            disk_lock_manager,
             sync_cleanup_pending: AtomicBool::new(false),
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
@@ -484,21 +490,8 @@ impl RuntimeImpl {
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
 
-        // Allocate lock for this box
-        let lock_id = self.lock_manager.allocate()?;
-        state.set_lock_id(lock_id);
-
-        // Persist to database immediately (status = Configured)
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
-            // Clean up the allocated lock on failure
-            if let Err(free_err) = self.lock_manager.free(lock_id) {
-                tracing::error!(
-                    lock_id = %lock_id,
-                    error = %free_err,
-                    "Failed to free lock after DB persist error"
-                );
-            }
-
+        // Persist Configured state only after both lock namespaces are allocated.
+        if let Err(e) = self.persist_box_with_locks(&config, &mut state) {
             // TOCTOU race recovery: lookup_box (line ~268) and add_box are
             // separate non-atomic operations. Between them, another concurrent
             // caller can complete the full create path and persist first:
@@ -519,7 +512,7 @@ impl RuntimeImpl {
 
         tracing::debug!(
             box_id = %config.id,
-            lock_id = %lock_id,
+            lock_id = ?state.lock_id,
             "Created box with Configured status"
         );
 
@@ -1126,107 +1119,25 @@ impl RuntimeImpl {
 
         // Try to get box from database first
         if let Some((config, state)) = self.box_manager.box_by_id(id)? {
-            // Box exists in database - handle as before
-            let mut state = state;
-            if state.status.is_active() || state.pid.is_some() {
-                if force {
-                    // Stop the box's whole process tree through the same handler
-                    // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
-                    // pid (the outer launcher), then reaps any survivors of a
-                    // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
-                    // which a single-pid kill misses, since #851 stopped tying
-                    // detached boxes to the launcher's lifetime.
-                    if let Some(pid) = state.pid {
-                        tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
-                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                        let _ = handler.stop();
-                    }
-                    // Update status to stopped and save
-                    state.set_status(BoxStatus::Stopped);
-                    state.set_pid(None);
-                    self.box_manager.save_box(id, &state)?;
-                } else {
-                    // Non-force mode: error on active box
-                    return Err(BoxliteError::InvalidState(format!(
-                        "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
-                        id, state.pid, state.status
-                    )));
+            // Lifecycle is already held: never wait for disk admission here.
+            let lock_id = state
+                .lock_id
+                .ok_or_else(|| BoxliteError::Internal(format!("box {id} is missing lock_id")))?;
+            let disk_locker = self.disk_lock_manager.retrieve(lock_id).map_err(|error| {
+                match error {
+                    BoxliteError::NotFound(_) => BoxliteError::InvalidState(format!(
+                        "box {id} disk lock {lock_id} is missing; cannot confirm disk admission for removal; \
+                         restore the lock or restart the runtime for recovery, then retry removal"
+                    )),
+                    error => error,
                 }
-            }
-
-            // Check if other boxes depend on this box's disks (COW backing references).
-            if !force {
-                let dependents = find_boxes_depending_on(self, id.as_ref())?;
-                if !dependents.is_empty() {
-                    return Err(BoxliteError::InvalidState(format!(
-                        "Cannot remove box: boxes [{}] have clone dependencies on it. \
-                         Remove those first or use force=true.",
-                        dependents.join(", ")
-                    )));
-                }
-            }
-
-            // Remove from BoxManager (database-first)
-            self.box_manager.remove_box(id)?;
-
-            // Free the lock if one was allocated
-            if let Some(lock_id) = state.lock_id {
-                if let Err(e) = self.lock_manager.free(lock_id) {
-                    tracing::warn!(
-                        box_id = %id,
-                        lock_id = %lock_id,
-                        error = %e,
-                        "Failed to free lock for removed box"
-                    );
-                } else {
-                    tracing::debug!(
-                        box_id = %id,
-                        lock_id = %lock_id,
-                        "Freed lock for removed box"
-                    );
-                }
-            }
-
-            // 1. Remove all base disk refs for this box (returns affected base IDs for GC)
-            let affected_base_ids = self
-                .base_disk_mgr
-                .store()
-                .remove_all_refs_for_box(id.as_ref())
-                .unwrap_or_default();
-
-            // 2. Delete container disk file
-            let disks_dir = config.box_home.join("disks");
-            let container = disks_dir.join(crate::disk::constants::filenames::CONTAINER_DISK);
-            let _ = std::fs::remove_file(&container);
-
-            // 3. Remove all snapshots for this box (files + DB records).
-            self.snapshot_mgr
-                .remove_all_for_box(id.as_ref(), &config.box_home);
-
-            // 4. GC each affected base (may cascade to parents)
-            for base_id in affected_base_ids {
-                self.base_disk_mgr.try_gc_base(&base_id);
-            }
-
-            // Delete box directory + its socket binding symlink
-            config.sockets().remove();
-            let box_home = config.box_home;
-            if box_home.exists()
-                && let Err(e) = std::fs::remove_dir_all(&box_home)
-            {
-                tracing::warn!(
-                    box_id = %id,
-                    path = %box_home.display(),
-                    error = %e,
-                    "Failed to cleanup box directory"
-                );
-            }
-
-            // Invalidate cache
-            self.invalidate_box_impl(id, config.name.as_deref());
-
-            tracing::info!(box_id = %id, "Removed box");
-            return Ok(());
+            })?;
+            let _disk_guard = LockGuard::try_new(disk_locker.as_ref()).ok_or_else(|| {
+                BoxliteError::InvalidState(format!(
+                    "box {id} has a disk operation in progress; retry removal"
+                ))
+            })?;
+            return self.remove_box_holding_admissions(id, force, config, state, lock_id);
         }
 
         // Box not in database - check in-memory cache
@@ -1292,6 +1203,101 @@ impl RuntimeImpl {
 
         // Box not found anywhere
         Err(BoxliteError::NotFound(id.to_string()))
+    }
+
+    /// Caller must hold this box's lifecycle and disk write admissions and pass
+    /// its refreshed config/state and the admitted lock ID.
+    pub(crate) fn remove_box_holding_admissions(
+        &self,
+        id: &BoxID,
+        force: bool,
+        config: BoxConfig,
+        state: BoxState,
+        lock_id: crate::lock::LockId,
+    ) -> BoxliteResult<()> {
+        let mut state = state;
+        if state.status.is_active() || state.pid.is_some() {
+            if force {
+                // Stop the box's whole process tree through the same handler
+                // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
+                // pid (the outer launcher), then reaps any survivors of a
+                // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
+                // which a single-pid kill misses, since #851 stopped tying
+                // detached boxes to the launcher's lifetime.
+                if let Some(pid) = state.pid {
+                    tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
+                    let mut handler = ShimHandler::from_pid(pid, config.id.clone());
+                    let _ = handler.stop();
+                }
+                // Update status to stopped and save
+                state.set_status(BoxStatus::Stopped);
+                state.set_pid(None);
+                self.box_manager.save_box(id, &state)?;
+            } else {
+                // Non-force mode: error on active box
+                return Err(BoxliteError::InvalidState(format!(
+                    "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
+                    id, state.pid, state.status
+                )));
+            }
+        }
+
+        // Check if other boxes depend on this box's disks (COW backing references).
+        if !force {
+            let dependents = find_boxes_depending_on(self, id.as_ref())?;
+            if !dependents.is_empty() {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Cannot remove box: boxes [{}] have clone dependencies on it. \
+                     Remove those first or use force=true.",
+                    dependents.join(", ")
+                )));
+            }
+        }
+
+        // Remove from BoxManager (database-first)
+        self.box_manager.remove_box(id)?;
+
+        // 1. Remove all base disk refs for this box (returns affected base IDs for GC)
+        let affected_base_ids = self
+            .base_disk_mgr
+            .store()
+            .remove_all_refs_for_box(id.as_ref())
+            .unwrap_or_default();
+
+        // 2. Delete container disk file
+        let disks_dir = config.box_home.join("disks");
+        let container = disks_dir.join(crate::disk::constants::filenames::CONTAINER_DISK);
+        let _ = std::fs::remove_file(&container);
+
+        // 3. Remove all snapshots for this box (files + DB records).
+        self.snapshot_mgr
+            .remove_all_for_box(id.as_ref(), &config.box_home);
+
+        // 4. GC each affected base (may cascade to parents)
+        for base_id in affected_base_ids {
+            self.base_disk_mgr.try_gc_base(&base_id);
+        }
+
+        // Delete box directory + its socket binding symlink
+        config.sockets().remove();
+        let box_home = config.box_home;
+        if box_home.exists()
+            && let Err(e) = std::fs::remove_dir_all(&box_home)
+        {
+            tracing::warn!(
+                box_id = %id,
+                path = %box_home.display(),
+                error = %e,
+                "Failed to cleanup box directory"
+            );
+        }
+
+        // Invalidate cache
+        self.invalidate_box_impl(id, config.name.as_deref());
+        self.free_box_locks(lock_id);
+
+        tracing::info!(box_id = %id, "Removed box");
+        Ok(())
     }
 
     // ========================================================================
@@ -1395,11 +1401,7 @@ impl RuntimeImpl {
         state.set_status(initial_status);
         state.resolved_image = resolved_image;
 
-        let lock_id = self.lock_manager.allocate()?;
-        state.set_lock_id(lock_id);
-
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
-            let _ = self.lock_manager.free(lock_id);
+        if let Err(e) = self.persist_box_with_locks(&config, &mut state) {
             let _ = std::fs::remove_dir_all(&config.box_home);
             config.sockets().remove();
             return Err(e);
@@ -1408,6 +1410,39 @@ impl RuntimeImpl {
         self.get(box_id.as_str()).await?.ok_or_else(|| {
             BoxliteError::Internal("Provisioned box not found after persist".to_string())
         })
+    }
+
+    /// Allocate the paired namespaces before publishing the persisted lock ID.
+    /// A numeric ID stays unavailable until its disk namespace is clean.
+    fn persist_box_with_locks(
+        &self,
+        config: &BoxConfig,
+        state: &mut BoxState,
+    ) -> BoxliteResult<()> {
+        let id = self.lock_manager.allocate()?;
+        if let Err(e) = self.disk_lock_manager.allocate_and_retrieve(id) {
+            tracing::warn!(lock_id = %id, error = %e,
+                "Retaining lifecycle ID to prevent reuse against residual disk locks; recovery required");
+            return Err(e);
+        }
+        state.set_lock_id(id);
+        if let Err(e) = self.box_manager.add_box(config, state) {
+            self.free_box_locks(id);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// A numeric ID stays unavailable until its disk namespace is clean.
+    fn free_box_locks(&self, id: crate::lock::LockId) {
+        if let Err(e) = self.disk_lock_manager.free(id) {
+            tracing::warn!(lock_id = %id, error = %e,
+                "Retaining lifecycle ID to prevent reuse against residual disk locks; recovery required");
+            return;
+        }
+        if let Err(e) = self.lock_manager.free(id) {
+            tracing::warn!(lock_id = %id, error = %e, "Failed to free lifecycle lock");
+        }
     }
 
     /// Recover boxes from persistent storage on runtime startup.
@@ -1419,6 +1454,7 @@ impl RuntimeImpl {
 
         // Clear all locks before recovery - safe because we hold the runtime lock.
         // This ensures a clean slate for lock allocation during recovery.
+        self.disk_lock_manager.clear_all_locks()?;
         self.lock_manager.clear_all_locks()?;
 
         // Phase 0: Scan filesystem for orphaned directories (no DB record)
@@ -1519,30 +1555,26 @@ impl RuntimeImpl {
 
         tracing::info!("Recovering {} boxes from database", persisted.len());
 
+        // Reserve persisted IDs before allocating any IDs for legacy rows.
+        for (_, state) in &persisted {
+            if let Some(lock_id) = state.lock_id {
+                self.lock_manager.allocate_and_retrieve(lock_id)?;
+                if let Err(e) = self.disk_lock_manager.allocate_and_retrieve(lock_id) {
+                    let _ = self.lock_manager.free(lock_id);
+                    return Err(e);
+                }
+            }
+        }
+
         for (config, mut state) in persisted {
             let box_id = &config.id;
             let original_status = state.status;
             let original_pid = state.pid;
-
-            // Reclaim the lock for this box if one was allocated
-            if let Some(lock_id) = state.lock_id {
-                match self.lock_manager.allocate_and_retrieve(lock_id) {
-                    Ok(_) => {
-                        tracing::debug!(
-                            box_id = %box_id,
-                            lock_id = %lock_id,
-                            "Reclaimed lock for recovered box"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            box_id = %box_id,
-                            lock_id = %lock_id,
-                            error = %e,
-                            "Failed to reclaim lock for recovered box"
-                        );
-                    }
-                }
+            let original_lock_id = state.lock_id;
+            if state.lock_id.is_none() {
+                let lock_id = self.lock_manager.allocate()?;
+                self.disk_lock_manager.allocate_and_retrieve(lock_id)?;
+                state.set_lock_id(lock_id);
             }
 
             let box_layout = self.layout.box_layout(box_id.as_str(), false)?;
@@ -1642,7 +1674,10 @@ impl RuntimeImpl {
             }
 
             // Save updated state to database if changed
-            if state.status != original_status || state.pid != original_pid {
+            if state.status != original_status
+                || state.pid != original_pid
+                || state.lock_id != original_lock_id
+            {
                 self.box_manager.save_box(box_id, &state)?;
             }
         }
@@ -3145,6 +3180,10 @@ mod tests {
             .allocate()
             .expect("Failed to allocate lock");
         state.set_lock_id(lock_id);
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
 
         runtime
             .box_manager
@@ -3816,7 +3855,7 @@ mod tests {
 
         // Create box A with a disk.
         let config_a = test_box_config_in_layout(false, &runtime);
-        let state_a = BoxState::new();
+        let mut state_a = BoxState::new();
         let disks_a = config_a.box_home.join("disks");
         std::fs::create_dir_all(&disks_a).unwrap();
 
@@ -3824,7 +3863,9 @@ mod tests {
         let disk_a = disks_a.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
 
-        runtime.box_manager.add_box(&config_a, &state_a).unwrap();
+        runtime
+            .persist_box_with_locks(&config_a, &mut state_a)
+            .unwrap();
 
         // Create box B.
         let config_b = test_box_config_in_layout(false, &runtime);
@@ -3877,7 +3918,7 @@ mod tests {
         let (runtime, _dir) = create_test_runtime();
 
         let config = test_box_config_in_layout(false, &runtime);
-        let state = BoxState::new();
+        let mut state = BoxState::new();
         let disks_dir = config.box_home.join("disks");
         std::fs::create_dir_all(&disks_dir).unwrap();
 
@@ -3885,7 +3926,7 @@ mod tests {
         let disk = disks_dir.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk, None);
 
-        runtime.box_manager.add_box(&config, &state).unwrap();
+        runtime.persist_box_with_locks(&config, &mut state).unwrap();
 
         // The socket binding symlink must be removed with the box.
         config.sockets().ensure().unwrap();
@@ -3906,12 +3947,14 @@ mod tests {
 
         // Create box A.
         let config_a = test_box_config_in_layout(false, &runtime);
-        let state_a = BoxState::new();
+        let mut state_a = BoxState::new();
         let disks_a = config_a.box_home.join("disks");
         std::fs::create_dir_all(&disks_a).unwrap();
         let disk_a = disks_a.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
-        runtime.box_manager.add_box(&config_a, &state_a).unwrap();
+        runtime
+            .persist_box_with_locks(&config_a, &mut state_a)
+            .unwrap();
 
         // Create box B.
         let config_b = test_box_config_in_layout(false, &runtime);
@@ -4112,3 +4155,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/disk_lock.rs"]
+mod disk_lock_tests;

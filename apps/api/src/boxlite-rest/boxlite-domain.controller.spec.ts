@@ -22,10 +22,11 @@ function makeHarness() {
       domains: [
         {
           hostname: 'demo1.app.test',
+          kind: 'platform',
           url: 'https://demo1.app.test',
           target: { type: 'box', box: 'AbCdEf123456', port: 3000 },
         },
-        { hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
+        { hostname: 'spare.app.test', kind: 'platform', url: 'https://spare.app.test', target: null },
       ],
       limit: 2,
       used: 2,
@@ -104,10 +105,11 @@ describe('BoxliteDomainController', () => {
       domains: [
         {
           hostname: 'demo1.app.test',
+          kind: 'platform',
           url: 'https://demo1.app.test',
           target: { type: 'box', box: 'AbCdEf123456', port: 3000 },
         },
-        { hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
+        { hostname: 'spare.app.test', kind: 'platform', url: 'https://spare.app.test', target: null },
       ],
       limit: 2,
       used: 2,

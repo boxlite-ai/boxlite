@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and package the skills-only BoxLite plugin without local state."""
+"""Validate and reproducibly package BoxLite's cloud MCP and local workflows."""
 import argparse
 import hashlib
 import json
@@ -12,6 +12,15 @@ REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / 'plugins/boxlite'
 CACHE = {'node_modules', '.venv', '__pycache__', 'dist', 'public'}
 PRIVATE = {'deployment.json', 'credentials.toml', 'secrets.json', 'supervisor.conf', 'data'}
+MCP_URL = 'https://api.boxlite.ai/mcp'
+INVENTORY = {
+    'plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json',
+    'mcp.json', '.mcp.json', 'README.md', 'LICENSE', 'assets/boxlite-icon.png',
+    'skills/boxlite/SKILL.md', 'skills/boxlite/agents/openai.yaml',
+    'skills/boxlite/references/cloud.md', 'skills/boxlite/references/local.md',
+    'skills/boxlite/scripts/local.py', 'skills/boxlite-setup/SKILL.md',
+    'skills/boxlite-setup/agents/openai.yaml', 'skills/boxlite-setup/references/cloud-auth.md',
+}
 
 
 def package_files(root):
@@ -62,7 +71,8 @@ def validate(root=PLUGIN):
     manifest = load_manifest(root, 'plugin.json')
     if manifest.get('$schema') != 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json':
         raise ValueError('Expected portable Agent Plugins schema')
-    if manifest.get('name') != 'boxlite' or manifest.get('version') != '0.1.0':
+    version = manifest.get('version')
+    if manifest.get('name') != 'boxlite' or not isinstance(version, str) or not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
         raise ValueError('Unexpected plugin identity/version')
     legacy = load_manifest(root, '.codex-plugin/plugin.json')
     for key in ('name', 'version', 'description'):
@@ -79,6 +89,8 @@ def validate(root=PLUGIN):
         raise ValueError('Compatibility presentation differs')
     if legacy.get('skills') != './skills':
         raise ValueError('Compatibility skill root differs')
+    if legacy.get('mcpServers') != './.mcp.json':
+        raise ValueError('Compatibility MCP path differs')
     onboarding = required_field(settings, 'onboardingSkill', 'OpenAI extension')
     legacy_extensions = required_field(legacy, 'extensions', 'Codex manifest')
     legacy_settings = required_field(legacy_extensions, 'com.openai', 'Codex extensions')
@@ -86,8 +98,12 @@ def validate(root=PLUGIN):
         raise ValueError('Compatibility onboarding differs')
     for field in ('composerIcon', 'logo'):
         checked_path(root, required_field(interface, field, 'OpenAI interface'))
-    if (root / 'mcp.json').exists() or (root / 'hooks').exists() or (root / '.mcp.json').exists():
-        raise ValueError('v0.1 is skills-only')
+    for filename, transport in (('mcp.json', 'streamable-http'), ('.mcp.json', 'http')):
+        expected = {'mcpServers': {'boxlite': {'type': transport, 'url': MCP_URL}}}
+        if filename == 'mcp.json':
+            expected['$schema'] = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
+        if load_manifest(root, filename) != expected:
+            raise ValueError(f'Invalid MCP declaration: {filename}; only the production endpoint is distributable')
     skills = [path for path in files if path.name == 'SKILL.md' and path.parent.parent == root / 'skills']
     if not skills:
         raise ValueError('No skills packaged')
@@ -105,20 +121,31 @@ def validate(root=PLUGIN):
     for path in files:
         if path.suffix == '.py':
             compile(path.read_text(), str(path), 'exec')
+        if path.suffix in {'.json', '.md', '.py', '.yaml'} and re.search(r'\bblk_[A-Za-z0-9_-]{16,}', path.read_text()):
+            raise ValueError('Credential material is not distributable')
+    if {path.relative_to(root).as_posix() for path in files} != INVENTORY:
+        raise ValueError('Package inventory differs: missing or undeclared files')
     return files
+
+
+def write_zip(archive, root, files):
+    """Use stable ordering, timestamps, permissions, and paths for either archive."""
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
+        for path in sorted(files):
+            info = zipfile.ZipInfo(path.relative_to(root).as_posix(), (2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            zipped.writestr(info, path.read_bytes())
 
 
 def build(output, root=PLUGIN):
     """Validate and stage a deterministic ZIP, host marketplaces, and SHA-256 digest."""
     files = validate(root)
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / 'boxlite-0.1.0.zip'
-    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
-        for path in files:
-            info = zipfile.ZipInfo(path.relative_to(root).as_posix(), (2026, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o100644 << 16
-            zipped.writestr(info, path.read_bytes())
+    version = load_manifest(root, 'plugin.json')['version']
+    archive = output / f'boxlite-{version}.zip'
+    write_zip(archive, root, files)
     marketplace = output / 'boxlite-marketplace'
     if marketplace.exists():
         shutil.rmtree(marketplace)
@@ -136,14 +163,17 @@ def build(output, root=PLUGIN):
     claude_catalog = marketplace / '.claude-plugin/marketplace.json'
     claude_catalog.parent.mkdir(parents=True, exist_ok=True)
     claude_catalog.write_text(json.dumps({
-        'name': 'boxlite', 'description': 'BoxLite cloud deployment skills.',
+        'name': 'boxlite', 'description': 'BoxLite cloud MCP and independent local runtime.',
         'owner': {'name': 'BoxLite'}, 'plugins': [{
             'name': 'boxlite', 'source': './plugins/boxlite',
-            'description': 'Skills for building and deploying apps on BoxLite cloud.',
+            'description': load_manifest(root, 'plugin.json')['description'],
         }],
     }, indent=2) + '\n')
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    (output / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
+    marketplace_zip = output / f'boxlite-marketplace-{version}.zip'
+    write_zip(marketplace_zip, marketplace, [path for path in marketplace.rglob('*') if path.is_file()])
+    (output / 'SHA256SUMS').write_text(''.join(
+        f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n'
+        for path in (archive, marketplace_zip)))
     return archive
 
 

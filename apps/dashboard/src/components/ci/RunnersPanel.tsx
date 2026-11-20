@@ -5,7 +5,6 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Link, generatePath } from 'react-router-dom'
 import {
   ResourceFilterEmptyState,
-  ResourceEmptyState,
   ResourceLoadingState,
   ResourceErrorState,
   ResourceErrorNotice,
@@ -14,7 +13,6 @@ import {
 } from '@/components/ResourceLayout'
 import { ResourcePagination } from '@/components/ResourcePagination'
 import { BoxStatusIndicator } from '@/components/boxes/box-presentation'
-import { Container } from '@/components/ui/icon'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
@@ -22,6 +20,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { timeAgo } from '@/lib/format'
 import { isTransitioning } from '@/lib/utils/box'
+import { CiRunnerEmptyState } from './CiRunnerEmptyState'
 import { CapacitySummary } from './CapacitySummary'
 
 export function RunnersPanel() {
@@ -175,11 +174,7 @@ export function RunnersPanel() {
           (name ? (
             <ResourceFilterEmptyState title={`No runners match “${name}”.`} onClear={clearFilter} />
           ) : (
-            <ResourceEmptyState
-              icon={<Container />}
-              title="No CI runners yet"
-              description="Boxes appear here while GitHub Actions jobs run."
-            />
+            <CiRunnerEmptyState />
           ))}
       </div>
       {(!!runners.data?.total || page > 1) && (

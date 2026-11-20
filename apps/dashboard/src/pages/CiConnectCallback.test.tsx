@@ -50,6 +50,10 @@ it('CI callback performs one authenticated completion under real React StrictMod
     })
     expect(window.location.search).toBe('')
     expect(window.sessionStorage.getItem('boxlite.ci.connect')).toBeNull()
+    await act(async () =>
+      [...document.querySelectorAll('button')].find((button) => button.textContent === 'Set up a job')!.click(),
+    )
+    expect(document.querySelector('[aria-label="GitHub connection"]')?.textContent).toBe('GitHub connected.')
   } finally {
     await act(async () => root.unmount())
     host.remove()

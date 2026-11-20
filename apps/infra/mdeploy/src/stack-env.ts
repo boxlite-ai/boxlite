@@ -110,7 +110,7 @@ const RUNNER_NAME = /^[a-zA-Z0-9_.-]{2,255}$/
  * on and what an existing stage's state already calls its first host, so
  * renaming it would replace a machine rather than update one.
  */
-const fleetFrom = ({
+export const runnerFleetFrom = ({
   environment,
   app,
   stage,
@@ -250,6 +250,7 @@ export type StackEnvironment = {
    */
   mailRelayHost: string | null
   apiEnvironment: Record<string, string>
+  filestoreProjects: string[]
   /** Addresses rather than values, for the keys `env.selectGroup.secret` marks. */
   apiSecrets: Record<string, string>
   proxyEnvironment: Record<string, string>
@@ -305,6 +306,7 @@ const channels = ({
   ])
   return {
     apiEnvironment: api.environment,
+    filestoreProjects: api.filestoreProjects,
     apiSecrets: api.secrets,
     proxyEnvironment: proxy.values,
     proxySecrets: proxy.addresses,
@@ -378,7 +380,7 @@ export const readStackEnvironment = ({
     // that holds the key with nothing in it.
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
     userDomain: userDomainFrom(environment),
-    runnerFleet: fleetFrom({ environment, app, stage }),
+    runnerFleet: runnerFleetFrom({ environment, app, stage }),
     managedClickHouse: managedClickHouseFrom(environment),
     clickHouseRetentionHours:
       optional(environment, 'CLICKHOUSE_RETENTION_HOURS') === null ? null : clickHouseRetentionHours(environment),

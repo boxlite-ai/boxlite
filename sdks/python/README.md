@@ -4,6 +4,9 @@ Python bindings for BoxLite - an embeddable virtual machine runtime for secure, 
 
 Access the [agent API](../../docs/reference/agents.md) through `Box.agents`
 and `SimpleBox.agents`, including synchronous wrappers, grouped options and error handling.
+On a local runtime, create an OpenCode agent and await `events.opened()` before
+sending work when the first live event matters. Close the stream with `aclose()`
+when finished; cancellation of a read preserves its pending event for the next read.
 
 **Upgrade notice:** existing local boxes with secrets must be recreated with explicit
 `headers`, including boxes managed by `boxlite serve`. See the
@@ -1064,6 +1067,10 @@ make test:unit:python
 # Integration tests (need a VM; boxes pull through the local test registry)
 make test:integration:python
 ```
+
+To compare the Python and Node agent results with Rust in real OpenCode VMs,
+set `BOXLITE_TEST_OPENCODE_BINARY` to the OpenCode 2.2.2 Linux binary and run
+`make test:integration:agent-sdk-parity` from the repository root.
 
 Checkpoint REST boundary tests need the native extension but do not boot a VM.
 Unit jobs omit them when the extension is absent. The native coverage job builds

@@ -12,6 +12,10 @@
 
 mod install;
 mod opencode;
+/// Shared JSON conversion for agent API consumers.
+pub mod records;
+#[cfg(feature = "test-support")]
+mod test_support;
 mod types;
 pub use types::*;
 
@@ -103,6 +107,8 @@ trait AgentBackend: Send + Sync + std::fmt::Debug {
 pub struct Agents {
     box_backend: Arc<dyn BoxBackend>,
     network_backend: Arc<dyn BoxNetworkBackend>,
+    #[cfg(feature = "test-support")]
+    test_backend: bool,
 }
 
 impl std::fmt::Debug for Agents {
@@ -135,7 +141,16 @@ impl Agents {
         Self {
             box_backend,
             network_backend,
+            #[cfg(feature = "test-support")]
+            test_backend: false,
         }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn with_test_backend(mut self) -> Self {
+        self.test_backend = true;
+        self
     }
 
     /// Create an agent with initial configuration.
@@ -144,6 +159,10 @@ impl Agents {
     /// 2.2.2 already installed in the Box. Starts the Box and OpenCode's
     /// managed service on first use.
     pub async fn create(&self, agent: &str, options: AgentCreateOptions) -> BoxliteResult<Agent> {
+        #[cfg(feature = "test-support")]
+        if self.test_backend {
+            return Ok(Agent::for_test());
+        }
         match agent {
             opencode::IMPLEMENTATION => {
                 self.require_local_runtime()?;
@@ -160,6 +179,10 @@ impl Agents {
 
     /// Look up an agent without replaying work.
     pub async fn get(&self, agent_id: &str) -> BoxliteResult<Agent> {
+        #[cfg(feature = "test-support")]
+        if self.test_backend {
+            return Ok(Agent::for_test());
+        }
         self.require_local_runtime()?;
         if !opencode::is_session_id(agent_id) {
             return Err(BoxliteError::NotFound(format!(
@@ -212,6 +235,12 @@ impl Agents {
 }
 
 impl Agent {
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn for_test() -> Self {
+        Self::new(test_support::TestBackend::default())
+    }
+
     fn new(backend: impl AgentBackend + 'static) -> Self {
         Self {
             backend: Arc::new(backend),

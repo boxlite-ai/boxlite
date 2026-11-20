@@ -21,7 +21,7 @@ The model is implementation-grounded:
   [`api/src/migrations`](../../../../apps/api/src/migrations/): the baseline
   `1741087887225-migration.ts` and the
   [`pre-deploy`](../../../../apps/api/src/migrations/pre-deploy/) set create the tables.
-- Satellite stores come from [`dex/config.yaml`](../../../../apps/dex/config.yaml),
+- Satellite stores come from [`rauthy/config.toml`](../../../../apps/rauthy/config.toml),
   [`otel-collector/config.yaml`](../../../../apps/otel-collector/config.yaml), and the
   ClickHouse queries in
   [`box-telemetry`](../../../../apps/api/src/box-telemetry/services/box-telemetry.service.ts).
@@ -665,6 +665,9 @@ the persisted JSONB arrays.
 One data-disk expansion attempt per row, created by pre-deploy migration
 `1794528002000-add-runner-disk-expansion`. Written only by the runner-disk-expansion
 cron (`runner-disk-expansion.service.ts`); everything else reads it.
+Expansion is enabled by default; setting `RUNNER_DISK_EXPANSION_ENABLED=false`
+stops that cron and its sampling. Existing `disk_expand_exhausted` marks are
+not lifted while it is off.
 
 The disk identity the controller expands is the runner's own report
 (`dataDiskRef`, refreshed on each heartbeat that carries it). The API records
@@ -681,6 +684,7 @@ runner host, already grants more damaging capabilities (2026-11-12).
 | `runnerId` | `uuid` | cascades with the runner row |
 | `fromGiB` / `toGiB` | `double precision` | `toGiB` is the requested block-device size; `fromGiB` is the runner-reported filesystem total at request time (~2% below the device) |
 | `accepted` | `boolean` | whether the cloud accepted the request; only accepted rows count against the resize budget |
+| `performanceUpdated` | `boolean` | whether the PATCH carried provisioned-performance fields; every such attempt starts the per-disk performance cooldown regardless of outcome |
 | `operation` | `text` | nullable; zone operation name to poll for completion |
 | `status` | `enum` | `pending` \| `confirmed` \| `failed` |
 | `error` | `text` | nullable; `rate_limited`, `not_accepted`, `unconfirmed`, or the raw operation error |
@@ -1166,7 +1170,7 @@ boundary.
 | Store | Owner | Contents |
 | ----- | ----- | -------- |
 | ClickHouse database `otel` | written by [`otel-collector`](../../../../apps/otel-collector/config.yaml), read by `apps/api` | `otel_logs`, `otel_traces`, `otel_metrics_gauge` — the upstream ClickHouse exporter's own schema, queried by [`box-telemetry`](../../../../apps/api/src/box-telemetry/services/box-telemetry.service.ts) to serve per-box logs, traces, and metrics. The collector uses `create_schema: false`; self-hosted infrastructure owns table TTLs through `CLICKHOUSE_RETENTION_HOURS`, defaulting to 720 hours (30 days). |
-| SQLite `/var/dex/dex.db` | [`dex`](../../../../apps/dex/config.yaml) | Dex's own OIDC state — clients, auth codes, refresh tokens, signing keys. The control plane knows a person only by the subject dex issues, stored as `user.id`. |
+| Rauthy's embedded SQLite (local stacks only) | [`rauthy`](../../../../apps/rauthy/config.toml) | Rauthy's own OIDC state — users, clients, auth codes, refresh tokens, signing keys. The control plane knows a person only by the subject Rauthy issues, stored as `user.id`. |
 | Redis | `apps/api` | Advisory locks, rate-limit counters, and caches. Not a table store, and not a source of truth: because the locks expire, the invariants that matter live in the partial unique indexes listed above. |
 
 ## Known gaps

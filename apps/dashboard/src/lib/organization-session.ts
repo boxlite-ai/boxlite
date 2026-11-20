@@ -32,7 +32,14 @@ export function saveOrganizationSession(userId: string, organizationId: string) 
   }
 }
 
-export function organizationSwitchPath(pathname: string): string {
+export function organizationSwitchPath(pathname: string, search = ''): string {
+  if (pathname === RoutePath.BILLING) {
+    const params = new URLSearchParams(search)
+    const code = params.get('code')
+    if (params.get('tab') === 'wallet' && code) {
+      return `${pathname}?${new URLSearchParams({ tab: 'wallet', code })}`
+    }
+  }
   const lists = [
     RoutePath.BOXES,
     RoutePath.IMAGES,

@@ -16,7 +16,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
-mod records;
+use boxlite::agents::records;
 #[cfg(test)]
 mod tests;
 

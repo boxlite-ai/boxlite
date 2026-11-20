@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { workflowSource } from 'mdeploy/workflow-source'
 
-const workflow = readFileSync(
-  fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)),
-  'utf8',
-)
+const workflow = workflowSource('mbuild.yml')
 
 /** What the job runs, with the commentary that discusses it removed. */
 const commands = workflow
@@ -76,7 +72,8 @@ test('a scan refusal stops the retry loop rather than being retried', () => {
  * the wrong repository.
  */
 test('a promotion names both stages, a publish only the one it writes to', () => {
-  const setup = /stages: \$\{\{ inputs\.command == 'promote' && format\('\{0\} \{1\}', inputs\.from, inputs\.to\) \|\| inputs\.stage \}\}/
+  const setup =
+    /stages: \$\{\{ inputs\.command == 'promote' && format\('\{0\} \{1\}', inputs\.from, inputs\.to\) \|\| inputs\.stage \}\}/
   assert.match(commands, setup)
 
   const carried = commands.indexOf('setup-infra')

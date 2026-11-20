@@ -7,9 +7,9 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { load } from 'js-yaml'
-import { resolveRegistry } from '../mbuild/src/address.ts'
-import { parseBuildConfig } from '../mbuild/src/config.ts'
-import { AuditFailedError, publish, type RunOptions } from '../mbuild/src/publish.ts'
+import { resolveRegistry } from 'mbuild/address'
+import { parseBuildConfig } from 'mbuild/config'
+import { AuditFailedError, publish, type RunOptions } from 'mbuild/publish'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const path = join(root, '.github/workflows/release-dependency-audit.yml')

@@ -350,6 +350,81 @@ test('Auth0 email-provider reconciles the code templates on a tenant whose provi
   }
 })
 
+test('Auth0 email-provider previews, updates, and restores a template that differs from the checked-in copy', async () => {
+  const receiptDirectory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-email-'))
+  const calls: Array<{ method: string; path: string }> = []
+  const desired = buildAuth0CodeEmailTemplates('no-reply@boxlite.example', sourceTemplates())
+  const desiredVerify = desired.find((template) => template.template === 'verify_email_by_code') as JsonObject
+  // A tenant still on an older BoxLite verify email; the reset template already matches.
+  const olderVerify = { ...desiredVerify, subject: 'Verify your BoxLite email', body: '<p>Your code is {{ code }}</p>' }
+  const templates = new Map<string, JsonObject>(
+    desired.map((template) => [template.template, structuredClone(template)] as [string, JsonObject]),
+  )
+  templates.set('verify_email_by_code', structuredClone(olderVerify))
+  const client: Auth0ManagementClient = {
+    request(method, path, requestOptions = {}) {
+      calls.push({ method, path })
+      if (method === 'get' && path === 'emails/provider') return resendProvider()
+      if (method === 'get' && path.startsWith('email-templates/')) {
+        return templates.get(path.slice('email-templates/'.length)) ?? null
+      }
+      if (method === 'patch' && path.startsWith('email-templates/')) {
+        const template = templates.get(path.slice('email-templates/'.length))
+        if (!template) throw new Error(`cannot patch missing template '${path}'`)
+        Object.assign(template, requestOptions.data)
+        return template
+      }
+      throw new Error(`unexpected Auth0 request ${method} ${path}`)
+    },
+  }
+  const configurator = () =>
+    new Auth0EmailProviderConfigurator(templatesOnlyOptions(true), client, {
+      templates: sourceTemplates(),
+      receiptDirectory,
+    })
+
+  try {
+    const preview = configurator().preview()
+    assert.deepEqual(preview.templates, [
+      { name: 'verify_email_by_code', change: 'update', fields: ['subject', 'body'] },
+      { name: 'reset_email_by_code', change: 'reuse' },
+    ])
+    assert.equal(
+      calls.every((call) => call.method === 'get'),
+      true,
+    )
+
+    const result = await configurator().apply(async () => {
+      throw new Error('a run that owns no provider must not request SES credentials')
+    })
+    assert.equal(templates.get('verify_email_by_code')?.subject, desiredVerify.subject)
+    assert.equal(templates.get('verify_email_by_code')?.body, desiredVerify.body)
+    const receipt = JSON.parse(readFileSync(result.receipt as string, 'utf8'))
+    const verifyEntry = receipt.templates.find((entry: JsonObject) => entry.desired.template === 'verify_email_by_code')
+    assert.equal(verifyEntry.updated, true)
+    assert.equal(verifyEntry.previous.subject, olderVerify.subject)
+    assert.equal(verifyEntry.previous.body, olderVerify.body)
+
+    // An edit made after the apply is not the run's to undo.
+    templates.get('verify_email_by_code')!.body = '<p>Edited in the dashboard {{ code }}</p>'
+    assert.throws(
+      () => Auth0EmailProviderConfigurator.rollback(result.receipt as string, client),
+      /refusing to restore changed Auth0 email template 'verify_email_by_code'/,
+    )
+
+    templates.get('verify_email_by_code')!.body = desiredVerify.body
+    const rollback = Auth0EmailProviderConfigurator.rollback(result.receipt as string, client)
+    assert.deepEqual(rollback.restoredTemplates, ['verify_email_by_code'])
+    assert.equal(templates.get('verify_email_by_code')?.subject, olderVerify.subject)
+    assert.equal(templates.get('verify_email_by_code')?.body, olderVerify.body)
+
+    const repeatedRollback = Auth0EmailProviderConfigurator.rollback(result.receipt as string, client)
+    assert.deepEqual(repeatedRollback.restoredTemplates, [])
+  } finally {
+    rmSync(receiptDirectory, { recursive: true, force: true })
+  }
+})
+
 test('Auth0 email-provider template-only runs refuse a tenant the login policy would refuse', () => {
   const configurator = (provider: JsonObject | null, fromAddress = 'no-reply@boxlite.example') =>
     new Auth0EmailProviderConfigurator(

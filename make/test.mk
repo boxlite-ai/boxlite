@@ -11,6 +11,8 @@ PHONY_TARGETS += test\:apps\:ci-listener
 PHONY_TARGETS += _local-registry
 PHONY_TARGETS += _guest-boot-probe
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
+PHONY_TARGETS += test\:integration\:c\:agents
+PHONY_TARGETS += test\:integration\:agent-sdk-parity
 PHONY_TARGETS += test\:integration\:lifecycle-race
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -48,6 +50,9 @@ PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
 GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
+# RACE=1 runs the Go suites under the race detector; the detector's slowdown
+# pushes the full SDK suite past half an hour, so race runs get an hour.
+GOTEST_RACE      = $(if $(RACE),-race -timeout 60m,)
 
 # The Rust unit-test crate set, shared by test:unit:rust and the coverage
 # targets so coverage measures exactly what the unit suite runs. Test builds
@@ -519,6 +524,28 @@ test\:perf\:import-export: runtime
 		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
 
 # BoxLite C SDK unit tests.
+test\:integration\:c\:agents:
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
+		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
+	@$(MAKE) dev:c
+	@mkdir -p sdks/c/tests/build
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
+	@cd sdks/c/tests/build && cmake --build . --target test_agents_opencode -j
+	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
+		cargo test -p boxlite-c --lib c_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
+
+# Run the same OpenCode scenario in Rust, Python and Node, comparing each SDK
+# result with the Rust result produced in this invocation.
+test\:integration\:agent-sdk-parity: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { echo "Set BOXLITE_TEST_OPENCODE_BINARY" >&2; exit 1; }
+	@set -eu; parity_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/boxlite-agent-parity.XXXXXXXX")"; \
+	trap 'rm -rf "$$parity_dir"' EXIT; \
+	export BOXLITE_AGENT_RUST_BASELINE="$$parity_dir/rust.json"; \
+	$(MAKE) test:integration:agents SETUP_DONE=1 CARGOTEST_FILTER=opencode_agent_creates_sends_streams_and_waits NEXTEST_FILTER="-E 'test(opencode_agent_creates_sends_streams_and_waits)' --no-tests=pass"; \
+	test -s "$$BOXLITE_AGENT_RUST_BASELINE"; \
+	$(MAKE) test:integration:python SETUP_DONE=1 PYTEST_FILTER='-k python_agent_opencode_flow'; \
+	$(MAKE) test:integration:node SETUP_DONE=1 VITEST_FILTER='tests/agents-opencode.integration.test.ts'
+
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
@@ -658,7 +685,7 @@ test\:all\:c:
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
 	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
+	@cd sdks/go && go test -tags boxlite_dev $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.
@@ -698,6 +725,11 @@ test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
+PHONY_TARGETS += test\:apps\:infra\:auth0
+test\:apps\:infra\:auth0: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:tooling
+	@cd apps/infra && node --import tsx --test bootstrap/auth0*.test.ts bootstrap/configure-auth0-login.test.ts
+
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy
@@ -735,7 +767,7 @@ test\:apps\:github-ci-runner: _ensure-apps-deps
 
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
-	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+	@cd apps/runner && go test -tags boxlite_dev $(GOTEST_RACE) ./... $(GOTEST_FILTER)
 
 PHONY_TARGETS += test\:integration\:runner
 test\:integration\:runner: dev\:go
@@ -820,8 +852,6 @@ test\:e2e\:deps\:node:
 test\:e2e\:build\:python:
 	@"$(E2E_PYTHON)" -m uv pip install --python "$(E2E_PYTHON)" --no-deps --no-build-isolation --config-settings 'build-args=--locked --profile dev' --editable sdks/python
 
-test\:e2e\:build\:minio:
-	@python3 apps/e2e/minio.py --state-dir "$(E2E_STATE_DIR)"
 
 # Go's build cache does not track external CGO archives.
 test\:e2e\:build\:runner:

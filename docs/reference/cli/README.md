@@ -761,7 +761,9 @@ than the one the box has.
 A directory that merely *contains* a mount is treated differently per direction. Copying
 one **out** is refused (`boxlite cp box:/etc ./etc`), since the archive would carry the
 image's files rather than the mounted ones. Copying **in** is allowed, and refused only
-if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works.
+if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works. The
+copy streams into the box, so that file is refused before it is written, and the files
+written before it stay.
 
 Copy a path outside the mount, or pipe a tar through `boxlite exec`. Files copied in are
 owned by the box's exec user.
@@ -1157,6 +1159,10 @@ logging still applies.
 
 Run a long-running REST API server. The server holds a single `BoxliteRuntime` and exposes the full REST surface for `boxlite --url ...` clients and the language SDKs' REST mode.
 
+Open `http://127.0.0.1:8100/` for the web console, which manages boxes, images and volumes through the same API. With `--api-key`, the console asks for the key once and keeps an `HttpOnly` session cookie until `serve` restarts.
+
+A browser guard runs before auth and answers `403` when the `Origin` header differs from `Host`, blocking cross-site pages and their WebSocket upgrades. SDK and CLI clients send no `Origin` and are unaffected; see the [serve README](../../../src/cli/src/commands/serve/README.md#auth--config).
+
 **Options:**
 
 | Flag | Default | Description |
@@ -1166,6 +1172,7 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 | `--home PATH` | `~/.boxlite` | Absolute runtime data directory; env `BOXLITE_HOME` |
 | `--host ADDR` | `127.0.0.1` | Bind address. Any non-loopback address (e.g. `0.0.0.0`) requires `--api-key`; `serve` refuses to start otherwise. |
 | `--api-key KEY` | unset | Require this exact `Authorization: Bearer` value (constant-time match) on every route except `GET /v1/config`; env `BOXLITE_SERVE_API_KEY`. Unset is permissive. |
+| `--allowed-host HOST` | none | Extra `Host` name accepted while bound to loopback; repeatable. A loopback-bound server answers `403` to any other name, so a DNS-rebinding web page cannot reach it. Use this for a reverse proxy that forwards its own name. |
 | `--registry REGISTRY` | none | Image registry; repeatable and prepended to config |
 | `--config PATH` | none | JSON runtime configuration file |
 
@@ -1291,6 +1298,9 @@ Used by `run` and `exec` (defined in `src/cli/src/cli.rs`).
 | `--env KEY[=VALUE]` | `-e` | Set environment variables (repeatable; a bare key inherits from the host) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 | `--user NAME[:GROUP]` | `-u` | Run as `name`/`uid`[:`group`/`gid`] |
+
+Environment values may contain spaces and double quotes. For example,
+`-e 'X={"a": "b c"}'` passes the JSON value to the box unchanged.
 
 For `run`, `--tty` always requires TTY-attached stdin, including with
 `--detach`. Foreground `exec --tty` has the same requirement and implies

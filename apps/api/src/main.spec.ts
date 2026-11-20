@@ -104,6 +104,7 @@ describe('API bootstrap listener', () => {
     })
     expect(httpServer.requestTimeout).toBe(0)
     expect(service.start).toHaveBeenCalledTimes(1)
+    expect(listen.mock.invocationCallOrder[0]).toBeLessThan(service.start.mock.invocationCallOrder[0])
     const { readFileSync } = require('node:fs')
     expect(readFileSync).toHaveBeenCalledWith(expect.stringContaining('/openapi/box.openapi.yaml'), 'utf8')
     if (specs) {

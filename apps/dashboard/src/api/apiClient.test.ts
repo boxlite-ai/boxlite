@@ -3,6 +3,52 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
+describe('coupon link claims', () => {
+  const claim = { eventId: 'evt_coupon_001', couponCode: 'ABCD-EFGH' }
+
+  it('posts the claim to BoxLite with the signed-in user and reads the pending receipt', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 202, { status: 'pending', result: null }, requests)
+    await expect(api.claimCoupon('org/one', claim)).resolves.toEqual({ status: 'pending', result: null })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      method: 'post',
+      baseURL: 'http://api.test/api',
+      url: '/organizations/org%2Fone/coupon-claims',
+      data: JSON.stringify(claim),
+      headers: { Authorization: 'Bearer tok' },
+    })
+  })
+
+  it('preserves a definitive coupon refusal', async () => {
+    const api = await makeClient(vi.fn(), 409, { code: 'coupon_expired', message: 'This coupon has expired.' })
+    await expect(api.claimCoupon('org', claim)).rejects.toThrow('This coupon has expired.')
+  })
+
+  it('asks the owner to sign in again when a 401 cannot start reauthentication', async () => {
+    const failure = new Error('Could not clear the expired session')
+    const removeUser = vi.fn().mockRejectedValue(failure)
+    const api = await makeClient(removeUser, 401)
+
+    await expect(api.claimCoupon('org', claim)).rejects.toMatchObject({
+      message: expect.stringMatching(/sign in again/i),
+      cause: failure,
+    })
+    expect(removeUser).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['disconnected', {}],
+    [503, {}],
+    [200, { status: 'pending', result: null }],
+    [202, { status: 'done', result: null }],
+  ] as const)('treats a request without a valid acceptance as unconfirmed (%s)', async (status, body) => {
+    const api = await makeClient(vi.fn(), status, body)
+    const { CouponClaimUnconfirmedError } = await import('./coupon-claim')
+    await expect(api.claimCoupon('org', claim)).rejects.toBeInstanceOf(CouponClaimUnconfirmedError)
+  })
+})
+
 describe('ApiClient domains', () => {
   it('uses separate setup routes and unchanged portable binding fields', async () => {
     const requests: any[] = []
@@ -98,12 +144,10 @@ it('sends the dashboard activity source without inventing an SDK version', async
   }
 })
 
-// Fresh module per test so the module-level `isHandlingUnauthorized` guard
-// doesn't leak across cases. A custom axios adapter makes every request resolve
-// to `status` with an empty body, so the response interceptor sees the 401.
+// Each client starts with fresh reauthentication state and uses the real response interceptor.
 async function makeClient(
   onUnauthorized: () => Promise<void> | void,
-  status = 401,
+  status: number | 'disconnected' = 401,
   body: unknown = {},
   requests: any[] = [],
   headers: Record<string, string> = {},
@@ -113,8 +157,9 @@ async function makeClient(
   // A custom adapter must settle the response itself (axios doesn't re-apply
   // validateStatus to a custom adapter's return), so reject non-2xx with an
   // AxiosError carrying `.response`, exactly like the built-in adapters.
-  axios.defaults.adapter = (async (cfg: unknown) => {
+  axios.defaults.adapter = async (cfg) => {
     requests.push(cfg)
+    if (status === 'disconnected') throw new axios.AxiosError('Network Error', axios.AxiosError.ERR_NETWORK, cfg)
     const response = {
       data: typeof body === 'function' ? body(cfg) : body,
       status,
@@ -123,12 +168,8 @@ async function makeClient(
       config: cfg,
     }
     if (status >= 200 && status < 300) return response
-    const err = new Error(`Request failed with status code ${status}`) as Error & Record<string, unknown>
-    err.response = response
-    err.config = cfg
-    err.isAxiosError = true
-    throw err
-  }) as never
+    throw new axios.AxiosError(`Request failed with status code ${status}`, undefined, cfg, undefined, response)
+  }
   const { ApiClient } = await import('./apiClient')
   return new ApiClient(config, 'tok', onUnauthorized)
 }

@@ -198,17 +198,22 @@ async fn opencode_agent_creates_sends_streams_and_waits() {
     );
 
     let turn_id = turn.state().unwrap().id;
-    let enqueued = tokio::time::timeout(Duration::from_secs(30), async {
-        while let Some(event) = events.next().await {
-            let event = event.unwrap();
-            if event.kind == "session.inbox.enqueued" {
-                return event;
-            }
-        }
-        panic!("event stream ended before the turn was enqueued");
-    })
-    .await
-    .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(30), events.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.kind, "session.inbox.enqueued");
+    assert_eq!(first.turn_id.as_deref(), Some(turn_id.as_str()));
+    if let Some(path) = std::env::var_os("BOXLITE_AGENT_RUST_BASELINE") {
+        let baseline = serde_json::json!({
+            "result": boxlite::agents::records::result(&result),
+            "event": boxlite::agents::records::event(&first),
+            "turn_id": turn_id,
+        });
+        std::fs::write(path, serde_json::to_vec(&baseline).unwrap()).unwrap();
+    }
+    let enqueued = first;
     assert_eq!(enqueued.turn_id.as_deref(), Some(turn_id.as_str()));
 
     // A second handle, as another process would obtain it, reuses the service.

@@ -40,6 +40,8 @@ def configure(stage: str, url: str, environment, destination: Path) -> None:
                 raise RuntimeError("p2_readonly must have only read permissions or none")
         elif not {"write:boxes", "delete:boxes"} <= permissions:
             raise RuntimeError(f"{name} requires write:boxes and delete:boxes")
+        if name == "p2" and not {"read:images", "delete:images"} <= permissions:
+            raise RuntimeError("p2 requires read:images and delete:images for the catalog lane")
         profiles[name] = dict(url=url.rstrip("/"), api_key=key, auth_method="api_key", path_prefix=prefix)
 
     if stage in ("dev", "stage"):

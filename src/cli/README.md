@@ -429,7 +429,7 @@ win over server values; `OIDC_CLIENT_ID` is a fallback, not an override for
 `/api/config`. Do not provide a client secret. An `unauthorized_client` error
 can mean an unknown/wrong client or a disabled grant: check the CLI client ID
 and issuer, then ask the IdP administrator to verify the Device Code grant.
-For Dex, enable `oauth2.deviceFlow: {}` in `apps/dex/config.yaml`.
+The local Rauthy client in `apps/rauthy/bootstrap/clients.json` enables it.
 
 Device login prints the verification URL and one-time user code on stderr.
 Complete authorization in a browser while the CLI polls. Ctrl-C cancels polling;
@@ -742,6 +742,11 @@ List cached images.
 | `--format FMT` | | Output format: `table`, `json`, `yaml`; conflicts with `--quiet` |
 
 ### `boxlite cp`
+
+Native copies stream tar chunks while packing or extracting, without staging a
+complete archive. Transfers can leave partial destination files on failure;
+failed uploads can also leave root-owned files because ownership is adjusted
+after successful extraction. Older remote peers may buffer transfers.
 
 Copy files or directories between host and box.
 

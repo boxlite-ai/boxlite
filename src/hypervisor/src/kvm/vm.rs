@@ -7,7 +7,7 @@ use kvm_bindings::{KVM_API_VERSION, KVM_PIT_SPEAKER_DUMMY, kvm_pit_config};
 use kvm_ioctls::{Cap, Kvm, VmFd};
 
 use super::KvmVcpu;
-use super::memory::MemorySlots;
+use super::memory::{MAX_PAGES_PER_SLOT, MemorySlots};
 use crate::{Error, MemoryRegion, Result};
 
 /// An x86_64 KVM VM with an in-kernel interrupt controller and timer.
@@ -23,20 +23,17 @@ pub struct KvmVm {
     cpuid: Vec<crate::X86CpuidEntry>,
 }
 
-impl KvmVm {
-    /// Opens `/dev/kvm`, verifies the required API, and creates the empty VM.
-    pub fn new() -> Result<Self> {
-        Self::with_kick_signal(libc::SIGRTMIN() + 1)
-    }
+/// A checked KVM system handle and the supported CPUID for a prospective VM.
+#[derive(Debug)]
+pub struct PreparedKvm {
+    kvm: Kvm,
+    kick_signal: i32,
+    cpuid: Vec<crate::X86CpuidEntry>,
+}
 
-    /// Selects an application-reserved realtime signal for vCPU workers.
-    /// It must retain its default disposition and be unblocked before creation.
-    pub fn with_kick_signal(signal: i32) -> Result<Self> {
-        super::kick::validate_signal(signal).map_err(Error::CreateVm)?;
-        Self::create(signal).map_err(Error::CreateVm)
-    }
-
-    fn create(kick_signal: i32) -> io::Result<Self> {
+impl PreparedKvm {
+    fn open(kick_signal: i32) -> io::Result<Self> {
+        super::kick::validate_signal(kick_signal)?;
         let kvm = Kvm::new().map_err(|error| {
             let source = io::Error::from_raw_os_error(error.errno());
             if matches!(source.raw_os_error(), Some(libc::ENOENT | libc::ENODEV)) {
@@ -68,6 +65,25 @@ impl KvmVm {
                 ));
             }
         }
+        let cpuid = super::features::supported_cpuid(&kvm)?;
+        Ok(Self {
+            kvm,
+            kick_signal,
+            cpuid,
+        })
+    }
+
+    /// KVM-supported guest CPUID before the VMM applies guest topology/policy.
+    pub fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+        &self.cpuid
+    }
+
+    fn create(self) -> io::Result<KvmVm> {
+        let Self {
+            kvm,
+            kick_signal,
+            cpuid,
+        } = self;
         // SAFETY: sysconf has no pointer arguments and does not modify memory.
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
         if page_size <= 0 {
@@ -84,16 +100,40 @@ impl KvmVm {
             ..Default::default()
         })
         .map_err(io::Error::from)?;
-        Ok(Self {
+        Ok(KvmVm {
             fd,
             slots: Mutex::new(MemorySlots::new(kvm.get_nr_memslots(), page_size as usize)),
             run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
             kick_signal,
-            cpuid: super::features::supported_cpuid(&kvm)?,
+            cpuid,
         })
     }
+}
 
-    /// Host-supported CPUID values before the VMM applies guest topology/policy.
+impl KvmVm {
+    /// Opens `/dev/kvm`, verifies the required API, and creates the empty VM.
+    pub fn new() -> Result<Self> {
+        Self::from_prepared(Self::prepare()?)
+    }
+
+    /// Selects an application-reserved realtime signal for vCPU workers.
+    /// It must retain its default disposition and be unblocked before creation.
+    pub fn with_kick_signal(signal: i32) -> Result<Self> {
+        Self::from_prepared(PreparedKvm::open(signal).map_err(Error::CreateVm)?)
+    }
+
+    /// Opens `/dev/kvm`, verifies the required API and queries supported CPUID
+    /// without creating a VM. Uses the default vCPU kick signal.
+    pub fn prepare() -> Result<PreparedKvm> {
+        PreparedKvm::open(libc::SIGRTMIN() + 1).map_err(Error::CreateVm)
+    }
+
+    /// Creates the VM on a prepared KVM system handle and retains its CPUID.
+    pub fn from_prepared(prepared: PreparedKvm) -> Result<Self> {
+        prepared.create().map_err(Error::CreateVm)
+    }
+
+    /// KVM-supported guest CPUID before the VMM applies guest topology/policy.
     pub fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
         &self.cpuid
     }
@@ -128,11 +168,20 @@ impl KvmVm {
                 .slots
                 .lock()
                 .map_err(|_| io::Error::other("KVM memory slot lock is poisoned"))?;
-            slots.map(region, |mapping| {
-                // SAFETY: the caller guarantees valid backing memory. MemorySlots
-                // checks the ranges and retains the slot only after KVM accepts it.
-                unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)
-            })
+            slots.map_chunks(
+                region,
+                MAX_PAGES_PER_SLOT,
+                |mapping| {
+                    // SAFETY: the caller guarantees valid backing memory. MemorySlots
+                    // checks the ranges and retains the slot only after KVM accepts it.
+                    unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)
+                },
+                |mapping| {
+                    // SAFETY: a zero-sized region deletes the slot; KVM does not
+                    // dereference the supplied userspace address.
+                    unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)
+                },
+            )
         };
         install().map_err(|source| Error::MapMemory {
             guest_addr: region.guest_addr,
@@ -141,15 +190,16 @@ impl KvmVm {
         })
     }
 
-    /// Removes exactly the mapping identified by all three region fields.
-    /// A failed removal retains the slot and its backing-memory requirements.
+    /// Removes the slots for the exact region previously passed to `map_memory`.
+    /// An unrecorded region is a no-op. A failed removal retains the slot and
+    /// its backing-memory requirements.
     pub fn unmap_memory(&self, region: &MemoryRegion) -> Result<()> {
         let remove = || {
             let mut slots = self
                 .slots
                 .lock()
                 .map_err(|_| io::Error::other("KVM memory slot lock is poisoned"))?;
-            slots.unmap(region, |mapping| {
+            slots.unmap_chunks(region, |mapping| {
                 // SAFETY: a zero-sized region deletes the slot; KVM does not
                 // dereference the supplied userspace address.
                 unsafe { self.fd.set_user_memory_region(mapping) }.map_err(io::Error::from)

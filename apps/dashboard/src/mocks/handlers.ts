@@ -55,6 +55,28 @@ import {
 
 const BILLING_API_URL = `${window.location.origin}/api/billing`
 const API_URL = import.meta.env.VITE_API_URL
+// Keep the selected billing fixture through client-side onboarding/navigation.
+const billingPreview = new URLSearchParams(window.location.search).get('preview')
+const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-user-unfunded'
+
+// Saved cards answer set-default and remove like the billing API: removing the
+// default card promotes the next saved card.
+const MOCK_PAYMENT_METHODS: PaymentMethod[] = [
+  {
+    id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
+    isDefault: true,
+    paymentProviderType: 'stripe',
+    providerMethodId: 'pm_mock_visa',
+    details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
+  },
+  {
+    id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
+    isDefault: false,
+    paymentProviderType: 'stripe',
+    providerMethodId: 'pm_mock_mastercard',
+    details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
+  },
+]
 
 // Quickstart's agent handoff waits for a box created after it handed the key
 // over, then for that box enabling inbound access. Static fixtures can reach neither
@@ -63,16 +85,16 @@ const API_URL = import.meta.env.VITE_API_URL
 function quickstartHandoffDemoBox() {
   const stage = globalThis.localStorage?.getItem('qs-publish-demo')
   if (stage !== 'created' && stage !== 'published') return null
-  return {
-    ...MOCK_BOXES[0],
+  return buildBox({
     id: 'mock-box-agent',
     name: 'agile-otter',
+    state: BoxState.STARTED,
     createdAt: new Date().toISOString(),
     network: {
       outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
       inbound: { mode: stage === 'published' ? NetworkMode.ENABLED : NetworkMode.DISABLED, allow_net: [] },
     },
-  }
+  })
 }
 
 /** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
@@ -94,7 +116,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 
 export const handlers = [
   ...resourceStateHandlers(API_URL),
-  ...ciHandlers(),
+  ...ciHandlers(newUserPreview),
   ...sshHandlers,
   ...tunnelHandlers,
   ...domainHandlers(),
@@ -527,6 +549,34 @@ export const handlers = [
     })
   }),
   http.get(`${BILLING_API_URL}/plan`, async () => {
+    if (billingPreview === 'subscription-cards') {
+      return HttpResponse.json<Plan[]>([
+        {
+          id: 'starter',
+          name: 'NoSubscription',
+          priceMonthlyCents: 0,
+          includedQuotaCents: 0,
+          concurrencyLimit: 20,
+          selfServe: true,
+        },
+        {
+          id: 'pro',
+          name: 'Go',
+          priceMonthlyCents: 500,
+          includedQuotaCents: 2000,
+          concurrencyLimit: 40,
+          selfServe: true,
+        },
+        {
+          id: 'max',
+          name: 'Team',
+          priceMonthlyCents: 10000,
+          includedQuotaCents: 40000,
+          concurrencyLimit: 1000,
+          selfServe: true,
+        },
+      ])
+    }
     // Mirrors the billing service's own standard-plan catalog (Subscription.md
     // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
     // data — and is not self-serve.
@@ -566,37 +616,36 @@ export const handlers = [
     ])
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/wallet`, async () => {
+    const preview = billingPreview
+    if (preview === 'balance-error') return new HttpResponse(null, { status: 503 })
     return HttpResponse.json<OrganizationWallet>({
-      balanceCents: 1000,
-      ongoingBalanceCents: 1000,
+      balanceCents: newUserPreview ? 0 : 1000,
+      ongoingBalanceCents:
+        newUserPreview || ['balance-empty', 'balance-subscription'].includes(preview ?? '') ? 0 : 1000,
       name: 'Wallet',
-      creditCardConnected: true,
+      creditCardConnected: !newUserPreview,
       automaticTopUp: undefined,
-      creditGrantedCents: 10_000,
-      creditRemainingCents: 1_000,
       usageChargeMultiplier: '1.0000',
     })
   }),
+  http.post(`${API_URL}/organizations/:organizationId/coupon-claims`, async ({ request }) => {
+    const { couponCode } = (await request.json()) as { couponCode: string }
+    return couponCode === 'ACME50'
+      ? HttpResponse.json({ status: 'pending', result: null }, { status: 202 })
+      : HttpResponse.json({ code: 'coupon_not_found', message: 'Coupon not found.' }, { status: 404 })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/redeem-coupon/:code`, async ({ params }) =>
+    params.code === 'ACME50'
+      ? HttpResponse.json({ message: 'Coupon ACME50 redeemed: $50.00 added to your wallet' })
+      : HttpResponse.json({ message: `Coupon ${params.code} not found` }, { status: 400 }),
+  ),
   http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
+    if (newUserPreview)
+      return HttpResponse.json({ paymentMethods: [], meta: { currentPage: 1, totalPages: 0, totalCount: 0 } })
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
-    const paymentMethods: PaymentMethod[] = [
-      {
-        id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
-        isDefault: true,
-        paymentProviderType: 'stripe',
-        providerMethodId: 'pm_mock_visa',
-        details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
-      },
-      {
-        id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
-        isDefault: false,
-        paymentProviderType: 'stripe',
-        providerMethodId: 'pm_mock_mastercard',
-        details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
-      },
-    ]
+    const paymentMethods = MOCK_PAYMENT_METHODS
     const totalCount = paymentMethods.length
     const totalPages = Math.ceil(totalCount / perPage)
     const start = (page - 1) * perPage
@@ -612,7 +661,24 @@ export const handlers = [
       },
     })
   }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/payment-methods/:cardId/default`, ({ params }) => {
+    if (!MOCK_PAYMENT_METHODS.some((method) => method.id === params.cardId)) {
+      return new HttpResponse(null, { status: 404 })
+    }
+    for (const method of MOCK_PAYMENT_METHODS) method.isDefault = method.id === params.cardId
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${BILLING_API_URL}/organization/:organizationId/payment-methods/:cardId`, ({ params }) => {
+    const index = MOCK_PAYMENT_METHODS.findIndex((method) => method.id === params.cardId)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    const [removed] = MOCK_PAYMENT_METHODS.splice(index, 1)
+    if (removed.isDefault && MOCK_PAYMENT_METHODS.length > 0) MOCK_PAYMENT_METHODS[0].isDefault = true
+    return new HttpResponse(null, { status: 204 })
+  }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
+    const preview = billingPreview
+    if (newUserPreview || preview === 'balance-wallet') return HttpResponse.json({})
+    const empty = preview === 'balance-empty' || preview === 'balance-wallet-fallback'
     // Mirrors the billing service's own mock seed: pro, a quarter used,
     // pinned mid-cycle so the meter renders deterministically. The real
     // route wraps this in a `plan` key ({} means no live plan), never a
@@ -620,13 +686,13 @@ export const handlers = [
     return HttpResponse.json<{ plan?: OrganizationPlan }>({
       plan: {
         planId: 'pro',
-        planName: 'Pro',
+        planName: preview === 'subscription-cards' ? 'Go' : 'Pro',
         status: 'active',
         cycleFrom: new Date(Date.UTC(2026, 7, 5)),
         cycleTo: new Date(Date.UTC(2026, 8, 5)),
         includedQuotaCents: 25000,
-        quotaConsumedCents: 6250,
-        quotaRemainingCents: 18750,
+        quotaConsumedCents: empty ? 25000 : 6250,
+        quotaRemainingCents: empty ? 0 : 18750,
       },
     })
   }),
@@ -994,3 +1060,10 @@ export const handlers = [
     })
   }),
 ]
+
+// Reset after every handler factory has seeded its resources, including CI runners.
+if (newUserPreview) {
+  MOCK_BOXES.splice(0)
+  MOCK_PAGINATED_BOXES.items = MOCK_BOXES
+  MOCK_PAGINATED_BOXES.total = 0
+}

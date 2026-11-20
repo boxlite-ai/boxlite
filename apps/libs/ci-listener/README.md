@@ -90,10 +90,49 @@ replacement or release the replacement's purpose lock; concurrent retirement
 shares one operation. Tokens remain private and failed/unknown issuance records
 contain metadata only. PAT retirement closes the local handle without revoking
 the user's token. Hosts must close borrows and the provider during shutdown.
-Revocation alone does not complete retirement: the held entry remains available
-until its durable issuance record is deleted successfully. A failed deletion
-retries without revoking the already-closed token again. Lease loss still fences
-the state write and preserves the cleanup debt for reconciliation.
+After successful revocation, metadata deletion still uses the captured execution
+lease. Ordinary deletion failures retain the handle and retry without repeating
+revocation. If that write loses its lease, local retirement finishes and leaves
+the metadata to the current scheduler; remote revocation failures still retain
+the handle. This grants no stale owner permission to modify execution state.
+
+## Credential metadata collection
+
+New issuance metadata records its holder's lease owner, epoch and optional
+deployment, never the token. The current scheduler collects at most sixteen
+credential records per step, using database time and version-conditional writes.
+It skips the exact current holder and independently leased scan credentials.
+Issued App metadata is eligible at its persisted expiry; stale PAT borrow metadata
+requires a recorded former holder and never revokes the user's token. Unknown
+issuance, invalid expiry and legacy PAT records without holder proof remain.
+This collector cannot stop Boxes, unregister runners or change capacity.
+
+A malformed non-scan credential record aborts the current page without committing
+its metadata deletions or advancing the collection cursor. Subsequent cycles
+report `credential-collection` with `StateCorrupt` and retry the same page;
+records on later pages remain uncollected until an operator repairs the original
+record or restores consistent state. Corruption does not authorize skipping or
+deleting unknown metadata, revoking a PAT, or releasing worker capacity.
+
+## Deployment retirement
+
+A positively observed higher deployment permanently retires the old Listener;
+temporary same-deployment lease loss still permits recovery and reacquisition.
+The old process stops scheduling and new compensation claims, cancels discovery
+and replay, and closes its worker/backend, scanner and host credential owners.
+Every owner is attempted even when another close fails. Pending local revocation
+uses exponential retry delay capped at sixty seconds without restarting scheduling.
+An in-flight scan opening or uncancellable worker create does not delay the
+other owners' retirement. The old Listener retains ownership until each actual
+operation settles, closes any late reader without
+querying GitHub, and retries failed retirement before returning.
+
+The current owner restores existing Box/runner identities, allocations and quota;
+deployment never resets capacity or stops a running worker merely because its
+creator retired. Authorized webhook ingress remains available on a retired hosted
+API. Shared database/Redis pools and existing HTTP connections belong to the API
+host's lifecycle. Retirement does not guarantee immediate instance termination or
+eliminate database connection pressure and lock contention.
 
 `GitHubJobs` verifies the original repository identity before and after reading a
 job. A job notice must match the repository, run and job IDs returned by GitHub.
@@ -103,6 +142,38 @@ set containing exactly one routing label: `boxlite` for configured defaults, or
 waiting, pending and requested workflow runs. A changing or truncated inventory,
 permission failure or API pagination cap is an error; callers retain their wake
 and retry discovery instead of acknowledging an incomplete pass.
+
+## Docker startup
+
+Every CI worker Box requests guest privilege and prepares Docker before starting
+the GitHub runner. Docker-dependent actions, service containers and scripts use
+the guest-local `/var/run/docker.sock`. Bootstrap runs as root; readiness probes
+and the GitHub runner execute as `runner` with the docker group active.
+
+```text
+Privileged CI Box -> Docker API ready -> run.sh -> workflow service containers -> steps
+```
+
+The official GitHub runner image supplies Docker binaries and util-linux `setpriv`.
+Bootstrap switches directly to `runner:docker`, initializes the runner's
+supplementary groups and sets `HOME`, `USER` and `LOGNAME` for both probes and
+runner execution. The image's sudoers grants the sudo group access but excludes
+root, so root bootstrap must not depend on sudo for this switch.
+
+Other environment variables, including JIT configuration, are inherited.
+Bootstrap installs `iptables` with apt when missing, starts `dockerd`, and probes
+the API as the runner user. Dependency installation and readiness share a
+120-second deadline; a ready daemon is reused.
+
+Preparation failures stop startup and print the last 60 daemon log lines.
+Failed JIT delivery stops an owned daemon;
+an existing daemon remains untouched. Normal teardown belongs to the Box lifecycle.
+
+Hosts need Docker-capable firmware and privileged guest support; standalone REST
+creation also requires privileged creation to be enabled. Custom worker images
+must supply Bash, Docker binaries, the docker group, util-linux `setpriv` and GNU
+timeout, plus apt when `iptables` is absent.
+See [Docker inside a Box](../../../docs/guides/docker-in-docker.md).
 
 ## Resource labels
 
@@ -193,11 +264,27 @@ The identity and its UUID record version remain stable throughout
 a scheduler's tenure. Renewal extends only the deadline; takeover increments the
 epoch and changes both records atomically.
 
-Execution checks, renewal and acquisition lock `@owner` before reading `@lease`.
+Execution checks hold a shared `FOR SHARE` lock on `@owner` before reading
+`@lease`, so unrelated readers and allocation transactions can overlap.
+Standby ticks and webhook receipts validate an initialized journal's roots and
+requested seeds in a consistent snapshot. A missing or legacy owner sends
+initialization through serialized bootstrap, which rereads the roots before
+creating or migrating them. Missing seeds in an existing journal fail validation.
+During a standby tick, acquisition reads the owner and deadline without a row
+lock. A live lease or a different deployment ends the probe immediately.
+Activation, takeover, bootstrap and renewal take the owner lock exclusively.
+An identity change therefore waits for guarded transactions to finish; renewal
+serializes deadline updates without upgrading a shared lock.
+Adapters without shared point reads fall back to the exclusive lock; SQLite
+serializes transactions at the file boundary.
 Renewal rejects an expired or replaced owner and never shortens its deadline,
-even if a caller requests a shorter TTL. A contender checks the committed deadline
-after obtaining the owner lock, so it cannot take over a live renewed lease.
+even if a caller requests a shorter TTL. A takeover candidate rechecks the
+deployment and deadline against database time after obtaining the owner lock.
 The lock is held until the database transaction commits or rolls back.
+
+A failed renewal cancels in-flight work for that Listener session. The
+`listener-renewal` warning identifies that operation before the session drains.
+Hosted database failures include the SQLSTATE code without query text or parameters.
 
 Snapshot checks read the deadline without locking that frequently updated row.
 For example, a snapshot can precede a renewal from 10:00:30 to 10:00:40 and still
@@ -317,12 +404,11 @@ Each effect records an operation UUID first. Resource IDs are immutable, and an
 unknown create cannot be reset, retried or settled through a missing-resource result.
 
 `WorkerPool` drives boot, JIT registration/delivery and cleanup through host-bound
-capabilities. It keeps JIT configuration in memory and never republishes an uncertain
-delivery. A triggering job supplies demand rather than an exclusive assignment:
+capabilities. JIT configuration stays in memory and is sent at most once. A triggering job supplies demand rather than an exclusive assignment:
 the Box may execute another authorized matching job. A completed notification alone
-does not stop it. An elapsed timeout or a successful runner DELETE is not proof
-that its Box is idle. Delivered workers remain running until actual Box exit;
-automatic idle retirement requires separate verification. Physical Box capacity
+does not stop it. An elapsed timeout or runner absence alone does not prove
+that its Box is idle. Delivered workers remain until actual exit or confirmed
+[idle retirement](#surplus-idle-retirement). Physical Box capacity
 returns after its original Box is confirmed absent. The allocation stays indexed
 until both original resources are absent, preserving original-resource cleanup.
 The host must enforce authority and execution epoch
@@ -335,7 +421,9 @@ Hosted API and standalone Listener Boxes use the same label-count scheduler.
 Signed `queued`, `in_progress` and `completed` observations update aggregate demand
 and minimal job facts atomically. Repository-scoped ingress transactions serialize
 the counter and wake, including their initial insertion. Duplicate or out-of-order
-transitions cannot increment demand twice or resurrect completed jobs.
+transitions cannot increment demand twice or resurrect locally known completed
+jobs. A first-seen historical queued replay can still look new, so these counters
+are wake hints rather than permission to add capacity.
 `job-fact.runner` records GitHub's actual assignment; it does not lock the job to a
 runner provisioned because of that job.
 
@@ -355,27 +443,171 @@ R is busy -> A remains queued -> provision matching capacity for A
 Busy and closing resources retain quota until original Box absence is confirmed,
 but do not count as available supply. Unknown creation outcomes retain their
 reservation and never repeat create POST. Pending registrations count
-conservatively as starting supply. Counter versions fence reservations against
-newer observations; short quota updates serialize without holding a lock over
-GitHub or Box network calls.
+conservatively as starting supply. Repository revisions and proof deadlines fence reservations against newer
+observations; short quota updates serialize without holding a lock over GitHub
+or Box network calls.
 
-Independent allocations advance concurrently without a fixed management
-concurrency ceiling. Reservations commit before HTTP starts, within existing
-organization/host limits. All started operations settle before the next pool
-round. Credentials are isolated by allocation; each runner preserves its own
-effect ordering and lease checks.
+The Listener schedules scope planning and allocation execution independently.
+Each reservation enters execution as soon as it commits; neither the remaining
+reservations nor a previous allocation's create/JIT response is a batch barrier.
+The in-process budgets are eight scope planners and 32 allocation consumers per
+owner, independently of organization/host quota. Credentials remain isolated by
+allocation, with original effect ordering and lease checks.
 
-Dirty/missing counts, compensation notices and positive counts older than 30
-seconds trigger an authoritative queue rebuild. Newer webhook versions prevent
-an older rebuild from overwriting them. A busy runner without a matching claim
-also requires a rebuild before replenishment, covering PAT hosts and missed
-running events. Job queries support recovery instead of ordinary per-allocation
-admission. Custom backends without supply inventory retain job-driven fallback.
+### Asynchronous allocation queue
 
-Reused runner IDs do not reject job observations. Ambiguous assignment observations
-force an authoritative queue rebuild. A repository whose refresh repeatedly races
-new webhooks defers admission while other repositories and resource cleanup proceed.
-Inventory failures block new reservations while allowing existing cleanup. A known
+`Listener` assembles four keyed `WorkQueue` indexes. Scope keys coalesce capacity
+planning, allocation keys coalesce resource execution, scope/repository/run keys
+coalesce job verification across eight lanes, and scope/repository keys coalesce
+complete queue reconciliation across two background lanes. One key has at most one
+active consumer, and changed work received during execution runs once afterward
+with its latest revision. Hosted uses the PostgreSQL journal; standalone uses the
+same protocol in SQLite. These are logical queues within the existing state
+store, with no additional broker or deployment unit.
+
+The indexes each retain at most 4096 pending/active keys. Rejected submissions
+remain durable; planning and execution rotate past rejected positions on a later wake instead of always favoring the first page. Pending consumers
+count against quota as starting supply. The queue reads each allocation again
+when execution starts, and each effect retains its lease and version checks.
+
+Queue errors back off for one and then two seconds; a third failure yields to
+periodic recovery for 60 seconds. Version conflicts reload without consuming that remote-failure budget. A newer
+revision received during a conflicting operation remains queued; allocation work
+revisions include their admission/retirement proof, so refreshed guards replace
+stale pending work. A retry reconciles the original intent: it does not
+repeat an uncertain create, runner registration or JIT configuration upload.
+
+A confirmed creation refusal returns quota immediately and delays replacement
+admission at the stable scope/resource-label boundary: one second, then two,
+then sixty seconds for the third and later refusals. New allocation keys and
+completion wakes do not reset this delay. Other labels and resource cleanup
+remain eligible. A successful persisted create clears its label's refusal
+history. This bounded history belongs to the pool in the current owner session;
+it is not a persisted cooldown across owner restarts.
+
+`queue-revision/<installation>/<repository>` is an ingress-owned observation
+fence. Webhook observations and changed authoritative snapshots advance it in
+the same transaction as their facts/counters. Unchanged snapshots retain their
+versions, so polling cannot continually invalidate waiting consumers. A scan
+captures the revision before HTTP and verifies it on commit, including when a
+wake was acknowledged during the request. Queued idle retirement checks captured repository revisions and proof deadlines
+in the same transaction as its original intent. The deadline is checked against
+the database clock after possible lock waits; asynchronous execution cannot reuse
+an expired snapshot. An undispatched reservation with no Box, runner, delivery
+or effect intent can return quota through allocation CAS without external cleanup.
+Issued or uncertain creation is never released on that basis. Pending retirement
+intents are reconsidered against current demand after restart.
+
+Stop or lease loss rejects new queue work and cancels cooperative requests.
+The owner waits for actual active operations; an uncancellable call can still
+delay shutdown. Backend closure also rejects late authorization results and
+prevents new worker credential providers from appearing after the close snapshot.
+Persisted uncertain operations remain recoverable by the next execution owner.
+
+When invoking `WorkerPool` directly without the Listener's executor, its existing
+awaited `tick`/`balance` interface remains available. Both production hosts use
+the Listener's asynchronous assembly.
+
+Rollout must drain older webhook writers before enabling this queue protocol:
+older binaries do not advance the repository observation fence. This is a writer
+compatibility requirement, not a database migration or permission to clear CI
+state. Admission and cleanup continue to enforce current host authority.
+
+### Notification admission and background correction
+
+A current notification identifies its repository, run and job. The owner pump
+fairly submits at most 32 notices at a time, grouped by scope, repository and run,
+to an independent verification queue. It does not await a submitted batch. Different
+runs in the same scope can verify concurrently, and each completion wakes planning.
+A pending run lookup does not block another run from reserving and creating workers.
+Verification tracks each notice version separately. For a run with 64 notices,
+verifying the second group of 32 preserves the first group's remaining lifetime.
+Scope planning reads accumulated evidence without awaiting job-query HTTP. Each
+planning pass uses a fixed starting cursor so it visits each scope at most once.
+Jobs in one run share its first jobs page; notified jobs missing from that page
+use direct job requests. Each repository batch owns one credential borrow and
+retains repository identity/visibility checks. Compatible backends without batch
+reads use point-job reads. Runner inventory is read after fresh verification,
+without an initial unverified inventory pass.
+
+Verified queued jobs accumulate across turns in the owner's memory, with a
+30-second lifetime starting before HTTP and a total budget of 4096 jobs. For example, 64 one-job runs
+can contribute 32 verified jobs in each of two turns; the second turn deducts
+existing starting/idle supply from the combined demand. Each repository ingress
+transaction revalidates accumulated `job-fact` versions and accepts new HTTP
+observations through the same monotonic state rules as webhooks. Recorded progress
+or completion cannot be replaced by a stale queued response. Reservations and
+create intents check the resulting repository revision and earliest proof deadline.
+An owner restart rebuilds this evidence; persisted counters remain hints.
+
+For each label, the pool subtracts workers already starting or available from
+verified demand before choosing which unissued reservations may create a Box.
+With one queued job, two unissued reservations and no started workers, only one
+reservation may create. The other waits for new demand or a complete surplus check.
+If the execution queue rejects the first reservation during retry backoff, the
+next eligible reservation for that label can use the same grant.
+
+Queued notices remain pending while their jobs are eligible. GitHub-confirmed
+non-queued jobs or complete background snapshots settle captured notice versions.
+A duplicate webhook does not add another counted job or reservation. Custom
+backends without supply inventory retain the job-driven fallback.
+
+Two background lanes coordinate complete scope scans, with at most four repository
+reads per scope and isolated credential providers. The queued status is sampled
+before the other four active statuses overlap, preserving queued-to-running transitions; a failure
+aborts and drains sibling requests before credential retirement. Each status keeps
+its pagination and completeness checks. Failed credential cleanup remains owned
+and must succeed before a replacement reader opens.
+
+Background scans retain the five-minute cadence. New dirty counter versions can
+request immediate correction; uncertain surplus requests are bounded separately.
+The existing compensation scanner continues publishing missed-job notices on
+replicas. A complete scan rebuilds persisted counts behind captured wake and
+repository revisions. Snapshot correction and admission reads share a repository
+lock while invalidating cached demand and committing the corrected counts. GitHub
+requests run outside that lock. Planning uses database time to check whether
+every repository's 30-second proof remains live. Early completions retain their
+original deadlines.
+For example, three 35-second reads start together rather than requiring a second wave.
+When scan skew exceeds the freshness window, or a scope exceeds 100 proof checks,
+`surplus-retirement-deferred` reports the reason and retries at the periodic cadence.
+New dirty versions can request correction sooner. Admission and stopped-resource
+recovery continue while physical surplus retirement waits. If both targeted
+verification and the background scan fail, the pool can still clean up stopped Boxes.
+If expansion would replace a newly busy runner without an assignment record,
+planning drops the cached snapshot and requests fresh job verification.
+Invalidated reads cannot repopulate evidence or publish a verification timestamp. This covers missed assignment notifications
+without treating an older queued observation as a new capacity grant.
+
+Each run verifier owns its credential handles. If token issuance has an unknown
+outcome, replacement readers share a 60-second retry delay for that repository
+and purpose. Many small runs increase issuance and retirement traffic. Deployment
+latency and shared GitHub rate limits still need workload measurements.
+
+Every repository in a scope must have a matching proof before physical surplus
+retirement, including cancellation of an unissued reservation. Partial positive
+evidence can add capacity but cannot establish surplus. More than 100 retirement checks defer retirement before the point lookup while bounded
+admission and stopped-resource recovery continue.
+
+```mermaid
+flowchart LR
+  W[Webhook / compensation notices] --> D[(State journal)]
+  D --> J[Job / run verification: 8 lanes]
+  J --> C[Versioned positive evidence]
+  C --> P[Scope planning: 8 lanes]
+  P --> I[Runner inventory and slot reservation]
+  I --> E[Allocation execution: 32 lanes]
+  E --> B[Create / JIT / original-resource cleanup]
+  R[Complete reconciliation: 2 lanes] --> G[Repository queue enumeration]
+  G --> D
+  D --> F[Complete revision proof]
+  F --> P
+```
+
+Reused runner IDs do not reject job observations. Ambiguous assignment observations request background queue correction. A repository whose complete scan races new observations cannot authorize physical
+retirement; independently verified positive jobs can still add capacity.
+Queue and inventory failures still allow known stopped/absent resource cleanup,
+but cannot dispatch an existing unsent reservation. A known
 runner missing from inventory or offline retains starting supply during the existing
 300-second bootstrap budget from its persisted `runner.registeredAt`; older records
 fall back to allocation creation time. A delayed registration therefore receives
@@ -392,9 +624,91 @@ demand is larger. Rotation admits later repositories as that supply becomes busy
 it does not guarantee filling the entire queue across windows. The window does
 not cap runners represented by one counter or replace organization quota.
 
-Only current counted scopes settle their repository notices. Retired scopes may
-recover existing resources but leave notices pending, so a replacement scope can
-admit the work even if its backend uses the job-driven fallback.
+### Transaction and lock budget
+
+Worker recovery validates the scope once per membership page. Ordinary state
+reads use parameterized batches of at most 100 keys. Each worker batch rechecks
+up to 32 original allocations with their membership and deduplication links in
+one fenced snapshot; missing workers require missing memberships too.
+
+Queue rebuilding reads job facts and counters in bounded batches and inserts
+missing facts in groups of at most 100. All groups share the existing repository
+ingress transaction, wake-version check and execution lease. A later conflict
+rolls back earlier batches; partial snapshots cannot authorize capacity changes.
+
+Consecutive expected-absent ordinary records can share an insert statement.
+The inserted count must match the complete batch or the transaction rolls back.
+Versioned updates, deletes, sorted mutation order and policy locks retain their
+existing contracts.
+
+Optional batch storage methods have a point-operation fallback; reads preserve caller order and duplicate ingress keys.
+
+Hosted transactions still serialize on the namespace's `@owner` row, and SQLite
+still uses `BEGIN IMMEDIATE`. Batching reduces repeated transactions and queries;
+it does not remove these locks or establish a production throughput guarantee.
+GitHub and Box requests execute outside state transactions. PostgreSQL statement
+and lock timeouts do not bound the total duration of a multi-statement transaction.
+
+### Surplus idle retirement
+
+Retirement uses the complete authoritative label aggregate, including counters
+outside the rotating reservation window. It cancels undispatched surplus first.
+An online, nonbusy runner whose JIT delivery is `requested` or `done` becomes a
+candidate only after 300 seconds from registration. This is a startup grace, not
+evidence of continuous idle time. Busy workers and capacity still needed by the
+queue remain.
+
+A lost JIT upload acknowledgement can leave a runner at `requested`. A Hosted
+Box with a recoverable delivery uses its original allocation, Box and platform
+runner identities. A recorded job claim or a matching online or busy runner
+proves startup. Otherwise the native record determines the next action.
+
+| Native JIT record | Recovery |
+| --- | --- |
+| Delivery unclaimed or configuration upload in progress | Seal the operation with a versioned write, then close the original allocation. A delayed upload cannot authorize ready after the seal. |
+| Configuration acknowledged and ready authorized | Recheck current authority and original Box placement, then write only the fixed ready marker. |
+| Historical single-attempt marker | Keep observing the runner through its startup grace. |
+
+The guest consumes the configuration once and removes both files before running
+the job. Repeating the ready marker can never supply another configuration.
+The scheduler checks current queued demand when it replaces a closed allocation.
+
+Before unregistering, the scheduler persists a distinct `runner-retire` intent
+under the original allocation, identity and execution lease. `retireIdle()` reads
+the original runner again and uses the classic repository/organization REST DELETE.
+Only exact HTTP 204 followed by complete original-runner absence permits recording
+retirement and stopping its original Box. Existing cleanup then deletes that Box;
+physical quota returns only after confirmed Box absence.
+
+| Result | Recovery |
+| --- | --- |
+| Runner busy, offline or already missing | Keep the Box; absence alone cannot authorize idle retirement. |
+| Busy refusal (422), 404, unexpected 2xx or lost acknowledgement | Preserve the intent and quota; retry eligible online-idle runners at most once per minute in that process. |
+| Confirmation write fails after unregistering | Keep the durable unconfirmed intent, including after restart; do not infer that stopping is safe. |
+| Original Box actually stops or disappears | Continue ordinary original-resource cleanup regardless of pending retirement. |
+
+Pending retirement suppresses the older missing/offline bootstrap forced-stop
+path. A lost acknowledgement can therefore need operator investigation instead
+of automatic Box stop. Restart resets local retry timing, not the durable intent.
+This deliberately favors preserving a possibly assigned job over reclaiming quota.
+
+The busy-refusal fence follows
+[legacy ARC's classic REST protocol](https://github.com/actions/actions-runner-controller/blob/89f34c4f782d4b488e6aecb66146407fee8eb3af/controllers/actions.summerwind.net/runner_graceful_stop.go#L403).
+[GitHub's endpoint documentation](https://docs.github.com/en/rest/actions/self-hosted-runners#delete-a-self-hosted-runner-from-a-repository)
+does not formally guarantee atomic rejection against concurrent assignment.
+Disposable classic-runner boundary validation remains necessary before deployment;
+unit checks do not establish that remote guarantee. ScaleSet runner APIs are a
+different protocol and are not used here.
+
+`runner-retire` extends the persisted effect discriminator without changing SQL
+tables. Older decoders fail closed on these records, including API state readers.
+Upgrade all readers sharing a namespace. Before rolling back, drain or explicitly
+recover pending retirement records; do not erase the journal or rewrite an
+uncertain retirement as ordinary cleanup.
+
+Only current counted scopes verify and settle repository notices. Queued notices
+remain pending for future capacity releases. Retired scopes recover existing
+resources while leaving admission to the current scope.
 
 A fallback replaces or removes a malformed aggregate only after a version-fenced
 queue snapshot. Terminal job observations prevent stale scans from recreating
@@ -454,17 +768,24 @@ failed retirement retains its handle for retry and reports the cleanup failure.
 
 ## Worker recovery and logs
 
+`ci-worker-reserved` records the completed reservation. Pending resource work
+emits `ci-worker-execution-started` with `queueWaitMs` and
+`ci-worker-execution-settled` with `durationMs`. These are management timings,
+not proof that a GitHub job started or that an external mutation succeeded.
+Healthy running allocations do not emit these timing events on every poll.
+
 The scheduler rotates through eight active scopes per recovery metadata page;
 this is pagination, not a management concurrency limit. The label-capacity path
 reads each pool's allocations once per round in 32-record pages, counts compatible
-supply from a complete GitHub inventory, and advances independent resources
-concurrently. It does not rescan the pool before every reservation. Custom
+supply from a complete GitHub inventory, and enqueues independent resources
+without awaiting their completion. It does not rescan the pool before every reservation. Custom
 backends without inventory retain their clean-round and membership-version
 admission guard. Unknown resources retain their original identity and quota.
 
-The native API can also record a definitive creation refusal when the typed
-Box creation-limit error occurs before `onPersist` begins. It stores the original
-scope and creation-operation UUID in the same ledger key that would hold a Box ID;
+The native API records a definitive creation refusal for any failure before
+`onPersist` begins, including throttling, placement, image policy and prerequisite
+lookups. It stores the original scope and creation-operation UUID in the same
+ledger key that would hold a Box ID;
 an expected-null CAS makes those outcomes mutually exclusive. Only this durable
 fact yields `ConfirmedWorkerCreationRejected`. Hosted authority revocation can
 use the same fence before dispatch or after a rejected native persistence
@@ -475,6 +796,12 @@ over refusal and remains available for cleanup. Restart can recover the fact thr
 the original worker lookup. The kernel checks the original pending operation and
 atomically retires its allocation and scope reference, leaving queued demand pending.
 It emits `ci-worker-create-rejected`; a later attempt gets a new allocation/name.
+
+Native lookup also corrects historical pending creates after five minutes from
+reservation. It verifies the original operation and absence of a Box/ledger before
+conditionally recording that refusal. A delayed Box transaction must acquire the
+same ledger key and rolls back if correction wins. Time alone is not absence proof;
+known IDs and unexpected same-name Boxes retain their existing ownership checks.
 
 Ordinary HTTP errors, timeouts, failed proof persistence and uncertain persistence
 outcomes keep the reservation. The standalone REST adapter does not infer this
@@ -530,7 +857,8 @@ allocations for recovery, and drives the shared worker pools. The
 host supplies an authoritative scope directory, bound execution adapters and an
 ingress transaction that checks the current binding. Receiving a notification
 stores its receipt, observed phase and aggregate demand before waking the
-scheduler; it needs no execution lease. Notifications grant no authority: actual
+scheduler; it needs no execution lease. Resource and scope task completion do
+not gate the next demand read. Notifications grant no authority: actual
 effects still check the original scope and host policy. Settlement uses the captured notice version, so a concurrent
 delivery stays pending.
 
@@ -539,7 +867,8 @@ large repository list earns no extra turns. Selection continues rotating across
 tenants and accounts until it selects 32 candidates or exhausts the current input.
 An account can supply multiple distinct candidates in one batch; a short batch
 returns immediately without waiting to fill. Admission still checks each job's
-capacity and recovery readiness separately, and resource operations remain sequential.
+capacity and recovery readiness separately; the Listener queues the resource
+operations independently from subsequent job admission.
 Capacity exhaustion retains the
 notice and skips admission-time GitHub job reads while the durable account or
 tenant quota is full. Independent compensation scans continue recording pending
@@ -817,6 +1146,7 @@ sequenceDiagram
   participant Ingress as Host webhook endpoint
   participant State as PostgreSQL or SQLite
   participant Listener as Shared Listener
+  participant Verifier as Run verification queue
   participant Boxes as Native BoxService or BoxLite REST API
   participant Runner as Official runner in CI Box
   GitHub->>GitHub: Commit, PR or release queues a matching workflow job
@@ -832,9 +1162,12 @@ sequenceDiagram
     Listener->>GitHub: Refresh the installation catalog in the background
     Listener->>State: Publish successful scopes and settle only captured wake versions
   end
-  Listener->>Listener: Select tenant and GitHub account fairly and check capacity
-  Listener->>GitHub: Fetch actual job with scoped Actions-read credential
-  GitHub-->>Listener: Original IDs, status, assignment and complete labels
+  Listener-->>Verifier: Fairly enqueue by scope, repository and run; continue pumping
+  Verifier->>GitHub: Fetch actual jobs with scoped Actions-read credential
+  GitHub-->>Verifier: Original IDs, status, assignment and complete labels
+  Verifier->>State: Merge effective facts and retain versioned positive evidence
+  Verifier-->>Listener: Wake capacity planning as each run completes
+  Listener->>GitHub: Read current compatible runner supply
   Listener->>State: Reserve quota and journal Box-create intent
   Listener->>Boxes: Create worker with official runner image and waiting bootstrap
   Boxes-->>Listener: Original Box ID

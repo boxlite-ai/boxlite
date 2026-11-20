@@ -65,13 +65,19 @@ func (r *Runtime) Metrics(ctx context.Context) (*RuntimeMetrics, error) {
 
 // Metrics returns real-time metrics for this box.
 func (b *Box) Metrics(ctx context.Context) (*BoxMetrics, error) {
+	handle, unlock, err := b.acquire()
+	if err != nil {
+		return nil, err
+	}
+
 	b.runtime.ensureDrainRunning()
 
 	ch := make(chan boxMetricsResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_metrics(b.handle, C.cbBoxMetrics(), handleToPtr(h), &cerr)
+	code := C.boxlite_box_metrics(handle, C.cbBoxMetrics(), handleToPtr(h), &cerr)
+	unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)

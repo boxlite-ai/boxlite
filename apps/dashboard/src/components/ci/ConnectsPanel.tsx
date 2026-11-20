@@ -63,6 +63,7 @@ export function ConnectsPanel() {
   const [editAllowPrivate, setEditAllowPrivate] = useState(false)
   const [expanded, setExpanded] = useState<string[]>([])
   const [filter, setFilter] = useState('')
+  const [connectionRevision, setConnectionRevision] = useState(0)
   const submitting = useRef(false)
   const hasInventory = settings.data !== undefined
   if (!owner || !hasInventory || !settings.data?.available) {
@@ -126,6 +127,7 @@ export function ConnectsPanel() {
     setMessage('')
     try {
       await api.deleteCiConnection(organization, binding)
+      setConnectionRevision((revision) => revision + 1)
       await cache.invalidateQueries({ queryKey: ['ci-settings', organization] })
       setPendingDelete(null)
       setMessage('Connection deleted.')
@@ -140,7 +142,11 @@ export function ConnectsPanel() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="resource-toolbar mb-[14px] items-start">
         <ResourceFilter label="Filter connections" value={filter} onChange={setFilter} count={connections.length} />
-        <CiConnectionFlow organization={organization} configuration={configuration.data} />
+        <CiConnectionFlow
+          key={`${organization}:${connectionRevision}`}
+          organization={organization}
+          configuration={configuration.data}
+        />
       </div>
       {settings.isError && (
         <ResourceErrorNotice
@@ -322,6 +328,7 @@ export function ConnectsPanel() {
               {editing && (
                 <CiRepositoryDetails
                   key={editing.binding_id}
+                  variant="summary"
                   api={api}
                   organization={organization}
                   context={{ kind: 'binding', id: editing.binding_id }}

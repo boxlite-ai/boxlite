@@ -1,5 +1,6 @@
 """Exercise managed E2E configuration and lifecycle boundaries without a VM."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import signal
@@ -280,7 +281,7 @@ class LocalE2ETest(unittest.TestCase):
 
     def test_compose_declares_all_dependency_services(self):
         compose = (local.E2E / "compose.yaml").read_text()
-        for service in ("postgres", "redis", "registry", "dex", "minio"):
+        for service in ("postgres", "redis", "registry", "rauthy", "rustfs"):
             self.assertIn(f"  {service}:", compose)
 
     def test_environment_has_persistent_unpredictable_credentials_and_loopback_binding(self):
@@ -290,10 +291,17 @@ class LocalE2ETest(unittest.TestCase):
         self.assertNotEqual(env["ADMIN_API_KEY"], "e2e-admin-key")
         self.assertEqual(env["ADMIN_API_KEY"], local.base_env()["ADMIN_API_KEY"])
         self.assertEqual(env["PGPASSWORD"], env["POSTGRES_PASSWORD"])
-        self.assertEqual(env["S3_SECRET_KEY"], env["MINIO_PASSWORD"])
+        self.assertEqual(env["S3_SECRET_KEY"], env["RUSTFS_PASSWORD"])
         self.assertEqual(env["BOXLITE_HOME"], str(local.STATE / "client-home"))
         with patch.object(local, "STATE", self.state / "other"):
             self.assertNotEqual(env["ADMIN_API_KEY"], local.base_env()["ADMIN_API_KEY"])
+
+    def test_existing_credentials_gain_new_keys_without_rotating_old_ones(self):
+        (self.state / "credentials.json").write_text(json.dumps({"ADMIN_KEY": "kept"}))
+        first = local.load_credentials()
+        self.assertEqual(first["ADMIN_KEY"], "kept")
+        self.assertEqual(set(first), set(local.CREDENTIALS))
+        self.assertEqual(local.load_credentials(), first)
 
     def test_status_cannot_observe_truncated_pid_records(self):
         local.save_pids({"api": {"pid": 123, "starttime": "456"}})
@@ -330,7 +338,7 @@ class LocalE2ETest(unittest.TestCase):
                 mocks.enter_context(patch.object(local, name))
             build = mocks.enter_context(patch.object(local, "build"))
             start = mocks.enter_context(patch.object(local, "start"))
-            mocks.enter_context(patch.object(local, "compose", return_value="postgres redis registry dex minio"))
+            mocks.enter_context(patch.object(local, "compose", return_value="postgres redis registry rauthy rustfs"))
             mocks.enter_context(patch.object(local, "compose_services", return_value=set()))
             mocks.enter_context(patch.object(local, "box_processes", return_value=[]))
             mocks.enter_context(patch.object(local, "process_matches", return_value=True))
@@ -420,7 +428,7 @@ class LocalE2ETest(unittest.TestCase):
                 patch.object(local, "prune_box_dirs"):
             with self.assertRaisesRegex(local.Failure, "readiness"):
                 local.up({})
-        self.assertIn(("down",), events)
+        self.assertIn(("down", "--remove-orphans"), events)
         stop.assert_called()
 
     def test_build_failure_does_not_stop_existing_stack(self):
@@ -463,10 +471,12 @@ class LocalE2ETest(unittest.TestCase):
                 patch.object(local, "stop_orphaned_boxes", return_value=[]):
             with self.assertRaises(KeyboardInterrupt):
                 local.up({})
-        self.assertNotIn(["down"], events)
+        self.assertEqual([args for args in events if args[:1] == ["down"]], [])
         removed = [args for args in events if args[:3] == ["rm", "-s", "-f"]]
         self.assertEqual(len(removed), 1)
         self.assertNotIn("postgres", removed[0])
+        # Services dropped from compose.yaml (dex, minio) must not keep their ports.
+        self.assertIn(["up", "-d", "--remove-orphans"], events)
 
 
     def test_owned_process_is_scoped_to_this_checkout(self):

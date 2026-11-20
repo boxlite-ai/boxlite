@@ -21,8 +21,17 @@ pub enum Error {
     Filesystem(io::Error),
     /// Binding or configuring the host bridges failed.
     Vsock(io::Error),
-    /// The RAM size is outside `1..=memory::MAX_MEMORY_MIB`.
+    /// An invalid RAM size was requested.
     InvalidMemorySize(u32),
+    /// A guest RAM range extends beyond a host or boot address limit.
+    GuestMemoryAddressLimit {
+        memory_mib: u32,
+        end: u64,
+        limit_end: u64,
+        limit: &'static str,
+    },
+    /// The host's guest-memory capabilities are invalid or insufficient.
+    HostMemoryCapability(io::Error),
     /// Allocating the guest RAM failed.
     AllocateMemory { bytes: u64, source: io::Error },
     /// A host hypervisor operation failed.
@@ -83,6 +92,18 @@ impl fmt::Display for Error {
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
             Self::InvalidMemorySize(mib) => write!(f, "invalid memory size: {mib} MiB"),
+            Self::GuestMemoryAddressLimit {
+                memory_mib,
+                end,
+                limit_end,
+                limit,
+            } => write!(
+                f,
+                "guest RAM request of {memory_mib} MiB ends at GPA {end:#x}, beyond {limit} exclusive limit {limit_end:#x}"
+            ),
+            Self::HostMemoryCapability(source) => {
+                write!(f, "guest memory capability check failed: {source}")
+            }
             Self::AllocateMemory { bytes, .. } => {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
             }
@@ -139,6 +160,7 @@ impl error::Error for Error {
         match self {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
+            | Self::GuestMemoryAddressLimit { .. }
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)
             | Self::VirtioSlotsExhausted
@@ -150,6 +172,7 @@ impl error::Error for Error {
             | Self::AlreadyRan => None,
             Self::Vsock(source)
             | Self::Filesystem(source)
+            | Self::HostMemoryCapability(source)
             | Self::AllocateMemory { source, .. }
             | Self::OpenDisk { source, .. }
             | Self::LoadKernel { source, .. }

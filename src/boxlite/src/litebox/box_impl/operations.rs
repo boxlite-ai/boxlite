@@ -20,6 +20,11 @@ pub(super) enum StopReason {
     Exited { health_checked: bool },
 }
 
+pub(super) enum StopCommit {
+    Settled,
+    Remove,
+}
+
 impl BoxImpl {
     pub(crate) async fn with_operation<F, R>(&self, operation: F) -> BoxliteResult<R>
     where
@@ -75,40 +80,45 @@ impl BoxImpl {
         run: BoxRun,
         event: BoxEvent,
     ) -> BoxliteResult<Option<super::super::HealthStatus>> {
-        self.with_operation(async {
-            let current = self.state.read().clone();
-            if self.shutdown_token.is_cancelled()
-                || current.started_at != run.started_at
-                || (current.status.is_active() && current.pid != Some(run.pid))
-            {
-                return Ok(None);
-            }
-            match event {
-                BoxEvent::Exited { health_checked } => {
-                    self.finish_stop(StopReason::Exited { health_checked })?;
-                    Ok(None)
+        let (health, commit) = self
+            .with_operation(async {
+                let current = self.state.read().clone();
+                if self.shutdown_token.is_cancelled()
+                    || current.started_at != run.started_at
+                    || (current.status.is_active() && current.pid != Some(run.pid))
+                {
+                    return Ok((None, StopCommit::Settled));
                 }
-                BoxEvent::Health { healthy, retries } => {
-                    if current.status != BoxStatus::Running {
-                        return Ok(None);
+                match event {
+                    BoxEvent::Exited { health_checked } => {
+                        let commit = self.finish_stop(StopReason::Exited { health_checked })?;
+                        Ok((None, commit))
                     }
-                    let mut state = self.state.write();
-                    if healthy {
-                        if state.health_status.state == crate::HealthState::Healthy
-                            && state.health_status.failures == 0
-                        {
-                            return Ok(Some(state.health_status));
+                    BoxEvent::Health { healthy, retries } => {
+                        if current.status != BoxStatus::Running {
+                            return Ok((None, StopCommit::Settled));
                         }
-                        state.mark_health_check_success();
-                    } else {
-                        tracing::warn!(box_id = %self.id(), "Health check probe failed");
-                        state.mark_health_check_failure(retries);
+                        let mut state = self.state.write();
+                        if healthy {
+                            if state.health_status.state == crate::HealthState::Healthy
+                                && state.health_status.failures == 0
+                            {
+                                return Ok((Some(state.health_status), StopCommit::Settled));
+                            }
+                            state.mark_health_check_success();
+                        } else {
+                            tracing::warn!(box_id = %self.id(), "Health check probe failed");
+                            state.mark_health_check_failure(retries);
+                        }
+                        self.runtime.box_manager.save_box(self.id(), &state)?;
+                        Ok((Some(state.health_status), StopCommit::Settled))
                     }
-                    self.runtime.box_manager.save_box(self.id(), &state)?;
-                    Ok(Some(state.health_status))
                 }
-            }
-        })
-        .await
+            })
+            .await?;
+        if matches!(commit, StopCommit::Remove) {
+            self.complete_exit_cleanup().await?;
+        }
+        Ok(health)
     }
 }

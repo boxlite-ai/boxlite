@@ -516,14 +516,18 @@ describe('CreateBoxDto secrets', () => {
   })
 
   it('rejects a secret missing its value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', hosts: ['api.openai.com'] }] }))
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', hosts: ['api.openai.com'] }] }),
+    )
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isString')
   })
 
   it('rejects a secret with an empty value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '', hosts: ['api.openai.com'] }] }))
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '', hosts: ['api.openai.com'] }] }),
+    )
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')

@@ -48,7 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_logs.add_argument("component", nargs="?", help=f"{_COMPONENTS}|all")
 
     p_restart = sub.add_parser("restart", help="Restart L2 process(es) and/or recreate L1 box(es) by name.")
-    p_restart.add_argument("names", nargs="+", help=f"{_COMPONENTS} (procs) or an L1 box (dex|registry|...)")
+    p_restart.add_argument("names", nargs="+", help=f"{_COMPONENTS} (procs) or an L1 box (rauthy|registry|...)")
 
     p_reset = sub.add_parser("reset", help="Wipe L2 runtime state; --hard also drops + rebuilds the schema.")
     p_reset.add_argument("--hard", action="store_true", help="Also drop + rebuild the schema (identity wiped)")

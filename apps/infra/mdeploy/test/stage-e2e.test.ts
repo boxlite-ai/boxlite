@@ -86,6 +86,23 @@ test('stage uses the same URL override, variable and default precedence as dev',
   }
 })
 
+test('catalog cases use independent quota in a separate dev/stage process', () => {
+  const main = steps.find((step: any) => step.name === 'Run E2E suite')
+  assert.match(main.env.PYTEST_ADDOPTS, /--ignore=cases\/test_images_catalog.py/)
+  const catalog = steps.find((step: any) => step.name === 'Run image catalog E2E (dev and stage)')
+  assert.equal(catalog.env.BOXLITE_E2E_PROFILE, 'p2')
+  assert.match(catalog.run, /unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX/)
+  assert.match(catalog.run, /make test:rest:e2e AUTH=api-key FILTER=images_catalog/)
+  assert.equal(catalog['continue-on-error'], undefined)
+  for (const stage of ['', 'dev', 'stage', 'prod', 'typo']) {
+    assert.equal(evaluate(catalog.if, stage).coerceString(), String(['', 'dev', 'stage'].includes(stage)))
+  }
+  assert.ok(steps.indexOf(catalog) < steps.indexOf(main))
+  assert.match(catalog.env.PYTEST_ADDOPTS, /--junit-xml=.*pytest-catalog.xml/)
+  const upload = steps.find((step: any) => step.name === 'Upload pytest junit XML')
+  assert.match(upload.with.path, /pytest-catalog.xml/)
+})
+
 test('cloud release clients preserve source defaults and stage coverage', () => {
   for (const trigger of ['workflow_call', 'workflow_dispatch']) {
     assert.equal(workflow.on[trigger].inputs.tag.type, 'string')

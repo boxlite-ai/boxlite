@@ -42,20 +42,26 @@ func (b *Box) Executions() *Executions { return &Executions{box: b} }
 // List queries live guest state without starting a stopped box.
 func (e *Executions) List(ctx context.Context) ([]ExecutionInfo, error) {
 	b := e.box
-	if b == nil || b.handle == nil {
-		return nil, &Error{Code: ErrInvalidState, Message: "box is closed"}
+	if b == nil {
+		return nil, errBoxClosed
 	}
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	handle, unlock, err := b.acquire()
+	if err != nil {
 		return nil, err
 	}
 	b.runtime.ensureDrainRunning()
 	ch := make(chan executionInfoListResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	var cerr C.CBoxliteError
-	if code := C.boxlite_box_executions_list(b.handle, C.cbExecutionInfoList(), handleToPtr(h), &cerr); code != C.Ok {
+	if code := C.boxlite_box_executions_list(handle, C.cbExecutionInfoList(), handleToPtr(h), &cerr); code != C.Ok {
+		unlock()
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
+	unlock()
 	select {
 	case res := <-ch:
 		return res.value, res.err
@@ -89,8 +95,8 @@ func (b *Box) recoverExecution(ctx context.Context, executionID string, opts *Ex
 	if strings.IndexByte(executionID, 0) >= 0 || executionID == "" {
 		return nil, &Error{Code: ErrInvalidArgument, Message: "execution ID must be nonempty and NUL-free"}
 	}
-	if b == nil || b.handle == nil {
-		return nil, &Error{Code: ErrInvalidState, Message: "box is closed"}
+	if b == nil {
+		return nil, errBoxClosed
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -101,16 +107,21 @@ func (b *Box) recoverExecution(ctx context.Context, executionID string, opts *Ex
 	default:
 	}
 	b.runtime.ensureDrainRunning()
+	boxHandle, unlock, err := b.acquire()
+	if err != nil {
+		return nil, err
+	}
 	id := C.CString(executionID)
 	defer C.free(unsafe.Pointer(id))
 	var handle *C.CExecutionHandle
 	var cerr C.CBoxliteError
 	var code C.enum_BoxliteErrorCode
 	if attach {
-		code = C.boxlite_box_executions_attach(b.handle, id, &handle, &cerr)
+		code = C.boxlite_box_executions_attach(boxHandle, id, &handle, &cerr)
 	} else {
-		code = C.boxlite_box_executions_get(b.handle, id, &handle, &cerr)
+		code = C.boxlite_box_executions_get(boxHandle, id, &handle, &cerr)
 	}
+	unlock()
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

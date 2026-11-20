@@ -42,9 +42,7 @@ exists to catch those.
 It sits under `apps/` because the stack it drives — `apps/api`, `apps/runner`,
 `apps/proxy` — does. It is **not** an Nx project: there is no `project.json` or
 Jest config for Nx to infer, and pytest invokes its polyglot SDK drivers. It is
-also **not** what `npm run e2e:local` starts — that command brings up the local
-Dex environment for the dashboard. Drive this suite through the
-`make test:e2e*` targets.
+**not** driven by npm scripts: it runs through the `make test:e2e*` targets.
 
 The wider REST API test flow, from the contract inventory and this suite to the
 CLI matrix and both authentication modes, is in
@@ -155,7 +153,7 @@ unsupported executable names are rejected before creating a new environment.
 
 The source-run API reads the repository's `openapi/` through `BOXLITE_OPENAPI_DIR`; packaged deployments retain the bundled-assets default. This avoids requiring generated copies beneath `apps/api/src/assets` for local startup.
 
-Host API, Runner and proxy listeners bind to loopback through `BOXLITE_LISTEN_HOST=127.0.0.1`. Other deployments retain their existing all-interface default when this variable is unset. Credentials and encryption keys are generated once in `target/e2e/credentials.json` (mode 0600); preserve this file with the stack's data. Initial `POSTGRES_PASSWORD` and `MINIO_PASSWORD` overrides are persisted and later environment changes do not rotate existing credentials. Generated Compose `.env` files contain no passwords.
+Host API, Runner and proxy listeners bind to loopback through `BOXLITE_LISTEN_HOST=127.0.0.1`. Other deployments retain their existing all-interface default when this variable is unset. Credentials and encryption keys are generated once in `target/e2e/credentials.json` (mode 0600); preserve this file with the stack's data. Initial `POSTGRES_PASSWORD` and `RUSTFS_PASSWORD` overrides are persisted and later environment changes do not rotate existing credentials. Generated Compose `.env` files contain no passwords.
 
 `setup`, `up` and `test:e2e` reuse an unchanged healthy stack. The launcher hashes tracked and non-ignored untracked working-tree inputs, including submodule sources, and the launch environment/interpreter. Test directories and Markdown documentation are excluded; changing pytest cases, `FILTER` or `E2E_ARGS` therefore does not reinstall dependencies or restart services. Product or configuration changes conservatively rebuild components and restart all host services. Dependency manifests have a separate fingerprint, so source-only changes skip dependency installation when the Python environment and package directories still exist.
 
@@ -412,11 +410,12 @@ not the placeholder scopes in `/v1/me`.
 | Stage | Repository secret | Profile | Role |
 | --- | --- | --- | --- |
 | dev | `BOXLITE_DEV_API_KEY` | `p1` | Existing main suite and sweep; foreign identity for p2 boxes |
-| dev | `BOXLITE_DEV_P2_API_KEY` | `p2` | Owns identity-test boxes in a different organization from p1 |
+| dev | `BOXLITE_DEV_P2_API_KEY` | `p2` | Owns identity and catalog boxes in a different organization from p1 |
 | dev | `BOXLITE_DEV_P2_READONLY_API_KEY` | `p2_readonly` | Reads p2's private previews; cannot manage their network |
 | prod | `BOXLITE_PROD_API_KEY` | `p1` | Smoke suite only |
 
-Both dev owner keys need `write:boxes` and `delete:boxes`; the readonly key
+Both dev owner keys need `write:boxes` and `delete:boxes`; p2 also needs
+`read:images` and `delete:images` for catalog inspection and cleanup. The readonly key
 may carry only `read:*` permissions or none. Configuration fails before box
 creation if any required key is missing/invalid, if p1 and p2 share an
 organization, or if p2_readonly belongs to a different organization from p2.
@@ -430,6 +429,32 @@ as same-org reader, and p1 as foreign identity. It sets
 The p1 main suite deselects this case; the identity result is uploaded alongside
 the main result as `pytest-identities.xml`. These cases exercise API-key scopes,
 not different users, member removal, or OIDC roles.
+
+The dev and stage catalog lane runs `test_images_catalog.py` in a separate
+pytest process using p2, reusing the SDK builds. The p1 main suite excludes
+this module so its image usage cannot exhaust the catalog lane's quota.
+Its result is uploaded as `pytest-catalog.xml` alongside the other reports.
+
+Before the nonexistent-image case, the module removes only its successful
+test image and checks `usage.count < usage.limit`. For example, 20 used slots
+including that image become 19 before the registry pull; 20 unrelated entries
+fail the capacity precondition without deleting them or attempting a create.
+Removal retries for up to 25 seconds while earlier Boxes finish destruction.
+The failed create has a unique `e2e-catalog-failed-` name, so teardown finds
+and removes its Box even if create raises before returning a handle, then waits
+up to 60 seconds for it to disappear. The full report-window assertion still
+rejects any catalog entry for the failed pull. Module cleanup attempts both
+owned image entries and reports failures. `make test:unit:scripts` exercises
+this orchestration with stateful fakes; it does not verify the cloud API,
+Runner or VM path, which still requires a real cloud E2E run.
+
+Run the catalog lane with an independently provisioned p2 profile:
+
+```bash
+unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
+BOXLITE_E2E_PROFILE=p2 BOXLITE_E2E_SKIP_PATH_VERIFY=1 \
+make test:rest:e2e AUTH=api-key FILTER=images_catalog
+```
 
 Run the same identity pair locally with three profiles targeting one API:
 
@@ -658,8 +683,10 @@ Run the existing `e2e-cloud` workflow with `stage=stage`. The API defaults to
 `BOXLITE_STAGE_API_KEY`, `BOXLITE_STAGE_P2_API_KEY`, and
 `BOXLITE_STAGE_P2_READONLY_API_KEY` secrets. The p1 and p2 keys must belong to
 different organizations; p2_readonly must share p2's organization and have only
-read permissions. Missing stage settings never fall back to dev credentials.
+read permissions. The p2 key also needs `read:images` and `delete:images`.
+Missing stage settings never fall back to dev credentials.
 
 The existing profile helper checks HTTPS, organization membership and key permissions
-before writing the test profiles. Stage runs the main suite and identity lane, without dev's automatic sweep or
+before writing the test profiles. Stage runs the main suite, identity lane and
+isolated catalog lane, without dev's automatic sweep or
 shared-subdomain fixture. Production still runs the single-profile smoke suite.

@@ -397,6 +397,27 @@ fn host_causes_and_configuration_bounds_map_to_typed_errors() {
         map_vmm_error(boxlite_vmm::Error::InvalidVcpuCount(0)),
         BoxliteError::InvalidArgument(_)
     ));
+    assert!(matches!(
+        map_vmm_error(boxlite_vmm::Error::GuestMemoryAddressLimit {
+            memory_mib: 65_536,
+            end: 1 << 40,
+            limit_end: 1 << 39,
+            limit: "guest physical address limit",
+        }),
+        BoxliteError::InvalidArgument(_)
+    ));
+    assert!(matches!(
+        map_vmm_error(boxlite_vmm::Error::HostMemoryCapability(io::Error::from(
+            io::ErrorKind::Unsupported,
+        ))),
+        BoxliteError::Unsupported(_)
+    ));
+    assert!(matches!(
+        map_vmm_error(boxlite_vmm::Error::HostMemoryCapability(io::Error::other(
+            "host capability query failed",
+        ))),
+        BoxliteError::Engine(_)
+    ));
 
     let other_host = boxlite_vmm::Error::from(boxlite_hypervisor::Error::CreateVm(
         io::Error::from(io::ErrorKind::Other),

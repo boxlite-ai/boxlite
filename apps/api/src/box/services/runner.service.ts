@@ -456,12 +456,15 @@ export class RunnerService {
 
       const diskUsage = updateData.currentDiskUsagePercentage ?? 0
       if (diskUsage >= RUNNER_DISK_CRITICAL_THRESHOLD) {
-        this.logger.warn({
-          'event.name': 'runner.disk_pressure',
-          'disk.pressure_level': 'critical',
-          runnerId,
-          diskUsagePercentage: diskUsage,
-        }, `Runner ${runnerId} is at critical data-disk usage (${diskUsage}%)`)
+        this.logger.warn(
+          {
+            'event.name': 'runner.disk_pressure',
+            'disk.pressure_level': 'critical',
+            runnerId,
+            diskUsagePercentage: diskUsage,
+          },
+          `Runner ${runnerId} is at critical data-disk usage (${diskUsage}%)`,
+        )
       }
 
       updateData.availabilityScore = this.calculateAvailabilityScore(runnerId, {

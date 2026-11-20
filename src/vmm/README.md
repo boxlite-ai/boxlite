@@ -27,12 +27,12 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
-| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; bounds are 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes and at most 8 disks |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
+| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
-| `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
+| `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
@@ -94,10 +94,23 @@ for the scope and interface trade-offs.
 
 ## Guest RAM
 
-`memory::ram_ranges` places one region: at guest address 0 on x86_64, below
-the 32-bit MMIO hole at `0xC000_0000`, and at `0x8000_0000` on arm64. The
-3072 MiB bound keeps every layout inside that region; the region above 4 GiB
-and the arm64 address-space limit are later changes.
+`memory::ram_ranges` fills low RAM in `[0, 3 GiB)` on x86_64 and places any
+remaining RAM starting at 4 GiB. The `[3 GiB, 4 GiB)` MMIO hole does not count
+as RAM. The arm64 layout is a single region starting at 2 GiB.
+
+On Linux x86_64, preflight checks that the exclusive end of each backed region
+fits both the host KVM GPA width and the VMM's four-level startup identity
+map (`2^47`). For example, 36 GPA bits give an exclusive limit of 64 GiB and
+allow at most 64512 MiB (63 GiB) of x86 RAM; 64513 MiB crosses the limit. At
+the same GPA limit the arm64 layout would fit 63488 MiB (62 GiB); this is a
+layout example, not an arm64 host capability check.
+
+The pinned Linux guest kernel's four-level direct map has a 46-bit (64 TiB)
+usable physical address limit. On hosts with at least 47 GPA bits, the kernel
+truncates high RAM at that limit.
+With `2^46` as the exclusive guest physical address limit, subtracting the 1 GiB
+MMIO hole leaves a maximum x86 RAM configuration of
+**64 TiB - 1 GiB (67,107,840 MiB)** before truncation.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
 vm-memory and registers it with the host VM. Three rules keep the backend's
@@ -105,29 +118,39 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
 
 - Host-side users clone the shared `Arc<GuestMemoryMmap>` and access guest
   memory through vm-memory's volatile API, never through Rust references.
-- `map` registers regions lowest address first and removes the registered
-  prefix when one fails; `unmap` removes them highest first and stops at the
-  first failure, so the count of registered regions stays exact and a later
-  `unmap` retries.
-- The backing is released only after every registration is gone. Dropping a
-  `GuestRam` that may still be registered leaks the backing instead.
+- `map` registers logical RAM regions from low to high. KVM slices each region
+  into slots of at most `2^31−1` host pages and rolls back installed slices if
+  a registration fails. `GuestRam` also rolls back attempted regions, including
+  any slices the backend could not remove. `unmap` works from high to low and
+  retains failed registrations for retry.
+- The backing is released after all registrations are removed or a freshly
+  created host VM with exclusive ownership is closed before `run` starts.
+  If registrations may still exist, `GuestRam` retains the backing.
 
-`Vm::with_devices` runs validate, allocate, create the host VM, compose the
-devices, then map, so every early return drops the host VM before the RAM;
-`Vm`'s `Drop` unmaps as a backstop. `with_backend` is the same constructor
-without the mutable configuration, for tests. The `memory` and `vm` tests and
-that backend live in `tests/` and are included as unit-test modules, which
+`Vm::new` validates the configuration, then opens and checks the KVM system fd
+and reads supported CPUID once. It preflights the RAM addresses and boot leaf
+before spawning the console worker or allocating RAM. The VM builder
+allocates RAM first, then creates the VM fd using that system handle, composes
+devices, registers RAM, then constructs the `Vm` before writing boot data.
+A boot error or panic unwind runs `Vm::drop`, which shuts down the virtio
+workers and quiesces devices before attempting to unmap RAM. If the workers
+fail to join, teardown logs a warning and retains the registrations and
+backing. Teardown also logs unmap failures. The original boot error reaches
+the caller. `with_backend` is the test constructor without mutable configuration.
+The `memory` and `vm` tests and the mock backend live in `tests/` and are included
+as unit-test modules, which
 keeps them outside the counted sources and the coverage denominator; `config`
 and `error` keep inline test modules.
 
 ## Kernel loading
 
 On Linux x86_64, `boot::elf::load_elf(ram, kernel)` delegates ELF parsing and
-segment loading to rust-vmm's linux-loader and returns the entry address as
-`io::Result<u64>`. It reads `kernel` through a seekable reader, usually the
-kernel file, so segments go straight into guest RAM without buffering the
-whole image. It uses vm-memory 0.18 and linux-loader 0.14 with only the ELF
-feature. `boot::prepare` calls it for `Vm::new`.
+segment loading to rust-vmm's linux-loader and returns `io::Result<LoadedKernel>`
+with `entry` and the physical bounds (`start`/`end`, including BSS) so the boot
+page tables can stay clear of the kernel. It reads `kernel` through a seekable
+reader, usually the kernel file, so segments go straight into guest RAM without
+buffering the whole image. It uses vm-memory 0.18 and linux-loader 0.14 with
+only the ELF feature. `boot::prepare` calls it for `Vm::new`.
 
 Pass the pinned `vmlinux` from `make vmm:boot` and fresh zero-filled guest
 RAM before guest execution. BSS relies on that initial zero state. Validation
@@ -153,9 +176,9 @@ the [boot tests](#boot-tests) run Linux itself.
 ## Boot parameters
 
 On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges,
-initramfs)` fills the zero page that RSI points to at the 64-bit entry
-(`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its address,
-`0x7000`:
+initramfs, reserved)` fills the zero page that RSI points to at the 64-bit
+entry (`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its
+address, `0x7000`:
 
 - Setup header: `type_of_loader` `0xFF`, `boot_flag` `0xAA55`, the `HdrS`
   magic, a 16 MiB `kernel_alignment`, and `cmd_line_ptr` and `cmdline_size`
@@ -163,20 +186,23 @@ initramfs)` fills the zero page that RSI points to at the 64-bit entry
   `ramdisk_size` when there is an initramfs. The rest stays zero: no
   `loadflags` or ACPI tables.
 - E820: each RAM range as usable RAM outside `[0x9_FC00, 1 MiB)`, where the
-  MP table and the legacy BIOS areas go. More entries than the 128 table slots
-  fail with `InvalidInput` before anything is written.
+  MP table and the legacy BIOS areas go, while `reserved` intervals are marked
+  `E820_RESERVED` (including the boot page-table span passed by `prepare` when
+  the tables cannot fit in the fixed window and are placed above the kernel).
+  More entries than the 128 table slots fail with `InvalidInput` before
+  anything is written.
 
 `VmConfig::validate` accepts a command line only if it is printable ASCII and
 shorter than 2048 bytes, the kernel's `COMMAND_LINE_SIZE` with the NUL.
 linux-loader's `Cmdline` refuses the same lines, after trimming surrounding
 whitespace.
 
-`boot::prepare(ram, config)` opens `config.kernel` and runs `load_elf`, then
-`load_initramfs` when `config.initramfs` is set, then `write_boot_params`,
-`write_mptable` and `long_mode_entry`, in that order on fresh RAM, and returns
-a `BootSetup` with the boot vCPU registers. A failure names its step,
-`LoadKernel`, `LoadInitramfs` or `WriteBootData`, and keeps the I/O cause.
-`Vm::new` calls `prepare` once RAM is registered.
+`boot::prepare(ram, config, leaf)` opens `config.kernel` and runs `load_elf`,
+loads the optional initramfs, and plans the boot tables using the checked
+`leaf`. It then writes the boot parameters and MP table and sets up long-mode
+entry on fresh RAM, returning a `BootSetup` with the boot vCPU registers. A
+failure names its step, `LoadKernel`, `LoadInitramfs` or `WriteBootData`, and
+keeps the I/O cause. `Vm::new` calls `prepare` once RAM is registered.
 
 ## MP table
 
@@ -229,17 +255,20 @@ The boot tests need Linux x86_64, read/write `/dev/kvm` and the same
 make test:integration:vmm:linux
 ```
 
-Each builds a KVM `Vm` with `prepare` for 256 MiB of RAM on the
-[legacy devices](#legacy-devices-and-the-console) and runs it with
-`Vm::run`. The host VM is KVM behind a test wrapper that counts the edges
-devices raise on GSI 4 and can drop every interrupt. A watchdog stops a boot
-at its timeout, 30 seconds unless stated, so a failed boot reports the serial
-log so far.
+Each builds a KVM `Vm` with `prepare` on the
+[legacy devices](#legacy-devices-and-the-console) and runs it with `Vm::run`,
+with 256 MiB of RAM unless stated. The host VM is KVM behind a test wrapper
+that counts the edges devices raise on GSI 4 and can drop every interrupt. A
+watchdog stops a boot at its timeout, 30 seconds unless stated, so a failed
+boot reports the serial log so far.
 
 - With `earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, one
   vCPU and no initramfs, the log must show the kernel version, the exact
   command line, the two E820 entries, the memory total and
   `VFS: Unable to mount root fs`.
+- The same boot with 6144 MiB of RAM must show three E820 entries, with the
+  last one above 4 GiB, no reserved entry, and a memory total of nearly all
+  6 GiB: the kernel uses RAM on both sides of the 32-bit MMIO hole.
 - With the same command line, one vCPU and a generated archive whose
   `/init`, a 132-byte static ELF, calls `exit_group(42)`, the log must show
   the `RAMDISK:` range from the zero page, `Unpacking initramfs...`,
@@ -482,23 +511,34 @@ thread, even before `run` starts. A VM runs once: a second `run` fails with
 
 ## Long-mode entry
 
-On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params)`
+On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params, plan)`
 writes the state that the Linux 64-bit boot protocol requires
 (`Documentation/arch/x86/boot.rst`, "64-bit Boot Protocol") and returns the
 boot vCPU registers, which the vCPU 0 worker applies after its CPUID and
 MSRs.
 
 - Guest RAM: the GDT at `0x500` holds flat `__BOOT_CS` (`0x10`) and
-  `__BOOT_DS` (`0x18`). Page tables from `0x9000` identity-map
-  `[0, MMIO_HOLE_START)`, where all RAM lies, with 2 MiB pages, whatever the
-  RAM size, and leave the hole unmapped. Nothing is written unless RAM covers
-  `0x500..0xE000`.
+  `__BOOT_DS` (`0x18`). The four-level boot page tables identity-map only
+  backed RAM, leaving the MMIO hole unmapped. Tables start at `0x9000` if
+  they fit in the fixed boot window without overlaps; otherwise they go in
+  low RAM above the kernel. The default leaf is 2 MiB, with 4 KiB leaves
+  where needed. The internal `BOOT_LEAF` may request 1 GiB leaves only with
+  guest CPUID `pdpe1gb`. There is no automatic selection or public switch.
+  All table pages must fit in the selected window; passing address preflight
+  does not guarantee space for the tables.
 - Registers: 64-bit mode with paging (CR0 PE, ET and PG; CR4 PAE; EFER LME
   and LMA), interrupts off, RIP at `entry`, RSI at `boot_params`, a stack
   below `0x8FF0`, and segments decoded from the GDT entries. There is no IDT,
   so an exception before Linux installs its own resets the guest.
 
 ## CPU features
+
+Memory preflight uses the CPUID KVM supports for guests, not raw host CPUID.
+It takes the width from `0x8000_0008` EAX[7:0] and caps it with EAX[23:16]
+when that guest GPA width is nonzero; EAX[15:8] is the virtual width and is
+not used. These EAX fields are separate from the AMD topology in ECX. Missing
+or invalid width data fails preflight. `pdpe1gb` is `0x8000_0001` EDX bit 26;
+its absence rejects only a request for 1 GiB boot leaves.
 
 `cpu_features::vcpu_cpuid(supported, index, count)` turns KVM's supported
 CPUID into vCPU `index`'s. KVM passes the host's APIC ID through and reports
@@ -661,7 +701,7 @@ cause a RAM leak.
 ## Device composition
 
 `devices::add_all` is the one place that names device types. `Vm::new` calls it
-through `Vm::with_devices`; the helper adds the legacy platform devices, then
+through `Vm::build`; the helper adds the legacy platform devices, then
 each configured device type in slot order, and finally announces every slot on
 the front of the kernel command line, which is always before any `--` that
 starts the init arguments, so the caller's text is never parsed.
@@ -674,12 +714,11 @@ starts the init arguments, so the caller's text is never parsed.
   adds the device's worker slot and builds the `MmioTransport`; every
   virtio-mmio device uses it, so the wiring is not copied into each device
   module.
-- **Test seam.** `Vm::with_backend` keeps the old closure signature for tests
-  that add mock, conflict or legacy devices directly; `with_devices` hands the
-  closure the mutable `VmConfig` so `add_all` can announce slots. The aggregate
-  filesystem wiring test checks both device announcements followed by the
-  original command line: without disks, the balloon occupies slot 0 and
-  virtio-fs occupies slot 1.
+- **Test seam.** `Vm::with_backend` lets tests add mock, conflict or legacy
+  devices directly. `Vm::with_devices` also passes the mutable `VmConfig`, so
+  tests can use `add_all` to announce slots. The aggregate filesystem wiring
+  test checks both device announcements followed by the original command line:
+  without disks, the balloon occupies slot 0 and virtio-fs occupies slot 1.
 
 ## Virtio block device
 
@@ -992,8 +1031,8 @@ devices:
 - **Constructors.** A constructor only claims resources and builds state; a
   device that needs a thread starts it after `build`, and a virtio device's
   events run on the worker thread, which starts at its first DRIVER_OK.
-  `Vm::with_devices` passes the guest memory, the workers and the mutable
-  configuration in a `DeviceContext`; `devices::add_all` adds the
+  `Vm::build` passes the guest memory and workers in a `DeviceContext` and
+  supplies the mutable `VmConfig`; `devices::add_all` adds the
   [block devices](#virtio-block-device) and tests use `with_backend` to add a
   transport. A line from `Resources::line` is not armed until `build`
   succeeds: using it earlier fails with `Error::LineNotArmed` and makes no
@@ -1048,15 +1087,18 @@ make fmt:check:rust
 ```
 
 On Linux x86_64 with read/write access to `/dev/kvm`,
-`make test:integration:vmm:kvm` also runs this crate's hardware tests on VMs
-with the largest layout. A flat 32-bit guest reads the last RAM byte and
-reports it on port `0x3f8`. A 64-bit guest entered through
-`long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS` applied, reloads its
-segments from the GDT in RAM, reads markers at RSI and at the top of RAM, and
-stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and 0xB, MISC_ENABLE and
-MTRRdefType for the test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
-pages are committed; a host with `vm.overcommit_memory=2` refuses it. The
-[bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
+`make test:integration:vmm:kvm` also runs this crate's hardware tests. A flat
+32-bit guest uses 3072 MiB to fill the low RAM band, reads its last byte, and
+reports it on port `0x3f8`. A 64-bit guest uses 4097 MiB to place a marker above
+4 GiB. Entered through `long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS`
+applied, it reloads its segments from the GDT in RAM, reads markers at RSI and
+at the top of RAM, and stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and
+0xB, MISC_ENABLE and MTRRdefType for the test to compare. The RAM backing is
+sparse anonymous `mmap`: the host needs virtual address space for the full
+mapping, and accessed pages still depend on available memory and host memory
+pressure.
+
+The [bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
 modules need 2 MiB: a flat 32-bit guest writes and reads a test device on the
 port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through
 `KVM_IRQ_LINE`, skipping a repeated level. Another flat guest reads a claimed
@@ -1067,7 +1109,9 @@ ones, and runs no instruction after its i8042 reset. CI runs the same tests
 through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
 and weekly, it also runs the [boot tests](#boot-tests) on the kernel it builds
 with `make vmm:boot:host`, through `make coverage:vmm:boot`, which needs
-`VMM_KERNEL` like `make test:integration:vmm:linux`.
+`VMM_KERNEL` like `make test:integration:vmm:linux`. The Linux integration test
+`boots_linux_with_six_gib_of_ram` requires `VMM_KERNEL` and checks the E820 map
+and how much memory Linux takes over with 6144 MiB of guest RAM.
 
 With the corresponding Rust targets installed, the crate can also be compiled
 for each host with a backend module without booting a VM:

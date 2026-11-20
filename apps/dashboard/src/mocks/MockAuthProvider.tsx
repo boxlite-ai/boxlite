@@ -25,6 +25,13 @@ function finishSignIn(index: number, returnTo: string) {
 export function MockAuthProvider({ children }: { children: ReactNode }) {
   const [signedOut, setSignedOut] = useState(() => localStorage.getItem(SIGNED_OUT_KEY) === '1')
   const [debugEnabled] = useState(() => new URLSearchParams(window.location.search).get('authDebug') === '1')
+  const [authPreview] = useState(() => new URLSearchParams(window.location.search).get('authPreview'))
+  const waitForPreview = async () => {
+    if (authPreview === 'slow') await new Promise((resolve) => setTimeout(resolve, 2500))
+  }
+  const [hideEnvironmentLabel] = useState(
+    () => new URLSearchParams(window.location.search).get('preview') === 'trial-onboarding',
+  )
   const [debugOpen, setDebugOpen] = useState(false)
   const [error, setError] = useState<Error>()
   const removeUser = async () => {
@@ -32,6 +39,7 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
     setSignedOut(true)
   }
   const signinRedirect = async (args?: SigninRedirectArgs) => {
+    await waitForPreview()
     const returnTo = safeReturnTo((args?.state as { returnTo?: string })?.returnTo)
     if (args?.prompt) {
       setError(
@@ -43,12 +51,13 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
     finishSignIn(debugEnabled ? MOCK_ACCOUNTS.indexOf(MOCK_USER) : 0, returnTo)
   }
   const signoutRedirect = async () => {
+    await waitForPreview()
     await removeUser()
     window.location.replace(RoutePath.LANDING)
   }
   const mockAuth = {
     isAuthenticated: !signedOut,
-    isLoading: false,
+    isLoading: authPreview === 'loading',
     activeNavigator: undefined,
     error,
     user: signedOut
@@ -80,32 +89,34 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={mockAuth}>
       {children}
-      <aside aria-label="Preview environment" className="fixed bottom-4 left-4 z-50 text-meta text-muted-foreground">
-        {debugEnabled ? (
-          <div className="border border-border bg-background p-3">
-            <AsciiButton variant="quiet" size="sm" aria-expanded={debugOpen} onClick={() => setDebugOpen(!debugOpen)}>
-              Developer fixtures
-            </AsciiButton>
-            {debugOpen && (
-              <div className="mt-2 space-y-2">
-                <p>Mock identity — not saved login accounts</p>
-                {MOCK_ACCOUNTS.map((account, index) => (
-                  <AsciiButton
-                    key={account.sub}
-                    size="sm"
-                    className="block w-full"
-                    onClick={() => finishSignIn(index, RoutePath.DASHBOARD)}
-                  >
-                    Load fixture: {account.email}
-                  </AsciiButton>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <span>Preview</span>
-        )}
-      </aside>
+      {!hideEnvironmentLabel && (
+        <aside aria-label="Preview environment" className="fixed bottom-4 left-4 z-50 text-meta text-muted-foreground">
+          {debugEnabled ? (
+            <div className="border border-border bg-background p-3">
+              <AsciiButton variant="quiet" size="sm" aria-expanded={debugOpen} onClick={() => setDebugOpen(!debugOpen)}>
+                Developer fixtures
+              </AsciiButton>
+              {debugOpen && (
+                <div className="mt-2 space-y-2">
+                  <p>Mock identity — not saved login accounts</p>
+                  {MOCK_ACCOUNTS.map((account, index) => (
+                    <AsciiButton
+                      key={account.sub}
+                      size="sm"
+                      className="block w-full"
+                      onClick={() => finishSignIn(index, RoutePath.DASHBOARD)}
+                    >
+                      Load fixture: {account.email}
+                    </AsciiButton>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <span>Preview</span>
+          )}
+        </aside>
+      )}
     </AuthContext.Provider>
   )
 }

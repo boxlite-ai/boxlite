@@ -28,11 +28,14 @@ T = TypeVar("T")
 WINDOW_REMAINING = re.compile(r"(\d+)s left in the current one")
 
 
-async def create_box(rt, image: str, *, attempts: int = 3):
+async def create_box(rt, image: str, *, name: str | None = None, attempts: int = 3):
     """Create a box, waiting out the cold-pull budget if the gate asks us to."""
     for attempt in range(attempts):
         try:
-            return await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+            options = boxlite.BoxOptions(image=image, auto_remove=True)
+            if name is None:
+                return await rt.create(options)
+            return await rt.create(options, name=name)
         except Exception as failure:
             remaining = WINDOW_REMAINING.search(str(failure))
             if remaining is None or attempt == attempts - 1:

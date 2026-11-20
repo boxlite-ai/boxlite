@@ -60,8 +60,9 @@ it('audits real attach ticket issuance without leaking its ticket or key hash', 
   })
   expect(audit.createLog).toHaveBeenCalledWith(
     expect.objectContaining({ action: 'issue_attach_ticket', metadata: { executionId: 'exec-id' } }),
+    expect.any(Number),
   )
-  expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ targetId: 'box-id' }))
+  expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ targetId: 'box-id' }), 5000)
   expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain(issued.ticket)
   expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain('private-key-hash')
 })
@@ -77,7 +78,10 @@ it.each([{ secret: 'private-execution-id' }, ['private-execution-id'], 123])(
       }),
     )
     await expect(result).rejects.toMatchObject({ status: 400 })
-    expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ metadata: { executionId: null } }))
+    expect(audit.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { executionId: null } }),
+      expect.any(Number),
+    )
     expect(JSON.stringify([audit.createLog.mock.calls, audit.updateLog.mock.calls])).not.toContain(
       'private-execution-id',
     )
@@ -104,6 +108,7 @@ it('retains the resolved box ID when attach ticket persistence fails', async () 
   expect(audit.updateLog).toHaveBeenCalledWith(
     'audit',
     expect.objectContaining({ statusCode: 500, targetId: 'box-id' }),
+    5000,
   )
 })
 
@@ -123,6 +128,7 @@ it('audits experimental settings without recording embedded credentials', async 
   expect(update).toHaveBeenCalledWith('org', request.body)
   expect(audit.createLog).toHaveBeenCalledWith(
     expect.objectContaining({ targetId: 'org', metadata: { configuration: 'experimental', cleared: false } }),
+    expect.any(Number),
   )
   expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain('private-otel-secret')
 })
@@ -193,6 +199,7 @@ it('identifies the organization when leaving it', async () => {
   expect(remove).toHaveBeenCalledWith('org', user.userId)
   expect(audit.createLog).toHaveBeenCalledWith(
     expect.objectContaining({ action: 'leave_organization', targetType: 'organization', targetId: 'org' }),
+    expect.any(Number),
   )
 })
 
@@ -230,6 +237,7 @@ describe('account link audit targets', () => {
     if (operation === 'unlink') expect(remove).toHaveBeenCalledTimes(1)
     expect(audit.createLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: `${operation}_account`, targetType: 'user', targetId: 'github|secondary' }),
+      expect.any(Number),
     )
     expect(JSON.stringify([audit.createLog.mock.calls, audit.updateLog.mock.calls])).not.toContain(
       'test-management-token',
@@ -249,7 +257,10 @@ describe('account link audit targets', () => {
       controller(false).linkAccount(user as never, body as never),
     )
     await expect(result).rejects.toThrow()
-    expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ targetType: 'user', targetId: null }))
+    expect(audit.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({ targetType: 'user', targetId: null }),
+      expect.any(Number),
+    )
   })
 })
 
@@ -285,5 +296,6 @@ it.each(['event', 'dto'])('keeps the recovered Box ID after a subsequent %s fail
   expect(audit.updateLog).toHaveBeenCalledWith(
     'audit',
     expect.objectContaining({ targetId: box.id, statusCode: failure === 'dto' ? 500 : 400 }),
+    5000,
   )
 })

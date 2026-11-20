@@ -128,6 +128,73 @@ describe('SecretServerClient HTTP boundary', () => {
     ])
   })
 
+  describe('write contract limits', () => {
+    const batch = (count: number) => Array.from({ length: count }, (_, i) => ({ ...secrets[0], name: `key_${i}` }))
+
+    it.each([
+      ['secrets', batch(65)],
+      ['secrets[0].name', [{ ...secrets[0], name: 'a'.repeat(65) }]],
+      ['secrets[0].name', [{ ...secrets[0], name: '' }]],
+      ['secrets[0].value', [{ ...secrets[0], value: 'x'.repeat(65537) }]],
+      ['secrets[0].value', [{ ...secrets[0], value: 'é'.repeat(32768) + 'x' }]],
+      ['secrets[0].value', [{ ...secrets[0], value: '' }]],
+      ['secrets[0].placeholder', [{ ...secrets[0], placeholder: '' }]],
+      ['secrets[1].placeholder', [secrets[0], { ...secrets[1], placeholder: '' }]],
+    ])('rejects invalid %s before authentication or POST', async (field, input) => {
+      const identity = jest.spyOn(GoogleAuth.prototype, 'getIdTokenClient').mockResolvedValue({
+        getRequestHeaders: async () => new Headers({ authorization: 'Bearer test-token' }),
+      } as any)
+      await expect(
+        client(url, { 'secretServer.devToken': undefined }).storeBoxSecrets('id', 'org', 'user', input),
+      ).rejects.toMatchObject({ status: 400, response: expect.stringContaining(field) })
+      expect(identity).not.toHaveBeenCalled()
+      expect(requests).toHaveLength(0)
+    })
+
+    it.each([
+      ['64 secrets', batch(64)],
+      ['one-character name and one-byte value', [{ ...secrets[0], name: 'a', value: 'x' }]],
+      ['64-character name', [{ ...secrets[0], name: 'a'.repeat(64) }]],
+      ['64 normalized Unicode characters', [{ ...secrets[0], name: '😀'.repeat(64) }]],
+      ['65536 ASCII bytes', [{ ...secrets[0], value: 'x'.repeat(65536) }]],
+      ['65536 UTF-8 bytes', [{ ...secrets[0], value: 'é'.repeat(32768) }]],
+      ['explicit placeholder', [{ ...secrets[0], placeholder: 'custom-placeholder' }]],
+      ['omitted placeholder', [secrets[0]]],
+    ])('accepts %s and transfers the effective placeholder', async (_label, input) => {
+      respond = (response, body) =>
+        response.end(
+          JSON.stringify({
+            secrets: body.secrets.map(({ name }, i) => ({
+              name,
+              secret_id: `11111111-1111-4111-8111-${i.toString(16).padStart(12, '0')}`,
+            })),
+          }),
+        )
+      const result = await client(url).storeBoxSecrets('id', 'org', 'user', input)
+      expect(result).toHaveLength(input.length)
+      expect(requests).toHaveLength(1)
+      expect(requests[0].body.secrets).toEqual(
+        input.map((secret) => ({
+          ...secret,
+          placeholder: secret.placeholder ?? `<BOXLITE_SECRET:${secret.name}>`,
+        })),
+      )
+    })
+
+    it('preserves previously accepted input when forwarding is disabled', async () => {
+      const input = batch(65).map((secret) => ({
+        ...secret,
+        name: 'a'.repeat(65),
+        value: 'x'.repeat(65537),
+        placeholder: '',
+      }))
+      expect(await client(url, { 'secretServer.enabled': false }).storeBoxSecrets('id', 'org', undefined, input)).toBe(
+        input,
+      )
+      expect(requests).toHaveLength(0)
+    })
+  })
+
   it.each([401, 503, 307, 204])(
     'fails status %s without retrying, redirecting, or exposing upstream detail',
     async (status) => {

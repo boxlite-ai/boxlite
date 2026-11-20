@@ -27,7 +27,7 @@ interface GitHubRequest {
   oauthApp?: { clientId: string; clientSecret: string }
   json?: Json
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
-  response?: 'json' | 'empty' | 'page'
+  response?: 'json' | 'empty' | 'no-content' | 'page'
   signal?: AbortSignal
 }
 
@@ -84,9 +84,10 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
         retryAt = Math.max(retryAt ?? 0, Number(reset) * 1000)
       if (status === 429 && retryAt === undefined) retryAt = Date.now() + 60000
     }
-    if (!response.ok || options.response === 'empty') {
+    if (!response.ok || options.response === 'empty' || options.response === 'no-content') {
       await response.body?.cancel()
-      if (!response.ok) throw new Error('GitHub HTTP failure')
+      if (!response.ok || (options.response === 'no-content' && status !== 204))
+        throw new Error('GitHub HTTP acknowledgement is not definitive')
       return undefined
     }
     const link = response.headers.get('link')

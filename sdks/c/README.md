@@ -4,6 +4,9 @@ C bindings for the BoxLite runtime, providing a stable C API for integrating Box
 
 The [agent API](../../docs/reference/agents.md#c-api-and-ownership) covers
 Box-owned sessions, turns, callbacks and handle ownership.
+The CLI and C agent API share the core JSON mapping documented there. Open an
+event stream before sending work, and drain the terminal callback after freeing
+the subscription before releasing its `user_data` or the runtime.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
 
@@ -1179,12 +1182,13 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   land a directory as `docker cp` does: it becomes a destination that does not
   exist, and lands under its own name in one that does. End the source path
   with `/.` to copy only the contents either way, as before.
-- `boxlite_copy_in_start` takes a `BoxliteCopySourceKind source_kind` as its
-  third argument instead of `bool source_is_dir`. Use
-  `BoxliteCopySourceKindDir` for a directory tree,
-  `BoxliteCopySourceKindFile` for a single file, or
-  `BoxliteCopySourceKindUnknown` when the caller cannot tell (older
-  clients); with that kind the guest peeks the archive to decide.
+- `boxlite_copy_in_start` no longer takes a source shape (`bool
+  source_is_dir`, later `BoxliteCopySourceKind source_kind`), and
+  `boxlite_copy_out_start` no longer reports one through `out_source_kind`;
+  `BoxliteCopySourceKind` is gone. The archive's first entry says whether it
+  holds a file or a directory, and the receiver lands it by that, as
+  `docker cp` does. A guest from before this change, sent no shape, spools
+  the upload and caps it at 512 MiB.
 
 Before:
 ```c
@@ -1229,17 +1233,15 @@ while (!request_done) {
 
 Before:
 ```c
-boxlite_copy_in_start(handle, "/dst", true, copy_cb, user_data, &error);
+boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindDir, copy_cb, user_data, &error);
+int32_t kind;
+CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &kind, &error);
 ```
 
 After:
 ```c
-/* dir tree */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindDir, copy_cb, user_data, &error);
-/* one file */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindFile, copy_cb, user_data, &error);
-/* old client, shape unknown */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindUnknown, copy_cb, user_data, &error);
+boxlite_copy_in_start(handle, "/dst", copy_cb, user_data, &error);
+CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &error);
 ```
 
 ### From 0.1.x to 0.2.0
@@ -1443,6 +1445,7 @@ See `sdks/c/tests/` for the test suite.
 - Rust FFI tests borrowing runtime out-pointers should use `runtime.as_ref().expect(...)` at the borrow site, making the non-null precondition explicit to static analysis. Keep the allocation alive through the reference's last use, then free the runtime; a null check alone does not establish pointer validity.
 - `make test:unit:ffi FILTER=checkpoint` exercises checkpoint create/list/get/import/remove through loopback HTTP and the real post-and-drain queue, including callback-owned metadata, Box handles and errors. Native binding coverage runs these Rust FFI tests alongside the C executable tests; no VM is needed.
 - `make test:unit:c FILTER=agents` obtains a live Box handle from a loopback REST server, checks successful namespace allocation and release, and verifies agent-operation errors without starting a VM. Null-handle checks alone cannot cover namespace ownership.
+- `BOXLITE_TEST_OPENCODE_BINARY=/absolute/path/to/opencode make test:integration:c:agents` runs a compiled C caller and Rust agent against the same scripted model in separate local VMs. It compares result fields and the first event, and checks C getter and unsupported-steering behavior. The binary must be OpenCode 2.2.2 for the guest's Linux architecture and glibc.
 - C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.
 - `FREE_STR_CALLS` counts string frees across the whole test process. A Rust test that frees a counted FFI payload, or reads the counter, must hold `FREE_STR_LOCK` for as long as it does so, even if it never reads the counter. Without the lock, plain `cargo test` threads count its frees in another test's delta. nextest's process-per-test runs hide this.
 
