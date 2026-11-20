@@ -219,8 +219,8 @@ target's owning thread, and writes `CpuOnResult` into `result`; the next `run`
 returns it to the guest as the PSCI code, and `result` starts as
 `InternalFailure` so an unanswered call fails. On arm64 only the boot vCPU
 starts at the kernel's entry point, through `Arm64Vcpu::set_boot_registers`;
-each secondary starts powered off until `CPU_ON` gives it one. The stop path
-calls `unpark` to wake an HVF secondary even if the guest never started it.
+each secondary starts powered off until `CPU_ON` gives it one. An HVF secondary
+waits parked, so the stop path's unpark also wakes one the guest never started.
 
 How each host completes an access on the next `run`:
 
@@ -705,15 +705,6 @@ The kernel then boots itself (Linux v6.12):
   - A hotplug region directly above RAM is reserved at boot. virtio-mem adds
     and removes blocks in it with `map_memory` and `unmap_memory`.
 - **M8, memory snapshots.**
-  - The runtime owns atomic live checkpoint orchestration. It serializes the
-    operation with box lifecycle changes, coordinates pause, capture, and
-    resume, and publishes only a complete checkpoint. The operation uses the
-    existing public `BoxStatus` values and keeps pause and resume internal.
-  - The durable `.checkpoint_pending` marker records runtime ownership of an
-    in-progress checkpoint. Recovery uses it to resolve an interrupted attempt
-    before proceeding with the box lifecycle.
-  - `ShimHandler` currently returns `Unsupported` for live checkpoints. The
-    runtime orchestration requires a shim backend that can capture live state.
   - The exit contract already requires pending I/O to finish before vCPU
     state is saved (`src/hypervisor/src/exit.rs`).
   - vCPU registers, interrupt-controller state (`hv_gic_state_*` on HVF, vgic

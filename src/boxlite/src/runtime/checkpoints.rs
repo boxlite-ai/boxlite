@@ -3,33 +3,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
-use crate::runtime::rt_impl::LocalRuntime;
 use crate::{BoxliteError, BoxliteResult};
-
-/// One phase of a live checkpoint transaction.
-#[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "shim VMM does not support checkpointing")
-)]
-pub(crate) struct CheckpointRequest<'a> {
-    pub(crate) operation_id: &'a str,
-    pub(crate) action: CheckpointAction<'a>,
-}
-
-#[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "shim VMM does not support checkpointing")
-)]
-pub(crate) enum CheckpointAction<'a> {
-    FreezeGuest,
-    ExportAtomic { staging_dir: &'a Path },
-    Settle,
-}
 
 /// Metadata for a checkpoint whose complete archive has been published.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,7 +51,6 @@ pub(crate) trait CheckpointBackend: Send + Sync {
 #[derive(Clone)]
 pub struct CheckpointHandle {
     backend: Option<Arc<dyn CheckpointBackend>>,
-    local: Option<Weak<LocalRuntime>>,
 }
 
 impl std::fmt::Debug for CheckpointHandle {
@@ -85,31 +60,8 @@ impl std::fmt::Debug for CheckpointHandle {
 }
 
 impl CheckpointHandle {
-    #[cfg(any(test, feature = "rest"))]
     pub(crate) fn new(backend: Option<Arc<dyn CheckpointBackend>>) -> Self {
-        Self {
-            backend,
-            local: None,
-        }
-    }
-
-    pub(crate) fn from_local(local: Weak<LocalRuntime>) -> Self {
-        Self {
-            backend: None,
-            local: Some(local),
-        }
-    }
-
-    #[allow(dead_code, reason = "internal entry point for checkpoint-capable VMMs")]
-    pub(crate) async fn capture_live(&self, source: &str) -> BoxliteResult<PathBuf> {
-        check_source(source)?;
-        let runtime = self.local.as_ref().ok_or_else(|| {
-            BoxliteError::Unsupported("live checkpoints require a local runtime".into())
-        })?;
-        let runtime = runtime
-            .upgrade()
-            .ok_or_else(|| BoxliteError::Stopped("local runtime has been dropped".into()))?;
-        runtime.capture_live(source).await
+        Self { backend }
     }
 
     /// Ask the REST server to capture a stopped source box.
@@ -118,7 +70,11 @@ impl CheckpointHandle {
         source: &str,
         name: Option<String>,
     ) -> BoxliteResult<CheckpointInfo> {
-        check_source(source)?;
+        if source.is_empty() || source.contains('\0') {
+            return Err(BoxliteError::InvalidArgument(
+                "checkpoint source must be a box ID or name".into(),
+            ));
+        }
         if let Some(name) = &name {
             checked_name(name)?;
         }
@@ -148,15 +104,6 @@ impl CheckpointHandle {
 }
 
 pub(crate) const UNSUPPORTED_ON_LOCAL: &str = "checkpoints are only implemented for REST runtimes";
-
-fn check_source(source: &str) -> BoxliteResult<()> {
-    if source.is_empty() || source.contains('\0') {
-        return Err(BoxliteError::InvalidArgument(
-            "checkpoint source must be a box ID or name".into(),
-        ));
-    }
-    Ok(())
-}
 
 pub(crate) fn checked_name(name: &str) -> BoxliteResult<&str> {
     if name.is_empty()

@@ -7,9 +7,7 @@ use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
-#[cfg(feature = "rest")]
-use crate::runtime::checkpoints::CheckpointBackend;
-use crate::runtime::checkpoints::CheckpointHandle;
+use crate::runtime::checkpoints::{CheckpointBackend, CheckpointHandle};
 use crate::runtime::images::ImageBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::registries::RegistryBackend;
@@ -62,7 +60,7 @@ extern "C" fn shutdown_on_exit() {
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
-    checkpoints: CheckpointHandle,
+    checkpoint_backend: Option<Arc<dyn CheckpointBackend>>,
     /// Image capability — an `Arc` view of the same backend, local or REST.
     image_backend: Arc<dyn ImageBackend>,
     /// Named-volume capability — an `Arc` view of the same backend (local or
@@ -132,13 +130,13 @@ impl BoxliteRuntime {
         )?)))
     }
 
-    pub(crate) fn from_local(local: LocalRuntime) -> Self {
+    pub(super) fn from_local(local: LocalRuntime) -> Self {
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
         Self {
-            checkpoints: CheckpointHandle::from_local(Arc::downgrade(&backend_arc)),
             backend: backend_arc,
+            checkpoint_backend: None,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: None,
@@ -176,7 +174,7 @@ impl BoxliteRuntime {
         let checkpoint_backend = Arc::clone(&rest_runtime) as Arc<dyn CheckpointBackend>;
         Ok(Self {
             backend: rest_runtime,
-            checkpoints: CheckpointHandle::new(Some(checkpoint_backend)),
+            checkpoint_backend: Some(checkpoint_backend),
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
@@ -405,7 +403,7 @@ impl BoxliteRuntime {
 
     /// REST-managed disk checkpoints. Operations return Unsupported on local runtimes.
     pub fn checkpoints(&self) -> CheckpointHandle {
-        self.checkpoints.clone()
+        CheckpointHandle::new(self.checkpoint_backend.as_ref().map(Arc::clone))
     }
 
     // ========================================================================
