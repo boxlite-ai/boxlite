@@ -179,7 +179,7 @@ impl BlockDeviceMount {
     ///
     /// # Errors
     /// Returns error if filesystem is not ext4 or if resize operation fails.
-    fn resize_filesystem(device: &Path, filesystem: Filesystem) -> BoxliteResult<()> {
+    pub(crate) fn resize_filesystem(device: &Path, filesystem: Filesystem) -> BoxliteResult<()> {
         // Only ext4 is supported for online resize
         if filesystem != Filesystem::Ext4 {
             return Err(BoxliteError::Storage(format!(

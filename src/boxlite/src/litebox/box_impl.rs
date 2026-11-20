@@ -47,6 +47,10 @@ use operations::{StopCommit, StopReason};
 /// Shared reference to BoxImpl.
 pub type SharedBoxImpl = Arc<BoxImpl>;
 
+#[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
+#[path = "box_impl/tests/resize.rs"]
+mod resize_tests;
+
 // ============================================================================
 // LIVE STATE
 // ============================================================================
@@ -58,7 +62,7 @@ pub type SharedBoxImpl = Arc<BoxImpl>;
 pub(crate) struct LiveState {
     // VM process control
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
-    guest_session: GuestSession,
+    pub(super) guest_session: GuestSession,
 
     /// Host-side network control backend (gvproxy ServicesMux client), owned
     /// beside `guest_session`. `None` when the box was created network-disabled.
@@ -342,9 +346,11 @@ impl BoxImpl {
         info
     }
 
-    pub(crate) fn refresh_network_policy(&self) -> BoxliteResult<()> {
+    pub(crate) fn refresh_configuration(&self) -> BoxliteResult<()> {
         let persisted = self.runtime.box_manager.update_box(&self.config.id)?;
-        self.state.write().outbound_policy = persisted.outbound_policy;
+        let mut state = self.state.write();
+        state.outbound_policy = persisted.outbound_policy;
+        state.resources = persisted.resources;
         Ok(())
     }
 
@@ -786,19 +792,20 @@ impl BoxImpl {
                 self.config.id
             )));
         }
-        self.with_operation(async {
-            if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running
-            {
-                return Err(BoxliteError::InvalidState(format!(
-                    "Box {} is not running",
-                    self.id()
-                )));
-            }
-            self.live
-                .get_or_try_init(|| self.init_live_state(false))
-                .await
-        })
-        .await
+        self.with_operation(self.existing_live_state_locked()).await
+    }
+
+    /// Caller holds lifecycle admission; attaching here must never boot a new VM.
+    pub(super) async fn existing_live_state_locked(&self) -> BoxliteResult<&LiveState> {
+        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(format!(
+                "Box {} is not running",
+                self.id()
+            )));
+        }
+        self.live
+            .get_or_try_init(|| self.init_live_state(false))
+            .await
     }
 
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -1448,16 +1455,15 @@ impl BoxImpl {
         // New and restarted VMs remain guarded until DB persistence succeeds.
         // Running adoption disarms cleanup before reconnecting to the live VM.
         let mut state = state;
-        state.outbound_policy = self
-            .runtime
-            .box_manager
-            .update_box(&self.config.id)?
-            .outbound_policy;
+        let persisted = self.runtime.box_manager.update_box(&self.config.id)?;
+        state.outbound_policy = persisted.outbound_policy;
+        state.resources = persisted.resources;
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
             resolved_image,
+            resources,
         } = builder.build().await?;
 
         // The box is up. If we adopted one whose init was already running, that
@@ -1513,6 +1519,27 @@ impl BoxImpl {
                     "Box {} stopped while it was being adopted ({})",
                     self.config.id, state.status
                 )));
+            }
+            // Publish the observed allocation before Running. Lifecycle writes
+            // preserve this separate resource record, including from stale handles.
+            if let Some(resources) = resources {
+                if let Err(error) = self
+                    .runtime
+                    .box_manager
+                    .save_resources(&self.config.id, &resources)
+                {
+                    cleanup_guard.set_last_error(&error);
+                    if !adopting_running {
+                        cleanup_guard.set_handler(
+                            live_state
+                                .handler
+                                .into_inner()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        );
+                    }
+                    return Err(error);
+                }
+                state.resources = Some(resources);
             }
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
@@ -1774,12 +1801,16 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
-        self.refresh_network_policy()?;
+        self.refresh_configuration()?;
         Ok(BoxImpl::info(self))
     }
 
     async fn start(&self) -> BoxliteResult<()> {
         self.start().await
+    }
+
+    async fn resize(&self, options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        self.resize(options).await
     }
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {

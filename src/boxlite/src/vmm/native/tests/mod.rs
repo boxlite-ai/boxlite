@@ -489,7 +489,7 @@ async fn reports_a_missing_kernel_through_the_exit_file() {
 #[tokio::test]
 #[ignore = "requires Linux x86_64 with /dev/kvm, VMM_KERNEL, VMM_DISK_GROW_INIT and a boxlite-shim built with native"]
 async fn grows_a_disk_through_the_shim_control_socket() {
-    use crate::vmm::vmm_socket::{ControlOp, ControlReply, ControlRequest, VERSION, request};
+    use crate::vmm::vmm_socket::grow_disk;
 
     let test_box = TestBox::new();
     let kernel = fs::read(std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL")).unwrap();
@@ -510,11 +510,13 @@ async fn grows_a_disk_through_the_shim_control_socket() {
         format: DiskFormat::Raw,
     });
 
+    let mut options = BoxOptions::default();
+    options.advanced.security.resource_limits.max_file_size = Some(32 << 20);
     let mut controller = ShimController::new(
         find_binary("boxlite-shim").unwrap(),
         VmmKind::Native,
         test_box.box_id.clone(),
-        BoxOptions::default(),
+        options,
         test_box.layout.clone(),
     )
     .unwrap();
@@ -530,17 +532,20 @@ async fn grows_a_disk_through_the_shim_control_socket() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let path = test_box.layout.sockets().vmm_sock();
-    let grow = ControlRequest {
-        version: VERSION,
-        op: ControlOp::ResizeDisk {
-            block_id: "vda".into(),
-            bytes: 2 << 20,
-        },
-    };
-    let reply = tokio::task::spawn_blocking(move || request(&path, &grow, Duration::from_secs(15)))
+    let oversized = grow_disk(&path, "vda", 64 << 20).await;
+    assert!(
+        matches!(&oversized, Err(BoxliteError::Engine(message)) if message.contains("RLIMIT_FSIZE")),
+        "over-limit growth: {oversized:?}"
+    );
+    assert_eq!(fs::metadata(&disk).unwrap().len(), 1 << 20);
+    grow_disk(&path, "vda", 2 << 20)
         .await
-        .unwrap()
-        .unwrap();
+        .unwrap_or_else(|err| {
+            panic!(
+                "disk growth failed: {err}\nconsole:\n{}",
+                test_box.console()
+            )
+        });
     let exit = tokio::time::timeout(
         SHIM_TIMEOUT,
         ProcessMonitor::new(handler.pid()).wait_for_exit(),
@@ -549,11 +554,6 @@ async fn grows_a_disk_through_the_shim_control_socket() {
     .expect("the shim exits within the timeout");
 
     let console = test_box.console();
-    assert_eq!(
-        reply,
-        Ok(ControlReply::DiskSize(2 << 20)),
-        "console:\n{console}"
-    );
     assert_eq!(exit, ProcessExit::Code(0), "console:\n{console}");
     assert!(console.contains("GROW_AFTER 4096"), "console:\n{console}");
     assert_eq!(fs::metadata(&disk).unwrap().len(), 2 << 20);

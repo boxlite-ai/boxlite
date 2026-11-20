@@ -150,7 +150,8 @@ impl BoxStore {
 
         let rows_affected = db_err!(conn.execute(
             "UPDATE box_state SET status = ?1, pid = ?2, \
-             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy')) \
+             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
+                             '$.resources', json_extract(json, '$.resources')) \
              WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
@@ -160,6 +161,24 @@ impl BoxStore {
             return Err(BoxliteError::NotFound(box_id.to_string()));
         }
 
+        Ok(())
+    }
+
+    /// Allocation updates survive lifecycle writes from older handles.
+    pub fn update_resources(
+        &self,
+        box_id: &str,
+        resources: &crate::litebox::BoxResources,
+    ) -> BoxliteResult<()> {
+        let body = serde_json::to_string(resources)
+            .map_err(|error| BoxliteError::Database(error.to_string()))?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(json, '$.resources', json(?1)) WHERE id = ?2",
+            params![body, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
         Ok(())
     }
 
@@ -481,6 +500,42 @@ mod tests {
     const TEST_ID_1: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R1";
     const TEST_ID_2: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R2";
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";
+
+    #[test]
+    fn resize_allocation_survives_stale_lifecycle_writes_and_reopen() {
+        let (store, dir) = create_test_db();
+        let config = create_test_config(TEST_ID_1);
+        let mut stale = BoxState::new();
+        store.save(&config, &stale).unwrap();
+        store
+            .db
+            .conn()
+            .execute(
+                "UPDATE box_state SET json = json_remove(json, '$.resources')",
+                [],
+            )
+            .unwrap();
+        assert!(
+            store
+                .load_state(TEST_ID_1)
+                .unwrap()
+                .unwrap()
+                .resources
+                .is_none()
+        );
+        let grown = crate::BoxResources { disk_size_gb: 20 };
+        store.update_resources(TEST_ID_1, &grown).unwrap();
+        stale.status = BoxStatus::Stopped;
+        store.update_state(TEST_ID_1, &stale).unwrap();
+        let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
+        let state = reopened.load_state(TEST_ID_1).unwrap().unwrap();
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert_eq!(state.resources, Some(grown));
+        assert!(matches!(
+            store.update_resources(TEST_ID_2, &grown),
+            Err(BoxliteError::NotFound(_))
+        ));
+    }
 
     #[test]
     fn network_policy_survives_stale_lifecycle_writes_and_reopen() {

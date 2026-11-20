@@ -383,11 +383,47 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start or resume the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
+| `resize` | `async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources>` | Query or grow a running native Linux box's root disk |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
 | `executions` | `fn executions(&self) -> ExecutionsHandle` | Live session inventory and control recovery; never boots a box |
 | `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
+
+#### Online disk growth
+
+`ResizeOptions::disk_size_gb` is an absolute capacity in binary GiB, from 1 through 1024.
+The box must be running on the native Linux VMM. Shrinking is rejected.
+
+Its kernel needs `CONFIG_BLK_DEV_WRITE_MOUNTED=y` for the guest's `resize2fs`; the [native kernel build](../../../src/vmm/boot/README.md#how-it-works) includes it.
+
+```rust,no_run
+use boxlite::ResizeOptions;
+
+# async fn example(bx: &boxlite::LiteBox) -> boxlite::BoxliteResult<()> {
+let current = bx.resize(ResizeOptions::default()).await?;
+let grown = bx.resize(ResizeOptions { disk_size_gb: Some(20) }).await?;
+assert_eq!(grown.disk_size_gb, 20);
+# Ok(())
+# }
+```
+
+An empty request queries the observed disk allocation. An explicit target also completes ext4 growth, including when the disk already has that capacity.
+Success means the guest observed the target capacity and `resize2fs` completed.
+
+The operation continues in the runtime if the caller drops its waiting future.
+Resize serializes with stop and disk-copy operations; a handle from an earlier VM run is rejected.
+
+Device growth cannot be rolled back. If filesystem growth fails, the larger allocation is persisted and the error reports partial completion.
+Retry the same target to complete the filesystem step.
+
+An older guest without the RPC returns `Unsupported` with the partial-completion context.
+After a lost reply or interrupted persistence, the next query or start recovers allocation from the image.
+
+Restart completes filesystem growth. Clone and export carry the effective disk capacity.
+The shim's configured or inherited `RLIMIT_FSIZE` soft limit can restrict growth.
+
+Other engines and remote backends return `Unsupported`; this API is not exposed through REST, CLI or other SDKs.
 
 #### ExecutionsHandle
 

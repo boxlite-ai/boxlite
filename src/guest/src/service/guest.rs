@@ -1,14 +1,14 @@
 //! Guest service implementation.
 //!
 //! Handles guest initialization and management (Init, Ping, Shutdown,
-//! Quiesce, Thaw RPCs).
+//! Quiesce, Thaw, SyncClock and ResizeFilesystem RPCs).
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
     guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
     GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
-    QuiesceResponse, ShutdownRequest, ShutdownResponse, SyncClockRequest, SyncClockResponse,
-    ThawRequest, ThawResponse,
+    QuiesceResponse, ResizeFilesystemRequest, ResizeFilesystemResponse, ShutdownRequest,
+    ShutdownResponse, SyncClockRequest, SyncClockResponse, ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -259,6 +259,64 @@ impl GuestService for GuestServer {
         );
         Ok(Response::new(SyncClockResponse {}))
     }
+
+    async fn resize_filesystem(
+        &self,
+        request: Request<ResizeFilesystemRequest>,
+    ) -> Result<Response<ResizeFilesystemResponse>, Status> {
+        use std::os::unix::fs::FileTypeExt;
+        use std::path::Path;
+        use std::time::Duration;
+
+        let request = request.into_inner();
+        if request.device != "/dev/vda"
+            || request.minimum_bytes == 0
+            || !request.minimum_bytes.is_multiple_of(512)
+        {
+            return Err(Status::invalid_argument(
+                "resize requires /dev/vda and a positive sector-aligned capacity",
+            ));
+        }
+        let guard = self.init_state.clone().lock_owned().await;
+        if !guard.initialized || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Status::failed_precondition(
+                "guest must be initialized and running",
+            ));
+        }
+        // Own the serialization guard beyond RPC cancellation: resize2fs must
+        // finish before another request can start a second filesystem grow.
+        tokio::spawn(async move {
+            let _guard = guard;
+            let device = Path::new("/dev/vda");
+            let metadata = tokio::fs::symlink_metadata(device).await.map_err(|error| {
+                Status::failed_precondition(format!("root disk unavailable: {error}"))
+            })?;
+            if !metadata.file_type().is_block_device() {
+                return Err(Status::failed_precondition(
+                    "root disk must be a block device",
+                ));
+            }
+            wait_for_disk_capacity(
+                Path::new("/sys/class/block/vda/size"),
+                request.minimum_bytes,
+                Duration::from_secs(10),
+            )
+            .await
+            .map_err(|error| *error)?;
+            tokio::task::spawn_blocking(|| {
+                crate::storage::block_device::BlockDeviceMount::resize_filesystem(
+                    Path::new("/dev/vda"),
+                    boxlite_shared::Filesystem::Ext4,
+                )
+            })
+            .await
+            .map_err(|error| Status::internal(format!("resize task failed: {error}")))?
+            .map_err(|error| Status::internal(error.to_string()))?;
+            Ok(Response::new(ResizeFilesystemResponse {}))
+        })
+        .await
+        .map_err(|error| Status::internal(format!("resize task failed: {error}")))?
+    }
 }
 
 /// Why a host-supplied timestamp was rejected.
@@ -337,6 +395,32 @@ fn clock_settime_status(error: &std::io::Error) -> Status {
     }
 }
 
+async fn wait_for_disk_capacity(
+    size_path: &std::path::Path,
+    minimum_bytes: u64,
+    timeout: std::time::Duration,
+) -> Result<(), Box<Status>> {
+    tokio::time::timeout(timeout, async {
+        loop {
+            let text = tokio::fs::read_to_string(size_path)
+                .await
+                .map_err(|error| Status::internal(format!("read root disk capacity: {error}")))?;
+            let bytes = text
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .and_then(|sectors| sectors.checked_mul(512))
+                .ok_or_else(|| Status::internal("invalid root disk capacity"))?;
+            if bytes >= minimum_bytes {
+                return Ok::<(), Box<Status>>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| Status::deadline_exceeded("kernel has not observed the grown root disk"))?
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -345,6 +429,68 @@ mod tests {
     use crate::layout::GuestLayout;
     use crate::reaper::ExitSlot;
     use crate::service::exec::exec_handle::ExitStatus;
+
+    #[tokio::test]
+    async fn resize_filesystem_rejects_other_devices_and_uninitialized_guests() {
+        let root = tempfile::tempdir().unwrap();
+        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        for (device, minimum_bytes) in [
+            ("/dev/vdb", 1024),
+            ("/dev/../dev/vda", 1024),
+            ("/tmp/disk", 1024),
+            ("/dev/vda", 0),
+            ("/dev/vda", 513),
+        ] {
+            let error = server
+                .resize_filesystem(Request::new(ResizeFilesystemRequest {
+                    device: device.into(),
+                    minimum_bytes,
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        }
+        let error = server
+            .resize_filesystem(Request::new(ResizeFilesystemRequest {
+                device: "/dev/vda".into(),
+                minimum_bytes: 1024,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn resize_filesystem_waits_for_kernel_capacity_and_bounds_the_wait() {
+        use std::time::Duration;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("size");
+        tokio::fs::write(&path, "2\n").await.unwrap();
+        let wait = wait_for_disk_capacity(&path, 2048, Duration::from_secs(1));
+        tokio::pin!(wait);
+        assert!(tokio::time::timeout(Duration::from_millis(30), &mut wait)
+            .await
+            .is_err());
+        tokio::fs::write(&path, "4\n").await.unwrap();
+        wait.await.unwrap();
+        assert_eq!(
+            wait_for_disk_capacity(&path, 4096, Duration::from_millis(20))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::DeadlineExceeded
+        );
+        for invalid in ["garbage", "18446744073709551615"] {
+            tokio::fs::write(&path, invalid).await.unwrap();
+            assert_eq!(
+                wait_for_disk_capacity(&path, 2048, Duration::from_secs(1))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::Internal
+            );
+        }
+    }
 
     /// A quiesce that fails must not strand the rest of the teardown: the exit
     /// record still reaches disk, and the failure is reported afterwards.

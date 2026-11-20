@@ -18,6 +18,10 @@ use crate::runtime::types::BoxStatus;
 impl BoxImpl {
     fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
         let mut options = self.config.options.clone();
+        if self.config.engine_kind == crate::vmm::VmmKind::Native {
+            // Copy the image's observed size even if its grow reply was lost.
+            crate::BoxResources::from_disk(&self.layout.disk_path())?.apply_to(&mut options);
+        }
         if let Some(policy) = self
             .runtime
             .box_manager

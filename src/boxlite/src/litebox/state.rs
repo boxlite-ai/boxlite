@@ -202,12 +202,34 @@ impl std::fmt::Display for BoxStatus {
     }
 }
 
+/// Effective allocation, including online growth, in binary GiB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxResources {
+    pub disk_size_gb: u64,
+}
+
+impl BoxResources {
+    pub(crate) fn from_disk(path: &std::path::Path) -> boxlite_shared::BoxliteResult<Self> {
+        let bytes = crate::disk::Qcow2Helper::qcow2_virtual_size(path)?;
+        Ok(Self {
+            disk_size_gb: bytes.div_ceil(1 << 30),
+        })
+    }
+
+    pub(crate) fn apply_to(self, options: &mut crate::BoxOptions) {
+        options.disk_size_gb = Some(self.disk_size_gb);
+    }
+}
+
 /// Dynamic box state (changes during lifecycle).
 ///
 /// This is updated frequently and persisted to database.
 /// State transitions are validated before applying.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxState {
+    /// Last observed allocation. Older rows recover it from the disk at start or resize.
+    #[serde(default)]
+    pub resources: Option<BoxResources>,
     /// Last applied runtime outbound policy. Creation options still determine
     /// whether the VM has a NIC; an override never adds or removes the device.
     #[serde(default)]
@@ -363,6 +385,7 @@ impl BoxState {
     pub fn new() -> Self {
         Self {
             status: BoxStatus::Configured,
+            resources: None,
             outbound_policy: None,
             pid: None,
             container_id: None,

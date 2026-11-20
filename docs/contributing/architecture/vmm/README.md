@@ -554,10 +554,16 @@ logged.
   attach order (`vda` container, `vdb` guest root), and defaults to `console=hvc0`.
   The single filesystem device exports logical shares below its aggregate root;
   matching mount instructions are sent only for the native engine.
-- **Runtime control.** The runtime sends `resize_disk` to the native shim over
-  the host-only `vmm.sock`, which stays open across transient accept errors.
-  The shim routes requests by `block_id` through
-  [`VmControl`](../../../../src/vmm/README.md#virtio-block-device).
+- **Runtime control** uses matching runtime and shim versions with HTTP/1.1
+  over the host-only `vmm.sock` (mode `0600`). A `POST /v1/resize-disk` with
+  `{"block_id":"vda","bytes":21474836480}` requests a 20 GiB target for `vda`
+  through [`VmControl`](../../../../src/vmm/README.md#virtio-block-device).
+  The shim serves one request per connection and keeps listening across
+  transient accept errors.
+- **Runtime resize.** `LiteBox::resize` persists observed disk capacity, then
+  asks the guest to wait for the new capacity and run `resize2fs`. Queries
+  recover allocation from the image, and a retry or native restart can
+  complete the filesystem step.
 - **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
   The host kernel enforces the shim's configured or inherited
   [`RLIMIT_FSIZE` soft limit](../../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).

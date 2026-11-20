@@ -31,6 +31,7 @@ use std::path::PathBuf;
 pub struct VmmSpawnTask;
 
 struct VmmSpawnInputs {
+    resources: Option<crate::BoxResources>,
     outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
     options: BoxOptions,
     layout: BoxFilesystemLayout,
@@ -66,9 +67,18 @@ impl VmmSpawnInputs {
             .path()
             .to_path_buf();
 
+        let mut options = ctx.config.options.clone();
+        let resources = if ctx.config.engine_kind == VmmKind::Native {
+            let resources = crate::BoxResources::from_disk(&container_disk_path)?;
+            resources.apply_to(&mut options);
+            Some(resources)
+        } else {
+            None
+        };
         Ok(Self {
+            resources,
             outbound_policy: ctx.outbound_policy.clone(),
-            options: ctx.config.options.clone(),
+            options,
             layout,
             container_image_config,
             prepared_kernel,
@@ -105,6 +115,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         let mut ctx = ctx.lock().await;
+        ctx.resources = inputs.resources;
         ctx.guard.set_handler(handler);
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
@@ -136,6 +147,7 @@ async fn build_config(
     Option<Box<dyn NetworkBackend>>,
 )> {
     let VmmSpawnInputs {
+        resources,
         outbound_policy,
         options,
         layout,
@@ -176,29 +188,23 @@ async fn build_config(
     // SHARED virtiofs - needed by all strategies
     volume_mgr.add_fs_share(mount_tags::SHARED, layout.shared_dir(), None, false, None);
 
-    // Add container rootfs disk (COW overlay workflow):
-    // 1. Base disk: Pre-built ext4 image with container layers merged
-    // 2. COW disk: QCOW2 overlay with copy-on-write semantics
-    //    - Inherits formatted ext4 from base (need_format=false)
-    //    - May have larger virtual size if disk_size_gb specified
-    // 3. Guest mount: Only resize on fresh start, not restart
-    //    - Fresh start with custom size: resize2fs expands filesystem
-    //    - Restart: filesystem already at correct size, skip resize
-    let need_resize = options.disk_size_gb.is_some() && !reuse_rootfs;
+    // Native starts reconcile the actual image capacity, including a grow whose
+    // reply or persistence was interrupted. resize2fs is idempotent when full.
+    let need_resize = options.disk_size_gb.is_some() && (!reuse_rootfs || resources.is_some());
     let rootfs_device = volume_mgr.add_block_device(
         container_disk_path,
         DiskFormat::Qcow2,
         false,
         None,
-        false,       // need_format: COW child inherits formatted base
-        need_resize, // need_resize: only on fresh start with custom disk size
+        false, // need_format: COW child inherits formatted base
+        need_resize,
     );
 
     // Update rootfs_init with actual device path and resize flag
     let rootfs_init = crate::portal::interfaces::ContainerRootfsInitConfig::DiskImage {
         device: rootfs_device,
         need_format: false, // COW child uses pre-formatted base
-        need_resize,        // Only on fresh start with custom disk size
+        need_resize,
     };
 
     // Add user volumes via ContainerVolumeManager

@@ -356,6 +356,21 @@ mod tests {
                 thawed_count: 0,
             }))
         }
+
+        async fn sync_clock(
+            &self,
+            _: tonic::Request<boxlite_shared::SyncClockRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::SyncClockResponse>, tonic::Status> {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+
+        async fn resize_filesystem(
+            &self,
+            _: tonic::Request<boxlite_shared::ResizeFilesystemRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ResizeFilesystemResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
     }
 
     #[tonic::async_trait]

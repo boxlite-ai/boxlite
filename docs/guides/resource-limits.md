@@ -251,6 +251,11 @@ boxlite.BoxOptions(
 The disk lives as long as the box. By default the box is removed when it stops; set
 `auto_delete=0` to keep the box, and its disk, after stop.
 
+The Rust API can [grow a running native Linux box's root disk](../reference/rust/README.md#online-disk-growth) to at most 1024 GiB.
+It preserves the larger allocation across restarts, clones and exports. The shim's configured or inherited `RLIMIT_FSIZE` soft limit can restrict growth.
+
+If filesystem growth fails after device growth, retry the same target or restart the box to complete it.
+
 **I/O Monitoring:**
 - Currently not exposed in metrics
 - Future feature
