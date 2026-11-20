@@ -83,6 +83,7 @@ func TestDatabaseErrorCategories(t *testing.T) {
 		{"timeout", context.DeadlineExceeded, "database connection timed out"},
 		{"canceled", context.Canceled, "database connection canceled"},
 		{"rejected", &pgconn.PgError{Code: "28P01", Message: "secret-marker"}, "database connection rejected (SQLSTATE 28P01)"},
+		{"invalid SQLSTATE", &pgconn.PgError{Code: "28!01", Message: "secret-marker"}, "database connection rejected"},
 		{"network", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("secret-marker")}, "database network connection failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

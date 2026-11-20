@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -39,6 +40,16 @@ func TestStartupRejectsInvalidKeyID(t *testing.T) {
 	s, err := New(context.Background(), c)
 	if s != nil || err == nil || !strings.Contains(err.Error(), "SECRET_MASTER_KEY_ID") {
 		t.Fatalf("New with invalid key ID = %v, %v", s, err)
+	}
+}
+
+func TestStartupStopsWhenEncryptionSelfTestContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c := Config{KeyID: "env:test", Key: base64.StdEncoding.EncodeToString(make([]byte, 32))}
+	s, err := New(ctx, c)
+	if s != nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "encryption self-test") {
+		t.Fatalf("New with canceled context = %v, %v", s, err)
 	}
 }
 
