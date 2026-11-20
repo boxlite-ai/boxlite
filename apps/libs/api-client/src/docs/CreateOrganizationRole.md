@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**proxyPermissions** | **Array&lt;string&gt;** | Outbound proxy permissions | [optional] [default to undefined]
 **name** | **string** | The name of the role | [default to undefined]
 **description** | **string** | The description of the role | [default to undefined]
 **permissions** | **Array&lt;string&gt;** | The list of permissions assigned to the role | [default to undefined]
@@ -15,6 +16,7 @@ Name | Type | Description | Notes
 import { CreateOrganizationRole } from './api';
 
 const instance: CreateOrganizationRole = {
+    proxyPermissions,
     name,
     description,
     permissions,
