@@ -51,6 +51,7 @@ type volumeMount struct {
 	hostPath  string
 	mountPath string
 	rootPath  string
+	bucket    string
 }
 
 type boxVolumeMountRecord struct {
@@ -66,48 +67,57 @@ func getVolumeMountBasePath() string {
 }
 
 func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) ([]volumeMount, error) {
+	mounts, err := planVolumeMounts(volumes)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.mountPlannedVolumes(ctx, mounts); err != nil {
+		return nil, err
+	}
+	return mounts, nil
+}
+
+func planVolumeMounts(volumes []dto.VolumeDTO) ([]volumeMount, error) {
 	volumeMounts := make([]volumeMount, 0, len(volumes))
-
-	fuseMountedVolumes := make(map[string]bool)
-
 	for _, vol := range volumes {
 		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
 		baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
-
-		subpathStr := ""
-		if vol.Subpath != nil {
-			subpathStr = *vol.Subpath
-		}
-
-		if !fuseMountedVolumes[volumeIdPrefixed] {
-			err := c.ensureVolumeFuseMounted(ctx, volumeIdPrefixed, baseMountPath)
-			if err != nil {
-				return nil, err
-			}
-			fuseMountedVolumes[volumeIdPrefixed] = true
-		}
-
 		bindSource := baseMountPath
 		if vol.Subpath != nil && *vol.Subpath != "" {
 			bindSource = filepath.Join(baseMountPath, *vol.Subpath)
 			if !strings.HasPrefix(filepath.Clean(bindSource), filepath.Clean(baseMountPath)) {
 				return nil, fmt.Errorf("invalid subpath %q: resolves outside volume mount", *vol.Subpath)
 			}
-			err := os.MkdirAll(bindSource, 0755)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create subpath directory %s: %s", bindSource, err)
-			}
 		}
 
-		c.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeIdPrefixed, "subpath", subpathStr, "mountPath", vol.MountPath)
 		volumeMounts = append(volumeMounts, volumeMount{
 			hostPath:  bindSource,
 			mountPath: vol.MountPath,
 			rootPath:  baseMountPath,
+			bucket:    volumeIdPrefixed,
 		})
 	}
 
 	return volumeMounts, nil
+}
+
+func (c *Client) mountPlannedVolumes(ctx context.Context, mounts []volumeMount) error {
+	mounted := make(map[string]bool)
+	for _, mount := range mounts {
+		if !mounted[mount.bucket] {
+			if err := c.ensureVolumeFuseMounted(ctx, mount.bucket, mount.rootPath); err != nil {
+				return err
+			}
+			mounted[mount.bucket] = true
+		}
+		if mount.hostPath != mount.rootPath {
+			if err := os.MkdirAll(mount.hostPath, 0755); err != nil {
+				return fmt.Errorf("failed to create subpath directory %s: %w", mount.hostPath, err)
+			}
+		}
+		c.logger.DebugContext(ctx, "binding volume", "volumeId", mount.bucket, "hostPath", mount.hostPath, "mountPath", mount.mountPath)
+	}
+	return nil
 }
 
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {

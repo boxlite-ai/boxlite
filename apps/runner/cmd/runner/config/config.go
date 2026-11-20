@@ -55,6 +55,7 @@ type Config struct {
 	BuildCPUCores                      int64         `envconfig:"BUILD_CPU_CORES" default:"4" validate:"min=1"`
 	BuildMemoryGB                      int64         `envconfig:"BUILD_MEMORY_GB" default:"8" validate:"min=1"`
 	ApiVersion                         int           `envconfig:"API_VERSION" default:"2"`
+	CompleteOutboundLeaseToken         string        `envconfig:"BOXLITE_COMPLETE_OUTBOUND_LEASE_TOKEN"`
 	InitializeDaemonTelemetry          bool          `envconfig:"INITIALIZE_DAEMON_TELEMETRY" default:"true"`
 	BuildEngine                        string        `envconfig:"BUILD_ENGINE" default:"buildkit" validate:"oneof=buildkit legacy"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`

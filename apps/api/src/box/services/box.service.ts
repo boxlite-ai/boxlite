@@ -6,7 +6,16 @@
 
 import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { requestedMemoryMib } from '../utils/memory-allocation'
-import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
+import {
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common'
+import { randomUUID } from 'node:crypto'
 import { InjectRepository } from '@nestjs/typeorm'
 import {
   Not,
@@ -60,6 +69,14 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxDtoReads, BoxSecret, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
+import { RunnerAdapterV0 } from '../runner-adapter/runnerAdapter.v0'
+import {
+  completeOutboundRecord,
+  lockCompleteOutboundFloor,
+  verifiedCompleteRunner,
+} from '../stores/outbound-policy.store'
+import { CompleteCreateJobService } from './complete-create-job.service'
+import type { CompleteCreateIntent } from '../entities/outbound-control-record'
 import {
   DISABLED_OUTBOUND_RULES_ERROR,
   hasDisabledOutboundRules,
@@ -107,7 +124,11 @@ import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
-import { RunnerOutboundControl } from '../runner-adapter/outbound-control'
+import {
+  CompleteOutboundPolicy,
+  RunnerOutboundControl,
+  validCompleteOutboundPolicy,
+} from '../runner-adapter/outbound-control'
 import { OutboundPrecondition } from './outbound-policy.coordinator'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
@@ -133,6 +154,7 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  completeOutbound?: CompleteOutboundPolicy
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
@@ -197,7 +219,7 @@ function validateSecrets(secrets: BoxSecret[] | undefined): void {
 }
 
 @Injectable()
-export class BoxService {
+export class BoxService implements OnApplicationBootstrap {
   private readonly logger = new Logger(BoxService.name)
 
   constructor(
@@ -225,6 +247,7 @@ export class BoxService {
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
+    private readonly completeCreateJobs: CompleteCreateJobService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -317,13 +340,20 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    const completeOutbound = options.completeOutbound
+    if (completeOutbound !== undefined) {
+      if (!validCompleteOutboundPolicy(completeOutbound)) throw new BadRequestError('Invalid complete outbound policy')
+      await this.boxRepository.assertCompleteCreateAdmission()
+    }
     // Authentication caches organizations; admission must use the current policy.
     const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
     organization = Object.assign(Object.create(Object.getPrototypeOf(organization)) as Organization, organization, {
       nestedVirtualizationEnabled,
     })
     validateSecrets(createBoxDto.secrets)
-    const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
+    const outboundEnabled = completeOutbound
+      ? completeOutbound.mode === 'enabled'
+      : (createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress)
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
     }
@@ -358,7 +388,8 @@ export class BoxService {
       // `box.image` records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
+      const needsFreshBox =
+        !!completeOutbound || !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -464,23 +495,50 @@ export class BoxService {
       // @Unique(['organizationId', 'name']) constraint. Only the insert retries:
       // the chosen runner is still fine, it was the name that collided.
       //
-      // The cold-pull budget is spent in here, once a runner is chosen and just
-      // before the insert: it has no way to give a slot back, so a create its
-      // own input or placement refuses must not spend one. Only the box limit
-      // and a name collision, which the insert itself settles, come after it.
-      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
-        await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
-        const insert = () =>
-          options.onPersist
-            ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
-            : this.boxRepository.insert(box, options.maxCreatedBoxes)
-        return createBoxDto.name
-          ? insert()
-          : persistWithGeneratedBoxName(box.id, (name) => {
-              box.name = name
-              return insert()
-            })
-      })
+      // Spend a cold-pull slot after placement. For a complete create, hold
+      // admission through the spend so a concurrent close cannot waste it.
+      const insertedBox = await this.persistOnAvailableRunner(
+        box,
+        { regions: [region.id], boxClass },
+        async (runner) => {
+          const preparation = completeOutbound
+            ? await this.prepareCompleteCreate(box, runner, completeOutbound)
+            : undefined
+          const completeJob =
+            preparation?.intent.transport === 'v2'
+              ? {
+                  owner: preparation.intent,
+                  request: await this.completeCreateJobs.prepareBox(box, preparation.runner),
+                }
+              : undefined
+          const spendColdPull = () => this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+          if (!preparation) await spendColdPull()
+          const insert = () =>
+            preparation
+              ? this.boxRepository.insertCompleteCreate(
+                  box,
+                  preparation.intent,
+                  preparation,
+                  options.maxCreatedBoxes,
+                  async (manager, inserted) => {
+                    if (completeJob) {
+                      await this.completeCreateJobs.enqueue(manager, completeJob.owner, completeJob.request)
+                    }
+                    await spendColdPull()
+                    await options.onPersist?.(manager, inserted)
+                  },
+                )
+              : options.onPersist
+                ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
+                : this.boxRepository.insert(box, options.maxCreatedBoxes)
+          return createBoxDto.name
+            ? insert()
+            : persistWithGeneratedBoxName(box.id, (name) => {
+                box.name = name
+                return insert()
+              })
+        },
+      )
 
       recordBoxRequested('box.create', insertedBox, ctx)
 
@@ -500,6 +558,31 @@ export class BoxService {
 
       throw error
     }
+  }
+
+  private async prepareCompleteCreate(box: Box, runner: Runner, policy: CompleteOutboundPolicy) {
+    if (runner.apiVersion !== '0' && runner.apiVersion !== '2') {
+      throw new HttpException(
+        { code: 'unsupported', message: 'Selected Runner cannot create complete outbound policy' },
+        501,
+      )
+    }
+    return this.boxRepository.withCompleteCreateRunner(runner.id, async (verifiedRunner, leaseId) => {
+      const candidate = await new RunnerOutboundControl(verifiedRunner, box.id).prepareCreate(randomUUID(), policy)
+      const owner = {
+        kind: 'create',
+        incarnation: box.id,
+        attemptId: randomUUID(),
+        generation: 1,
+        runnerId: verifiedRunner.id,
+        candidate,
+      } as const
+      const intent: CompleteCreateIntent =
+        verifiedRunner.apiVersion === '2'
+          ? { ...owner, transport: 'v2', claimId: randomUUID(), jobId: randomUUID() }
+          : { ...owner, transport: 'v0' }
+      return { intent, runner: verifiedRunner, leaseId }
+    })
   }
 
   private async assignWarmPoolBox(
@@ -1201,16 +1284,6 @@ export class BoxService {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    try {
-      await runnerAdapter.recoverBox(box)
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('storage cannot be further expanded')) {
-        const errorMsg = `Box storage cannot be further expanded. Maximum expansion of ${(box.disk * 0.1).toFixed(2)}GB (10% of original ${box.disk.toFixed(2)}GB) has been reached. Please contact support for further assistance.`
-        throw new ForbiddenException(errorMsg)
-      }
-      throw error
-    }
-
     const updateData: Partial<Box> = {
       state: BoxState.STOPPED,
       desiredState: BoxDesiredState.STOPPED,
@@ -1220,7 +1293,38 @@ export class BoxService {
 
     await this.boxRepository.updateWhere(box.id, {
       updateData,
-      whereCondition: { state: BoxState.ERROR },
+      whereCondition: { state: BoxState.ERROR, pending: false, organizationId: organization.id, runnerId: runner.id },
+      lockTimeoutMs: 5000,
+      beforeLock: lockCompleteOutboundFloor,
+      beforeUpdate: async (manager, locked) => {
+        const withPolicy = await manager
+          .createQueryBuilder(Box, 'box')
+          .addSelect('box.completeOutboundControl')
+          .where({ id: locked.id })
+          .getOne()
+        const complete = withPolicy && completeOutboundRecord(withPolicy)
+        try {
+          if (!complete) {
+            await runnerAdapter.recoverBox(locked)
+            return
+          }
+          if (complete.pending || complete.finalization || !complete.committed) {
+            throw new ConflictException('Complete outbound operation is still pending')
+          }
+          const enrolled = await verifiedCompleteRunner(manager, locked.runnerId)
+          const completeAdapter = await this.runnerAdapterFactory.create(enrolled.runner)
+          if (!(completeAdapter instanceof RunnerAdapterV0)) {
+            throw new ForbiddenException('Runner does not support complete outbound rebuild')
+          }
+          await completeAdapter.rebuildCompleteBox(locked, complete.committed)
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('storage cannot be further expanded')) {
+            const errorMsg = `Box storage cannot be further expanded. Maximum expansion of ${(locked.disk * 0.1).toFixed(2)}GB (10% of original ${locked.disk.toFixed(2)}GB) has been reached. Please contact support for further assistance.`
+            throw new ForbiddenException(errorMsg)
+          }
+          throw error
+        }
+      },
     })
 
     // Now that box is in STOPPED state, use the normal start flow
@@ -1448,6 +1552,61 @@ export class BoxService {
     return this.boxRepository.readOutbound(box.id, organizationId)
   }
 
+  async getCompleteOutboundNetwork(boxIdOrName: string, organizationId: string) {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    return this.boxRepository.readCompleteOutbound(box.id, organizationId)
+  }
+
+  async getBoxNetworkProjections(ids: string[], organizationId: string) {
+    return this.boxRepository.readNetworkProjections(ids, organizationId)
+  }
+
+  async getCompleteOutboundStatus(boxIdOrName: string, organizationId: string) {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    return this.boxRepository.completeOutboundStatus(box.id, organizationId, async (current) =>
+      (await this.outboundControl(current)).completeStatus(),
+    )
+  }
+
+  async setCompleteOutboundNetwork(
+    boxIdOrName: string,
+    policy: CompleteOutboundPolicy,
+    organizationId: string,
+    matches?: OutboundPrecondition,
+  ) {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    return this.boxRepository.completeOutboundCoordinator().replace(box.id, organizationId, policy, matches)
+  }
+
+  onApplicationBootstrap() {
+    void this.reconcileCompleteReplacements().catch(() =>
+      this.logger.warn('Could not reconcile complete replacements at startup'),
+    )
+  }
+
+  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'reconcile-complete-outbound-replacements', waitForCompletion: true })
+  async reconcileCompleteReplacements() {
+    const coordinator = this.boxRepository.completeOutboundCoordinator()
+    const before = new Date(Date.now() - 30_000)
+    let after = ''
+    for (;;) {
+      const rows = await this.boxRepository.completeReplacementWork(after, before)
+      if (!rows.length) return
+      for (let index = 0; index < rows.length; index += 10) {
+        await Promise.all(
+          rows
+            .slice(index, index + 10)
+            .map(({ id, organizationId }) =>
+              coordinator
+                .recover(id, organizationId)
+                .catch(() => this.logger.debug(`Complete outbound replacement for ${id} still needs reconciliation`)),
+            ),
+        )
+      }
+      after = rows[rows.length - 1].id
+    }
+  }
+
   async getOutboundStatus(boxIdOrName: string, organizationId: string) {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
     return this.boxRepository.outboundStatus(box.id, organizationId, (locked) => this.outboundControl(locked))
@@ -1489,12 +1648,15 @@ export class BoxService {
     errorReason?: string,
     reportedImage?: ReportedImage,
   ): Promise<void> {
-    const box = await this.boxRepository.findOne({
-      where: { id: boxId },
-    })
-
-    if (!box) {
-      throw new NotFoundException(`Box with ID ${boxId} not found`)
+    const { box, outboundCreate } = await this.boxRepository.findWithCheckpointState(boxId)
+    // A bare state report cannot end an owned complete creation. Recovery
+    // reads the bound receipt from the assigned Runner independently.
+    if (outboundCreate) {
+      const owner = outboundCreate.pending
+      if (newState === BoxState.STARTED && owner?.kind === 'create' && owner.transport === 'v2') {
+        await this.completeCreateJobs.reconcileJob(owner.jobId)
+      }
+      return
     }
 
     // Before any state handling, and deliberately not inside it: this is a fact

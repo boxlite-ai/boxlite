@@ -1,0 +1,130 @@
+//go:build unix
+
+package boxlite
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestPreparedOutboundCreateValidatesAcrossFFI(t *testing.T) {
+	ctx := context.Background()
+	runtime, err := NewRuntime(WithHomeDir(t.TempDir()))
+	if err != nil {
+		var unavailable *Error
+		if errors.As(err, &unavailable) && (unavailable.Code == ErrUnsupported || unavailable.Code == ErrUnsupportedEngine) {
+			t.Skipf("local runtime unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	_, err = runtime.PrepareOutboundCreate(ctx, "cloud-revision", json.RawMessage(`{"mode":"enabled","deny_net":null}`))
+	if !IsInvalidArgument(err) {
+		t.Fatalf("explicit null deny error = %v, want invalid argument", err)
+	}
+
+	const name = "hosted-create"
+	prepared := PreparedOutboundCreate{Snapshot: CompleteOutboundSnapshot{
+		Revision:  "cloud-revision",
+		Admission: OutboundAdmissionExtendedIPv4,
+		Policy: EffectiveOutboundPolicy{
+			Mode:     NetworkModeEnabled,
+			AllowNet: []string{"EXAMPLE.com:443"},
+			DenyNet:  []string{},
+		},
+	}}
+	box, created, err := runtime.GetOrCreateWithPreparedOutbound(ctx, "alpine", prepared,
+		WithName(name), WithNetwork(NetworkSpec{Mode: NetworkModeEnabled}))
+	if box != nil {
+		_ = box.Close()
+	}
+	if box != nil || created || !IsInvalidArgument(err) {
+		t.Fatalf("noncanonical prepared create: box=%v created=%t err=%v", box, created, err)
+	}
+	if _, err := runtime.GetInfo(ctx, name); !IsNotFound(err) {
+		t.Fatalf("noncanonical prepared create left a Box: %v", err)
+	}
+
+	shimDir := t.TempDir()
+	t.Setenv("BOXLITE_RUNTIME_DIR", shimDir)
+	shim := `#!/bin/sh
+test "$(cat)" = '{"outbound_policy_probe":1}' || exit 1
+printf '%s\n' '{"admission":true,"deny":true,"port":true,"capacity":true}'`
+	if err := os.WriteFile(filepath.Join(shimDir, "boxlite-shim"), []byte(shim), 0700); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err = runtime.PrepareOutboundCreate(ctx, "cloud-revision", json.RawMessage(`{"mode":"enabled","allow_net":["EXAMPLE.com:443"],"deny_net":[]}`))
+	if err != nil || !prepared.DenyPresent || !reflect.DeepEqual(prepared.Snapshot.Policy.AllowNet, []string{"example.com:443"}) {
+		t.Fatalf("prepared create: %+v err=%v", prepared, err)
+	}
+	options := []BoxOption{WithName(name), WithNetwork(NetworkSpec{Mode: NetworkModeEnabled})}
+	box, created, err = runtime.GetOrCreateWithPreparedOutbound(ctx, "alpine", prepared, options...)
+	if err != nil || !created {
+		t.Fatalf("prepared create: created=%t err=%v", created, err)
+	}
+	t.Cleanup(func() { _ = box.Close() })
+	network, err := box.Network()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = network.Close() })
+	snapshot, err := network.CompleteOutboundSnapshot(ctx)
+	if err != nil || !reflect.DeepEqual(snapshot, prepared.Snapshot) {
+		t.Fatalf("installed snapshot = %+v, prepared=%+v err=%v", snapshot, prepared.Snapshot, err)
+	}
+	status, err := network.CompleteOutboundStatus(ctx)
+	if err != nil || status.ApplicationState != OutboundUncertain || status.Observed != nil {
+		t.Fatalf("configured Box unexpectedly has live status: %+v err=%v", status, err)
+	}
+	replayed, created, err := runtime.GetOrCreateWithPreparedOutbound(ctx, "alpine", prepared, options...)
+	if err != nil || created || replayed.ID() != box.ID() {
+		t.Fatalf("prepared replay: created=%t err=%v", created, err)
+	}
+	_ = replayed.Close()
+	prepared.Snapshot.Revision = "different-revision"
+	if rejected, created, err := runtime.GetOrCreateWithPreparedOutbound(ctx, "alpine", prepared, options...); rejected != nil || created || !IsInvalidState(err) {
+		t.Fatalf("different revision was not refused: box=%v created=%t err=%v", rejected, created, err)
+	}
+
+	const limitedRevision = "deny-incapable-revision"
+	emptyDenyPolicy := json.RawMessage(`{"mode":"enabled","allow_net":["example.com:443"],"deny_net":[]}`)
+	explicit, err := runtime.PrepareOutboundCreate(ctx, limitedRevision, emptyDenyPolicy)
+	if err != nil || !explicit.DenyPresent {
+		t.Fatalf("explicit empty deny before capability loss: prepared=%+v err=%v", explicit, err)
+	}
+	shimWithoutDeny := strings.Replace(shim, `"deny":true`, `"deny":false`, 1)
+	if err := os.WriteFile(filepath.Join(shimDir, "boxlite-shim"), []byte(shimWithoutDeny), 0700); err != nil {
+		t.Fatal(err)
+	}
+	omitted, err := runtime.PrepareOutboundCreate(ctx, limitedRevision, json.RawMessage(`{"mode":"enabled","allow_net":["example.com:443"]}`))
+	if err != nil || omitted.DenyPresent || !reflect.DeepEqual(omitted.Snapshot, explicit.Snapshot) {
+		t.Fatalf("omitted deny on deny-incapable backend: prepared=%+v err=%v", omitted, err)
+	}
+	_, err = runtime.PrepareOutboundCreate(ctx, limitedRevision, emptyDenyPolicy)
+	if !networkErrorCode(err, ErrUnsupported) {
+		t.Fatalf("explicit empty deny on deny-incapable backend: err=%v, want unsupported", err)
+	}
+
+	// The policy identity is the same in both cases. Execute the same prepared
+	// snapshot with each presence value to cover a backend change after prepare.
+	const limitedName = "deny-incapable-create"
+	limitedOptions := []BoxOption{WithName(limitedName), WithNetwork(NetworkSpec{Mode: NetworkModeEnabled})}
+	if rejected, created, err := runtime.GetOrCreateWithPreparedOutbound(ctx, "alpine", explicit, limitedOptions...); rejected != nil || created || !networkErrorCode(err, ErrUnsupported) {
+		t.Fatalf("explicit empty deny at create: box=%v created=%t err=%v", rejected, created, err)
+	}
+	if _, err := runtime.GetInfo(ctx, limitedName); !IsNotFound(err) {
+		t.Fatalf("unsupported prepared create left a Box: %v", err)
+	}
+	allowed, created, err := runtime.GetOrCreateWithPreparedOutbound(ctx, "alpine", omitted, limitedOptions...)
+	if err != nil || !created || allowed == nil {
+		t.Fatalf("omitted deny at create: box=%v created=%t err=%v", allowed, created, err)
+	}
+	_ = allowed.Close()
+}

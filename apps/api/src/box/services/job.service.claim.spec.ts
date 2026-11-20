@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { In } from 'typeorm'
+import { In, Not } from 'typeorm'
 import { Job } from '../entities/job.entity'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { JobService } from './job.service'
@@ -69,7 +69,7 @@ describe('JobService.claimPendingJobs', () => {
     expect(claimed[0].status).toBe(JobStatus.IN_PROGRESS)
 
     expect(jobRepository.update).toHaveBeenCalledWith(
-      { id: In(['job-1']), status: JobStatus.PENDING },
+      { id: In(['job-1']), status: JobStatus.PENDING, type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX) },
       expect.objectContaining({ status: JobStatus.IN_PROGRESS }),
       { returning: ['id'] },
     )

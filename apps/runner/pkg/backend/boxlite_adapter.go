@@ -32,6 +32,14 @@ func (a *BoxliteAdapter) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (s
 	return a.client.Create(ctx, boxDto)
 }
 
+func (a *BoxliteAdapter) CreateCompleteOutbound(ctx context.Context, target string, request dto.CompleteCreateRequest) (dto.CompleteCreateResult, error) {
+	return a.client.CreateCompleteOutbound(ctx, target, request)
+}
+
+func (a *BoxliteAdapter) CancelCompleteOutboundCreate(ctx context.Context, target string, attempt dto.CompleteCreateAttempt) (dto.CompleteCreateResult, error) {
+	return a.client.CancelCompleteOutboundCreate(ctx, target, attempt)
+}
+
 func (a *BoxliteAdapter) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
 	return a.client.Start(ctx, boxId, authToken, metadata)
 }

@@ -67,6 +67,7 @@ function makeService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    noop, // completeCreateJobs
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -207,6 +208,7 @@ function makeNetworkTunnelService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    noop, // completeCreateJobs
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -239,7 +241,7 @@ describe('BoxService image reporting', () => {
     Object.assign(service as any, {
       // The ERROR case runs on past the image report into the real state
       // update, so the write it ends with has to exist.
-      boxRepository: { findOne: jest.fn().mockResolvedValue(box), updateWhere: jest.fn() },
+      boxRepository: { findWithCheckpointState: jest.fn().mockResolvedValue({ box }), updateWhere: jest.fn() },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       imageRegistrarService: { onBoxStarted: jest.fn().mockResolvedValue(undefined) },
       imagePullFailureService: passThroughPullFailures(),

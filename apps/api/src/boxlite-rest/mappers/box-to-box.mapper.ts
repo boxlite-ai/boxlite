@@ -12,7 +12,8 @@ import {
   DEFAULT_AUTO_RESUME,
 } from '../../box/constants/box-lifecycle.constants'
 import { BoxResponseDto } from '../dto/box-response.dto'
-import { CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
+import { CompleteCreateOutboundSpecDto, CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
+import type { CompleteOutboundPolicy } from '../../box/runner-adapter/outbound-control'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
@@ -35,6 +36,16 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     // here would report every clean exit as "no exit code recorded".
     exit_code: box.exitCode,
     network: box.network,
+  }
+}
+
+export function completeCreateOutboundPolicy(dto: RestCreateBoxDto): CompleteOutboundPolicy | undefined {
+  const outbound = dto.network?.outbound
+  if (!(outbound instanceof CompleteCreateOutboundSpecDto)) return undefined
+  return {
+    mode: outbound.mode,
+    allow_net: outbound.allow_net ?? [],
+    ...(outbound.deny_net !== undefined ? { deny_net: outbound.deny_net } : {}),
   }
 }
 
@@ -78,7 +89,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   // Only an explicit inbound.mode=enabled enables inbound access. Omitting
   // inbound (including the legacy flat network shape) leaves it disabled.
   createDto.inboundEnabled = dto.network?.inbound?.mode === 'enabled'
-  if (dto.network) {
+  if (dto.network && !(dto.network.outbound instanceof CompleteCreateOutboundSpecDto)) {
     const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.outboundEnabled = dto.network.outbound?.mode !== 'disabled'
     createDto.outboundAllowNet = allowNet?.length ? allowNet : undefined

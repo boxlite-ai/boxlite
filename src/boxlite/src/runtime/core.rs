@@ -381,6 +381,37 @@ impl BoxliteRuntime {
             .await
     }
 
+    /// Prepare a canonical hosted create snapshot on this local Runtime.
+    #[doc(hidden)]
+    pub async fn prepare_hosted_outbound_create(
+        &self,
+        policy: crate::net::CompleteOutboundPolicy,
+        revision: crate::net::OutboundRevision,
+    ) -> BoxliteResult<crate::net::PreparedOutboundCreate> {
+        self.backend
+            .prepare_hosted_outbound_create(policy, revision)
+            .await
+    }
+
+    /// Install an exact prepared snapshot or adopt the named Box with that identity.
+    #[doc(hidden)]
+    pub async fn get_or_create_with_prepared_outbound(
+        &self,
+        options: BoxOptions,
+        name: String,
+        prepared: crate::net::PreparedOutboundCreate,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        if name.is_empty() {
+            return Err(BoxliteError::InvalidArgument(
+                "prepared outbound create requires a Box name".into(),
+            ));
+        }
+        options.sanitize_create()?;
+        self.backend
+            .get_or_create_with_prepared_outbound(options, name, prepared)
+            .await
+    }
+
     /// Get a handle to an existing box by ID or name.
     ///
     /// The `id_or_name` parameter can be either:

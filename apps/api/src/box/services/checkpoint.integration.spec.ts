@@ -300,6 +300,40 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect((await boxes.findOneByOrFail({ id: shadow.id })).pending).toBe(false)
   })
 
+  async function protectedSource() {
+    const box = await source('complete-outbound-source')
+    await boxes.update(box.id, {
+      completeOutboundControl: {
+        version: 2,
+        committed: {
+          revision: randomUUID(),
+          admission: 'extended_ipv4',
+          policy: { mode: 'enabled', allow_net: [], deny_net: [] },
+        },
+      },
+    })
+    return box
+  }
+
+  it('refuses checkpoint capture for a Box with a protected empty outbound policy', async () => {
+    const protectedBox = await protectedSource()
+    await expect(service.create(organizationId, protectedBox.id)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'complete_policy_required' }),
+    })
+    expect(await jobs.count()).toBe(0)
+    expect(await checkpoints.count()).toBe(0)
+    expect(await states.findOneBy({ boxId: protectedBox.id })).toBeNull()
+  })
+
+  it('marks only the legacy Box for drain migration', async () => {
+    await protectedSource()
+    const legacyBox = await source('legacy-source')
+    expect(await repository.markParkedBoxesForExport([runner.id])).toBe(1)
+    const migrations = await dataSource.getRepository(BoxMigration).find()
+    expect(migrations.map(({ boxId }) => boxId)).toEqual([legacyBox.id])
+  })
+
   async function legacyCheckpointNameCollision() {
     const checkpoint = await readyCheckpoint()
     const id = randomUUID()

@@ -42,13 +42,17 @@ import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { recordBoxRequested } from '../box/utils/box-business-event.util'
 import { Box } from '../box/entities/box.entity'
+import { BoxDto } from '../box/dto/box.dto'
+import { NetworkInfoResponseDto } from '../box/dto/network-info.dto'
+import type { BoxNetworkProjection } from '../box/repositories/box.repository'
 import { outboundRecord } from '../box/stores/outbound-policy.store'
+import { validCompleteOutboundPolicy } from '../box/runner-adapter/outbound-control'
 import { outboundPrecondition } from './outbound-precondition'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto, InboundNetworkSpecDto, OutboundNetworkSpecDto } from './dto/create-box.dto'
-import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
+import { boxToBoxResponse, completeCreateOutboundPolicy, createBoxToCreateBox } from './mappers/box-to-box.mapper'
 import { Audit, AUDIT_TARGET_ID, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -134,9 +138,10 @@ export class BoxliteBoxController {
     @Body() dto: CreateBoxDto,
     @UserContext() ctx: Context,
     @Req() request?: Request,
+    @Res({ passthrough: true }) response?: Response,
   ): Promise<BoxResponseDto> {
     if (dto.checkpoint_id !== undefined) {
-      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
+      return this.createBoxFromCheckpoint(authContext, dto, ctx, request, response)
     }
 
     // Attaching a managed volume grants the box read/write access to its data,
@@ -150,13 +155,19 @@ export class BoxliteBoxController {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+    const completeOutbound = completeCreateOutboundPolicy(dto)
 
-    let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
+    let box = await this.boxService.create(createBoxDto, organization, ctx, {
+      maxCreatedBoxes,
+      ...(completeOutbound ? { completeOutbound } : {}),
+    })
     if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      box = completeOutbound
+        ? await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30, true)
+        : await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }
-    return boxToBoxResponse(box)
+    return this.respondWithBox(box, organization.id, response)
   }
 
   /** Admit an inherited configuration, record its request, then wait without losing its identity. */
@@ -165,6 +176,7 @@ export class BoxliteBoxController {
     dto: CreateBoxDto,
     ctx: Context,
     request?: Request,
+    response?: Response,
   ): Promise<BoxResponseDto> {
     const overrides = Object.entries(dto)
       .filter(([field, value]) => value !== undefined && field !== 'checkpoint_id' && field !== 'name')
@@ -191,7 +203,8 @@ export class BoxliteBoxController {
     recordBoxRequested('box.create', box, ctx)
     if (request) request[AUDIT_TARGET_ID] = box.id
     try {
-      return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))
+      const started = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
+      return this.respondWithBox(started, authContext.organizationId, response)
     } catch (error) {
       // Admission already created this identity. Clients must query it after
       // any wait failure instead of submitting another anonymous Box.
@@ -229,6 +242,7 @@ export class BoxliteBoxController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Query() page: BoxPageQuery,
     @Param('prefix') prefix?: string,
+    @Res({ passthrough: true }) response?: Response,
   ): Promise<ListBoxesResponseDto> {
     const organizationId = authContext.organizationId
     if (
@@ -246,7 +260,7 @@ export class BoxliteBoxController {
     const returned = boxes.slice(0, page.pageSize)
     const dtos = await this.boxService.toBoxDtos(returned)
     return {
-      boxes: dtos.map(boxToBoxResponse),
+      boxes: await this.respondWithBoxes(dtos, organizationId, response),
       ...(boxes.length > page.pageSize
         ? { next_page_token: page.next(organizationId, returned[returned.length - 1].id) }
         : {}),
@@ -262,10 +276,11 @@ export class BoxliteBoxController {
   async getBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
+    @Res({ passthrough: true }) response?: Response,
   ): Promise<BoxResponseDto> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     const dto = await this.boxService.toBoxDtoWithExitCode(box)
-    return boxToBoxResponse(dto)
+    return this.respondWithBox(dto, authContext.organizationId, response)
   }
 
   @Head(':boxId')
@@ -316,13 +331,14 @@ export class BoxliteBoxController {
     @Param('boxId') boxId: string,
     @UserContext() ctx: Context,
     @Req() request?: Request,
+    @Res({ passthrough: true }) response?: Response,
   ): Promise<BoxResponseDto> {
     let box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (request) request[AUDIT_TARGET_ID] = box.id
 
     if (this.isStartAlreadyInProgress(box)) {
       const dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
-      return boxToBoxResponse(dto)
+      return this.respondWithBox(dto, authContext.organizationId, response)
     }
 
     box = await this.boxService.start(box.id, authContext.organization, ctx, { idOnly: true })
@@ -330,7 +346,7 @@ export class BoxliteBoxController {
     if (dto.state !== BoxState.STARTED) {
       dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
     }
-    return boxToBoxResponse(dto)
+    return this.respondWithBox(dto, authContext.organizationId, response)
   }
 
   @Post(':boxId/stop')
@@ -350,10 +366,11 @@ export class BoxliteBoxController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @UserContext() ctx: Context,
+    @Res({ passthrough: true }) response?: Response,
   ): Promise<BoxResponseDto> {
     const box = await this.boxService.stop(boxId, authContext.organizationId, ctx)
     const dto = await this.boxService.toBoxDto(box)
-    return boxToBoxResponse(dto)
+    return this.respondWithBox(dto, authContext.organizationId, response)
   }
 
   // The dashboard, CLI and SDKs all change inbound mode here, and only here.
@@ -397,6 +414,68 @@ export class BoxliteBoxController {
     return this.boxService.getOutboundStatus(boxId, authContext.organizationId)
   }
 
+  @Get(':boxId/network/outbound/complete')
+  async getCompleteOutboundNetwork(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Res() response: Response,
+  ): Promise<void> {
+    const snapshot = await this.boxService.getCompleteOutboundNetwork(boxId, authContext.organizationId)
+    response.setHeader('Cache-Control', 'private, no-store')
+    if (snapshot === null) {
+      // There is no representation validator for a policy that has not committed.
+      // End the response directly so Express does not generate a weak error-body ETag.
+      response
+        .status(409)
+        .type('json')
+        .end(
+          JSON.stringify({
+            statusCode: 409,
+            code: 'outbound_pending',
+            message: 'No complete outbound snapshot is committed',
+          }),
+        )
+      return
+    }
+    response.setHeader('ETag', `"${snapshot.revision}"`)
+    response.json(snapshot)
+  }
+
+  @Get(':boxId/network/outbound/complete/status')
+  async getCompleteOutboundStatus(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader('Cache-Control', 'private, no-store')
+    return this.boxService.getCompleteOutboundStatus(boxId, authContext.organizationId)
+  }
+
+  @Put(':boxId/network/outbound/complete')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.UPDATE_NETWORK_SETTINGS,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+  })
+  async updateCompleteOutboundNetwork(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    if (request.headers['x-boxlite-outbound-revision'] !== undefined) {
+      throw new BadRequestException('Outbound candidate revisions are internal control metadata')
+    }
+    const matches = outboundPrecondition(request.headers['if-match'])
+    if (!validCompleteOutboundPolicy(body)) throw new BadRequestException('Invalid complete outbound policy')
+    const result = await this.boxService.setCompleteOutboundNetwork(boxId, body, authContext.organizationId, matches)
+    response.setHeader('Cache-Control', 'private, no-store')
+    response.setHeader('ETag', `"${result.revision}"`)
+    return result
+  }
+
   @Put(':boxId/network/outbound')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @ApiResponse({ status: 200, type: OutboundNetworkSpecDto })
@@ -427,6 +506,42 @@ export class BoxliteBoxController {
     )
     response.setHeader('ETag', `"${outboundRecord(box).revision}"`)
     return { mode: box.outboundEnabled ? 'enabled' : 'disabled', allow_net: box.outboundAllowNet ?? [] }
+  }
+
+  private async respondWithBox(box: BoxDto, organizationId: string, response?: Response): Promise<BoxResponseDto> {
+    const [result] = await this.respondWithBoxes([box], organizationId, response)
+    return result
+  }
+
+  private async respondWithBoxes(
+    boxes: BoxDto[],
+    organizationId: string,
+    response?: Response,
+  ): Promise<BoxResponseDto[]> {
+    response?.setHeader('Cache-Control', 'private, no-store')
+    response?.vary('X-BoxLite-Source')
+    const dashboard = response?.req.get('X-BoxLite-Source') === 'dashboard'
+    const rows = await this.boxService
+      .getBoxNetworkProjections(
+        boxes.map((box) => box.id),
+        organizationId,
+      )
+      .catch((): BoxNetworkProjection[] => {
+        this.logger.warn('Box network metadata is unavailable')
+        return []
+      })
+    const projections = new Map(rows.map((row) => [row.id, row]))
+    return boxes.map((box) => {
+      const result = boxToBoxResponse(box)
+      delete result.network
+      const row = projections.get(box.id)
+      if (!row) return result
+      const network = NetworkInfoResponseDto.fromBox(row)
+      if (!row.protected) result.network = network
+      else if (dashboard)
+        result.network = { inbound: network.inbound, outbound: { mode: 'unavailable', allow_net: [] } }
+      return result
+    })
   }
 
   private isStartAlreadyInProgress(box: Box): boolean {

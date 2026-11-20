@@ -49,7 +49,7 @@ function createService(box: Box | null, stalledJob: Job | null): Harness {
   const updateWhere = jest.fn().mockResolvedValue(box)
 
   ;(service as any).logger = { debug: jest.fn(), warn: jest.fn(), error: jest.fn(), log: jest.fn() }
-  ;(service as any).boxRepository = { findOne: jest.fn().mockResolvedValue(box), updateWhere }
+  ;(service as any).boxRepository = { findWithCheckpointState: jest.fn().mockResolvedValue({ box }), updateWhere }
   ;(service as any).jobRepository = { findOne: jobFindOne }
   ;(service as any).jobService = { updateJobStatus }
   ;(service as any).configService = {
@@ -65,6 +65,15 @@ function createService(box: Box | null, stalledJob: Job | null): Harness {
 }
 
 describe('BoxService.updateState start reconciliation', () => {
+  it('does not complete a legacy job for a complete create reservation', async () => {
+    const box = makeBox(BoxState.CREATING)
+    const { service, jobFindOne, updateWhere, updateJobStatus } = createService(box, makeStalledJob(JobType.CREATE_BOX))
+    ;(service as any).boxRepository.findWithCheckpointState.mockResolvedValue({ box, outboundCreate: { version: 2 } })
+    await service.updateState(box.id, BoxState.STARTED)
+    expect(jobFindOne).not.toHaveBeenCalled()
+    expect(updateJobStatus).not.toHaveBeenCalled()
+    expect(updateWhere).not.toHaveBeenCalled()
+  })
   it('completes the stalled startup job instead of writing the box directly', async () => {
     const box = makeBox(BoxState.CREATING)
     const job = makeStalledJob(JobType.CREATE_BOX)

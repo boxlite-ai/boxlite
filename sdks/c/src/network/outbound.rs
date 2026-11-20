@@ -1,7 +1,8 @@
 //! Additive revision control ABI; existing policy setters and error codes stay stable.
 use super::*;
 use boxlite::net::{
-    OutboundReplaceOutcome, OutboundReplacement, OutboundRevision, OutboundSnapshot,
+    CompleteOutboundPolicy, HostedOutboundCommand, OutboundReplaceOutcome, OutboundReplacement,
+    OutboundRevision, OutboundSnapshot,
 };
 
 #[cfg(test)]
@@ -51,6 +52,84 @@ pub unsafe extern "C" fn boxlite_network_outbound_status(
     unsafe {
         read_json(network, out_json, out_error, |network| {
             network.tokio_rt.block_on(network.handle.outbound_status())
+        })
+    }
+}
+
+/// Read a complete persisted snapshot, including deny rules and admission mode.
+/// Release a successful response with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_complete_outbound_snapshot(
+    network: *mut CBoxNetworkHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        read_json(network, out_json, out_error, |network| {
+            network
+                .tokio_rt
+                .block_on(network.handle.complete_outbound_snapshot())
+        })
+    }
+}
+
+/// Read complete durable and live observations without applying a policy.
+/// Release a successful response with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_complete_outbound_status(
+    network: *mut CBoxNetworkHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        read_json(network, out_json, out_error, |network| {
+            network
+                .tokio_rt
+                .block_on(network.handle.complete_outbound_status())
+        })
+    }
+}
+
+/// Execute a private hosted control-plane command. Free the receipt with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_hosted_outbound(
+    network: *mut CBoxNetworkHandle,
+    command_json: *const c_char,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        read_json(network, out_json, out_error, |network| {
+            let command = parse_policy::<HostedOutboundCommand>(command_json)?;
+            network
+                .tokio_rt
+                .block_on(network.handle.hosted_outbound(command))
+        })
+    }
+}
+
+/// Prepare a hosted create snapshot without provisioning a Box.
+/// Revision and policy inputs are borrowed UTF-8. Free the result with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_prepare_outbound_create(
+    runtime: *mut crate::CBoxliteRuntime,
+    candidate_revision: *const c_char,
+    policy_json: *const c_char,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        json_result(out_json, out_error, || {
+            let runtime = runtime
+                .as_ref()
+                .ok_or_else(|| null_pointer_error("runtime"))?;
+            let revision = revision(candidate_revision, "candidate_revision")?;
+            let policy = parse_policy::<CompleteOutboundPolicy>(policy_json)?;
+            runtime.tokio_rt.block_on(
+                runtime
+                    .runtime
+                    .prepare_hosted_outbound_create(policy, revision),
+            )
         })
     }
 }
@@ -110,6 +189,21 @@ unsafe fn read_json<T: serde::Serialize>(
     out_error: *mut CBoxliteError,
     read: impl FnOnce(&BoxNetworkHandle) -> Result<T, BoxliteError>,
 ) -> BoxliteErrorCode {
+    unsafe {
+        json_result(out_json, out_error, || {
+            let network = network
+                .as_ref()
+                .ok_or_else(|| null_pointer_error("network"))?;
+            read(network)
+        })
+    }
+}
+
+unsafe fn json_result<T: serde::Serialize>(
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+    read: impl FnOnce() -> Result<T, BoxliteError>,
+) -> BoxliteErrorCode {
     let result = (|| {
         if out_json.is_null() {
             return Err(null_pointer_error("out_json"));
@@ -117,8 +211,7 @@ unsafe fn read_json<T: serde::Serialize>(
         unsafe {
             *out_json = ptr::null_mut();
         }
-        let network = unsafe { network.as_ref() }.ok_or_else(|| null_pointer_error("network"))?;
-        let value = read(network)?;
+        let value = read()?;
         let json = serde_json::to_string(&value).map_err(|error| {
             BoxliteError::Internal(format!("serialize outbound response: {error}"))
         })?;

@@ -6,11 +6,14 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
+	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/checkpoint"
 	"github.com/containerd/errdefs"
 )
 
@@ -21,24 +24,38 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	// Check before Destroy: a request that cannot be recreated must not cost
 	// the box it was meant to recover.
 	createDto := recoverCreateDto(boxId, recoverDto)
-	if _, err := dto.CPUAllocation(createDto.CpuQuota); err != nil {
-		return errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	resources, err := validateCreateResources(createDto)
+	if err != nil {
+		return err
 	}
-	if _, err := dto.MemoryMiB(createDto.MemoryQuota); err != nil {
-		return errdefs.ErrInvalidArgument.WithMessage(err.Error())
-	}
-	if _, err := networkSpec(createDto); err != nil {
+	network, err := networkSpec(createDto)
+	if err != nil {
 		return err
 	}
 	if err := validateRecreatableSecrets(createDto.Secrets); err != nil {
 		return err
 	}
 
-	if err := c.Destroy(ctx, boxId); err != nil {
+	operation, err := c.checkpointOperations().Lock(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	if err := operation.CheckNoCompleteCreate(); err != nil {
+		return err
+	}
+	if _, err := c.OutboundSnapshot(ctx, boxId); err != nil && !sdk.IsNotFound(err) {
+		var failure *sdk.Error
+		if errors.As(err, &failure) && failure.Code == sdk.ErrUnsupported {
+			return checkpoint.ErrCompleteCreateConflict
+		}
+		return err
+	}
+	if err := c.destroy(ctx, boxId, operation); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	_, _, err := c.Create(ctx, createDto)
+	_, _, err = c.create(ctx, createDto, operation, resources, network, nil)
 	return err
 }
 

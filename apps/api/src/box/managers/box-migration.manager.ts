@@ -17,6 +17,7 @@ import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { RunnerService } from '../services/runner.service'
+import { hasCompleteOutboundControl } from '../stores/outbound-policy.store'
 import { getMigrateJobLockKey } from '../utils/lock-key.util'
 
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -318,8 +319,8 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
           return false
         }
 
-        if (!current.isUndisturbedBy(box)) {
-          this.logger.log(`Box ${box.id} was touched during its migration; rolling back instead of ${jobType}`)
+        if (!current.isUndisturbedBy(box) || (await hasCompleteOutboundControl(entityManager, box.id))) {
+          this.logger.log(`Box ${box.id} is ineligible for migration; rolling back instead of ${jobType}`)
           await this.markRollback(entityManager, current)
           return false
         }

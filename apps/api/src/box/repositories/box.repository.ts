@@ -6,6 +6,12 @@
 
 import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
+import { Runner } from '../entities/runner.entity'
+import {
+  COMPLETE_CREATE_UNSUPPORTED_REASON,
+  CompleteOutboundControlRecord,
+  CompleteCreateIntent,
+} from '../entities/outbound-control-record'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Checkpoint } from '../entities/checkpoint.entity'
@@ -14,7 +20,7 @@ import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
@@ -31,9 +37,28 @@ import { registryProxyHost } from '../../registry/utils/registry-proxy.util'
 import { matchingCredential } from '../../registry/utils/matching-credential'
 import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
-import { OutboundControl } from '../runner-adapter/outbound-control'
-import { OutboundPolicyCoordinator, OutboundPrecondition } from '../services/outbound-policy.coordinator'
-import { OutboundPolicyStore, persistedOutbound } from '../stores/outbound-policy.store'
+import { CompleteOutboundCoordinator } from '../services/complete-outbound.coordinator'
+import {
+  CompleteCreateOutcome,
+  CompleteOutboundStatus,
+  OutboundControl,
+  runnerOutboundEndpoint,
+  sameCompleteOutboundSnapshot,
+} from '../runner-adapter/outbound-control'
+import {
+  completeCloudStatus,
+  OutboundPolicyCoordinator,
+  OutboundPrecondition,
+} from '../services/outbound-policy.coordinator'
+import {
+  completeOutboundRecord,
+  OutboundPolicyStore,
+  persistedCompleteOutbound,
+  persistedOutbound,
+  requireCompleteOutboundAdmission,
+  verifiedCompleteRunner,
+  lockCompleteOutboundFloor,
+} from '../stores/outbound-policy.store'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
@@ -78,6 +103,10 @@ export const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
 
+export type BoxNetworkProjection = Pick<Box, 'id' | 'inboundEnabled' | 'outboundEnabled' | 'outboundAllowNet'> & {
+  protected: boolean
+}
+
 // The fields of a Box before a write that decide its organization's activity.
 type OrganizationActivitySource = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'createdAt'>
 type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
@@ -114,6 +143,194 @@ export class BoxRepository extends BaseRepository<Box> {
 
   async readOutbound(id: string, organizationId: string) {
     return persistedOutbound(await new OutboundPolicyStore(this.dataSource).read(id, organizationId))
+  }
+
+  async readCompleteOutbound(id: string, organizationId: string) {
+    return persistedCompleteOutbound(await new OutboundPolicyStore(this.dataSource).read(id, organizationId))
+  }
+
+  async readNetworkProjections(ids: string[], organizationId: string): Promise<BoxNetworkProjection[]> {
+    if (ids.length === 0) return []
+    const primary = this.dataSource.createQueryRunner('master')
+    try {
+      return await primary.manager
+        .createQueryBuilder(Box, 'box')
+        .select('box.id', 'id')
+        .addSelect('box.inboundEnabled', 'inboundEnabled')
+        .addSelect('box.outboundEnabled', 'outboundEnabled')
+        .addSelect('box.outboundAllowNet', 'outboundAllowNet')
+        .addSelect('box.completeOutboundControl IS NOT NULL', 'protected')
+        .where('box.organizationId = :organizationId AND box.id IN (:...ids)', { organizationId, ids })
+        .getRawMany<BoxNetworkProjection>()
+    } finally {
+      await primary.release()
+    }
+  }
+
+  async completeOutboundStatus(
+    id: string,
+    organizationId: string,
+    observe: (box: Box) => Promise<CompleteOutboundStatus>,
+  ) {
+    return completeCloudStatus(new OutboundPolicyStore(this.dataSource), id, organizationId, observe)
+  }
+
+  completeOutboundCoordinator() {
+    return new CompleteOutboundCoordinator(new OutboundPolicyStore(this.dataSource))
+  }
+
+  async completeReplacementWork(after: string, before: Date) {
+    const primary = this.dataSource.createQueryRunner('master')
+    try {
+      return await primary.manager
+        .createQueryBuilder(Box, 'box')
+        .select('box.id', 'id')
+        .addSelect('box.organizationId', 'organizationId')
+        .where('box.id > :after AND box.updatedAt <= :before', { after, before })
+        .andWhere(
+          `(box.completeOutboundControl #>> '{pending,kind}' = 'replace'
+          OR box.completeOutboundControl ? 'finalization')`,
+        )
+        .orderBy('box.id')
+        .limit(100)
+        .getRawMany<{ id: string; organizationId: string }>()
+    } finally {
+      await primary.release()
+    }
+  }
+
+  async pendingV0CreateIds(after: string, before: Date): Promise<string[]> {
+    const primary = this.dataSource.createQueryRunner('master')
+    try {
+      const rows = await primary.manager
+        .createQueryBuilder(Box, 'box')
+        .select('box.id', 'id')
+        .where('box.id > :after AND box.createdAt <= :before', { after, before })
+        .andWhere(`box.pending AND box."completeOutboundControl" #>> '{pending,transport}' = 'v0'`)
+        .orderBy('box.id')
+        .limit(100)
+        .getRawMany<{ id: string }>()
+      return rows.map(({ id }) => id)
+    } finally {
+      await primary.release()
+    }
+  }
+
+  async assertCompleteCreateAdmission(): Promise<void> {
+    const primary = this.dataSource.createQueryRunner('master')
+    try {
+      await requireCompleteOutboundAdmission(primary.manager, false)
+    } finally {
+      await primary.release()
+    }
+  }
+
+  async withCompleteCreateRunner<T>(
+    runnerId: string,
+    prepare: (runner: Runner, leaseId: string) => Promise<T>,
+  ): Promise<T> {
+    return this.dataSource.transaction(async (manager) => {
+      await requireCompleteOutboundAdmission(manager, true)
+      const { runner, leaseId } = await verifiedCompleteRunner(manager, runnerId)
+      return prepare(runner, leaseId)
+    })
+  }
+
+  async insertCompleteCreate(
+    box: Box,
+    pending: CompleteCreateIntent,
+    preparation: { runner: Runner; leaseId: string },
+    maxCreatedBoxes?: number,
+    onPersist?: (manager: EntityManager, box: Box) => Promise<void>,
+  ): Promise<Box> {
+    if (box.runnerId !== pending.runnerId || !box.pending || box.state !== BoxState.UNKNOWN) {
+      throw new ServiceUnavailableException('Invalid complete create reservation')
+    }
+    try {
+      return await this.insert(box, maxCreatedBoxes, onPersist, async (manager) => {
+        await requireCompleteOutboundAdmission(manager, true)
+        const { runner, leaseId } = await verifiedCompleteRunner(manager, pending.runnerId, preparation.leaseId)
+        if (
+          runner.id !== preparation.runner.id ||
+          runnerOutboundEndpoint(runner) !== runnerOutboundEndpoint(preparation.runner) ||
+          runner.apiKey !== preparation.runner.apiKey ||
+          runner.apiVersion !== preparation.runner.apiVersion
+        ) {
+          throw new ServiceUnavailableException('Runner changed after complete outbound preparation')
+        }
+        const bound = pending.transport === 'v0' ? { ...pending, runnerLeaseId: leaseId } : pending
+        box.completeOutboundControl = { version: 2, committed: null, pending: bound }
+        completeOutboundRecord(box)
+      })
+    } finally {
+      delete box.completeOutboundControl
+    }
+  }
+
+  async withCompleteRunner<T>(
+    runnerId: string,
+    leaseId: string,
+    allowExpired: boolean,
+    operation: (runner: Runner) => Promise<T>,
+  ): Promise<T> {
+    return this.dataSource.transaction(async (manager) => {
+      await lockCompleteOutboundFloor(manager)
+      const { runner } = await verifiedCompleteRunner(manager, runnerId, leaseId, allowExpired)
+      return operation(runner)
+    })
+  }
+
+  /** Publish only against the exact primary reservation and only after commit. */
+  async settleCompleteCreate(
+    selected: Box,
+    reservation: CompleteOutboundControlRecord,
+    result: CompleteCreateOutcome,
+  ): Promise<boolean> {
+    const owner = reservation.pending
+    if (owner?.kind !== 'create' || result.outcome === 'pending' || selected.runnerId !== owner.runnerId) return false
+    if (result.outcome === 'installed' && !sameCompleteOutboundSnapshot(owner.candidate.snapshot, result.snapshot)) {
+      return false
+    }
+    const changed = await this.dataSource.transaction(async (manager) => {
+      await manager.query("SET LOCAL lock_timeout = '5s'")
+      const box = await manager
+        .createQueryBuilder(Box, 'box')
+        .where('box.id = :id AND box.organizationId = :organizationId AND box.runnerId = :runnerId', {
+          id: selected.id,
+          organizationId: selected.organizationId,
+          runnerId: owner.runnerId,
+        })
+        .andWhere('box.completeOutboundControl = CAST(:reservation AS jsonb)', {
+          reservation: JSON.stringify(reservation),
+        })
+        .setLock('pessimistic_write')
+        .getOne()
+      if (!box || !box.pending || box.state !== BoxState.UNKNOWN) return null
+      const previous = { ...box }
+      const update: Partial<Box> =
+        result.outcome === 'installed'
+          ? { state: BoxState.STARTED, completeOutboundControl: { version: 2, committed: result.snapshot } }
+          : {
+              state: box.desiredState === BoxDesiredState.DESTROYED ? BoxState.DESTROYED : BoxState.ERROR,
+              runnerId: null,
+              recoverable: false,
+              errorReason:
+                result.failure === 'unsupported' ? COMPLETE_CREATE_UNSUPPORTED_REASON : 'outbound_create_cancelled',
+              completeOutboundControl: null,
+            }
+      Object.assign(box, update)
+      box.assertValid()
+      const invariantChanges = box.enforceInvariants()
+      await manager.update(Box, box.id, { ...update, ...invariantChanges })
+      if (previous.state !== box.state) await this.upsertLastActivity(manager, box.id, new Date())
+      delete box.completeOutboundControl
+      return { box, previous }
+    })
+    if (!changed) return false
+    this.invalidateLookupCacheOnUpdate(changed.box, changed.previous)
+    this.emitUpdateEvents(changed.box, changed.previous)
+    await this.recordOrganizationActivity(changed.box, changed.previous)
+    return true
   }
 
   async outboundStatus(id: string, organizationId: string, control: (box: Box) => Promise<OutboundControl>) {
@@ -310,21 +527,34 @@ export class BoxRepository extends BaseRepository<Box> {
   async findWithCheckpointState(
     id: string,
     organizationId?: string,
-  ): Promise<{ box: Box; checkpointState: BoxCheckpointState | null }> {
-    const { entities, raw } = await this.repository
-      .createQueryBuilder('box')
-      .leftJoin(BoxCheckpointState, 'checkpoint', 'checkpoint.boxId = box.id')
-      .addSelect('checkpoint.activeJobId', 'checkpoint_job_id')
-      .addSelect('checkpoint.sequence', 'checkpoint_sequence')
-      .where({ id, ...(organizationId === undefined ? {} : { organizationId }) })
-      .getRawAndEntities<{ checkpoint_job_id: string | null; checkpoint_sequence: number | null }>()
-    const box = entities[0]
-    if (!box) throw new NotFoundException('Box not found')
-    const checkpointState =
-      raw[0].checkpoint_sequence === null
-        ? null
-        : { boxId: id, activeJobId: raw[0].checkpoint_job_id, sequence: raw[0].checkpoint_sequence }
-    return { box, checkpointState }
+  ): Promise<{
+    box: Box
+    checkpointState: BoxCheckpointState | null
+    outboundCreate: CompleteOutboundControlRecord | null
+  }> {
+    const primary = this.dataSource.createQueryRunner('master')
+    try {
+      const { entities, raw } = await primary.manager
+        .createQueryBuilder(Box, 'box')
+        .leftJoin(BoxCheckpointState, 'checkpoint', 'checkpoint.boxId = box.id')
+        .addSelect('box.completeOutboundControl')
+        .addSelect('checkpoint.activeJobId', 'checkpoint_job_id')
+        .addSelect('checkpoint.sequence', 'checkpoint_sequence')
+        .where({ id, ...(organizationId === undefined ? {} : { organizationId }) })
+        .getRawAndEntities<{ checkpoint_job_id: string | null; checkpoint_sequence: number | null }>()
+      const box = entities[0]
+      if (!box) throw new NotFoundException('Box not found')
+      const checkpointState =
+        raw[0].checkpoint_sequence === null
+          ? null
+          : { boxId: id, activeJobId: raw[0].checkpoint_job_id, sequence: raw[0].checkpoint_sequence }
+      const reservation = completeOutboundRecord(box)
+      const outboundCreate = reservation?.pending?.kind === 'create' ? reservation : null
+      delete box.completeOutboundControl
+      return { box, checkpointState, outboundCreate }
+    } finally {
+      await primary.release()
+    }
   }
 
   /** Explicit deletion fences checkpoint callbacks before the runner removes the target. */
@@ -426,14 +656,17 @@ export class BoxRepository extends BaseRepository<Box> {
       updateData: Partial<Box>
       whereCondition: FindOptionsWhere<Box>
       lockTimeoutMs?: number
+      beforeLock?: (manager: EntityManager) => Promise<void>
+      beforeUpdate?: (manager: EntityManager, box: Box) => Promise<void>
     },
   ): Promise<Box> {
-    const { updateData, whereCondition, lockTimeoutMs } = params
+    const { updateData, whereCondition, lockTimeoutMs, beforeLock, beforeUpdate } = params
 
     const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
       if (lockTimeoutMs !== undefined) {
         await entityManager.query("SELECT set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`])
       }
+      await beforeLock?.(entityManager)
       const whereClause = {
         ...whereCondition,
         id,
@@ -450,6 +683,7 @@ export class BoxRepository extends BaseRepository<Box> {
         throw new BoxConflictError()
       }
 
+      await beforeUpdate?.(entityManager, box)
       const previousBox = { ...box }
 
       Object.assign(box, updateData)
@@ -596,6 +830,7 @@ export class BoxRepository extends BaseRepository<Box> {
       .andWhere('box.state = :state', { state: BoxState.STOPPED })
       .andWhere('box.desiredState = :desiredState', { desiredState: BoxDesiredState.STOPPED })
       .andWhere('box.pending = false')
+      .andWhere('box.completeOutboundControl IS NULL')
       .andWhere(`NOT EXISTS ${migrationInFlight.getQuery()}`)
       .setParameter('claimable', BoxMigrationState.COMPLETED)
       .setLock('pessimistic_write')

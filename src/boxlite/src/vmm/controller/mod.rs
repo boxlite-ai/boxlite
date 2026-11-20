@@ -15,7 +15,9 @@
 //! - Caller-controlled GuestSession creation
 
 mod handler;
+mod rebuild_shim;
 mod shim;
+pub(crate) use rebuild_shim::{copy_rebuild_shim, pin_rebuild_shim, rebuild_shim_for_box};
 pub(crate) use shim::probe_outbound_capabilities;
 mod spawn;
 pub mod watchdog;

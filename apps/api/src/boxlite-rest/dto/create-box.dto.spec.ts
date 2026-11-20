@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse } from 'yaml'
 import { CreateBoxDto, OutboundNetworkSpecDto } from './create-box.dto'
-import { createBoxToCreateBox } from '../mappers/box-to-box.mapper'
+import { completeCreateOutboundPolicy, createBoxToCreateBox } from '../mappers/box-to-box.mapper'
 
 // A box with 0 vCPUs can never boot (libkrun set_vm_config(0, ...) -> EINVAL),
 // so the create endpoint must reject undersized resources at the request
@@ -159,14 +159,12 @@ describe('CreateBoxDto network validation', () => {
     },
   )
 
-  it('rejects more than ten allow_net entries', async () => {
+  it('rejects more than ten allow_net entries in the legacy flat shape', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         network: {
-          outbound: {
-            mode: 'enabled',
-            allow_net: Array.from({ length: 11 }, (_, index) => `api-${index}.example.com`),
-          },
+          mode: 'enabled',
+          allow_net: Array.from({ length: 11 }, (_, index) => `api-${index}.example.com`),
         },
       }),
     )
@@ -402,6 +400,44 @@ describe('CreateBoxDto legacy network compatibility through the request pipeline
 
   it('rejects a non-empty array for network, as before', async () => {
     await expect(pipe.transform({ image: 'alpine:latest', network: [{ mode: 'enabled' }] }, meta)).rejects.toThrow()
+  })
+})
+
+describe('REST complete outbound creation classification', () => {
+  const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })
+  const meta = { type: 'body' as const, metatype: CreateBoxDto }
+  const rules = (count: number) => Array.from({ length: count }, (_, index) => `host-${index}.example`)
+  const parseNetwork = (network: unknown) => pipe.transform({ image: 'alpine:latest', network }, meta)
+
+  it.each([
+    [{ allow_net: rules(10) }, false],
+    [{ allow_net: rules(11) }, true],
+    [{ allow_net: rules(64) }, true],
+    [{ allow_net: ['example.com:443'] }, true],
+    [{ deny_net: [] }, true],
+    [{ deny_net: ['example.com'] }, true],
+  ])('selects the exact nested policy contract for %j', async (fields, complete) => {
+    const dto = await parseNetwork({ outbound: { mode: 'enabled', ...fields }, inbound: { mode: 'enabled' } })
+    expect(createBoxToCreateBox(dto).inboundEnabled).toBe(true)
+    if (!complete) {
+      expect(completeCreateOutboundPolicy(dto)).toBeUndefined()
+      return
+    }
+    expect(completeCreateOutboundPolicy(dto)).toEqual({ mode: 'enabled', allow_net: [], ...fields })
+    expect(createBoxToCreateBox(dto).outboundAllowNet).toBeUndefined()
+  })
+
+  it.each([
+    { outbound: { mode: 'enabled', deny_net: null } },
+    { outbound: { mode: 'enabled', allow_net: null, deny_net: [] } },
+    { outbound: { mode: 'enabled', allow_net: rules(65) } },
+    { outbound: { mode: 'enabled', deny_net: rules(65) } },
+    { outbound: { mode: 'disabled', allow_net: ['example.com:443'] } },
+    { mode: 'enabled', deny_net: [] },
+    { mode: 'enabled', allow_net: ['example.com:443'] },
+    { mode: 'enabled', allow_net: rules(11) },
+  ])('rejects malformed or extended flat input %j', async (network) => {
+    await expect(parseNetwork(network)).rejects.toMatchObject({ status: 400 })
   })
 })
 

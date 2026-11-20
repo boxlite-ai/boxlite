@@ -71,7 +71,8 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
     const repository = new BoxRepository(db, { emit: jest.fn() } as any, {} as any)
     const service = Object.assign(Object.create(BoxService.prototype), {
       boxRepository: repository,
-      boxActivityService: { getLastActivityAtMany: async () => new Map() },
+      boxActivityService: { getLastActivityAt: async () => null, getLastActivityAtMany: async () => new Map() },
+      boxExitCodeService: { getExitCode: async () => undefined },
       imagePreparationService: { preparingImage: async () => new Set() },
     })
     const module = await Test.createTestingModule({
@@ -139,7 +140,7 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
   })
   async function get(query: string, prefix = '', headers = {}) {
     const response = await fetch(`${base}/api/v1/${prefix}boxes?${query}`, { headers })
-    return { status: response.status, body: await response.json() }
+    return { status: response.status, body: await response.json(), headers: response.headers }
   }
   async function tool(args: Record<string, unknown>) {
     return dispatcher.call(catalog.get('listBoxes')!, args, {
@@ -159,6 +160,69 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
     const next = await get(`status=stopped&pageSize=1&pageToken=${first.body.next_page_token}`, `${org}/`)
     expect(next.body.boxes.map((b: any) => b.box_id)).toEqual(['000000000006'])
     expect(next.body).not.toHaveProperty('next_page_token')
+  })
+
+  it('projects protected policy safely on both inventory and detail responses', async () => {
+    const protectedBox = '000000000001'
+    const pendingBox = '000000000002'
+    const legacyBox = '000000000003'
+    const complete = {
+      revision: 'complete-a',
+      admission: 'extended_ipv4' as const,
+      policy: { mode: 'enabled' as const, allow_net: [], deny_net: ['example.com'] },
+    }
+    await rows.update(protectedBox, {
+      inboundEnabled: true,
+      completeOutboundControl: { version: 2, committed: complete },
+    })
+    await rows.update(pendingBox, {
+      completeOutboundControl: {
+        version: 2,
+        committed: null,
+        pending: {
+          kind: 'create',
+          transport: 'v0',
+          incarnation: pendingBox,
+          attemptId: 'attempt-1',
+          runnerId: 'runner-1',
+          generation: 1,
+          candidate: { deny_present: true, snapshot: complete },
+        },
+      },
+    })
+
+    for (const source of [undefined, 'sdk', 'unknown', 'dashboard']) {
+      const headers = source ? { 'X-BoxLite-Source': source } : {}
+      const list = await get('pageSize=3', '', headers)
+      expect(list.status).toBe(200)
+      expect(list.headers.get('vary')).toContain('X-BoxLite-Source')
+      expect(list.headers.get('cache-control')).toBe('private, no-store')
+      for (const [id, inbound] of [
+        [protectedBox, 'enabled'],
+        [pendingBox, 'disabled'],
+      ]) {
+        const listed = list.body.boxes.find((box: { box_id: string }) => box.box_id === id)
+        const response = await fetch(`${base}/api/v1/boxes/${id}`, { headers })
+        expect(response.status).toBe(200)
+        expect(response.headers.get('vary')).toContain('X-BoxLite-Source')
+        expect(response.headers.get('cache-control')).toBe('private, no-store')
+        const detail = await response.json()
+        for (const projection of [listed, detail]) {
+          if (source === 'dashboard') {
+            expect(projection.network).toEqual({
+              inbound: { mode: inbound, allow_net: [] },
+              outbound: { mode: 'unavailable', allow_net: [] },
+            })
+          } else {
+            expect(projection).not.toHaveProperty('network')
+          }
+        }
+      }
+      expect(list.body.boxes.find((box: { box_id: string }) => box.box_id === legacyBox).network.outbound).toEqual({
+        mode: 'enabled',
+        allow_net: [],
+      })
+    }
   })
   it('requires a resolved organization even for an admin admitted by the resource guard', async () => {
     const result = await get('pageSize=2', '', { 'x-test-unscoped-admin': 'true' })

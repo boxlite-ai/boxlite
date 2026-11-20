@@ -28,7 +28,7 @@ func TestCreateHasNoFallibleStepAfterStart(t *testing.T) {
 		t.Fatalf("parse client.go: %v", err)
 	}
 
-	create := findMethod(parsed, "Client", "Create")
+	create := findMethod(parsed, "Client", "create")
 	if create == nil {
 		t.Fatal("Client.Create not found in client.go; update this guard if it was renamed")
 	}

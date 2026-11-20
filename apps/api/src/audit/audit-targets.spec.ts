@@ -32,6 +32,7 @@ describe('audit targets at HTTP boundaries', () => {
     boxes = {
       create: jest.fn().mockResolvedValue(box),
       findOneByIdOrName: jest.fn().mockResolvedValue(box),
+      getBoxNetworkProjections: jest.fn().mockResolvedValue([]),
       start: jest.fn().mockResolvedValue(box),
       toBoxDto: jest.fn().mockResolvedValue(box),
     }

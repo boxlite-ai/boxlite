@@ -1,7 +1,7 @@
 import { createServer, Server, IncomingMessage, ServerResponse } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Runner } from '../entities/runner.entity'
-import { RunnerOutboundControl } from './outbound-control'
+import { CompleteCreateAttempt, RunnerOutboundControl } from './outbound-control'
 
 describe('revision-required outbound Runner HTTP boundary', () => {
   let server: Server
@@ -11,6 +11,11 @@ describe('revision-required outbound Runner HTTP boundary', () => {
   let requests: { method: string; path: string; headers: IncomingMessage['headers']; body: unknown }[]
   const policy = { mode: 'enabled' as const, allow_net: ['*.example.com'] }
   const candidate = { revision: 'candidate-b', policy }
+  const complete = {
+    revision: 'complete-rev',
+    admission: 'extended_ipv4' as const,
+    policy: { mode: 'enabled' as const, allow_net: ['example.com:443'], deny_net: [] as string[] },
+  }
 
   function reply(status: number, body: unknown, etag?: string | string[]) {
     answer = (_request, response) => {
@@ -52,6 +57,129 @@ describe('revision-required outbound Runner HTTP boundary', () => {
   afterEach(async () => {
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  it('sends a complete create preparation over the dedicated authenticated route and preserves deny presence', async () => {
+    const omitted = { mode: 'enabled' as const, allow_net: ['EXAMPLE.com:0443'] }
+    const explicit = { ...omitted, deny_net: [] }
+    reply(200, { snapshot: complete, deny_present: false })
+    await expect(control.prepareCreate(complete.revision, omitted)).resolves.toEqual({
+      snapshot: complete,
+      deny_present: false,
+    })
+    reply(200, { snapshot: complete, deny_present: true })
+    await expect(control.prepareCreate(complete.revision, explicit)).resolves.toEqual({
+      snapshot: complete,
+      deny_present: true,
+    })
+    expect(requests.map(({ body }) => body)).toEqual([omitted, explicit])
+    for (const request of requests) {
+      expect(request).toMatchObject({
+        method: 'POST',
+        path: '/v1/boxes/box%2F1/network/outbound/complete/prepare-create',
+        headers: { authorization: 'Bearer synthetic-secret', 'x-boxlite-outbound-revision': complete.revision },
+      })
+    }
+  })
+
+  it.each([
+    ['lost presence', { snapshot: complete, deny_present: false }],
+    ['different revision', { snapshot: { ...complete, revision: 'other' }, deny_present: true }],
+    ['legacy admission', { snapshot: { ...complete, admission: 'legacy' }, deny_present: true }],
+    [
+      'omitted policy rules',
+      { snapshot: { ...complete, policy: { ...complete.policy, allow_net: [] } }, deny_present: true },
+    ],
+  ])('refuses a complete create acknowledgement with %s', async (_label, prepared) => {
+    reply(200, prepared)
+    await expect(control.prepareCreate(complete.revision, complete.policy)).rejects.toMatchObject({ status: 503 })
+    expect(requests).toHaveLength(1)
+  })
+
+  it('refuses an explicit null deny list before network I/O', async () => {
+    const invalid = { ...complete.policy, deny_net: null } as unknown as typeof complete.policy
+    await expect(control.prepareCreate(complete.revision, invalid)).rejects.toMatchObject({ status: 400 })
+    expect(requests).toHaveLength(0)
+  })
+
+  it('reports an old Runner as unsupported without falling back to the legacy route', async () => {
+    reply(404, null)
+    await expect(control.prepareCreate(complete.revision, complete.policy)).rejects.toMatchObject({
+      status: 501,
+      response: expect.objectContaining({ code: 'unsupported' }),
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].path).toBe('/v1/boxes/box%2F1/network/outbound/complete/prepare-create')
+  })
+
+  it('checks the complete snapshot revision against the strong ETag', async () => {
+    reply(200, complete, '"complete-rev"')
+    await expect(control.completeSnapshot()).resolves.toEqual(complete)
+    reply(200, complete, 'W/"complete-rev"')
+    await expect(control.completeSnapshot()).rejects.toMatchObject({ status: 503 })
+  })
+
+  it('binds versioned create and cancellation to the same complete identity', async () => {
+    const attempt: CompleteCreateAttempt = {
+      incarnation: 'target-a',
+      attempt_id: 'attempt-a',
+      generation: 2,
+      prepared: { snapshot: complete, deny_present: true },
+    }
+    const box = { id: 'box/1', image: 'base', osUser: 'boxlite', memoryQuota: 1, storageQuota: 1, gpuQuota: 0 }
+    reply(200, { attempt, outcome: 'installed', snapshot: complete })
+    await expect(control.createComplete(attempt, box)).resolves.toEqual({ outcome: 'installed', snapshot: complete })
+    reply(200, { attempt, outcome: 'no_effect', failure: 'unsupported' })
+    await expect(control.cancelCompleteCreate(attempt)).resolves.toEqual({
+      outcome: 'no_effect',
+      failure: 'unsupported',
+    })
+    expect(requests.map(({ path, body }) => [path, body])).toEqual([
+      ['/v1/boxes/box%2F1/network/outbound/complete/create', { attempt, box }],
+      ['/v1/boxes/box%2F1/network/outbound/complete/cancel-create', attempt],
+    ])
+  })
+
+  it('leaves stale or contradictory Runner create evidence unresolved', async () => {
+    const attempt: CompleteCreateAttempt = {
+      incarnation: 'target-a',
+      attempt_id: 'attempt-a',
+      generation: 2,
+      prepared: { snapshot: complete, deny_present: true },
+    }
+    for (const proof of [
+      { attempt: { ...attempt, generation: 1 }, outcome: 'no_effect' },
+      { attempt: { ...attempt, prepared: { ...attempt.prepared, deny_present: false } }, outcome: 'no_effect' },
+      { attempt, outcome: 'installed', snapshot: { ...complete, revision: 'other' } },
+      { attempt, outcome: 'no_effect', snapshot: complete },
+      { attempt, outcome: 'pending', failure: 'unsupported' },
+    ]) {
+      reply(200, proof)
+      await expect(control.cancelCompleteCreate(attempt)).rejects.toMatchObject({ status: 503 })
+    }
+    reply(404, null)
+    await expect(control.cancelCompleteCreate(attempt)).rejects.toMatchObject({ status: 501 })
+    expect(requests.every(({ path }) => path.endsWith('/complete/cancel-create'))).toBe(true)
+  })
+
+  it('accepts confirmed complete status only when both lists and admission agree', async () => {
+    const result = {
+      persisted: complete,
+      observed: { snapshot: complete, application_state: 'confirmed' },
+      application_state: 'confirmed',
+    }
+    reply(200, result)
+    await expect(control.completeStatus()).resolves.toEqual(result)
+    reply(200, {
+      ...result,
+      observed: {
+        snapshot: { ...complete, policy: { ...complete.policy, deny_net: ['example.net'] } },
+        application_state: 'confirmed',
+      },
+    })
+    await expect(control.completeStatus()).rejects.toMatchObject({ status: 503 })
+    reply(200, { ...result, pending_revision: 'next-revision' })
+    await expect(control.completeStatus()).rejects.toMatchObject({ status: 503 })
   })
 
   it('propagates the exact candidate through the authenticated dedicated resource', async () => {
