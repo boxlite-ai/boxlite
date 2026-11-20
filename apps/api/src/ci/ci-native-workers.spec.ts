@@ -1025,6 +1025,93 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(rows).not.toContain(key)
     expect(received).toHaveLength(2)
   })
+  describe('native JIT recovery', () => {
+    async function lostReadyAcknowledgment() {
+      const delivery = await forDelivery()
+      respond = async () => {
+        if (received.length === 2) throw new Error('Connection closed after receiving ready')
+        return 204
+      }
+      await expect(delivery.host.deliverJit(delivery.config.name, jit)).rejects.toThrow('delivery failed')
+      expect(received.map((request) => request.content)).toEqual([jit, 'ready'])
+      return delivery
+    }
+
+    it('seals an unclaimed delivery before a delayed publisher can send config', async () => {
+      const { host, config, row } = await forDelivery()
+      const repair = workers.open(scope(), lease)
+      const findOne = platform.findOne.bind(platform)
+      let recovery: string | undefined
+      const lookup = jest.spyOn(platform, 'findOne').mockImplementationOnce(async (...args) => {
+        const box = await findOne(...args)
+        recovery = await repair.recoverJit!(config.name, row.value.effect!.id)
+        return box
+      })
+      try {
+        const failure = await host.deliverJit(config.name, jit).catch((error: unknown) => error)
+        expect(received).toHaveLength(0)
+        expect(recovery).toBe('replace')
+        expect(failure).toBeInstanceOf(Error)
+        await expect(repair.recoverJit!(config.name, row.value.effect!.id)).resolves.toBe('replace')
+      } finally {
+        lookup.mockRestore()
+      }
+    })
+
+    it('fences a delayed ready authorization after config was acknowledged', async () => {
+      const { host, config, row } = await forDelivery()
+      const repair = workers.open(scope(), lease)
+      const runner = { id: runnerId, apiUrl: endpoint, apiKey: key }
+      let recovery: string | undefined
+      runners.findOneUncachedOrFail.mockResolvedValueOnce(runner).mockImplementationOnce(async () => {
+        recovery = await repair.recoverJit!(config.name, row.value.effect!.id)
+        return runner
+      })
+      const failure = await host.deliverJit(config.name, jit).catch((error: unknown) => error)
+      expect(received.map((request) => request.file)).toEqual(['.boxlite-jitconfig'])
+      expect(recovery).toBe('replace')
+      expect(failure).toBeInstanceOf(Error)
+    })
+
+    it('replays only ready after the original ready acknowledgment is lost', async () => {
+      const { config, row, box } = await lostReadyAcknowledgment()
+      const repair = workers.open(scope(), lease)
+      const result = await repair.recoverJit!(config.name, row.value.effect!.id)
+      expect(received.map((request) => request.content)).toEqual([jit, 'ready', 'ready'])
+      expect(received[2]).toMatchObject({
+        file: '.boxlite-jitconfig.ready',
+        url: `/v1/boxes/${box.box_id}/files?path=%2Fhome%2Frunner`,
+      })
+      expect(result).toBe('delivered')
+    })
+
+    it('leaves an opaque single-claim marker for normal startup recovery', async () => {
+      const { host, config, row } = await forDelivery()
+      await db.query(
+        "UPDATE ci_listener_state SET payload=payload||jsonb_build_object('delivery',gen_random_uuid()::text) WHERE namespace=$1 AND record_key=$2",
+        [store.namespace, 'box-native/' + config.name.slice(7)],
+      )
+      expect(await host.get(config.name)).not.toHaveProperty('recoverableJit')
+      await expect(host.recoverJit!(config.name, row.value.effect!.id)).resolves.toBe('unknown')
+      await expect(host.deliverJit(config.name, jit)).rejects.toThrow('already attempted')
+      expect(received).toHaveLength(0)
+    })
+
+    it.each(['effect', 'binding', 'platform runner', 'Box organization'])(
+      'refuses a ready retry when the original %s changes',
+      async (changed) => {
+        const { host, config, row, box } = await lostReadyAcknowledgment()
+        if (changed === 'binding') await db.query("UPDATE ci_installation_binding SET state='disabled'")
+        if (changed === 'platform runner') await db.getRepository(Box).update(box.box_id, { runnerId: randomUUID() })
+        if (changed === 'Box organization')
+          await db.getRepository(Box).update(box.box_id, { organizationId: randomUUID() })
+        const effect = changed === 'effect' ? randomUUID() : row.value.effect!.id
+        await expect(host.recoverJit!(config.name, effect)).rejects.toThrow()
+        expect(received.map((request) => request.content)).toEqual([jit, 'ready'])
+      },
+    )
+  })
+
   it('keeps an uncertain JIT attempt and never sends ready after an HTTP failure', async () => {
     const { host, config } = await forDelivery()
     respond = async () => 503

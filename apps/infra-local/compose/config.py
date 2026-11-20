@@ -71,12 +71,12 @@ class InfraConfig:
     host_hub: str = "host.boxlite.internal"
 
     # Credentials (env-overridable; each is genuinely consumed — postgres &
-    # minio entrypoints, pgadmin login).
+    # rustfs entrypoints, pgadmin login).
     pg_user: str = "boxlite"
     pg_password: str = field(default="boxlite", repr=False)
     pg_db: str = "boxlite"
-    minio_user: str = "minioadmin"
-    minio_password: str = field(default="minioadmin", repr=False)
+    rustfs_user: str = "rustfsadmin"
+    rustfs_password: str = field(default="rustfsadmin", repr=False)
     pgadmin_email: str = "admin@boxlite.dev"
     pgadmin_password: str = field(default="boxlite", repr=False)
 
@@ -84,14 +84,14 @@ class InfraConfig:
     # Each value is also the literal host port in the matching
     # ServiceSpec.ports in services.py — that literal is what the box actually
     # binds. These named fields exist only so generated configs (the Caddyfile,
-    # the S3 bootstrap URL, dex_issuer) and the integration tests can reference
+    # the S3 bootstrap URL, rauthy_issuer) and the integration tests can reference
     # the same number by name. Changing one of these alone will NOT move the
     # bound port; update the services.py literal too. Ports with no such
     # consumer (postgres, redis, caddy-https, otel-grpc) are left as bare
     # literals in services.py and intentionally have no field here.
-    minio_host_port: int = 29000
+    rustfs_host_port: int = 29000
     registry_host_port: int = 25000
-    dex_host_port: int = 25556
+    rauthy_host_port: int = 25556
     jaeger_host_port: int = 26686
     pgadmin_host_port: int = 25051
     registry_ui_host_port: int = 25052
@@ -118,8 +118,8 @@ class InfraConfig:
             pg_user=os.environ.get("BOXLITE_PG_USER", "boxlite"),
             pg_password=os.environ.get("BOXLITE_PG_PASSWORD", "boxlite"),
             pg_db=os.environ.get("BOXLITE_PG_DB", "boxlite"),
-            minio_user=os.environ.get("BOXLITE_MINIO_USER", "minioadmin"),
-            minio_password=os.environ.get("BOXLITE_MINIO_PASSWORD", "minioadmin"),
+            rustfs_user=os.environ.get("BOXLITE_RUSTFS_USER", "rustfsadmin"),
+            rustfs_password=os.environ.get("BOXLITE_RUSTFS_PASSWORD", "rustfsadmin"),
             pgadmin_email=os.environ.get("BOXLITE_PGADMIN_EMAIL", "admin@boxlite.dev"),
             pgadmin_password=os.environ.get("BOXLITE_PGADMIN_PASSWORD", "boxlite"),
             # .expanduser() so a documented value like
@@ -138,13 +138,14 @@ class InfraConfig:
         )
 
     @property
-    def dex_issuer(self) -> str:
-        # NOTE: the issuer is also what dex publishes in its
+    def rauthy_issuer(self) -> str:
+        # NOTE: the issuer is also what rauthy publishes in its
         # `.well-known/openid-configuration`, which the BROWSER fetches via
         # the dashboard's OIDC flow. The browser can't resolve
         # `host.boxlite.internal` (only resolvable inside boxes via gvproxy
-        # DNS), so we publish a `localhost` URL. Trade-off: a FUTURE box->dex
+        # DNS), so we publish a `localhost` URL. Trade-off: a FUTURE box->rauthy
         # flow won't reach `localhost` from inside a box — when that case
         # appears, this issuer should become a `*.boxlite.test` host backed
         # by dns-shim + mkcert (out of current autonomous scope).
-        return f"http://localhost:{self.dex_host_port}/dex"
+        # Rauthy serves its OIDC API under `/auth/v1` and appends a `/` to `iss`.
+        return f"http://localhost:{self.rauthy_host_port}/auth/v1"

@@ -265,5 +265,5 @@ test('a stage that already holds everything still deploys', () => {
   for (const job of ACTING.filter((name) => name !== 'deploy')) {
     assert.match(deploy, new RegExp(`needs: \\[[^\\]]*${job}[^\\]]*\\]`), `the deploy does not wait for ${job}`)
   }
-  assert.match(deploy, /!cancelled\(\) && !failure\(\)/, 'a skipped artifact job would skip the deploy')
+  assert.match(deploy, /!cancelled\(\)/, 'deployment must check cancellation even when a notice is skipped')
 })

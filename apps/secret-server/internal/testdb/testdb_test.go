@@ -38,3 +38,17 @@ func TestCreateOverridesDatabaseQuery(t *testing.T) {
 		t.Fatalf("database = %q, want %q", cfg.ConnConfig.Database, name)
 	}
 }
+
+func TestDatabaseURLOverridesQuery(t *testing.T) {
+	got, err := databaseURL("postgres://localhost/old?dbname=postgres&database=postgres&sslmode=disable", "isolated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Path != "/isolated" || u.Query().Has("dbname") || u.Query().Has("database") || u.Query().Get("sslmode") != "disable" {
+		t.Fatalf("unexpected test database URL: %q", got)
+	}
+}

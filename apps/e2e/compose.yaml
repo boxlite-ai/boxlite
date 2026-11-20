@@ -34,28 +34,34 @@ services:
     volumes:
       - registry:/var/lib/registry
 
-  dex:
-    image: ${DEX_IMAGE:?}
-    command: ["dex", "serve", "/etc/dex/config.yaml"]
-    ports:
-      - "127.0.0.1:${DEX_PORT:-35556}:5556"
-    volumes:
-      - ${DEX_CONFIG:?}:/etc/dex/config.yaml:ro
-      - dex:/var/dex
-
-  minio:
-    image: ${MINIO_IMAGE:?}
-    command: ["server", "/data"]
+  rauthy:
+    image: ${RAUTHY_IMAGE:?}
+    command: ["serve", "--config-file", "/rauthy/config.toml"]
     environment:
-      MINIO_ROOT_USER: e2eadmin
-      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?}
+      PUB_URL: localhost:${RAUTHY_PORT:-35556}
+      RP_ORIGIN: http://localhost:${RAUTHY_PORT:-35556}
+      ENC_KEYS: ${RAUTHY_ENC_KEYS:?}
+      ENC_KEY_ACTIVE: local
+      HQL_SECRET_RAFT: ${RAUTHY_SECRET:?}
+      HQL_SECRET_API: ${RAUTHY_SECRET:?}
     ports:
-      - "127.0.0.1:${MINIO_PORT:-39000}:9000"
+      - "127.0.0.1:${RAUTHY_PORT:-35556}:8080"
     volumes:
-      - minio:/data
+      - ${RAUTHY_CONFIG_DIR:?}:/rauthy:ro
+
+  rustfs:
+    image: ${RUSTFS_IMAGE:?}
+    command: ["/data"]
+    user: "0:0"
+    environment:
+      RUSTFS_ACCESS_KEY: e2eadmin
+      RUSTFS_SECRET_KEY: ${RUSTFS_PASSWORD:?}
+    ports:
+      - "127.0.0.1:${RUSTFS_PORT:-39000}:9000"
+    volumes:
+      - rustfs:/data
 
 volumes:
   postgres:
   registry:
-  dex:
-  minio:
+  rustfs:

@@ -1,0 +1,12 @@
+[
+  { "name": "write:boxes" },
+  { "name": "delete:boxes" },
+  { "name": "read:volumes" },
+  { "name": "write:volumes" },
+  { "name": "delete:volumes" },
+  { "name": "read:images" },
+  { "name": "write:images" },
+  { "name": "delete:images" },
+  { "name": "write:templates" },
+  { "name": "delete:templates" }
+]

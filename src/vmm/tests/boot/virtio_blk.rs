@@ -21,7 +21,7 @@ use imago::{
 };
 
 use super::{
-    BOOT_TIMEOUT, CONSOLE_CMDLINE, SerialLog, TempFile, linux_config, newc_archive,
+    BOOT_TIMEOUT, CONSOLE_CMDLINE, SerialLog, TempFile, linux_config, newc_archive, probe_boot,
     run_with_watchdog, static_program,
 };
 use crate::{
@@ -322,18 +322,19 @@ fn boots_linux_and_drives_virtio_blk_through_the_workers() {
         observed: observed.clone(),
     }));
     let edges = Arc::new(Mutex::new(Vec::new()));
+    let (prepared, leaf) = probe_boot(&config);
     let (writer, mut console) =
         ConsoleWorker::spawn(Box::new(log.clone()), DEFAULT_QUEUE_BYTES).unwrap();
     let counter_edges = Arc::clone(&edges);
     let mut vm = crate::Vm::with_backend(
         config,
-        || {
+        move || {
             Ok(LineCounter {
-                kvm: boxlite_hypervisor::KvmVm::new()?,
+                kvm: boxlite_hypervisor::KvmVm::from_prepared(prepared)?,
                 edges: counter_edges,
             })
         },
-        |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
+        move |ram, config| crate::boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
         |chipset, ctx| {
             add_legacy_devices(chipset, writer)?;
             add_blk(chipset, ctx, device, slot)

@@ -111,6 +111,24 @@ func TestMigrateInvalidURLRedactsPassword(t *testing.T) {
 	}
 }
 
+func TestMigrateRedactsDatabaseURL(t *testing.T) {
+	if os.Getenv("SECRET_TEST_REDACTION_CHILD") == "1" {
+		os.Args = []string{"secret-server", "migrate"}
+		main()
+		return
+	}
+	const password = "redaction-test-password"
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMigrateRedactsDatabaseURL$")
+	cmd.Env = append(os.Environ(), "SECRET_TEST_REDACTION_CHILD=1", "DATABASE_URL=postgresql://user@localhost/db?password="+password+"&sslmode=invalid")
+	output, err := cmd.CombinedOutput()
+	if strings.Contains(string(output), password) {
+		t.Fatalf("database password leaked in command output: %s", output)
+	}
+	if err == nil || !strings.Contains(string(output), "DATABASE_URL") {
+		t.Fatalf("expected DATABASE_URL configuration error, got %v: %s", err, output)
+	}
+}
+
 func TestIntegration(t *testing.T) {
 	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
 	if dsn == "" {

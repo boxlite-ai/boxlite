@@ -163,7 +163,7 @@ export function CiFirstJobGuide({
   )
 }
 
-function CopyableCode({
+export function CopyableCode({
   value,
   label,
   name,

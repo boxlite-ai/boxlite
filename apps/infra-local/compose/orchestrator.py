@@ -308,7 +308,7 @@ async def up(
             continue
         results = await asyncio.gather(*[start_service(runtime, services[n], config) for n in targets])
         changed |= any(results)
-    if "minio" in services and (only is None or "minio" in only):
+    if "rustfs" in services and (only is None or "rustfs" in only):
         from .storage import ensure_bucket
         await asyncio.to_thread(ensure_bucket, config)
     return changed
