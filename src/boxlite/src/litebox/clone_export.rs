@@ -71,6 +71,7 @@ impl BoxImpl {
         let source_admission =
             Arc::new(crate::lock::OwnedLockGuard::new_async(self.disk_locker()?).await);
         self.ensure_box_exists()?;
+        self.reconcile_live_snapshot_under_disk_lock().await?;
         (async {
             let rt = Arc::clone(&self.runtime);
             let src_disks = self.config.box_home.join("disks");

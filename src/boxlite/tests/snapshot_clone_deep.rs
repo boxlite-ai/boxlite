@@ -1,6 +1,6 @@
 //! Deep integration tests for snapshot, clone, and export/import operations.
 //!
-//! 67 tests across 12 categories covering: multi-snapshot lifecycle, snapshot
+//! Tests across 12 categories covering: multi-snapshot lifecycle, snapshot
 //! removal, running-box operations, snapshot+clone interactions, clone details,
 //! export/import, error paths, stress, box lifecycle, data integrity, cleanup/GC,
 //! and archive format details.
@@ -701,7 +701,7 @@ async fn test_snapshot_remove_middle_of_three() {
 // ============================================================================
 
 #[tokio::test]
-async fn test_snapshot_running_box_with_quiesce() {
+async fn test_snapshot_running_box_keeps_vm_running() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -715,7 +715,7 @@ async fn test_snapshot_running_box_with_quiesce() {
     // Write marker data
     write_file(&litebox, "/root/marker.txt", "running-snap").await;
 
-    // Snapshot while running (should use quiesce bracket)
+    // The disk switch should preserve the running VM.
     litebox
         .snapshots()
         .create(SnapshotOptions::default(), "live")
@@ -735,6 +735,262 @@ async fn test_snapshot_running_box_with_quiesce() {
     litebox.stop().await.unwrap();
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}
+
+#[tokio::test]
+async fn test_online_snapshot_isolates_post_snapshot_writes() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .expect("create runtime");
+
+    let name = "snapshot-isolates-writes";
+    let litebox = create_running_box(&runtime, name).await;
+    let run =
+        |command: &'static str| exec_stdout(&litebox, BoxCommand::new("sh").args(["-ec", command]));
+    let boot_id = run("echo 41 > /dev/shm/counter; \
+         for file in append overwrite deleted; do echo before > /root/$file; done; \
+         sync; cat /proc/sys/kernel/random/boot_id")
+    .await;
+
+    let first_snapshot = litebox
+        .snapshots()
+        .create(SnapshotOptions::default(), "online")
+        .await
+        .expect("create an online snapshot");
+    let snapshot_path = first_snapshot.disk_info.to_path_buf();
+    let frozen_disk = std::fs::read(&snapshot_path).expect("read snapshot image");
+    let observed = run(
+        "echo $(( $(cat /dev/shm/counter) + 1 )) > /dev/shm/counter; \
+         cat /proc/sys/kernel/random/boot_id /dev/shm/counter; \
+         echo after >> /root/append; echo after > /root/overwrite; rm /root/deleted; sync",
+    )
+    .await;
+    assert_eq!(observed.trim(), format!("{}\n42", boot_id.trim()));
+
+    let litebox = stop_and_refresh(&runtime, litebox, name).await;
+    let snapshot_unchanged =
+        std::fs::read(&snapshot_path).expect("read snapshot after writes") == frozen_disk;
+    litebox.start().await.unwrap();
+    assert_eq!(
+        read_file(&litebox, "/root/append").await.trim(),
+        "before\nafter",
+        "writes to the new layer survive a restart"
+    );
+    let litebox = stop_and_refresh(&runtime, litebox, name).await;
+    litebox.snapshots().restore("online").await.unwrap();
+    litebox.start().await.unwrap();
+    let contents = exec_stdout(
+        &litebox,
+        BoxCommand::new("sh").args([
+            "-ec",
+            "cat /root/append; cat /root/overwrite; cat /root/deleted 2>/dev/null || echo GONE",
+        ]),
+    )
+    .await;
+    litebox.stop().await.unwrap();
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+
+    assert_eq!(
+        contents.trim(),
+        "before\nbefore\nbefore",
+        "online snapshot restore retained writes that happened after creation"
+    );
+    assert!(
+        snapshot_unchanged,
+        "the guest changed the online snapshot disk"
+    );
+}
+
+#[tokio::test]
+async fn test_online_snapshot_journal_blocks_guest_access_and_stop() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let litebox = create_running_box(&runtime, "snapshot-journal-admission").await;
+    let box_home = home.path.join("boxes").join(litebox.id().to_string());
+    let pid_file = box_home.join("shim.pid");
+    let pid_record = std::fs::read(&pid_file).unwrap();
+    let journal = box_home.join(".live-snapshot.json");
+    litebox.executions().list().await.unwrap();
+
+    // Simulate a damaged journal at the disk boundary, where replay cannot proceed.
+    std::fs::write(&journal, b"{").unwrap();
+    let list = litebox.executions().list().await;
+    let stop = litebox.stop().await;
+    let status = litebox.info().await.unwrap().status;
+    let pid_preserved = std::fs::read(&pid_file).is_ok_and(|record| record == pid_record);
+    std::fs::remove_file(journal).unwrap();
+
+    if stop.is_err() {
+        litebox.stop().await.unwrap();
+    } else {
+        let recovery_pid = home.path.join("shim-cleanup.pid");
+        std::fs::write(&recovery_pid, &pid_record).unwrap();
+        if let boxlite::util::ProcessIdentity::Verified(pid) =
+            boxlite::util::PidFileReader::at(recovery_pid).process_identity()
+        {
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+
+    assert!(
+        list.is_err() && stop.is_err() && status == BoxStatus::Running && pid_preserved,
+        "pending journal let execution listing succeed: {}, stop succeed: {}, status: {status}, PID preserved: {pid_preserved}",
+        list.is_ok(),
+        stop.is_ok()
+    );
+}
+
+#[tokio::test]
+async fn test_online_snapshot_recovers_after_runtime_exit() {
+    const CHILD_HOME: &str = "BOXLITE_LIVE_SNAPSHOT_CHILD_HOME";
+    const BOX_NAME: &str = "snapshot-creator-crash";
+    const SNAPSHOT: &str = "before-crash";
+
+    if let Some(path) = std::env::var_os(CHILD_HOME) {
+        let home = std::path::PathBuf::from(path);
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: home.clone(),
+            image_registries: common::test_registries(),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut options = common::alpine_opts();
+        options.detach = true;
+        let handle = runtime
+            .create(options, Some(BOX_NAME.into()))
+            .await
+            .unwrap();
+        handle.start().await.unwrap();
+        exec_stdout(
+            &handle,
+            BoxCommand::new("sh").args([
+                "-ec",
+                "echo intact > /dev/shm/counter; echo before > /root/state; sync",
+            ]),
+        )
+        .await;
+        std::fs::write(home.join("creator-starting"), handle.id().to_string()).unwrap();
+        std::fs::rename(home.join("creator-starting"), home.join("creator-ready")).unwrap();
+        wait_for_creator(&home.join("create-snapshot")).await;
+        let result = handle
+            .snapshots()
+            .create(SnapshotOptions::default(), SNAPSHOT)
+            .await;
+        // If the parent detects an earlier failure, it releases its SQLite lock and lets us clean up.
+        handle.stop().await.unwrap();
+        result.unwrap();
+        return;
+    }
+
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let mut creator = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "test_online_snapshot_recovers_after_runtime_exit",
+            "--nocapture",
+        ])
+        .env(CHILD_HOME, &home.path)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    let id = wait_for_creator(&home.path.join("creator-ready")).await;
+    let journal = home.path.join("boxes").join(id).join(".live-snapshot.json");
+    let blocker = rusqlite::Connection::open(home.path.join("db/boxlite.db")).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    std::fs::write(home.path.join("create-snapshot"), []).unwrap();
+
+    let record = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            if let Ok(bytes) = std::fs::read(&journal) {
+                let record: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                if record["record"]["decision"] == "Commit" {
+                    break Some(record);
+                }
+            }
+            if creator.try_wait().unwrap().is_some() {
+                break None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let Some(record) = record else {
+        blocker.execute_batch("ROLLBACK").unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), creator.wait()).await;
+        panic!("snapshot writer did not record COMMIT while registration was blocked");
+    };
+    let snapshot_id = record["record"]["info"]["id"].as_str().unwrap().to_owned();
+    creator.kill().await.unwrap();
+    blocker.execute_batch("ROLLBACK").unwrap();
+    drop(blocker);
+
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let handle = runtime.get(BOX_NAME).await.unwrap().unwrap();
+    let memory = exec_stdout(
+        &handle,
+        BoxCommand::new("sh").args([
+            "-ec",
+            "cat /dev/shm/counter; echo after > /root/state; sync",
+        ]),
+    )
+    .await;
+    assert_eq!(
+        memory.trim(),
+        "intact",
+        "recovery should retain the guest's RAM"
+    );
+    assert!(!journal.exists());
+    assert_eq!(
+        handle.snapshots().get(SNAPSHOT).await.unwrap().unwrap().id,
+        snapshot_id
+    );
+
+    let handle = stop_and_refresh(&runtime, handle, BOX_NAME).await;
+    handle.snapshots().restore(SNAPSHOT).await.unwrap();
+    handle.start().await.unwrap();
+    assert_eq!(read_file(&handle, "/root/state").await.trim(), "before");
+    handle.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+async fn wait_for_creator(path: &std::path::Path) -> String {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            match std::fs::read_to_string(path) {
+                Ok(value) => return value,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("could not read creator signal: {error}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("creator did not become ready")
 }
 
 #[tokio::test]
@@ -986,6 +1242,16 @@ async fn test_clone_then_snapshot_clone() {
     // Start clone, write clone-specific data, stop
     cloned.start().await.unwrap();
     write_file(&cloned, "/root/clone.txt", "clone-data").await;
+    let error = cloned
+        .snapshots()
+        .create(SnapshotOptions::default(), "live-clone")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, boxlite::BoxliteError::InvalidState(_)),
+        "{error:?}"
+    );
+    assert!(cloned.snapshots().list().await.unwrap().is_empty());
     let cloned = stop_and_refresh(&runtime, cloned, "snap-clone").await;
 
     // Snapshot the clone
@@ -1948,20 +2214,26 @@ async fn test_snapshot_under_write_pressure() {
 
     let source = create_running_box(&runtime, "snap-stress").await;
 
-    // Write marker before stress
-    write_file(&source, "/root/marker.txt", "snap-stress-marker").await;
+    // Make the marker durable before taking a block-device crash-consistent snapshot.
+    exec_stdout(
+        &source,
+        BoxCommand::new("sh").args(["-ec", "printf snap-stress-marker > /root/marker.txt; sync"]),
+    )
+    .await;
 
     // Start background writer
     let write_script = concat!(
-        "while true; do ",
+        "count=0; while true; do ",
         "dd if=/dev/urandom of=/root/stress.bin bs=4096 count=1 ",
-        "seek=$((RANDOM % 256)) conv=notrunc 2>/dev/null; ",
+        "seek=$((count % 256)) conv=notrunc 2>/dev/null || exit; ",
+        "sync; ",
+        "count=$((count + 1)); printf '%s\\n' \"$count\" > /dev/shm/writes; ",
         "done"
     );
     let cmd = BoxCommand::new("sh").args(["-c", write_script]);
     let _bg = source.exec(cmd).await.unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let before = wait_for_guest_writes(&source, 0).await;
 
     // Snapshot while writes happening
     source
@@ -1975,6 +2247,8 @@ async fn test_snapshot_under_write_pressure() {
         source.info().await.expect("get source box info").status,
         BoxStatus::Running
     );
+    let after = wait_for_guest_writes(&source, before).await;
+    assert!(wait_for_guest_writes(&source, after).await > after);
 
     // Stop, restore, verify boots
     let source = stop_and_refresh(&runtime, source, "snap-stress").await;
@@ -1987,6 +2261,26 @@ async fn test_snapshot_under_write_pressure() {
     source.stop().await.unwrap();
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}
+
+async fn wait_for_guest_writes(handle: &LiteBox, after: u64) -> u64 {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let count = exec_stdout(
+                handle,
+                BoxCommand::new("sh").args(["-c", "cat /dev/shm/writes 2>/dev/null || true"]),
+            )
+            .await;
+            if let Ok(count) = count.trim().parse::<u64>()
+                && count > after
+            {
+                return count;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("guest writes did not progress")
 }
 
 #[tokio::test]

@@ -9,22 +9,32 @@
 //! a shim answers any other version, or an operation its engine lacks, with
 //! [`ControlError::Unsupported`].
 
-use std::io::{self, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(
+    test,
+    feature = "krun",
+    all(feature = "native", target_os = "linux", target_arch = "x86_64")
+))]
+mod server;
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use server::serve;
+
+#[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use server::request;
+
+#[cfg(feature = "krun")]
+pub(crate) use server::{bind_owner, serve_bound};
+
 /// The protocol version a request names.
 pub(crate) const VERSION: u32 = 1;
 /// The largest frame either side accepts.
 const MAX_FRAME: u32 = 4096;
-/// How long the shim waits for a request or a reply write.
-const IO_TIMEOUT: Duration = Duration::from_secs(2);
-const ACCEPT_RETRY_INITIAL: Duration = Duration::from_millis(5);
-const ACCEPT_RETRY_MAX: Duration = Duration::from_millis(50);
-
 /// One versioned request. Its operation sits beside `version`, tagged by
 /// `op`; an unknown operation fails to parse.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,7 +49,11 @@ pub(crate) struct ControlRequest {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ControlOp {
     /// Grows the disk with the configured `block_id` to `bytes`.
-    ResizeDisk { block_id: String, bytes: u64 },
+    ResizeDisk {
+        block_id: String,
+        bytes: u64,
+    },
+    DiskSnapshot(super::live_snapshot::Request),
 }
 
 /// The shim's answer.
@@ -51,6 +65,7 @@ pub(crate) type ControlResponse = Result<ControlReply, ControlError>;
 pub(crate) enum ControlReply {
     /// The disk's size in bytes after the operation.
     DiskSize(u64),
+    DiskSnapshot(super::live_snapshot::Phase),
 }
 
 /// Why an operation failed.
@@ -65,129 +80,88 @@ pub(crate) enum ControlError {
     Failed(String),
 }
 
-/// Binds `path` (replacing a stale socket), makes it owner-only, and serves
-/// each connection on a `vmm-control` thread with `handle`.
-pub(crate) fn serve(
-    path: &Path,
-    handle: impl Fn(ControlOp) -> ControlResponse + Send + 'static,
-) -> io::Result<()> {
-    if std::fs::symlink_metadata(path).is_ok() {
-        std::fs::remove_file(path)?;
-    }
-    let listener = UnixListener::bind(path)?;
-    restrict_to_owner(path)?;
-    std::thread::Builder::new()
-        .name("vmm-control".into())
-        .spawn(move || serve_connections(listener.incoming(), handle, std::thread::sleep))?;
-    Ok(())
-}
-
-fn serve_connections(
-    incoming: impl Iterator<Item = io::Result<UnixStream>>,
-    handle: impl Fn(ControlOp) -> ControlResponse,
-    mut sleep: impl FnMut(Duration),
-) {
-    use io::ErrorKind::{ConnectionAborted, Interrupted};
-
-    let mut retry_delay = ACCEPT_RETRY_INITIAL;
-    for connection in incoming {
-        let stream = match connection {
-            Ok(stream) => {
-                retry_delay = ACCEPT_RETRY_INITIAL;
-                stream
-            }
-            Err(error) if matches!(error.kind(), Interrupted | ConnectionAborted) => continue,
-            Err(error)
-                if matches!(
-                    error.raw_os_error(),
-                    Some(libc::EBADF | libc::ENOTSOCK | libc::EINVAL)
-                ) =>
-            {
-                tracing::error!(%error, "VMM control listener stopped");
-                break;
-            }
-            Err(error) => {
-                if retry_delay == ACCEPT_RETRY_INITIAL {
-                    tracing::warn!(%error, "VMM control accept failed, retrying");
-                }
-                sleep(retry_delay);
-                retry_delay = (retry_delay * 2).min(ACCEPT_RETRY_MAX);
-                continue;
-            }
-        };
-        if let Err(error) = answer(stream, &handle) {
-            tracing::debug!(%error, "control connection ended");
-        }
-    }
-}
-
-fn answer(
-    mut stream: UnixStream,
-    handle: &impl Fn(ControlOp) -> ControlResponse,
-) -> io::Result<()> {
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    let response = match serde_json::from_slice::<ControlRequest>(&read_frame(&mut stream)?) {
-        Ok(request) if request.version == VERSION => handle(request.op),
-        Ok(request) => Err(ControlError::Unsupported(format!(
-            "protocol version {}",
-            request.version
-        ))),
-        Err(error) => Err(ControlError::InvalidInput(error.to_string())),
-    };
-    write_frame(&mut stream, &serde_json::to_vec(&response)?)
-}
-
-/// Sends `request` to the shim at `path` and waits up to `timeout` for the
-/// answer, as the host side of one exchange.
-#[cfg(test)]
-pub(crate) fn request(
+pub(crate) async fn request_from_shim(
     path: &Path,
     request: &ControlRequest,
+    identity: crate::util::PidRecord,
     timeout: Duration,
-) -> io::Result<ControlResponse> {
-    let mut stream = UnixStream::connect(path)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    write_frame(&mut stream, &serde_json::to_vec(request)?)?;
-    Ok(serde_json::from_slice(&read_frame(&mut stream)?)?)
+) -> io::Result<(ControlResponse, crate::util::PidRecord)> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    tokio::time::timeout(timeout, async {
+        let mut stream = tokio::net::UnixStream::connect(path).await?;
+        let peer = stream
+            .peer_cred()?
+            .pid()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|&pid| is_shim_peer(pid, identity))
+            .and_then(|pid| {
+                crate::util::process_start_time(pid).map(|start_time| crate::util::PidRecord {
+                    pid,
+                    start_time: Some(start_time),
+                })
+            })
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "unexpected VMM socket peer",
+                )
+            })?;
+
+        let frame = serde_json::to_vec(request)?;
+        let size = checked_size(frame.len())?;
+        stream.write_all(&size.to_le_bytes()).await?;
+        stream.write_all(&frame).await?;
+
+        let size = stream.read_u32_le().await?;
+        if size > MAX_FRAME {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "control frame too large",
+            ));
+        }
+        let mut response = vec![0; size as usize];
+        stream.read_exact(&mut response).await?;
+        Ok((serde_json::from_slice(&response)?, peer))
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "VMM control request timed out"))?
 }
 
-fn read_frame(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
-    let mut length = [0u8; 4];
-    stream.read_exact(&mut length)?;
-    let length = u32::from_le_bytes(length);
-    if length > MAX_FRAME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("control frame of {length} bytes exceeds {MAX_FRAME}"),
-        ));
+#[cfg(target_os = "linux")]
+fn is_shim_peer(mut peer: u32, identity: crate::util::PidRecord) -> bool {
+    // Bubblewrap's bound socket belongs to the jailed descendant of the recorded process.
+    for _ in 0..8 {
+        if peer == identity.pid {
+            return identity.start_time.is_some()
+                && crate::util::process_start_time(peer) == identity.start_time;
+        }
+        let parent = std::fs::read_to_string(format!("/proc/{peer}/status"))
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix("PPid:"))
+                    .and_then(|pid| pid.trim().parse::<u32>().ok())
+            });
+        let Some(parent) = parent.filter(|&pid| pid > 1 && pid != peer) else {
+            return false;
+        };
+        peer = parent;
     }
-    let mut frame = vec![0u8; length as usize];
-    stream.read_exact(&mut frame)?;
-    Ok(frame)
+    false
 }
 
-fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> io::Result<()> {
-    let length = u32::try_from(frame.len())
+#[cfg(not(target_os = "linux"))]
+fn is_shim_peer(peer: u32, identity: crate::util::PidRecord) -> bool {
+    peer == identity.pid
+        && identity.start_time.is_some()
+        && crate::util::process_start_time(peer) == identity.start_time
+}
+
+fn checked_size(size: usize) -> io::Result<u32> {
+    u32::try_from(size)
         .ok()
         .filter(|length| *length <= MAX_FRAME)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "control frame too large"))?;
-    stream.write_all(&length.to_le_bytes())?;
-    stream.write_all(frame)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "control frame too large"))
 }
-
-/// `fchmodat`, which the shim's seccomp profile allows, rather than `chmod`.
-fn restrict_to_owner(path: &Path) -> io::Result<()> {
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-    // SAFETY: `path` is a valid NUL-terminated string for the call.
-    if unsafe { libc::fchmodat(libc::AT_FDCWD, path.as_ptr(), 0o600, 0) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-#[path = "tests/vmm_socket.rs"]
-mod tests;

@@ -277,7 +277,29 @@ impl BoxImpl {
         let locker = self.disk_locker()?;
         let _lock = LockGuard::new_async(locker.as_ref()).await;
         self.ensure_box_exists()?;
+        self.reconcile_live_snapshot_under_disk_lock().await?;
         fut.await
+    }
+
+    async fn reconcile_live_snapshot_if_pending(&self) -> BoxliteResult<()> {
+        if super::local_snapshot::has_live_snapshot_journal(&self.config.box_home) {
+            self.with_disk_admission(async { Ok(()) }).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn reconcile_live_snapshot_under_disk_lock(&self) -> BoxliteResult<()> {
+        let home = &self.config.box_home;
+        if !super::local_snapshot::has_live_snapshot_journal(home) {
+            return Ok(());
+        }
+        self.with_operation(super::live_snapshot::recover(
+            home,
+            self.id().as_str(),
+            &self.runtime.layout.db_dir().join("boxlite.db"),
+        ))
+        .await?;
+        super::local_snapshot::require_resolved_snapshot(home)
     }
 
     /// Confirm the box row still exists after acquiring disk admission, so waiters
@@ -359,6 +381,7 @@ impl BoxImpl {
     ///
     /// A Running VM may still have an unstarted container; this starts its main command once.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        self.reconcile_live_snapshot_if_pending().await?;
         match self.with_operation(self.start_inner()).await {
             Err(BoxliteError::NotFound(_)) if self.shutdown_token.is_cancelled() => {
                 Err(BoxliteError::Stopped(
@@ -780,6 +803,7 @@ impl BoxImpl {
     /// Recover a running VM only. Unlike ensure_booted, this path can never
     /// select a create/restart pipeline, even if status changes during attach.
     async fn existing_live_state(&self) -> BoxliteResult<&LiveState> {
+        self.reconcile_live_snapshot_if_pending().await?;
         if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::InvalidState(format!(
                 "Box {} is not running",
@@ -787,6 +811,7 @@ impl BoxImpl {
             )));
         }
         self.with_operation(async {
+            super::local_snapshot::require_resolved_snapshot(&self.config.box_home)?;
             if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running
             {
                 return Err(BoxliteError::InvalidState(format!(
@@ -829,6 +854,7 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
+        self.reconcile_live_snapshot_if_pending().await?;
         match self.with_operation(self.stop_inner()).await {
             Err(BoxliteError::NotFound(_))
                 if (self.auto_removed.load(Ordering::Acquire)
@@ -855,6 +881,9 @@ impl BoxImpl {
             }
             return Ok(());
         }
+
+        // Snapshot replay may need the live shim and its original PID record.
+        super::local_snapshot::require_resolved_snapshot(&self.config.box_home)?;
 
         // Abort the box watcher (if armed) so it does not run past stop().
         // `stop()` also cancels the shutdown token the watcher selects on, but the
@@ -1258,6 +1287,7 @@ impl BoxImpl {
     /// `start()`). `attach` deliberately does *not* use this: it boots without
     /// running init, so a client can attach before `start()`.
     async fn live_state(&self) -> BoxliteResult<&LiveState> {
+        self.reconcile_live_snapshot_if_pending().await?;
         let live = self
             .with_operation(async {
                 if self.shutdown_token.is_cancelled() {
@@ -1285,6 +1315,7 @@ impl BoxImpl {
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+        self.reconcile_live_snapshot_if_pending().await?;
         self.with_operation(async {
             if self.shutdown_token.is_cancelled() {
                 return Err(BoxliteError::Stopped("Box handle has been stopped".into()));
@@ -1296,6 +1327,7 @@ impl BoxImpl {
 
     /// Caller owns lifecycle admission, including when stop attaches for teardown.
     async fn ensure_booted_locked(&self) -> BoxliteResult<&LiveState> {
+        super::local_snapshot::require_resolved_snapshot(&self.config.box_home)?;
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \

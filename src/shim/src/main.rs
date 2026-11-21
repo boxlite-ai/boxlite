@@ -135,6 +135,8 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
         "Guest entrypoint configured"
     );
 
+    let snapshot_listener = boxlite::vmm::krun::SnapshotListener::bind(&config)?;
+
     // =========================================================================
     // Network backend (gvproxy) + Seccomp
     // =========================================================================
@@ -206,13 +208,16 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     tracing::info!("Engine created, creating Box instance");
 
     // Create Box instance with the provided configuration
-    let instance = match engine.create(config) {
+    let mut instance = match engine.create(config) {
         Ok(instance) => instance,
         Err(e) => {
             tracing::error!("Failed to create Box instance: {}", e);
             return Err(e);
         }
     };
+    if let Some(listener) = snapshot_listener {
+        listener.serve(&mut instance)?;
+    }
     timing("instance created (krun FFI calls done)");
 
     tracing::info!("Box instance created, handing over process control to Box");

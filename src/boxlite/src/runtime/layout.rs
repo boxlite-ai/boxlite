@@ -539,6 +539,10 @@ impl BoxFilesystemLayout {
         self.box_dir.join(dirs::DISKS_DIR)
     }
 
+    pub(crate) fn snapshots_dir(&self) -> PathBuf {
+        self.box_dir.join("snapshots")
+    }
+
     /// Virtual disk path: ~/.boxlite/boxes/{box_id}/disks/disk.qcow2
     pub fn disk_path(&self) -> PathBuf {
         self.disks_dir()
@@ -624,6 +628,9 @@ impl BoxFilesystemLayout {
 
         std::fs::create_dir_all(self.disks_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create disks dir: {e}")))?;
+
+        std::fs::create_dir_all(self.snapshots_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create snapshots dir: {e}")))?;
 
         std::fs::create_dir_all(self.mounts_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create mounts dir: {e}")))?;

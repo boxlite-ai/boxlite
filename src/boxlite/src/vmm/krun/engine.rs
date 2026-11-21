@@ -11,9 +11,14 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 struct KrunVmmInstance {
     context: KrunContext,
     probe: Box<dyn crate::system_check::HypervisorProbe>,
+    snapshot: Option<super::snapshot::SnapshotHandle>,
 }
 
 impl VmmInstanceImpl for KrunVmmInstance {
+    fn take_disk_snapshot(&mut self) -> Option<super::snapshot::SnapshotHandle> {
+        self.snapshot.take()
+    }
+
     fn enter(self: Box<Self>) -> BoxliteResult<()> {
         // Actually start the VM - following microsandbox pattern
         // In libkrun:
@@ -436,9 +441,13 @@ impl Vmm for Krun {
 
         // Return a VmmInstance that wraps the configured context
         // The actual VM start will happen when enter() is called
+        let snapshot = super::snapshot::container_block_id(&config)
+            .map(|id| super::snapshot::SnapshotHandle::enable(ctx.id(), id))
+            .transpose()?;
         let instance = KrunVmmInstance {
             context: ctx,
             probe: crate::system_check::hypervisor_probe(),
+            snapshot,
         };
         Ok(VmmInstance::new(Box::new(instance)))
     }
