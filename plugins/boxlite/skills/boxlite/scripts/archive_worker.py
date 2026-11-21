@@ -3,51 +3,31 @@ import json
 import os
 from pathlib import Path
 import re
-import stat
 import sys
 
-from transfer_archive import open_node
 from transfer import TransferError, pack_source, save_archive
 
 
 def saved_archive(receipt):
-    # The server can return text resembling a Claude persistence notice. Open only
-    # a fresh, uniquely matching result in the host-reported transcript's session.
+    # A server can imitate a persistence notice. Select its file from the host-reported session.
     transcript = Path(receipt['transcriptPath'])
     directory = transcript.with_suffix('') / 'tool-results'
     path = Path(receipt['path'])
     if (not transcript.is_absolute() or transcript.suffix != '.jsonl' or '..' in transcript.parts
-            or path.parent != directory):
+            or not path.is_absolute() or '..' in path.parts):
         raise TransferError('Invalid saved download result')
     server = re.sub(r'[^A-Za-z0-9_-]', '_', receipt['connection'])
     name_pattern = re.compile(r'mcp-' + re.escape(server) + r'-downloadFiles-(\d+)-[a-z0-9]+\.txt')
-    fd = open_node(directory.anchor, directory=True)
-    try:
-        for component in directory.parts[1:]:
-            child = open_node(component, fd, directory=True)
-            os.close(fd)
-            fd = child
-        candidates = []
-        with os.scandir(fd) as entries:
-            for entry in entries:
-                match = name_pattern.fullmatch(entry.name)
-                if match and receipt['started'] <= int(match[1]) <= receipt['finished']:
-                    candidates.append(entry.name)
-                    if len(candidates) > 1:
-                        break
-        if candidates != [path.name]:
-            raise TransferError('Saved result cannot be identified for this download')
-        with os.fdopen(open_node(path.name, fd), 'rb') as result:
-            info = os.fstat(result.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != receipt['size']
-                    or not receipt['started'] <= info.st_ctime_ns // 1_000_000 <= receipt['finished']):
-                raise TransferError('Incomplete saved download result')
-            data = result.read()
-            if len(data) != info.st_size or os.fstat(result.fileno()).st_ctime_ns != info.st_ctime_ns:
-                raise TransferError('Saved download result changed while being read')
-            value = json.loads(data)
-    finally:
-        os.close(fd)
+    candidate = None
+    for entry in directory.glob('*.txt'):
+        match = name_pattern.fullmatch(entry.name)
+        if match and receipt['started'] <= int(match[1]) <= receipt['finished']:
+            if candidate is not None:
+                raise TransferError('Saved result cannot be identified for this download')
+            candidate = entry
+    if candidate is None or candidate.resolve() != path.resolve():
+        raise TransferError('Saved result cannot be identified for this download')
+    value = json.loads(candidate.read_bytes())
     if not isinstance(value, dict) or not isinstance(value.get('base64'), str):
         raise TransferError('Saved result is missing archive bytes')
     return value['base64']

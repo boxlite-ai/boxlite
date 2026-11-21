@@ -15,7 +15,14 @@ class TransferError(Exception):
     pass
 
 
-def tool_result(value):
+def tool_result(name, value):
+    if name == 'uploadFiles' and isinstance(value, dict) and value.get('isError') is True:
+        detail = value.get('structuredContent')
+        content = value.get('content')
+        item = content[0] if isinstance(content, list) and len(content) == 1 else None
+        if ((isinstance(detail, dict) and detail.get('statusCode') == 403)
+                or (isinstance(item, dict) and item.get('type') == 'text' and item.get('text') == 'HTTP 403')):
+            raise TransferError('Server refused the upload (HTTP 403). Check permissions for the selected connection')
     if not isinstance(value, dict) or value.get('isError'):
         raise TransferError('MCP tool failed; completion is unknown')
     return value
@@ -67,7 +74,7 @@ class HostProcess:
             except BlockingIOError:
                 continue
             except BrokenPipeError:
-                raise TransferError('Host stopped accepting arguments') from None
+                raise TransferError('Host stopped accepting arguments; completion is unknown') from None
             data = data[size:]
 
     def receive(self):
@@ -78,7 +85,7 @@ class HostProcess:
                 raise TransferError('Host timed out returning a result; completion is unknown')
             chunk = os.read(self.process.stdout.fileno(), 65536)
             if not chunk:
-                raise TransferError('Host stopped before returning the tool result')
+                raise TransferError('Host stopped before returning the tool result; completion is unknown')
             start = len(self.buffer)
             self.buffer.extend(chunk)
             newline = self.buffer.find(b'\n', start)
@@ -137,5 +144,6 @@ class CodexHost:
             return value['result']
 
     def call(self, name, arguments):
-        return tool_result(self.request('mcpServer/tool/call', {'threadId': self.thread, 'server': self.server,
-                                                             'tool': name, 'arguments': arguments}))
+        result = self.request('mcpServer/tool/call', {'threadId': self.thread, 'server': self.server,
+                                                      'tool': name, 'arguments': arguments})
+        return tool_result(name, result)

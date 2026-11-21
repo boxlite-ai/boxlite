@@ -92,7 +92,7 @@ class FileTransferTests(unittest.TestCase):
                 transfer.upload(Response(value), 'box-1', self.source, '/workspace/fresh')
         for value in (None, [], {'isError': True}):
             with self.assertRaises(transfer_hosts.TransferError):
-                transfer_hosts.tool_result(value)
+                transfer_hosts.tool_result('uploadFiles', value)
         self.fault('empty-ack')
         with self.client() as client, self.assertRaises(transfer_hosts.TransferError):
             transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
@@ -105,6 +105,19 @@ class FileTransferTests(unittest.TestCase):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
             self.assertIsNotNone(client.channel.process.poll())
         self.assertFalse(self.calls())
+
+    def test_codex_distinguishes_upload_refusal_from_unknown_completion(self):
+        client = self.client()
+        client.thread = 'fixture-thread'
+        for reply, expected in (
+            ({'content': [{'type': 'text', 'text': 'HTTP 403'}]}, 'Server refused the upload'),
+            ({'structuredContent': {'statusCode': 403, 'message': 'private detail'}}, 'Server refused the upload'),
+            ({'content': [{'type': 'text', 'text': 'upstream mentioned HTTP 403: private detail'}]}, 'completion is unknown'),
+        ):
+            with self.subTest(reply=reply), patch.object(client, 'request', return_value={'isError': True, **reply}):
+                with self.assertRaisesRegex(transfer_hosts.TransferError, expected) as error:
+                    transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
+                self.assertNotIn('private detail', str(error.exception))
 
     def test_cleanup_kills_descendant_when_host_exits_first(self):
         endpoint = self.root / 'child.sock'
@@ -189,18 +202,30 @@ class FileTransferTests(unittest.TestCase):
                 transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
 
     def test_saved_download_refuses_other_sessions_and_ambiguous_results(self):
-        directory = self.root / 'session/tool-results'
+        project = self.root / 'project'
+        directory = project / 'session/tool-results'
         directory.mkdir(parents=True)
         started = time.time_ns() // 1_000_000
         saved = directory / f'mcp-chosen-server-downloadFiles-{started}-first.txt'
-        saved.write_text(json.dumps({'base64': transfer.pack_source(self.source)}))
-        receipt = {'transcriptPath': str(self.root / 'session.jsonl'), 'connection': 'chosen-server',
-                   'started': started - 50, 'finished': time.time_ns() // 1_000_000,
-                   'path': str(saved), 'size': saved.stat().st_size}
+        saved.write_text('{}')
+        receipt = {'transcriptPath': str(project / 'session.jsonl'), 'connection': 'chosen-server',
+                   'started': started, 'finished': started, 'path': str(saved), 'size': saved.stat().st_size}
+        encoded = transfer.pack_source(self.source)
+        saved.write_text(json.dumps({'base64': encoded}))
         transfer.save_archive(archive_worker.saved_archive(receipt), self.destination)
         self.assertEqual((self.destination / 'binary.bin').read_bytes(), (self.source / 'binary.bin').read_bytes())
+
+        backing = self.root / 'result.txt'
+        saved.rename(backing)
+        saved.symlink_to(backing)
+        storage = self.root / 'storage'
+        project.rename(storage)
+        project.symlink_to(storage)
+        self.assertEqual(archive_worker.saved_archive(dict(receipt, path=str(backing))), encoded)
         with self.assertRaises(transfer.TransferError):
-            archive_worker.saved_archive(dict(receipt, transcriptPath=str(self.root / 'other.jsonl')))
+            archive_worker.saved_archive(dict(receipt, path=str(self.source / 'binary.bin')))
+        with self.assertRaises(transfer.TransferError):
+            archive_worker.saved_archive(dict(receipt, transcriptPath=str(project / 'other.jsonl')))
         (directory / f'mcp-chosen-server-downloadFiles-{started}-second.txt').touch()
         with self.assertRaises(transfer.TransferError):
             archive_worker.saved_archive(receipt)

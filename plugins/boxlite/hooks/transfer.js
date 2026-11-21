@@ -28,11 +28,18 @@ async function archive($, operation, path, input) {
 }
 
 async function callFileTool($, connection, tool, input) {
+  let result
   try {
-    const result = await $.mcp.call(connection, tool, input)
-    if (result && !result.isError) return result
+    result = await $.mcp.call(connection, tool, input)
   } catch {
     // Host exceptions can contain the raw request or response.
+  }
+  if (result && !result.isError) return result
+  if (tool === 'uploadFiles' && result?.isError === true) {
+    const item = Array.isArray(result.content) && result.content.length === 1 ? result.content[0] : null
+    if (result.structuredContent?.statusCode === 403 || (item?.type === 'text' && item.text === 'HTTP 403')) {
+      throw new TransferError('Server refused the upload (HTTP 403). Check permissions for the selected connection')
+    }
   }
   throw new TransferError(tool + ' failed on the selected connection; completion is unknown')
 }
@@ -59,11 +66,10 @@ async function download($, args) {
   let data = result.structuredContent
   if (data == null && result.content?.length === 1 && result.content[0]?.type === 'text') {
     const text = result.content[0].text
-    const notice = /^Error: result \(([\d,]+) characters(?: across [\d,]+ lines?)?\) exceeds maximum allowed tokens\. Output has been saved to ([^\n]+)\.\nFormat: (?:JSON|Plain text)/.exec(text)
+    const notice = /^Error: result \([\d,]+ characters(?: across [\d,]+ lines?)?\) exceeds maximum allowed tokens\. Output has been saved to ([^\n]+)\.\nFormat: (?:JSON|Plain text)/.exec(text)
     if (notice) {
       const {transcriptPath} = await $.session.info()
-      const receipt = {transcriptPath, connection: args.connection, started, finished,
-        path: notice[2], size: Number(notice[1].replaceAll(',', ''))}
+      const receipt = {transcriptPath, connection: args.connection, started, finished, path: notice[1]}
       await archive($, 'save-result', args.local_destination, JSON.stringify(receipt))
       return args.local_destination
     }
