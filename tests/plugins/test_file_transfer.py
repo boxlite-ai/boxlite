@@ -206,9 +206,9 @@ class FileTransferTests(unittest.TestCase):
         transfer.download(Response(value), 'box-1', '/workspace/fresh/.', self.destination)
         self.assertEqual(transfer_archive.Archive.snapshot(self.destination).tree(), transfer_archive.Archive.snapshot(self.source).tree())
 
-    def test_authorized_worker_transfers_selected_names_links_and_large_files(self):
+    def test_authorized_worker_transfers_selected_names_and_links(self):
         selected = self.source / '.env'
-        selected.write_bytes(b'x' * (8 * 1024 * 1024 + 1))
+        selected.write_bytes(b'selected contents')
         (self.source / 'alias').symlink_to('.env')
         worker = [sys.executable, str(SCRIPTS / 'archive_worker.py')]
         packed = subprocess.run(worker + ['pack', str(self.source)], capture_output=True)
@@ -217,6 +217,58 @@ class FileTransferTests(unittest.TestCase):
         self.assertEqual(saved.returncode, 0, saved.stderr)
         self.assertEqual((self.destination / '.env').read_bytes(), selected.read_bytes())
         self.assertEqual(os.readlink(self.destination / 'alias'), '.env')
+
+    def test_upload_limit_counts_pax_headers_and_final_record_padding(self):
+        directory = self.root / 'boundary'
+        directory.mkdir()
+        source = directory / ('x' * 110)
+        largest_record = (8 << 20) // tarfile.RECORDSIZE * tarfile.RECORDSIZE
+        # Directory header, PAX header and data, file header, and two end blocks.
+        with source.open('wb') as stream:
+            stream.truncate(largest_record - 6 * tarfile.BLOCKSIZE)
+        self.assertEqual(len(base64.b64decode(transfer.pack_source(directory))), largest_record)
+        with source.open('ab') as stream:
+            stream.write(b'x')
+        with self.client() as client, patch.object(os, 'fdopen', wraps=os.fdopen) as open_stream:
+            with self.assertRaisesRegex(ValueError, '8 MiB'):
+                transfer.upload(client, 'box-1', directory, '/workspace/data')
+            open_stream.assert_not_called()
+        self.assertFalse(self.calls())
+
+    def test_download_gnu_sparse_files_preserves_extents_and_logical_size(self):
+        def sparse_entry(name, size, offset, data, extent_size=None):
+            # Old GNU sparse header layout emitted by the guest's tar-rs packer.
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.GNUTYPE_SPARSE
+            info.size = len(data)
+            header = bytearray(info.tobuf(tarfile.GNU_FORMAT))
+            if extent_size is None:
+                extent_size = len(data)
+            for start, value in ((386, offset), (398, extent_size), (483, size)):
+                header[start:start + 12] = b'%011o\0' % value
+            header[148:156] = b' ' * 8
+            header[148:156] = b'%06o\0 ' % sum(header)
+            return header + data + b'\0' * (-len(data) % tarfile.BLOCKSIZE)
+
+        size = 16 << 20
+        raw = (sparse_entry('empty.img', 1 << 20, 1 << 20, b'')
+               + sparse_entry('disk.img', size, size // 2, b'payload') + bytes(1024))
+        (self.root / 'uploaded.tar').write_bytes(raw)
+        with self.client() as client:
+            transfer.download(client, 'box-1', '/workspace/data', self.destination)
+        self.assertEqual((self.destination / 'empty.img').stat().st_size, 1 << 20)
+        path = self.destination / 'disk.img'
+        self.assertEqual(path.stat().st_size, size)
+        self.assertLess(path.stat().st_blocks * 512, size)
+        with path.open('rb') as stream:
+            stream.seek(size // 2 - 1)
+            self.assertEqual(stream.read(9), b'\0payload\0')
+        # A claimed extent must fit both the stored data and the logical file.
+        for offset, extent_size in ((0, 8), (size - 1, 7)):
+            raw = sparse_entry('invalid', size, offset, b'payload', extent_size) + bytes(1024)
+            with self.subTest(offset=offset), self.assertRaisesRegex(ValueError, 'sparse extent'):
+                transfer.save_archive(base64.b64encode(raw), self.root / 'invalid-download')
+            self.assertFalse((self.root / 'invalid-download').exists())
 
     def test_existing_download_destination_is_refused_before_call(self):
         with self.client() as client, self.assertRaises(transfer_hosts.TransferError):

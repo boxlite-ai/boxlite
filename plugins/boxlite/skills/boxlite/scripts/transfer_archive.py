@@ -12,6 +12,22 @@ import sys
 import tarfile
 
 
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+
+
+def _padded(size, alignment):
+    return size + (-size % alignment)
+
+
+def _tar_member(name, kind, size=0, linkname='', executable=False):
+    member = tarfile.TarInfo(name)
+    member.type = kind
+    member.size = size
+    member.linkname = linkname
+    member.mode = 0o700 if kind == tarfile.DIRTYPE or executable else 0o600
+    return member
+
+
 def safe_name(name):
     if not isinstance(name, str) or not name or '\\' in name or any(ord(c) < 32 for c in name):
         raise ValueError('Invalid archive path')
@@ -31,6 +47,51 @@ def open_node(name, parent=None, directory=False):
 @dataclass(frozen=True)
 class SymbolicLink:
     target: str
+
+
+class _DownloadTarInfo(tarfile.TarInfo):
+    def _proc_member(self, archive):
+        # Keep the on-wire end before tarfile substitutes a sparse logical size
+        # or advances offset_data past an in-band GNU sparse map.
+        stored_size = self.size
+        member = super()._proc_member(archive)
+        if member is self:
+            self.stored_end = self.offset_data + stored_size
+        return member
+
+
+@dataclass
+class _SparseFile:
+    size: int
+    extents: list[tuple[int, memoryview]]
+
+    @classmethod
+    def decode(cls, member, raw, next_header):
+        pos = member.offset_data
+        end = member.stored_end
+        if not pos <= end <= len(raw) or _padded(end, tarfile.BLOCKSIZE) != next_header:
+            raise ValueError('Truncated sparse archive member')
+        extents = []
+        previous_end = 0
+        for offset, length in member.sparse:
+            if offset < 0 or length < 0 or offset + length > member.size:
+                raise ValueError('Invalid sparse extent')
+            if not length:  # GNU headers may have unused (0, 0) slots.
+                continue
+            if offset < previous_end or pos + length > end:
+                raise ValueError('Invalid sparse extent')
+            extents.append((offset, raw[pos:pos + length]))
+            previous_end = offset + length
+            pos += length
+        if pos != end:
+            raise ValueError('Sparse extents do not match stored size')
+        return cls(member.size, extents)
+
+    def write(self, stream):
+        for offset, chunk in self.extents:
+            stream.seek(offset)
+            stream.write(chunk)
+        stream.truncate(self.size)
 
 
 def _publish_directory(source_parent, source, target_parent, target):
@@ -98,10 +159,20 @@ class Archive:
     def snapshot(cls, source):
         source = Path(source).absolute()
         result = cls()
+        archive_size = 2 * tarfile.BLOCKSIZE  # End-of-archive marker.
+
+        def reserve(member):
+            nonlocal archive_size
+            archive_size += len(member.tobuf(tarfile.PAX_FORMAT))
+            archive_size += _padded(member.size, tarfile.BLOCKSIZE)
+            if _padded(archive_size, tarfile.RECORDSIZE) > MAX_UPLOAD_BYTES:
+                raise ValueError('Upload tar archive exceeds the 8 MiB limit')
 
         def visit_entry(parent, entry, name):
             if stat.S_ISLNK(os.stat(entry, dir_fd=parent, follow_symlinks=False).st_mode):
-                result.add(name, SymbolicLink(os.readlink(entry, dir_fd=parent)))
+                target = os.readlink(entry, dir_fd=parent)
+                reserve(_tar_member(name, tarfile.SYMTYPE, linkname=target))
+                result.add(name, SymbolicLink(target))
                 return
             fd = open_node(entry, parent)
             try:
@@ -112,12 +183,15 @@ class Archive:
         def visit(fd, name):
             before = os.fstat(fd)
             if stat.S_ISDIR(before.st_mode):
+                reserve(_tar_member(name or '.', tarfile.DIRTYPE))
                 if name:
                     result.add(name)
-                for child in sorted(os.listdir(fd)):
-                    relative = f'{name}/{child}' if name else child
-                    visit_entry(fd, child, relative)
+                with os.scandir(fd) as children:
+                    for child in children:
+                        relative = f'{name}/{child.name}' if name else child.name
+                        visit_entry(fd, child.name, relative)
             elif stat.S_ISREG(before.st_mode):
+                reserve(_tar_member(name, tarfile.REGTYPE, before.st_size))
                 with os.fdopen(os.dup(fd), 'rb') as stream:
                     data = stream.read(before.st_size + 1)
                 after = os.fstat(fd)
@@ -148,15 +222,12 @@ class Archive:
             entries.insert(0, ('.', None))
         with tarfile.open(fileobj=output, mode='w', format=tarfile.PAX_FORMAT) as archive:
             for name, data in entries:
-                member = tarfile.TarInfo(name)
-                member.mode = 0o700 if data is None or name in self.executables else 0o600
                 if data is None:
-                    member.type = tarfile.DIRTYPE
+                    member = _tar_member(name, tarfile.DIRTYPE)
                 elif isinstance(data, SymbolicLink):
-                    member.type = tarfile.SYMTYPE
-                    member.linkname = data.target
+                    member = _tar_member(name, tarfile.SYMTYPE, linkname=data.target)
                 else:
-                    member.size = len(data)
+                    member = _tar_member(name, tarfile.REGTYPE, len(data), executable=name in self.executables)
                 archive.addfile(member, io.BytesIO(data) if isinstance(data, bytes) else None)
         return output.getvalue()
 
@@ -165,14 +236,16 @@ class Archive:
         if len(raw) % 512:
             raise ValueError('Truncated archive')
         result = cls()
-        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:', tarinfo=_DownloadTarInfo) as archive:
             for member in archive:
-                if member.sparse is not None:
-                    raise ValueError('Unsupported archive member')
                 if member.size < 0:
                     raise ValueError('Negative archive member size')
                 name = member.name
-                if member.isfile():
+                if member.sparse is not None:
+                    if not member.isfile():
+                        raise ValueError('Invalid sparse archive member')
+                    result.add(name, _SparseFile.decode(member, memoryview(raw), archive.offset))
+                elif member.isfile():
                     if member.offset_data + member.size > len(raw):
                         raise ValueError('Truncated archive member')
                     data = archive.extractfile(member).read()
@@ -220,7 +293,10 @@ class Archive:
                     file_fd = os.open(PurePosixPath(name).name,
                                       os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
                     with os.fdopen(file_fd, 'w+b') as stream:
-                        stream.write(data)
+                        if isinstance(data, _SparseFile):
+                            data.write(stream)
+                        else:
+                            stream.write(data)
                 finally:
                     os.close(fd)
             _publish_directory(stage, 'files', parent, destination.name)

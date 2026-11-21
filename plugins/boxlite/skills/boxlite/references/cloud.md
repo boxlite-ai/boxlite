@@ -69,7 +69,9 @@ The helper never retries, changes credentials or leaves a transfer-ticket cache;
 
 Uploads include the selected directory’s contents, including hidden files. Symbolic links travel as links, preserving their target text.
 
-Both hosts handle archives in memory, so available memory and the selected MCP connection determine the transferable size.
+Codex and Claude stop an upload before calling MCP if its tar archive would exceed 8 MiB, including headers and padding. This limit applies before Base64 encoding.
+
+Downloads preserve GNU sparse files from the Box. The helper writes the stored data ranges and recreates holes without imposing a limit on the file's logical size.
 
 Downloads require a new local directory, an existing parent and a filesystem that supports atomic directory placement.
 The helper writes with private permissions and places the directory at the requested path only after the full archive has been written.
