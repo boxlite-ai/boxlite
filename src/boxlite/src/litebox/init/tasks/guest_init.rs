@@ -332,6 +332,13 @@ mod tests {
             }))
         }
 
+        async fn sync_clock(
+            &self,
+            _: tonic::Request<boxlite_shared::SyncClockRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::SyncClockResponse>, tonic::Status> {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+
         async fn shutdown(
             &self,
             _: tonic::Request<boxlite_shared::ShutdownRequest>,
