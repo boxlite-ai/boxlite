@@ -151,6 +151,8 @@ func TestCompleteOutboundStartupUsesIndependentCapabilityUnion(t *testing.T) {
 }
 
 func TestCompleteOutboundAcknowledgedPolicyGatesNewGuestTCPAndUDP(t *testing.T) {
+	const protectedBefore = "203.0.113.12"
+	const protectedAfter = "203.0.113.13"
 	var received atomic.Uint64
 	httpTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received.Add(1)
@@ -159,8 +161,10 @@ func TestCompleteOutboundAcknowledgedPolicyGatesNewGuestTCPAndUDP(t *testing.T) 
 	t.Cleanup(httpTarget.Close)
 	tcpPort := uint16(httpTarget.Listener.Addr().(*net.TCPAddr).Port)
 	udpTarget, udpPort := newUDPTestTarget(t)
-	cfg := testGvproxyConfig()
-	tap := startNetworkWith(t, cfg)
+	cfg := platformGuardTestConfig(t, []string{"203.0.113.0/24"})
+	tap := startNetworkWithSeams(t, cfg, networkSeams{
+		nat: map[string]string{protectedBefore: "127.0.0.1", protectedAfter: "127.0.0.1"},
+	})
 	dial := startGuestStack(t, tap, cfg)
 	request := "GET / HTTP/1.0\r\nHost: test.invalid\r\n\r\n"
 	before := tap.policy.active.Load().revision
@@ -182,6 +186,7 @@ func TestCompleteOutboundAcknowledgedPolicyGatesNewGuestTCPAndUDP(t *testing.T) 
 		t.Fatalf("guest TCP reached the controlled target with active deny: err=%v requests=%d", err, received.Load())
 	}
 	assertUDPPolicyDrop(t, tap, udpTarget, unlistedIP, guestSrcPort, udpPort, outboundUserDeny)
+	assertUDPPolicyDrop(t, tap, udpTarget, protectedBefore, guestSrcPort, udpPort, outboundPlatformDeny)
 
 	clear := completeTestSnapshot("clear-both", extendedAdmission)
 	response = outboundControl(tap, completeTestRequest(t, clear, denied.Revision, json.RawMessage("[]")))
@@ -193,4 +198,5 @@ func TestCompleteOutboundAcknowledgedPolicyGatesNewGuestTCPAndUDP(t *testing.T) 
 	}
 	tap.send(t, udpFrame(t, unlistedIP, udpPort, []byte("allowed")))
 	udpTarget.receive(t, "allowed")
+	assertUDPPolicyDrop(t, tap, udpTarget, protectedAfter, guestSrcPort, udpPort, outboundPlatformDeny)
 }

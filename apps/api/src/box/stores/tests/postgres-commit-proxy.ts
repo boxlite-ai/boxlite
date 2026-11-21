@@ -21,6 +21,12 @@ export class PostgresCommitProxy {
         client.destroy()
         upstream.destroy()
       }
+      const cut = () => {
+        this.cuts++
+        this.rejectConnections = this.rejectAfterCut
+        if (this.rejectConnections) for (const socket of this.sockets) socket.destroy()
+        close()
+      }
       client.on('error', close)
       upstream.on('error', close)
       client.on('end', () => upstream.end())
@@ -41,10 +47,7 @@ export class PostgresCommitProxy {
           if (!startup && frame[0] === 81 && frame.subarray(5).toString() === 'COMMIT\0' && this.fault) {
             const fault = this.fault
             this.fault = undefined
-            this.cuts++
-            this.rejectConnections = this.rejectAfterCut
-            if (this.rejectConnections) for (const socket of this.sockets) socket.destroy()
-            if (fault === 'before') return close()
+            if (fault === 'before') return cut()
             afterCommit = true
           }
           startup = false
@@ -59,7 +62,7 @@ export class PostgresCommitProxy {
           if (back.length < length) return
           const frame = back.subarray(0, length)
           back = back.subarray(length)
-          if (afterCommit && frame[0] === 67 && frame.subarray(5).toString() === 'COMMIT\0') return close()
+          if (afterCommit && frame[0] === 67 && frame.subarray(5).toString() === 'COMMIT\0') return cut()
           client.write(frame)
         }
       })
