@@ -52,7 +52,7 @@ The helper needs Python 3.9+ and host shell/filesystem access; it does not imple
 
 Claude authorizes the BoxLite transfer tool in the current session. Python prepares or extracts the archive, and the plugin uses that session's selected MCP connection.
 
-Codex loads its selected connection through app-server. Verify OAuth and API-key acceptance separately. See the [file-transfer prerequisites](../../../plugins/boxlite/skills/boxlite/references/cloud.md#files).
+Codex loads its selected connection through app-server. Verify OAuth and API-key acceptance separately. See the [file-transfer prerequisites packaged with this candidate](REVIEWER.md#file-transfer-prerequisites).
 
 ## Data handling
 

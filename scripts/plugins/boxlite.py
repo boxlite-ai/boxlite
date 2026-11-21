@@ -105,6 +105,9 @@ def validate(root=PLUGIN):
         expected = {'mcpServers': {'boxlite': {'type': transport, 'url': MCP_URL}}}
         if filename == 'mcp.json':
             expected['$schema'] = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
+            expected['mcpServers']['boxlite']['extensions'] = {
+                'com.openai': {'auth': {'type': 'oauth', 'client': {'mode': 'cimd'}}},
+            }
         if load_manifest(root, filename) != expected:
             raise ValueError(f'Invalid MCP declaration: {filename}; only the production endpoint is distributable')
     skills = [path for path in files if path.name == 'SKILL.md' and path.parent.parent == root / 'skills']

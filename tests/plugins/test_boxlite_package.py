@@ -36,6 +36,9 @@ class PackageTests(unittest.TestCase):
         output = Path(self.temp.name) / 'output'
         archive = package.build(output, self.root)
         with zipfile.ZipFile(archive) as zipped:
+            server = json.loads(zipped.read('mcp.json'))['mcpServers']['boxlite']
+            self.assertEqual(server.get('extensions', {}).get('com.openai', {}).get('auth'),
+                             {'type': 'oauth', 'client': {'mode': 'cimd'}})
             self.assertTrue(package.CLAUDE_FILES.isdisjoint(zipped.namelist()))
             self.assertIn('plugin.json', zipped.namelist())
             self.assertIn('skills/boxlite/SKILL.md', zipped.namelist())

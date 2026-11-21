@@ -59,11 +59,11 @@ Local runs the CLI on your execution host; runtime image pulls and commands you 
 There is no plugin telemetry, background service, bundled credential store, or installation hook.
 
 The file helper reads reviewed sources and writes requested downloads; it requires Python and host filesystem access.
-The marketplace distribution includes the Claude transfer tools.
 The helper uses existing MCP contracts without a BoxLite CLI dependency, new server API, transfer cache or additional checksum/readback step.
+Directory uploads include hidden entries and preserve symbolic links as links.
 
-Claude authorizes the BoxLite upload or download in the current session using the connection, Box ID and both paths.
-Python handles the archive and the plugin sends the data through that MCP connection. The tool returns a short receipt.
+At session start, the marketplace plugin registers the Claude upload and download tools. Claude authorizes each request using the connection, Box ID and both paths.
+The handler then starts the bundled Python archive worker, calls the selected MCP connection and returns a short receipt.
 
 OAuth credentials stay with the host; API keys stay in the user's chosen private host environment.
 Keep mode selection, Box IDs, runtime homes, and app secrets outside the plugin and version control.
