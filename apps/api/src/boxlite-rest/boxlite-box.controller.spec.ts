@@ -360,12 +360,45 @@ describe('BoxliteBoxController creation diagnostics', () => {
         volumeCount: 1,
         volumeIds: ['vol-1'],
         mountPaths: ['/data'],
-        err: failure,
+        errorName: 'BadRequestException',
       }),
       'Box creation failed',
     )
     expect(log.mock.calls[0][0]).not.toHaveProperty('image')
     expect(log.mock.calls[0][0]).not.toHaveProperty('env')
+    expect(log.mock.calls[0][0]).not.toHaveProperty('err')
+  })
+
+  it('does not serialize database queries or parameters when Box insertion fails', async () => {
+    const secret = 'do-not-log-box-auth-token'
+    const failure = Object.assign(new Error('duplicate key value'), {
+      name: 'QueryFailedError',
+      query: 'INSERT INTO box (env, authToken) VALUES ($1, $2)',
+      parameters: ['secret-environment-value', secret],
+      driverError: { code: '23505', detail: secret },
+    })
+    const controller = new BoxliteBoxController(
+      { create: jest.fn().mockRejectedValue(failure) } as any,
+      {} as any,
+      { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(10) } as any,
+      {} as any,
+    )
+    const log = jest.spyOn((controller as any).logger, 'error').mockImplementation(() => undefined)
+    const auth = { role: 'admin', organization: { id: 'org-1' }, organizationId: 'org-1' } as any
+
+    await expect(controller.createBox(auth, { image: 'alpine:latest' } as any, Context.user())).rejects.toBe(failure)
+
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secret)
+    expect(JSON.stringify(log.mock.calls)).not.toContain('secret-environment-value')
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'box.create.failed',
+        errorName: 'QueryFailedError',
+        databaseErrorCode: '23505',
+      }),
+      'Box creation failed',
+    )
+    expect(log.mock.calls[0][0]).not.toHaveProperty('err')
   })
 })
 

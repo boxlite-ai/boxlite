@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
 import { BoxState } from '../../enums/box-state.enum'
@@ -77,7 +77,8 @@ export class BoxStartAction extends BoxAction {
 
     const organization = await this.organizationService.findOne(box.organizationId)
 
-    const metadata = await this.volumeMetadata(box, { ...organization?.boxMetadata })
+    const volumes = await this.resolveBoxVolumes(box)
+    const metadata = this.volumeMetadata({ ...organization?.boxMetadata }, volumes)
 
     // A tenant's image was pinned by the resolver when the box was created. A
     // curated one keeps its tag on the box — the warm pool matches on it — and
@@ -86,7 +87,7 @@ export class BoxStartAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
     await runnerAdapter.createBox(
-      box,
+      this.withVolumes(box, volumes),
       image,
       metadata,
       await resolveNestedVirtualization(
@@ -118,18 +119,30 @@ export class BoxStartAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    const metadata = await this.volumeMetadata(box, { ...organization?.boxMetadata })
+    let volumes: Box['volumes']
+    try {
+      volumes = await this.resolveBoxVolumes(box)
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        this.logger.warn(`Filestore resolution for box ${box.id} is temporarily unavailable; restart will be retried`)
+        return DONT_SYNC_AGAIN
+      }
+      throw error
+    }
+    const dispatchBox = this.withVolumes(box, volumes)
+    const metadata = this.volumeMetadata({ ...organization?.boxMetadata }, volumes)
 
-    await runnerAdapter.startBox(box.id, box.authToken, metadata)
+    await runnerAdapter.assertFilestoreVolumeSupport(dispatchBox)
+    await runnerAdapter.startBox(dispatchBox.id, dispatchBox.authToken, metadata)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
     return SYNC_AGAIN
   }
 
-  private async volumeMetadata(box: Box, metadata: Record<string, string>): Promise<Record<string, string>> {
-    if (!box.volumes?.length) return metadata
+  private async resolveBoxVolumes(box: Box): Promise<Box['volumes']> {
+    if (!box.volumes?.length) return box.volumes
 
-    const volumes = await Promise.all(
+    return Promise.all(
       box.volumes.map(async (volume) => {
         const dispatch = boxVolumeForDispatch(volume)
         if (!volume.filestore) return dispatch
@@ -141,6 +154,15 @@ export class BoxStartAction extends BoxAction {
         }
       }),
     )
+  }
+
+  private withVolumes(box: Box, volumes: Box['volumes']): Box {
+    if (!box.volumes?.length) return box
+    return Object.assign(Object.create(Object.getPrototypeOf(box)) as Box, box, { volumes })
+  }
+
+  private volumeMetadata(metadata: Record<string, string>, volumes: Box['volumes']): Record<string, string> {
+    if (!volumes?.length) return metadata
     return { ...metadata, volumes: JSON.stringify(volumes) }
   }
 

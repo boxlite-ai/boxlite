@@ -1,6 +1,9 @@
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
-import { CreateVolumeDto } from './create-volume.dto'
+import { CreateVolumeDto, FILESTORE_INSTANCE_PATTERN } from './create-volume.dto'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { parse } from 'yaml'
 
 describe('CreateVolumeDto name', () => {
   async function errorsFor(payload: Record<string, unknown>) {
@@ -33,9 +36,9 @@ describe('CreateVolumeDto name', () => {
 })
 
 // The instance name becomes a component of the runner's host mount path
-// (/mnt/boxlite-filestore-<name>), so the grammar must keep out path
-// separators and relative components — the same path-safety shape the runner
-// requires, and free of characters a `-v` source could never address.
+// (/mnt/boxlite-filestore-<name>), so the API configuration grammar must keep
+// out path separators and relative components, and stay free of characters a
+// `-v` source could never address.
 describe('CreateVolumeDto filestore instance', () => {
   async function errorsFor(payload: Record<string, unknown>) {
     return JSON.stringify(await validate(plainToInstance(CreateVolumeDto, payload)))
@@ -63,5 +66,17 @@ describe('CreateVolumeDto filestore instance', () => {
 
   it('rejects an unsupported backend', async () => {
     expect(await errorsFor({ storageBackend: 'nfs' })).toContain('storageBackend')
+  })
+})
+
+describe('CreateVolumeDto OpenAPI contract', () => {
+  it('uses the server-side Filestore instance grammar in the public schema', () => {
+    const document = parse(readFileSync(path.resolve(__dirname, '../../../../../openapi/box.openapi.yaml'), 'utf8'))
+    const pattern = document.components.schemas.CreateVolumeRequest.properties.instance.pattern
+
+    expect(pattern).toBe(FILESTORE_INSTANCE_PATTERN.source)
+    for (const instance of ['1foo', 'foo-']) {
+      expect(new RegExp(pattern).test(instance)).toBe(false)
+    }
   })
 })

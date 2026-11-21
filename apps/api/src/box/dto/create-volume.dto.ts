@@ -79,7 +79,7 @@ export class CreateVolumeDto {
   @Matches(FILESTORE_INSTANCE_PATTERN, {
     message:
       'instance must be the logical name of a Filestore instance: 1-63 characters of ' +
-      '[a-z0-9] and -, starting alphanumeric. It must match an instance entry in the ' +
+      '[a-z0-9] and -, starting with a lowercase letter and ending alphanumeric. It must match an instance entry in the ' +
       "API's FILESTORE_INSTANCES configuration.",
   })
   instance?: string
