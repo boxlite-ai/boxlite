@@ -24,7 +24,7 @@ def _tar_member(name, kind, size=0, linkname='', mode=0o600):
     member.type = kind
     member.size = size
     member.linkname = linkname
-    member.mode = 0o700 if kind == tarfile.DIRTYPE else mode
+    member.mode = mode
     return member
 
 
@@ -115,9 +115,13 @@ def _publish_directory(source_parent, source, target_parent, target):
 
 def _clear_staging_directory(directory):
     for name in os.listdir(directory):
-        if not stat.S_ISDIR(os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode):
+        mode = os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode
+        if not stat.S_ISDIR(mode):
             os.unlink(name, dir_fd=directory)
             continue
+        # Publication can fail after restrictive directory modes have been restored.
+        if mode & 0o700 != 0o700:
+            os.chmod(name, 0o700, dir_fd=directory, follow_symlinks=False)
         child = open_node(name, directory, directory=True)
         try:
             _clear_staging_directory(child)
@@ -131,17 +135,15 @@ class Archive:
     def __init__(self):
         self.parents = set()
         self.files = {}
-        self.directories = set()
+        self.directory_modes = {}
         self.single_file = False
         self.file_modes = {}
 
-    def add(self, name, data=None, *, mode=0o600):
+    def add(self, name, data=None, *, mode=None):
         name = safe_name(name)
-        if name == '.':
-            if data is not None:
-                raise ValueError('Archive root must be a directory')
-            return
-        if name in self.files or name in self.directories:
+        if name == '.' and data is not None:
+            raise ValueError('Archive root must be a directory')
+        if name in self.files or (name != '.' and name in self.directory_modes):
             raise ValueError('Duplicate archive path')
         parents = {str(parent) for parent in PurePosixPath(name).parents if str(parent) != '.'}
         if any(parent in self.files for parent in parents) or (data is not None and name in self.parents):
@@ -150,12 +152,12 @@ class Archive:
         if data is not None:
             self.files[name] = data
             if not isinstance(data, SymbolicLink):
-                self.file_modes[name] = mode & 0o700
+                self.file_modes[name] = 0o600 if mode is None else mode & 0o700
         else:
-            self.directories.add(name)
+            self.directory_modes[name] = 0o700 if mode is None else mode & 0o700
 
     def tree(self):
-        return self.directories | self.parents, self.files
+        return (self.directory_modes.keys() | self.parents) - {'.'}, self.files
 
     @classmethod
     def snapshot(cls, source):
@@ -185,9 +187,8 @@ class Archive:
         def visit(fd, name):
             before = os.fstat(fd)
             if stat.S_ISDIR(before.st_mode):
-                reserve(_tar_member(name or '.', tarfile.DIRTYPE))
-                if name:
-                    result.add(name)
+                reserve(_tar_member(name or '.', tarfile.DIRTYPE, mode=before.st_mode & 0o700))
+                result.add(name or '.', mode=before.st_mode)
                 with os.scandir(fd) as children:
                     for child in children:
                         relative = f'{name}/{child.name}' if name else child.name
@@ -223,7 +224,7 @@ class Archive:
         with tarfile.open(fileobj=output, mode='w', format=tarfile.PAX_FORMAT) as archive:
             for name, data in entries:
                 if data is None:
-                    member = _tar_member(name, tarfile.DIRTYPE)
+                    member = _tar_member(name, tarfile.DIRTYPE, mode=self.directory_modes.get(name, 0o700))
                 elif isinstance(data, SymbolicLink):
                     member = _tar_member(name, tarfile.SYMTYPE, linkname=data.target)
                 else:
@@ -253,7 +254,7 @@ class Archive:
                         raise ValueError('Truncated archive member')
                     result.add(name, data, mode=member.mode)
                 elif member.isdir():
-                    result.add(name)
+                    result.add(name, mode=member.mode)
                 elif member.issym() and member.linkname:
                     result.add(name, SymbolicLink(member.linkname))
                 else:
@@ -269,23 +270,20 @@ class Archive:
         destination = Path(destination).absolute()
         parent = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
         stage_name = None
-        stage = None
         root = None
         try:
             candidate = '.boxlite-download-' + secrets.token_hex(16)
             os.mkdir(candidate, 0o700, dir_fd=parent)
             stage_name = candidate
-            stage = open_node(stage_name, parent, directory=True)
-            os.mkdir('files', 0o700, dir_fd=stage)
-            root = open_node('files', stage, directory=True)
+            root = open_node(stage_name, parent, directory=True)
             for name in sorted(directories, key=lambda p: (p.count('/'), p)):
-                fd = self._parent(root, name)
+                fd = self._open_directory(root, PurePosixPath(name).parent)
                 try:
                     os.mkdir(PurePosixPath(name).name, 0o700, dir_fd=fd)
                 finally:
                     os.close(fd)
             for name, data in files.items():
-                fd = self._parent(root, name)
+                fd = self._open_directory(root, PurePosixPath(name).parent)
                 try:
                     if isinstance(data, SymbolicLink):
                         os.symlink(data.target, PurePosixPath(name).name, dir_fd=fd)
@@ -301,7 +299,16 @@ class Archive:
                         os.fchmod(stream.fileno(), self.file_modes[name])
                 finally:
                     os.close(fd)
-            _publish_directory(stage, 'files', parent, destination.name)
+            # Children need traversable parents until their final modes are set.
+            for name in sorted(self.directory_modes, key=lambda p: len(PurePosixPath(p).parts), reverse=True):
+                fd = self._open_directory(root, PurePosixPath(name))
+                try:
+                    os.fchmod(fd, self.directory_modes[name])
+                finally:
+                    os.close(fd)
+            # Rename within the same parent even when the root is now read-only.
+            _publish_directory(parent, stage_name, parent, destination.name)
+            stage_name = None
             try:
                 reported = os.stat(destination, follow_symlinks=False)
             except OSError:
@@ -310,21 +317,21 @@ class Archive:
                 raise ValueError('Download was written but the requested path no longer identifies it')
         finally:
             if root is not None:
+                if stage_name is not None:
+                    with suppress(OSError):
+                        os.fchmod(root, 0o700)
+                        _clear_staging_directory(root)
                 os.close(root)
-            if stage is not None:
-                with suppress(OSError):
-                    _clear_staging_directory(stage)
-                os.close(stage)
             if stage_name is not None:
                 with suppress(OSError):
                     os.rmdir(stage_name, dir_fd=parent)
             os.close(parent)
 
     @staticmethod
-    def _parent(root, name):
+    def _open_directory(root, path):
         fd = os.dup(root)
         try:
-            for component in PurePosixPath(name).parts[:-1]:
+            for component in path.parts:
                 next_fd = open_node(component, fd, directory=True)
                 os.close(fd)
                 fd = next_fd

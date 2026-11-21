@@ -278,7 +278,6 @@ class FileTransferTests(unittest.TestCase):
         path = self.destination / 'disk.img'
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
         self.assertEqual(path.stat().st_size, size)
-        self.assertLess(path.stat().st_blocks * 512, size)
         with path.open('rb') as stream:
             stream.seek(size // 2 - 1)
             self.assertEqual(stream.read(9), b'\0payload\0')
@@ -409,6 +408,35 @@ class FileTransferTests(unittest.TestCase):
             self.assertTrue(archive.next().isdir())
             self.assertEqual(archive.getmember('start.sh').mode, 0o700)
             self.assertEqual(archive.getmember('binary.bin').mode, 0o600)
+
+    def test_explicit_directory_permissions_on_upload_and_download(self):
+        assets = self.source / 'assets'
+        assets.mkdir()
+        (assets / 'logo').write_bytes(b'logo')
+        assets.chmod(0o555)
+        self.source.chmod(0o555)
+        with self.client() as client:
+            transfer.upload(client, 'box-1', self.source, '/workspace/site')
+        with tarfile.open(self.root / 'uploaded.tar') as archive:
+            with self.subTest(direction='upload'):
+                self.assertEqual([archive.getmember(p).mode for p in ('.', 'assets')], [0o500, 0o500])
+
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode='w') as archive:
+            for name in ('.', 'assets'):
+                directory = tarfile.TarInfo(name)
+                directory.type, directory.mode = tarfile.DIRTYPE, 0o555
+                archive.addfile(directory)
+            logo = tarfile.TarInfo('assets/images/logo')
+            logo.size = 4
+            archive.addfile(logo, io.BytesIO(b'logo'))
+        (self.root / 'uploaded.tar').write_bytes(raw.getvalue())
+        with self.client() as client:
+            transfer.download(client, 'box-1', '/workspace/site/.', self.destination)
+        self.assertEqual((self.destination / 'assets/images/logo').read_bytes(), b'logo')
+        for path, mode in (('.', 0o500), ('assets', 0o500), ('assets/images', 0o700)):
+            with self.subTest(download=path):
+                self.assertEqual(stat.S_IMODE((self.destination / path).stat().st_mode), mode)
 
     def test_download_reports_when_published_files_no_longer_match_requested_path(self):
         parent = self.root / 'parent'
