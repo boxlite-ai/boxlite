@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -140,6 +141,22 @@ class FileTransferTests(unittest.TestCase):
                 self.fail('Timeout must not connect')
         self.assertFalse(self.calls())
 
+    def test_cli_rejects_relative_paths_before_starting_codex(self):
+        for operation in ('upload', 'download'):
+            for option in ('--source', '--destination'):
+                paths = {'--source': '/workspace/source', '--destination': str(self.destination)}
+                paths[option] = 'relative/path'
+                argv = ['transfer.py', '--host', 'codex', '--server', 'chosen-server', operation,
+                        '--box', 'box-1', '--source', paths['--source'], '--destination', paths['--destination']]
+                with self.subTest(operation=operation, option=option), patch.object(sys, 'argv', argv), \
+                        patch.object(transfer, 'CodexHost') as host, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    with self.assertRaises(SystemExit) as error:
+                        transfer.main()
+                    self.assertEqual(error.exception.code, 2)
+                    self.assertIn(option, stderr.getvalue())
+                    self.assertIn('absolute path', stderr.getvalue())
+                    host.assert_not_called()
+
     def test_cli_prints_only_receipts_and_rejects_credential_options(self):
         command = [sys.executable, str(SCRIPTS / 'transfer.py'), '--host', 'codex', '--server', 'chosen-server']
         for operation, source, destination in [('upload', self.source, '/workspace/new'),
@@ -240,6 +257,7 @@ class FileTransferTests(unittest.TestCase):
             # Old GNU sparse header layout emitted by the guest's tar-rs packer.
             info = tarfile.TarInfo(name)
             info.type = tarfile.GNUTYPE_SPARSE
+            info.mode = 0o755
             info.size = len(data)
             header = bytearray(info.tobuf(tarfile.GNU_FORMAT))
             if extent_size is None:
@@ -258,6 +276,7 @@ class FileTransferTests(unittest.TestCase):
             transfer.download(client, 'box-1', '/workspace/data', self.destination)
         self.assertEqual((self.destination / 'empty.img').stat().st_size, 1 << 20)
         path = self.destination / 'disk.img'
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
         self.assertEqual(path.stat().st_size, size)
         self.assertLess(path.stat().st_blocks * 512, size)
         with path.open('rb') as stream:
@@ -373,12 +392,19 @@ class FileTransferTests(unittest.TestCase):
                 self.assertTrue(host.process.stdin.closed)
                 self.assertTrue(host.process.stdout.closed)
 
-    def test_upload_archive_preserves_single_file_landing_and_owner_execute(self):
+    def test_file_transfer_preserves_single_file_landing_and_owner_permissions(self):
         single = self.source / 'start.sh'
         single.write_bytes(b'fixture')
+        single.chmod(0o500)
+        with self.client() as client:
+            transfer.upload(client, 'box-1', single, '/workspace/start.sh')
+            transfer.download(client, 'box-1', '/workspace/start.sh', self.destination)
+        with tarfile.open(self.root / 'uploaded.tar') as archive:
+            self.assertEqual([(member.name, member.mode) for member in archive], [('start.sh', 0o500)])
+        downloaded = self.destination / 'start.sh'
+        self.assertEqual(stat.S_IMODE(downloaded.stat().st_mode), 0o500)
+        self.assertEqual(downloaded.read_bytes(), b'fixture')
         single.chmod(0o755)
-        with tarfile.open(fileobj=io.BytesIO(transfer_archive.Archive.snapshot(single).encode())) as archive:
-            self.assertEqual([(member.name, member.mode) for member in archive], [('start.sh', 0o700)])
         with tarfile.open(fileobj=io.BytesIO(transfer_archive.Archive.snapshot(self.source).encode())) as archive:
             self.assertTrue(archive.next().isdir())
             self.assertEqual(archive.getmember('start.sh').mode, 0o700)

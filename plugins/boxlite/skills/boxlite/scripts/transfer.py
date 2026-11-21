@@ -57,14 +57,20 @@ def save_archive(encoded, destination):
     Archive.decode(raw).save(destination)
 
 
+def absolute_path(value):
+    if not value.startswith('/'):
+        raise argparse.ArgumentTypeError('expected an absolute path')
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', choices=('codex',), required=True)
     parser.add_argument('--server', required=True, help='Existing selected host MCP connection name')
     parser.add_argument('operation', choices=('upload', 'download'))
     parser.add_argument('--box', required=True)
-    parser.add_argument('--source', required=True)
-    parser.add_argument('--destination', required=True)
+    parser.add_argument('--source', required=True, type=absolute_path)
+    parser.add_argument('--destination', required=True, type=absolute_path)
     args = parser.parse_args()
     try:
         with CodexHost(args.server) as client:

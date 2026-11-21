@@ -19,12 +19,12 @@ def _padded(size, alignment):
     return size + (-size % alignment)
 
 
-def _tar_member(name, kind, size=0, linkname='', executable=False):
+def _tar_member(name, kind, size=0, linkname='', mode=0o600):
     member = tarfile.TarInfo(name)
     member.type = kind
     member.size = size
     member.linkname = linkname
-    member.mode = 0o700 if kind == tarfile.DIRTYPE or executable else 0o600
+    member.mode = 0o700 if kind == tarfile.DIRTYPE else mode
     return member
 
 
@@ -133,9 +133,9 @@ class Archive:
         self.files = {}
         self.directories = set()
         self.single_file = False
-        self.executables = set()
+        self.file_modes = {}
 
-    def add(self, name, data=None):
+    def add(self, name, data=None, *, mode=0o600):
         name = safe_name(name)
         if name == '.':
             if data is not None:
@@ -149,6 +149,8 @@ class Archive:
         self.parents.update(parents)
         if data is not None:
             self.files[name] = data
+            if not isinstance(data, SymbolicLink):
+                self.file_modes[name] = mode & 0o700
         else:
             self.directories.add(name)
 
@@ -198,9 +200,7 @@ class Archive:
                 if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                         after.st_size, after.st_mtime_ns, after.st_ctime_ns) or len(data) != before.st_size:
                     raise ValueError('Source changed while being read')
-                result.add(name, data)
-                if before.st_mode & stat.S_IXUSR:
-                    result.executables.add(name)
+                result.add(name, data, mode=before.st_mode)
             else:
                 raise ValueError('Only regular files, directories and symbolic links are supported')
 
@@ -227,7 +227,7 @@ class Archive:
                 elif isinstance(data, SymbolicLink):
                     member = _tar_member(name, tarfile.SYMTYPE, linkname=data.target)
                 else:
-                    member = _tar_member(name, tarfile.REGTYPE, len(data), executable=name in self.executables)
+                    member = _tar_member(name, tarfile.REGTYPE, len(data), mode=self.file_modes[name])
                 archive.addfile(member, io.BytesIO(data) if isinstance(data, bytes) else None)
         return output.getvalue()
 
@@ -244,14 +244,14 @@ class Archive:
                 if member.sparse is not None:
                     if not member.isfile():
                         raise ValueError('Invalid sparse archive member')
-                    result.add(name, _SparseFile.decode(member, memoryview(raw), archive.offset))
+                    result.add(name, _SparseFile.decode(member, memoryview(raw), archive.offset), mode=member.mode)
                 elif member.isfile():
                     if member.offset_data + member.size > len(raw):
                         raise ValueError('Truncated archive member')
                     data = archive.extractfile(member).read()
                     if len(data) != member.size:
                         raise ValueError('Truncated archive member')
-                    result.add(name, data)
+                    result.add(name, data, mode=member.mode)
                 elif member.isdir():
                     result.add(name)
                 elif member.issym() and member.linkname:
@@ -297,6 +297,8 @@ class Archive:
                             data.write(stream)
                         else:
                             stream.write(data)
+                        stream.flush()
+                        os.fchmod(stream.fileno(), self.file_modes[name])
                 finally:
                     os.close(fd)
             _publish_directory(stage, 'files', parent, destination.name)

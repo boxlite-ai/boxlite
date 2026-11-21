@@ -80,7 +80,8 @@ If the parent moved during placement, the helper reports that the download was w
 
 A guest source ending in `/.` downloads directory contents. Other paths retain the directory name.
 
-A single-file upload can name a destination file and follows the server's overwrite behavior. Uploads preserve the source owner's execute bit.
+A single-file upload can name a destination file and follows the server's overwrite behavior.
+Uploads and downloads preserve only the owner's read, write and execute bits (`mode & 0700`). Downloads apply these permissions after writing the regular or sparse file.
 
 Guest mount paths such as `/tmp` may not support file transfer. Use a suitable rootfs path such as `/workspace`.
 
