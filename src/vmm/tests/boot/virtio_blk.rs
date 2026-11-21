@@ -14,6 +14,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use imago::{
@@ -38,6 +39,7 @@ use crate::{
         blk::{
             VIRTIO_BLK_S_OK,
             backend::{DiskBackend, Request, RequestKind, SubmitOutcome},
+            control,
             device::VirtioBlk,
             imago::ImagoBackend,
         },
@@ -318,7 +320,7 @@ fn boots_linux_and_drives_virtio_blk_through_the_workers() {
     let observed = Observed::default();
     let backend = ImagoBackend::open(&image.0, DiskFormat::Raw, false).expect("open the image");
     let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(Recording {
-        inner: VirtioBlk::new(Box::new(backend)),
+        inner: VirtioBlk::new(Box::new(backend), control::channel().unwrap().1),
         observed: observed.clone(),
     }));
     let edges = Arc::new(Mutex::new(Vec::new()));
@@ -397,6 +399,7 @@ fn boots_linux_with_a_raw_virtio_disk_through_the_public_api() {
     let log = SerialLog::default();
     let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
     config.disks = vec![DiskConfig {
+        block_id: "container".into(),
         path: image.0.clone(),
         format: DiskFormat::Raw,
         read_only: false,
@@ -430,6 +433,7 @@ fn boots_linux_with_a_qcow2_virtio_disk_over_a_backing_file() {
     let log = SerialLog::default();
     let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
     config.disks = vec![DiskConfig {
+        block_id: "container".into(),
         path: image.0.clone(),
         format: DiskFormat::Qcow2,
         read_only: false,
@@ -480,4 +484,72 @@ fn boots_linux_with_a_qcow2_virtio_disk_over_a_backing_file() {
         &buf[..16]
     );
     eprintln!("blk public API, qcow2: {elapsed:?}");
+}
+
+/// The host grows a qcow2 disk through `VmControl::resize_disk` while the guest
+/// runs; the guest sees the new size in sysfs without a restart.
+#[test]
+#[ignore = "requires Linux x86_64 KVM, VMM_KERNEL and VMM_DISK_GROW_INIT"]
+fn the_guest_sees_a_disk_grown_while_it_runs() {
+    let init = std::fs::read(
+        std::env::var_os("VMM_DISK_GROW_INIT")
+            .expect("use make test:integration:vmm:linux for the guest init"),
+    )
+    .unwrap();
+    let backing = raw_image("grow-backing.raw");
+    let image = qcow2_over(&backing.0, "grow-overlay.qcow2");
+    let initramfs = TempFile::new("grow.cpio", &newc_archive("init", &init));
+    let log = SerialLog::default();
+    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    config.disks = vec![DiskConfig {
+        block_id: "container".into(),
+        path: image.0.clone(),
+        format: DiskFormat::Qcow2,
+        read_only: false,
+    }];
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
+    let control = vm.control();
+    assert_eq!(
+        control
+            .resize_disk("missing", 512, Duration::ZERO)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    let grown_bytes = 2 * IMAGE_SECTORS * 512;
+    let grower = {
+        let log = log.clone();
+        thread::spawn(move || {
+            let deadline = Instant::now() + BOOT_TIMEOUT;
+            while !log.text().contains("GROW_BEFORE") {
+                if Instant::now() > deadline {
+                    return None;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Some(control.resize_disk("container", grown_bytes, Duration::from_secs(5)))
+        })
+    };
+
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+    let grown = grower.join().unwrap();
+    drop(vm);
+
+    let log = log.text();
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} after {elapsed:?}; log:\n{log}"
+    );
+    let grown = grown.expect("the guest never printed its size");
+    assert_eq!(grown.unwrap(), grown_bytes);
+    assert!(
+        log.contains(&format!("GROW_BEFORE {IMAGE_SECTORS}")),
+        "the guest saw another starting size:\n{log}"
+    );
+    assert!(
+        log.contains(&format!("GROW_AFTER {}", 2 * IMAGE_SECTORS)),
+        "the guest did not see the grown size:\n{log}"
+    );
+    assert!(log.contains("GROW_OK"), "{log}");
+    eprintln!("blk online grow: {elapsed:?}");
 }

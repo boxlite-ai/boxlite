@@ -83,7 +83,7 @@ coverage\:vmm\:kvm: _ensure-kvm
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
 # CI runs it only when the vmm path filter matches.
 coverage\:vmm\:boot: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
-coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) vmm\:guest-mount-init
+coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) vmm\:guest-mount-init
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
@@ -103,6 +103,11 @@ coverage\:go: dev\:go
 	(cd apps/secret-server && GOWORK=off go test -race -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
+
+PHONY_TARGETS += coverage\:apps\:secret-server\:integration
+coverage\:apps\:secret-server\:integration:
+	@mkdir -p "$(PROJECT_ROOT)/target/coverage"
+	@cd apps/secret-server && SECRET_TEST_DATABASE_URL="$${SECRET_TEST_DATABASE_URL:-postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite}" GOWORK=off go test -race -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server-integration.out" ./internal/database ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM)$$'
 
 # Native archive import/export does not boot a VM, but the production constructor still
 # requires a supported host. The Linux native-binding job enables KVM first.

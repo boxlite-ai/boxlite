@@ -5,6 +5,7 @@ mod contexts;
 mod credentials;
 mod defaults;
 mod formatter;
+mod mountspec;
 pub mod terminal;
 pub mod util;
 mod volumespec;

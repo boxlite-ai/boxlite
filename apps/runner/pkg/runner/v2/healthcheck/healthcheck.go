@@ -117,6 +117,9 @@ func (s *Service) newHealthcheck(nestedVirtualizationEnabled bool) *apiclient.Ru
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)
 	healthcheck.SetDomain(s.domain)
 	healthcheck.SetSupportsPrivileged(true)
+	// The binary's filestore mount support is compiled in, so it is declared
+	// unconditionally: an API sees it from the first heartbeat after the upgrade.
+	healthcheck.SetCapabilities([]string{"filestore"})
 	healthcheck.SetNestedVirtualizationEnabled(nestedVirtualizationEnabled)
 
 	proxyUrl := fmt.Sprintf("http://%s:%d", s.domain, s.proxyPort)

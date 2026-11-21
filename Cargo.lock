@@ -784,7 +784,10 @@ dependencies = [
  "libc",
  "serde_json",
  "signal-hook",
+ "tempfile",
  "tokio",
+ "tokio-stream",
+ "tonic",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -7084,6 +7087,7 @@ version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b55e753c7725603745cb32b2287ef7ef3da05c03c7702cda3fa8abe25ae0465"
 dependencies = [
+ "arc-swap",
  "libc",
  "thiserror 2.0.18",
  "winapi",

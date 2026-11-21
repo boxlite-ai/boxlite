@@ -232,7 +232,7 @@ impl Default for SecurityOptions {
             env_allowlist: vec!["RUST_LOG".to_string()],
             resource_limits: ResourceLimits {
                 max_open_files: Some(1024),
-                max_file_size: Some(1024 * 1024 * 1024), // 1GB
+                max_file_size: None,
                 // Per-box cgroup `pids.max` — the fork-bomb cap for the box's
                 // host-side process tree (bwrap + shim + libkrun/gvproxy
                 // threads), which sits well under this. Deliberately does NOT

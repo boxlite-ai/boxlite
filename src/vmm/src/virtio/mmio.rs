@@ -41,7 +41,7 @@ use crate::{
     chipset::ChipsetBuilder,
     error::{Error, Result},
     events::{Event, EventSender},
-    memory::GuestMemoryMmap,
+    memory::GuestMemoryView,
 };
 
 /// The MMIO window length a transport claims.
@@ -153,7 +153,7 @@ pub(crate) fn add_device(
             device,
             interrupt,
             MmioResources {
-                memory: Arc::clone(ctx.memory),
+                memory: ctx.memory.clone(),
                 sender: resources.event_sender(),
                 worker,
             },
@@ -209,8 +209,8 @@ type DeviceResult<T> = std::result::Result<T, DeviceError>;
 
 /// The resources a transport shares with its device and the workers.
 pub(crate) struct MmioResources {
-    /// The guest memory the queues address.
-    pub(crate) memory: Arc<GuestMemoryMmap>,
+    /// The guest memory view the queues address.
+    pub(crate) memory: GuestMemoryView,
     /// The run thread's event sender.
     pub(crate) sender: EventSender,
     /// The device's slot in the virtio workers.
@@ -236,7 +236,7 @@ struct QueueConfig {
 pub(crate) struct MmioTransport {
     device: Arc<Mutex<dyn VirtioDevice>>,
     interrupt: Arc<super::interrupt::MmioInterrupt>,
-    memory: Arc<GuestMemoryMmap>,
+    memory: GuestMemoryView,
     sender: EventSender,
     worker: Arc<dyn WorkerControl>,
     spec: DeviceSpec,
@@ -636,13 +636,13 @@ impl MmioTransport {
             self.spec.queue_max,
             event_idx,
             indirect,
-            Arc::clone(&self.memory),
+            self.memory.clone(),
         )
         .map_err(DeviceError::from)?;
 
         let interrupt: Arc<dyn VirtioInterrupt> = self.interrupt.clone();
         let ctx = ActivationContext {
-            memory: Arc::clone(&self.memory),
+            memory: self.memory.clone(),
             queues,
             interrupt,
             events: worker.events,

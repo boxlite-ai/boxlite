@@ -228,7 +228,7 @@ impl Guest {
             device,
             interrupt,
             MmioResources {
-                memory: memory.clone(),
+                memory: memory.clone().into(),
                 sender: events.sender(),
                 worker: worker.clone(),
             },

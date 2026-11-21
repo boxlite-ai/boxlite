@@ -4,11 +4,14 @@
 //! The virtio block device: the [`VirtioDevice`] contract over one request
 //! queue and a [`DiskBackend`].
 
+use std::io;
+
 use super::{
-    DEVICE_ID, QUEUE_MAXIMUM, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_S_OK,
+    DEVICE_ID, QUEUE_MAXIMUM, SECTOR_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
+    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_S_OK,
     backend::{CompletedRequest, DiskBackend, DiskInfo, RequestKind, SubmitOutcome},
     config::BlkConfig,
+    control::{BlockControlRequest, Controls},
     inflight::Inflight,
     request::{self, Decoded, WriteTargets},
 };
@@ -29,6 +32,7 @@ pub(crate) struct VirtioBlk {
     config: BlkConfig,
     disk_info: DiskInfo,
     backend: Box<dyn DiskBackend>,
+    controls: Controls,
     active: Option<ActiveState>,
 }
 
@@ -37,18 +41,21 @@ struct ActiveState {
     ctx: ActivationContext,
     /// The backend's registered source, when it has one.
     source: Option<SourceId>,
+    /// The registered doorbell of [`Controls`].
+    control: SourceId,
     inflight: Inflight,
     /// Scratch for `completions`, kept so no event allocates.
     completed: Vec<CompletedRequest>,
 }
 
 impl VirtioBlk {
-    /// Builds the device over an open backend.
+    /// Builds the device over an open backend; `controls` brings its grow
+    /// requests.
     ///
     /// A synchronous backend runs every request inside `on_event`, so one
     /// kick does at most the queue size times `MAX_REQUEST_BYTES` of I/O on
     /// the shared worker thread before another device runs.
-    pub(crate) fn new(backend: Box<dyn DiskBackend>) -> Self {
+    pub(crate) fn new(backend: Box<dyn DiskBackend>, controls: Controls) -> Self {
         let disk_info = backend.disk_info();
         let mut features = VIRTIO_F_VERSION_1 | VIRTIO_BLK_F_SEG_MAX | VIRTIO_F_INDIRECT_DESC;
         if disk_info.read_only {
@@ -69,8 +76,49 @@ impl VirtioBlk {
             config: BlkConfig::new(&disk_info),
             disk_info,
             backend,
+            controls,
             active: None,
         }
+    }
+
+    /// Applies queued device control requests on the worker thread.
+    fn apply_controls(&mut self) {
+        for request in self.controls.take() {
+            match request {
+                BlockControlRequest::Resize { bytes, reply } => {
+                    let result = self.grow(bytes);
+                    // A caller may have timed out; the admitted operation still completes.
+                    let _ = reply.try_send(result);
+                }
+            }
+        }
+    }
+
+    /// Actual growth updates configuration space before raising the config
+    /// interrupt and advancing its generation. The current size is a no-op.
+    fn grow(&mut self, bytes: u64) -> io::Result<u64> {
+        let current = self.disk_info.capacity_sectors * SECTOR_SIZE;
+        if self.disk_info.read_only {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the disk is read-only",
+            ));
+        }
+        if !bytes.is_multiple_of(SECTOR_SIZE) || bytes < current {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("a disk of {current} bytes grows only to a larger multiple of 512"),
+            ));
+        }
+        if bytes == current {
+            return Ok(current);
+        }
+        self.disk_info = self.backend.resize_grow(bytes)?;
+        self.config = BlkConfig::new(&self.disk_info);
+        if let Some(active) = &self.active {
+            active.ctx.interrupt.raise_config();
+        }
+        Ok(self.disk_info.capacity_sectors * SECTOR_SIZE)
     }
 
     /// Drains the request queue: every chain is parsed and submitted, and a
@@ -83,7 +131,8 @@ impl VirtioBlk {
             .as_mut()
             .ok_or(DeviceError::NeedsReset("block device is not active"))?;
         let ActiveState { ctx, inflight, .. } = active;
-        let memory = ctx.memory.as_ref();
+        let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
+        let memory: &GuestMemoryMmap = &snapshot;
         let notify = ctx.queues.drain(0, |chain| {
             let head = chain.head_index();
             match request::parse(chain, memory, &disk_info, negotiated)? {
@@ -126,7 +175,8 @@ impl VirtioBlk {
             completed,
             ..
         } = active;
-        let memory = ctx.memory.as_ref();
+        let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
+        let memory: &GuestMemoryMmap = &snapshot;
         let mut notify = false;
         loop {
             backend.completions(completed);
@@ -199,9 +249,24 @@ impl VirtioDevice for VirtioBlk {
             })?),
             None => None,
         };
+        let control = self
+            .controls
+            .event_source()
+            .and_then(|bell| ctx.events.register(bell).map_err(io::Error::other));
+        let control = match control {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::warn!(%error, "the block control source was not registered");
+                if let Some(id) = source {
+                    ctx.events.deregister(id);
+                }
+                return Err(DeviceError::NeedsReset("block control source"));
+            }
+        };
         self.active = Some(ActiveState {
             ctx,
             source,
+            control,
             inflight: Inflight::default(),
             completed: Vec::new(),
         });
@@ -214,6 +279,7 @@ impl VirtioDevice for VirtioBlk {
             if let Some(id) = active.source {
                 active.ctx.events.deregister(id);
             }
+            active.ctx.events.deregister(active.control);
             // The worker is stopped, so no completion can arrive, and the
             // guest may reuse the memory a request in flight would write: a
             // backend that still holds one cannot continue. A bounded wait
@@ -231,6 +297,15 @@ impl VirtioDevice for VirtioBlk {
         match event {
             DeviceEvent::QueueKick(0) => self.process_queue(),
             DeviceEvent::QueueKick(_) => Err(DeviceError::Unsupported("block queue index")),
+            DeviceEvent::BackendReady(id)
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.control == id) =>
+            {
+                self.apply_controls();
+                Ok(())
+            }
             DeviceEvent::BackendReady(id) => self.backend_ready(id),
         }
     }

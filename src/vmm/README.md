@@ -8,8 +8,8 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
-are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmControl`, `Error`
+and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
 `Vm::new(config, console)` adds COM1, the CMOS RTC, the i8042 and virtio-balloon; COM1
@@ -27,16 +27,17 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
+| `hotplug` | `HotplugMemory` places a window after boot RAM, plugs 2 MiB blocks and maps 128 MiB slots |
 | `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
+| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory view and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1, the CMOS RTC and the i8042 reset, with `add_legacy_devices` |
 | `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it after the disks, so it never renumbers them |
@@ -113,11 +114,22 @@ MMIO hole leaves a maximum x86 RAM configuration of
 **64 TiB - 1 GiB (67,107,840 MiB)** before truncation.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
-vm-memory and registers it with the host VM. Three rules keep the backend's
+vm-memory and registers it with the host VM. These rules keep the backend's
 `map_memory` contract:
 
-- Host-side users clone the shared `Arc<GuestMemoryMmap>` and access guest
-  memory through vm-memory's volatile API, never through Rust references.
+- Host-side users clone the shared `GuestMemoryView`, vm-memory's
+  `GuestMemoryAtomic` over the region map, and access guest memory through
+  vm-memory's volatile API, never through Rust references.
+- A user loads one snapshot per unit of work and drops it before returning;
+  no device keeps one across events.
+- `VirtQueues::drain` and `complete` load one per call. Block, fs, console and
+  balloon load one per device callback, such as `on_event`, `activate` or
+  `quiesce`.
+- Net loads one per guest buffer read or write. Vsock loads one per TX intake
+  pass and one per RX buffer write.
+- The next event therefore sees a map that gained or lost a region. A
+  descriptor naming a removed region fails translation like any other invalid
+  address. A snapshot still held keeps its regions mapped until it drops.
 - `map` registers logical RAM regions from low to high. KVM slices each region
   into slots of at most `2^31−1` host pages and rolls back installed slices if
   a registration fails. `GuestRam` also rolls back attempted regions, including
@@ -126,6 +138,24 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
 - The backing is released after all registrations are removed or a freshly
   created host VM with exclusive ownership is closed before `run` starts.
   If registrations may still exist, `GuestRam` retains the backing.
+
+A map replaced while a worker event runs reaches the next event, not the
+current one:
+
+```mermaid
+sequenceDiagram
+  participant W as Virtio worker
+  participant V as GuestMemoryView
+  participant H as Map owner
+  W->>V: memory() at event start
+  V-->>W: snapshot S1 (regions A, B)
+  H->>V: replace with S2 (region A only)
+  Note over W: event still reads B through S1
+  W->>W: drop S1 at event end
+  Note over V: B stays mapped until its last reference drops
+  W->>V: memory() at next event start
+  V-->>W: snapshot S2: a descriptor into B fails translation
+```
 
 `Vm::new` validates the configuration, then opens and checks the KVM system fd
 and reads supported CPUID once. It preflights the RAM addresses and boot leaf
@@ -141,6 +171,39 @@ The `memory` and `vm` tests and the mock backend live in `tests/` and are includ
 as unit-test modules, which
 keeps them outside the counted sources and the coverage denominator; `config`
 and `error` keep inline test modules.
+
+`GuestRam` registers and releases only the boot regions it allocated. The
+shared view can gain hotplug regions, so `GuestRam` keeps its own boot map
+instead of reading registrations back from the view.
+
+## Hotplug memory
+
+`HotplugMemory` owns the window that grows and shrinks guest RAM at runtime.
+Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
+
+- The window starts at or above 4 GiB after all boot RAM. The base is rounded
+  up to the bundled Linux guest's memory block size, and capacity must be a
+  positive multiple of that size. A guest with 6 GiB of boot RAM and 1 GiB of
+  hotplug capacity has a window at `[7 GiB, 8 GiB)`.
+- The planner checks the end against KVM's GPA limit and Linux's pluggable
+  address limit. It checks capacity against KVM's slot budget after boot RAM.
+  E820 and the startup identity map describe the backed boot ranges.
+- The guest plugs 2 MiB blocks. A 128 MiB slot gets its own private anonymous
+  mapping and KVM registration when its first block is plugged.
+- Unplugging the last block of a slot removes its KVM registration, publishes
+  a view without it, then drops the mapping. A held snapshot keeps the mapping
+  alive until it drops, as the [Guest RAM](#guest-ram) diagram shows.
+- Publishing a removal cannot fail: a poisoned view lock is still used, and a
+  region already missing from the view counts as removed.
+- Unplugging blocks discards them with `MADV_DONTNEED` while other blocks in
+  that slot remain plugged. An emptied slot retained after a failed unmap
+  retains its contents.
+- A failed slot map unregisters the slots that plug added and leaves every
+  block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
+  leaks a slot whose unmap fails.
+
+The virtio-mem device and host control handle that drive it arrive next; the
+`hotplug` tests use the recording backend.
 
 ## Kernel loading
 
@@ -758,7 +821,7 @@ took, and then announces that slot on the kernel command line.
   command line from guest RAM and checks consecutive MMIO windows, GSIs that
   skip 8, disk capacities in configuration order, balloon/fs device IDs and
   the real CMOS ports on a mock host VM; it does not boot a Linux guest.
-- **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
+- **Configuration.** `DiskConfig { block_id, path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
   backing chain its header names. At most 8 disks; `blk::add_disk` fails with
   `Error::OpenDisk` for an image it cannot open and `add_all` fails with
@@ -772,7 +835,8 @@ took, and then announces that slot on the kernel command line.
   at most 128 MiB, and a read past the end returns zeros, while writes are
   refused.
 - **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
-  engine implements: `disk_info` once after open; `event_source` at every
+  engine implements: `disk_info` once after open; `resize_grow` to a larger
+  aligned size between requests, returning the new information; `event_source` at every
   activation, registered with the worker generation when it is `Some`;
   `submit(token, Request)` per parsed chain, answering `Done(CompletedRequest)`
   inline or `Pending`; `completions` on each `BackendReady` edge, drained
@@ -798,8 +862,26 @@ took, and then announces that slot on the kernel command line.
   and at most 128 MiB, so a conforming guest splits a larger range; imago
   zeroes what the format cannot discard, and a qcow2 image frees the
   clusters without punching the host file.
+- **Disk identity.** `block_id` is a nonempty host control ID, unique within
+  the VM. The native adapter preserves the ID assigned by BoxLite. IDs do not
+  affect attachment order or Linux device names. Invalid IDs fail VM creation
+  before host resources or images are opened.
+- **Online grow.** `vm.control().resize_disk("data", 2 << 30, timeout)`
+  grows the writable disk with `block_id: "data"` to 2 GiB. Targets must be
+  sector-aligned and at least the current capacity. A same-size request is a no-op.
+
+  After growth succeeds, the device worker updates guest capacity and raises a
+  configuration interrupt. A timeout ends the wait and the request can still complete.
+
+  On Linux, preflight rejects a Raw target or qcow2 estimate above the shim's
+  `RLIMIT_FSIZE` soft limit. The temporary qcow2 estimate adds 1 MiB per
+  started GiB of target capacity.
+
+  Fresh standalone samples from QEMU 8.2.2 (`preallocation=metadata`,
+  64 KiB clusters, 16-bit refcounts) added 384 KiB to file length at 1 GiB
+  and 10.25 MiB at 64 GiB. Existing image layouts can require more space.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
-  backend source, fails the device with `Fatal` if a request is still in
+  backend and control sources, fails the device with `Fatal` if a request is still in
   flight (no completion can arrive any more, and the guest may already
   reuse that memory), flushes, and forgets the activation. The imago
   backend finishes every request inline, so its table is always empty; a

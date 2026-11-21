@@ -153,6 +153,23 @@ export class Runner {
   @Column({ default: false })
   nestedVirtualizationEnabled: boolean
 
+  /**
+   * Capabilities the runner binary declared in its latest healthcheck, e.g.
+   * `['filestore']`. This exists primarily for backward compatibility during
+   * rolling upgrades: null when the binary predates capability reporting, and
+   * dispatch then treats the runner as supporting nothing beyond the base
+   * protocol, so a pre-filestore v2 runner cannot be handed a filestore
+   * volume by mistake. Kept as a jsonb array rather than per-capability
+   * boolean columns so new capabilities can be added without a schema
+   * migration.
+   */
+  @Column({
+    type: 'jsonb',
+    nullable: true,
+    default: null,
+  })
+  capabilities: string[] | null
+
   @Column({
     nullable: true,
     type: 'timestamp with time zone',

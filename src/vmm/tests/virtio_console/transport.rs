@@ -108,7 +108,7 @@ fn the_transport_discovers_tx_only_console_and_resets_it() {
         Arc::clone(&device),
         Arc::clone(&interrupt),
         MmioResources {
-            memory: Arc::clone(&memory),
+            memory: Arc::clone(&memory).into(),
             sender: events.sender(),
             worker: Arc::clone(&worker) as Arc<dyn WorkerControl>,
         },

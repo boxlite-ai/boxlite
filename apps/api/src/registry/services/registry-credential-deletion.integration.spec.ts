@@ -17,6 +17,7 @@ import { BoxMigration } from '../../box/entities/box-migration.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { BoxService } from '../../box/services/box.service'
+import { SecretServerClient } from '../../box/services/secret-server-client'
 import { Context } from '../../common/context/context'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../../image/entities/image.entity'
@@ -137,6 +138,7 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     runner = { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: randomUUID() }) }
     createService = Object.create(BoxService.prototype) as BoxService
     Object.assign(createService, {
+      secretServerClient: new SecretServerClient({ get: () => false } as any),
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'us' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
       organizationService: {

@@ -4,6 +4,7 @@
  */
 
 import { BoxService } from './box.service'
+import { SecretServerClient } from './secret-server-client'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
@@ -39,6 +40,7 @@ function makeService() {
 function makeCreateService() {
   const service = Object.create(BoxService.prototype) as BoxService
   Object.assign(service as any, {
+    secretServerClient: new SecretServerClient({ get: () => false } as any),
     getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
     getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
     organizationService: {

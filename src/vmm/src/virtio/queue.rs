@@ -9,9 +9,11 @@
 //! including unready ones; a device checks [`VirtQueues::is_ready`] for the
 //! queues it needs.
 //!
-//! `prepare` also stores the guest-memory `Arc` and the negotiated
+//! `prepare` also stores the guest-memory view and the negotiated
 //! `VIRTIO_F_INDIRECT_DESC` flag, so [`VirtQueues::drain`] and
-//! [`VirtQueues::complete`] do not take them on every call.
+//! [`VirtQueues::complete`] do not take them on every call. Each of those
+//! calls loads the current memory snapshot once and drops it before
+//! returning.
 //!
 //! A device completes a chain inline with [`Completion::Used`] or takes it with
 //! [`Completion::Deferred`]: a deferred chain has already left the available
@@ -23,15 +25,15 @@
 //! [`VirtQueues::restore`] keep their signatures but return
 //! [`SnapshotError::Unsupported`].
 
-use std::{fmt, mem::size_of, sync::Arc};
+use std::{fmt, mem::size_of};
 
 use virtio_queue::{
     DescriptorChain, Queue, QueueOwnedT, QueueState, QueueT, desc::split::Descriptor,
 };
-use vm_memory::{Address, Bytes, GuestAddress};
+use vm_memory::{Address, Bytes, GuestAddress, GuestAddressSpace};
 
 use super::{DeviceError, SnapshotError};
-use crate::memory::GuestMemoryMmap;
+use crate::memory::{GuestMemoryMmap, GuestMemoryView};
 
 /// `VIRTIO_F_INDIRECT_DESC`: the driver may point a chain at an indirect table.
 pub(crate) const VIRTIO_F_INDIRECT_DESC: u64 = 1 << 28;
@@ -117,7 +119,7 @@ pub(crate) enum Completion {
 pub(crate) struct VirtQueues {
     queues: Vec<Queue>,
     deferred: Vec<Vec<u16>>,
-    memory: Arc<GuestMemoryMmap>,
+    memory: GuestMemoryView,
     indirect: bool,
 }
 
@@ -129,14 +131,14 @@ impl VirtQueues {
     /// check; the device decides whether it needs them. A ready queue must have
     /// a valid size, a non-zero available ring, and rings inside `memory`.
     ///
-    /// The facade stores `memory` and `indirect` for later calls; the Arc is
+    /// The facade stores `memory` and `indirect` for later calls; the view is
     /// shared with the activation context, so guest RAM is not copied.
     pub(crate) fn prepare(
         mut queues: Vec<Queue>,
         queue_max: &[u16],
         event_idx: bool,
         indirect: bool,
-        memory: Arc<GuestMemoryMmap>,
+        memory: GuestMemoryView,
     ) -> Result<Self, QueueError> {
         if queues.len() != queue_max.len() {
             return Err(QueueError::Count {
@@ -160,7 +162,7 @@ impl VirtQueues {
                 if queue.avail_ring() == 0 {
                     return Err(QueueError::Invalid);
                 }
-                if !queue.is_valid(memory.as_ref()) {
+                if !queue.is_valid(&*memory.memory()) {
                     return Err(QueueError::Memory);
                 }
             }
@@ -187,7 +189,7 @@ impl VirtQueues {
         _queue_max: &[u16],
         _event_idx: bool,
         _indirect: bool,
-        _memory: Arc<GuestMemoryMmap>,
+        _memory: GuestMemoryView,
     ) -> Result<Self, SnapshotError> {
         Err(SnapshotError::Unsupported)
     }
@@ -258,7 +260,8 @@ impl VirtQueues {
             memory,
             indirect,
         } = self;
-        let memory = memory.as_ref();
+        let snapshot = memory.memory();
+        let memory: &GuestMemoryMmap = &snapshot;
         let queue = queues
             .get_mut(index)
             .ok_or(DeviceError::NeedsReset("virtio queue"))?;
@@ -318,7 +321,8 @@ impl VirtQueues {
             memory,
             ..
         } = self;
-        let memory = memory.as_ref();
+        let snapshot = memory.memory();
+        let memory: &GuestMemoryMmap = &snapshot;
         let queue = queues
             .get_mut(index)
             .ok_or(DeviceError::NeedsReset("virtio queue"))?;

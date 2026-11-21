@@ -40,7 +40,7 @@ use crate::{
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
     chipset: &mut ChipsetBuilder,
-    ctx: DeviceContext<'_>,
+    mut ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
 ) -> Result<()> {
@@ -50,7 +50,7 @@ pub(crate) fn add_all(
     let mut used = Vec::new();
     for (index, disk) in config.disks.iter().enumerate() {
         add_slot_device(&mut slots, &mut used, |slot| {
-            blk::add_disk(chipset, &ctx, disk, index, slot)
+            blk::add_disk(chipset, &mut ctx, disk, index, slot)
         })?;
     }
     // The balloon follows the disks so it never renumbers them: the guest
