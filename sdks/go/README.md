@@ -475,6 +475,20 @@ the box keeps running in the runtime.
 
 ## Development
 
+Agent calls and getters reach the C SDK and Rust core through the
+[shared JSON mapping](../../docs/reference/agents.md#go-json-mapping).
+`Box.Agents()` acquires its namespace lazily. Agent and turn wrappers must not be
+copied after first use; `Runtime.Close` releases their native handles.
+Canceling a call stops the Go wait without canceling submitted agent work;
+late returned handles are released. `Agent.Close` invokes the core operation
+rather than freeing the local handle. Both event methods return `Unsupported`.
+
+The Go unit and coverage targets enable C `test-support` and the
+`boxlite_agent_test` Go tag. Deterministic tests cross the C/core boundary without
+requiring a VM; normal SDK builds exclude these test entry points.
+Run `make test:unit:go FILTER=Agent` and add `RACE=1` for race checks.
+
+
 Build from source (requires Rust toolchain):
 
 ```bash

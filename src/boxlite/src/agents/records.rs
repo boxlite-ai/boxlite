@@ -105,7 +105,13 @@ pub fn capabilities(capabilities: &AgentCapabilities) -> Value {
         "max_queued_turns": capabilities.max_queued_turns,
         "max_pending_steering": capabilities.max_pending_steering,
         "idempotency_retention_seconds":
-            capabilities.idempotency_retention.map(|retention| retention.as_secs_f64()),
+            capabilities.idempotency_retention.map(|retention| {
+                // Keep nanoseconds exact even beyond f64's integer precision.
+                let seconds = format!("{}.{:09}", retention.as_secs(), retention.subsec_nanos());
+                seconds.trim_end_matches('0').trim_end_matches('.')
+                    .parse::<serde_json::Number>()
+                    .expect("integer seconds and nanoseconds form a valid JSON number")
+            }),
     })
 }
 

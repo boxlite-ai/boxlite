@@ -1,9 +1,82 @@
 use super::*;
 use serde_json::json;
 
+const NUMERIC_DATA: &str = r#"[9007199254740992,9007199254740993,-9223372036854775808,9223372036854775807,18446744073709551615,0.123456789012345678901,0.123456789012345678902]"#;
+
+#[test]
+fn opaque_agent_numbers_round_trip() {
+    let config = records::parse_config(
+        serde_json::from_str(&format!(r#"{{"limits":{NUMERIC_DATA}}}"#)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(records::config(&config)["limits"].to_string(), NUMERIC_DATA);
+    let response = records::parse_response(
+        serde_json::from_str(&format!(
+            r#"{{"type":"answer","text":"yes","data":{NUMERIC_DATA}}}"#
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let AgentResponse::Answer {
+        data: Some(data), ..
+    } = response
+    else {
+        panic!("expected answer data")
+    };
+    assert_eq!(data.to_string(), NUMERIC_DATA);
+}
+
+#[test]
+fn capabilities_retention_preserves_nanoseconds() {
+    for (duration, expected) in [
+        (
+            Duration::from_nanos(i64::MAX as u64),
+            "9223372036.854775807",
+        ),
+        (Duration::ZERO, "0"),
+        (Duration::from_nanos(1), "0.000000001"),
+        (Duration::from_millis(1500), "1.5"),
+        (
+            Duration::from_nanos(9_007_199_254_740_991),
+            "9007199.254740991",
+        ),
+        (
+            Duration::from_nanos(9_007_199_254_740_992),
+            "9007199.254740992",
+        ),
+        (
+            Duration::from_nanos(9_007_199_254_740_993),
+            "9007199.254740993",
+        ),
+        (
+            Duration::from_nanos(i64::MAX as u64 - 1),
+            "9223372036.854775806",
+        ),
+        (
+            Duration::from_nanos(i64::MAX as u64 + 1),
+            "9223372036.854775808",
+        ),
+        (Duration::MAX, "18446744073709551615.999999999"),
+    ] {
+        let capabilities = AgentCapabilities {
+            operations: vec![],
+            input_kinds: vec![],
+            max_queued_turns: None,
+            max_pending_steering: None,
+            idempotency_retention: Some(duration),
+        };
+        assert_eq!(
+            records::capabilities(&capabilities)["idempotency_retention_seconds"].to_string(),
+            expected,
+            "duration {duration:?} must retain its nanoseconds in the JSON number"
+        );
+    }
+}
+
 #[test]
 fn go_json_fixture_matches_core_records() {
-    let data = json!({"enabled": false, "count": 0, "items": [], "nested": {"value": null}});
+    let numeric_data: serde_json::Value = serde_json::from_str(NUMERIC_DATA).unwrap();
+    let data = json!({"enabled": false, "count": 0, "items": [], "nested": {"value": null}, "numbers": numeric_data});
     let requests = vec![
         AgentRequest {
             id: "question-1".into(),
@@ -107,6 +180,18 @@ fn go_json_fixture_matches_core_records() {
         max_pending_steering: None,
         idempotency_retention: None,
     };
+    let max_capabilities = AgentCapabilities {
+        idempotency_retention: Some(Duration::from_nanos(i64::MAX as u64)),
+        ..capabilities.clone()
+    };
+    let overflow_capabilities = AgentCapabilities {
+        idempotency_retention: Some(Duration::from_nanos(i64::MAX as u64 + 1)),
+        ..capabilities.clone()
+    };
+    let numeric_config = records::parse_config(json!({
+        "limits": numeric_data, "permissions": numeric_data, "output_schema": numeric_data,
+    }))
+    .unwrap();
     let event = AgentEvent {
         cursor: None,
         agent_id: "agent-1".into(),
@@ -142,6 +227,9 @@ fn go_json_fixture_matches_core_records() {
         AgentResponse::Permission { approved: true }
     ));
     let fixture = json!({
+        "numeric_data": numeric_data, "numeric_config": records::config(&numeric_config),
+        "capabilities_max": records::capabilities(&max_capabilities),
+        "capabilities_overflow": records::capabilities(&overflow_capabilities),
         "config": records::config(&config), "config_default": records::config(&AgentConfig::default()),
         "capabilities": records::capabilities(&capabilities), "capabilities_unknown": records::capabilities(&unknown_capabilities),
         "state": records::agent_state(&state), "state_empty": records::agent_state(&empty_state),

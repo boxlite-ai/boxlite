@@ -10,7 +10,7 @@ pub(super) struct TestBackend {
 }
 
 impl TestBackend {
-    fn complete(&self, text: &str) -> AgentTurnState {
+    fn complete(&self, text: &str, data: Option<serde_json::Value>) -> AgentTurnState {
         let state = AgentTurnState {
             id: "turn-1".into(),
             agent_id: "agent-1".into(),
@@ -21,7 +21,7 @@ impl TestBackend {
                 status: AgentTurnStatus::Completed,
                 outcome: Some(AgentOutcome::Answer),
                 text: Some(text.into()),
-                data: None,
+                data,
                 artifacts: vec![],
                 usage: None,
                 error: None,
@@ -65,8 +65,8 @@ impl AgentBackend for TestBackend {
             steering: vec![],
         })
     }
-    async fn send(&self, text: &str, _: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
-        Ok(self.complete(text))
+    async fn send(&self, text: &str, options: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
+        Ok(self.complete(text, options.data.clone()))
     }
     async fn turn(&self, id: &str) -> BoxliteResult<AgentTurnState> {
         self.turn
@@ -93,7 +93,7 @@ impl AgentBackend for TestBackend {
         _: &AgentControlOptions,
     ) -> BoxliteResult<AgentTurnState> {
         match (id, response) {
-            ("request-1", AgentResponse::Answer { text, .. }) => Ok(self.complete(&text)),
+            ("request-1", AgentResponse::Answer { text, data }) => Ok(self.complete(&text, data)),
             _ => Err(BoxliteError::InvalidArgument(
                 "expected answer to request-1".into(),
             )),
