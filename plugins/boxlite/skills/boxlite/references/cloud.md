@@ -28,71 +28,50 @@ For incomplete output, retain the execution ID and inspect `getExecution`; never
 
 ## Files
 
-Use the packaged `scripts/transfer.py` helper for cloud files.
-It prepares archive arguments and hands them to the installed host, which sends the existing `uploadFiles` and `downloadFiles` calls.
-The helper never reads tokens or sends HTTP/MCP requests to BoxLite; do not copy, rewrite or split base64 in a conversation.
+Use Python 3.9+ on the host and the exact configured MCP connection name and Box ID.
+Supply absolute paths on both ends. Keep archive bytes inside the transfer tools.
 
-```text
-model selects files and paths -> helper packs bytes -> host client calls existing MCP tool
-host returns raw tool result -> helper decodes files -> model receives short receipt
-```
+### Claude Code
 
-The host needs Python 3.9+, shell/filesystem access, and an already configured and authorized MCP connection.
-Resolve `SKILL_DIR` to this installed skill and use the exact Box ID from the selected cloud connection.
-Select the host and connection explicitly; failures never switch credentials or fall back to REST or BoxLite CLI.
+Use the BoxLite marketplace plugin's tools from the current session. For example:
 
-| Host | Data handoff | Requirement and cost |
-| --- | --- | --- |
-| `codex` | Local app-server `mcpServer/tool/call` | Installed Codex with this method; no additional model request |
-| `claude` | Blocking execution hook with `updatedInput` and raw `structuredContent` event | Claude Code with blocking `PreToolUse` callback support; one additional model request per operation |
+| Tool | Arguments |
+| --- | --- |
+| `mcp__boxlite__upload` | `{"connection":"boxlite-api","box_id":"BOX_ID","local_source":"/home/user/report.csv","remote_destination":"/workspace/report.csv"}` |
+| `mcp__boxlite__download` | `{"connection":"boxlite-api","box_id":"BOX_ID","remote_source":"/workspace/report.csv","local_destination":"/home/user/new-download"}` |
 
-Use the actual configured server name, not a tool namespace guessed from its display label:
+Claude applies its current permission mode and rules to the requested operation, connection, Box and paths.
+Configure tool rules on these two transfer tools. An authorized directory transfer covers its contents.
+
+After authorization, the plugin runs Python for local archive I/O and calls the selected connection's `uploadFiles` or `downloadFiles` directly.
+Claude receives a short receipt. Claude Code can retain large downloads in its private session storage.
+
+The worker accepts a saved result only when it can identify a single matching download on this connection in the current session during the call. If the transfer tools or selected connection are unavailable, report that to the user.
+
+### Codex
+
+Use the packaged helper with the selected server in the Codex app-server configuration.
+Resolve `SKILL_DIR` to this installed skill.
 
 ```sh
 python3 SKILL_DIR/scripts/transfer.py --host codex --server SELECTED_SERVER upload --box BOX_ID --source /absolute/reviewed-source --destination /workspace/new-release
 python3 SKILL_DIR/scripts/transfer.py --host codex --server SELECTED_SERVER download --box BOX_ID --source /workspace/new-release/. --destination /absolute/new-download
-python3 SKILL_DIR/scripts/transfer.py --host claude --server SELECTED_SERVER upload --box BOX_ID --source /absolute/reviewed-source --destination /workspace/new-release
-python3 SKILL_DIR/scripts/transfer.py --host claude --server SELECTED_SERVER download --box BOX_ID --source /workspace/new-release/. --destination /absolute/new-download
 ```
 
-Each adapter starts a dedicated host process. A connection supplied only through flags on another process must be supplied to the helper too.
+### Transfer results
 
-Claude starts in a private empty directory and uses user and managed configuration. Select a connection from those scopes or pass a trusted `--mcp-config /absolute/private-config.json` or `--plugin-dir /absolute/plugin`.
+A successful transfer returns a receipt with `status: completed`. The Codex command also exits with code zero.
 
-Project-scoped connections require an explicit trusted configuration. A project `.mcp.json` triggers this requirement before Claude starts, and only Claude reads the explicitly selected files.
-
-Claude's single model turn proposes the selected tool and a placeholder, never archive bytes.
-The helper sends the prompt only after Claude confirms the execution hook was registered and blocks on failure.
-The hook checks the exact tool, connection, Box, path and input, then supplies the program-generated arguments for that call once.
-
-Claude still applies host deny and ask rules. If it requests a permission decision, the helper stops so the transfer can be handled in a session that asks the user.
-
-Downloads use Claude's raw structured result or its complete saved JSON when large results omit that field.
-Saved results must belong to the actual child session under Claude's projects directory; arbitrary paths and symlinks are refused.
-Claude downloads create a normal private session, so host transcripts/result files can retain copies of transferred data.
-
-The helper stops the child after the matching result, and a one-turn limit prevents a follow-up model request containing the payload.
-The hook is scoped to the dedicated child session. Claude owns the token store, login and refresh.
-
-Claude also needs its own model login available to the child process; the parent session alone does not guarantee that.
-A token supplied only to the parent can be absent from its Bash subprocess, even when the BoxLite MCP connection succeeds.
-Use an already configured host login or the user-approved shell environment; never extract tokens or change authentication in the helper.
-
-If the selected host cannot load the authorized connection or expose these control interfaces, report the limitation and stop.
-OAuth and API-key configuration remain host responsibilities; an API-key test does not establish OAuth acceptance.
-Tested control interfaces are Codex 0.170.0 and Claude Code 2.1.328; revalidate after host upgrades.
-
-Success is exit code zero with `status: completed`; this reports the MCP operation and local extraction, not an independent content-integrity check.
 Upload requires the existing server's `HTTP 204` acknowledgment; an empty or unexpected tool result leaves completion unknown.
 It makes one file-tool call and does not download files again or compute a checksum.
 
 The helper never retries, changes credentials or leaves a transfer-ticket cache; after a failure, inspect possible destination effects before a new attempt.
 
-The helper archive limit is 8 MiB including tar headers and padding; client response-size limits can be lower.
-Use reviewed regular files/directories; source links, sensitive/cache paths and unsafe archive members are refused.
-Upload paths must fit USTAR, including its 100-byte filename field and 155-byte directory-prefix field.
+Uploads include the selected directory’s contents, including hidden files. Symbolic links travel as links, preserving their target text.
 
-Downloads require a new local directory with existing, non-symlink parents and a filesystem that supports atomic directory placement.
+Both hosts handle archives in memory, so available memory and the selected MCP connection determine the transferable size.
+
+Downloads require a new local directory, an existing parent and a filesystem that supports atomic directory placement.
 The helper writes with private permissions and places the directory at the requested path only after the full archive has been written.
 
 If the parent moved during placement, the helper reports that the download was written and the requested path changed.

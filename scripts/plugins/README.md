@@ -134,7 +134,7 @@ make plugin:boxlite:smoke:cloud
 
 This bounded test client is for maintenance.
 
-The plugin file helper supplies arguments to Codex app-server or a blocking execution hook in the Claude child process. The host calls existing `uploadFiles` and `downloadFiles`.
+The Codex helper and the current Claude session’s BoxLite tools supply the transfer arguments. The host calls existing `uploadFiles` and `downloadFiles`.
 
 The helper handles archive base64 inside the program and prints completion metadata. It adds no checksum or upload readback.
 
@@ -192,12 +192,11 @@ References: [OpenAI submission](https://developers.openai.com/plugins/deploy/sub
 
 No BoxLite API or MCP server deployment is required; the helper uses existing file tools.
 Codex requires an installed app-server exposing `mcpServer/tool/call` and the selected server in its loaded configuration.
-Claude requires its permission control channel and raw structured tool events; each operation adds one model request.
 
-Both adapters start dedicated host processes using existing configuration; neither reads credentials or implements MCP transport.
-No live interactive socket is reused and no credential fallback occurs.
+Claude Code requires plugin tool registration and a post-permission `tool.run` handler. The handler calls the selected MCP connection directly after the session authorizes the transfer.
 
-Build the single distributable with `make plugin:boxlite:dist`. The Claude execution hook is registered in the child process for a single transfer.
+Build the artifacts with `make plugin:boxlite:dist`. The marketplace includes the Claude module and its Python worker. The standalone submission ZIP contains the Codex helper.
+
 Keep marketplace eligibility, deployed OAuth acceptance and API-key acceptance separate in release evidence.
 
-References: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Claude SDK hooks](https://code.claude.com/docs/en/agent-sdk/hooks), [programmatic MCP data handling](https://www.anthropic.com/research/code-execution-with-mcp).
+References: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Claude Code mods](https://code.claude.com/docs/en/plugins/mods), [programmatic MCP data handling](https://www.anthropic.com/research/code-execution-with-mcp).

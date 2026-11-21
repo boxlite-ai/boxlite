@@ -13,7 +13,8 @@ PLUGIN = REPO / 'plugins/boxlite'
 CACHE = {'node_modules', '.venv', '__pycache__', 'dist', 'public'}
 PRIVATE = {'deployment.json', 'credentials.toml', 'secrets.json', 'supervisor.conf', 'data'}
 MCP_URL = 'https://api.boxlite.ai/mcp'
-INVENTORY = {
+CLAUDE_FILES = {'hooks/hooks.json', 'hooks/transfer.js', 'skills/boxlite/scripts/archive_worker.py'}
+INVENTORY = CLAUDE_FILES | {
     'plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json',
     'skills/boxlite/scripts/transfer.py', 'skills/boxlite/scripts/transfer_archive.py',
     'skills/boxlite/scripts/transfer_hosts.py',
@@ -123,7 +124,7 @@ def validate(root=PLUGIN):
     for path in files:
         if path.suffix == '.py':
             compile(path.read_text(), str(path), 'exec')
-        if path.suffix in {'.json', '.md', '.py', '.yaml'} and re.search(r'\bblk_[A-Za-z0-9_-]{16,}', path.read_text()):
+        if path.suffix in {'.js', '.json', '.md', '.py', '.yaml'} and re.search(r'\bblk_[A-Za-z0-9_-]{16,}', path.read_text()):
             raise ValueError('Credential material is not distributable')
     if {path.relative_to(root).as_posix() for path in files} != INVENTORY:
         raise ValueError('Package inventory differs: missing or undeclared files')
@@ -147,7 +148,7 @@ def build(output, root=PLUGIN):
     output.mkdir(parents=True, exist_ok=True)
     version = load_manifest(root, 'plugin.json')['version']
     archive = output / f'boxlite-{version}.zip'
-    write_zip(archive, root, files)
+    write_zip(archive, root, [path for path in files if path.relative_to(root).as_posix() not in CLAUDE_FILES])
     marketplace = output / 'boxlite-marketplace'
     if marketplace.exists():
         shutil.rmtree(marketplace)

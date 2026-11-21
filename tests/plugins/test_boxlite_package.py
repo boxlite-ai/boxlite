@@ -36,6 +36,7 @@ class PackageTests(unittest.TestCase):
         output = Path(self.temp.name) / 'output'
         archive = package.build(output, self.root)
         with zipfile.ZipFile(archive) as zipped:
+            self.assertTrue(package.CLAUDE_FILES.isdisjoint(zipped.namelist()))
             self.assertIn('plugin.json', zipped.namelist())
             self.assertIn('skills/boxlite/SKILL.md', zipped.namelist())
             self.assertIn('.claude-plugin/plugin.json', zipped.namelist())

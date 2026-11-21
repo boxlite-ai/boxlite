@@ -4,7 +4,7 @@
 
 Upload `boxlite-0.2.0.zip` to OpenAI's plugin portal; do not upload this review-kit ZIP as the plugin.
 Extract `boxlite-marketplace-0.2.0.zip` for native Codex and Claude Code installation using its absolute directory.
-The marketplace includes both host catalogs and the identical plugin payload, with no external relative-path dependency.
+The marketplace includes both host catalogs and the shared plugin directory, with no external relative-path dependency.
 
 For Claude's public directory, provide the public repository, release commit/tag, and `plugins/boxlite` folder.
 Submit a companion connector for `https://api.boxlite.ai/mcp` under the same organization.
@@ -48,10 +48,11 @@ OAuth public-tunnel denial is expected and must not be replaced by an API-key ca
 ## File transfer prerequisites
 
 Discover `uploadFiles` and `downloadFiles` on the existing service; do not require new preparation tools or a server deployment.
-Use the packaged helper with an explicit Codex or Claude connection; archive base64 must remain inside the program and host control channel.
+Use the Codex helper or the current Claude session’s transfer tools. Check that the receipt contains only completion metadata.
+
 The host needs Python 3.9+, shell/filesystem access and access to the selected endpoint.
 
-Claude also needs a child-process model login; a parent-only environment token may not reach tool subprocesses.
+For Claude, verify the selected session exposes both BoxLite transfer tools.
 
 Check completion and expected file placement, using binary data, a filename with spaces/non-ASCII characters and an empty directory.
 Do not pre-create the download directory; the helper creates it.
@@ -59,8 +60,8 @@ Do not add a mandatory checksum or upload readback to the product workflow.
 
 A fixture run establishes only the boundaries it actually exercised; record deployed-server and native OAuth results separately.
 
-Both adapters reload existing host configuration and leave credential handling to that host.
-Claude adds one model request and supplies bytes through a blocking execution hook in the child session.
+Codex loads its host configuration. Claude authorizes the operation with its two paths before local archive I/O, then sends the file-tool call over the selected connection.
+
 API-key acceptance is not OAuth acceptance; verify the selected host's OAuth connection separately.
 
 ## Demo recording

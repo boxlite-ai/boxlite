@@ -8,14 +8,18 @@ import os
 from pathlib import Path
 import sys
 
-from transfer_archive import Archive, MAX_BYTES
-from transfer_hosts import CodexHost, ClaudeHost, TransferError
+from transfer_archive import Archive
+from transfer_hosts import CodexHost, TransferError
+
+
+def pack_source(source):
+    archive = Archive.snapshot(source).encode()
+    return base64.b64encode(archive).decode('ascii')
 
 
 def upload(client, box, source, destination):
-    archive = Archive.snapshot(source).encode()
     result = client.call('uploadFiles', {'box_id': box, 'path': destination,
-                                        'body_base64': base64.b64encode(archive).decode('ascii')})
+                                        'body_base64': pack_source(source)})
     content = result.get('content')
     # The existing server represents a successful, empty REST upload response as HTTP 204.
     if (not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], dict)
@@ -40,37 +44,30 @@ def download(client, box, source, destination):
             raise TransferError('MCP download returned malformed archive metadata') from None
     if not isinstance(value, dict) or not isinstance(value.get('base64'), str):
         raise TransferError('MCP download is missing archive bytes')
-    encoded = value['base64']
-    if len(encoded) > 4 * ((MAX_BYTES + 2) // 3):
-        raise TransferError('MCP archive exceeds 8 MiB')
+    save_archive(value['base64'], destination)
+    return {'operation': 'download', 'status': 'completed', 'box_id': box,
+            'destination': str(Path(destination).absolute())}
+
+
+def save_archive(encoded, destination):
     try:
         raw = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError):
         raise TransferError('MCP download returned invalid base64') from None
     Archive.decode(raw).save(destination)
-    return {'operation': 'download', 'status': 'completed', 'box_id': box,
-            'destination': str(Path(destination).absolute())}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', choices=('codex', 'claude'), required=True)
+    parser.add_argument('--host', choices=('codex',), required=True)
     parser.add_argument('--server', required=True, help='Existing selected host MCP connection name')
-    parser.add_argument('--mcp-config', help='Existing Claude MCP config path; passed to Claude without reading it')
-    parser.add_argument('--plugin-dir', help='Claude plugin directory, when not installed persistently')
     parser.add_argument('operation', choices=('upload', 'download'))
     parser.add_argument('--box', required=True)
     parser.add_argument('--source', required=True)
     parser.add_argument('--destination', required=True)
     args = parser.parse_args()
     try:
-        if args.host == 'codex':
-            if args.mcp_config or args.plugin_dir:
-                raise TransferError('Claude configuration options cannot be used with Codex')
-            client = CodexHost(args.server)
-        else:
-            client = ClaudeHost(args.server, mcp_config=args.mcp_config, plugin_dir=args.plugin_dir)
-        with client:
+        with CodexHost(args.server) as client:
             operation = upload if args.operation == 'upload' else download
             result = operation(client, args.box, args.source, args.destination)
         print(json.dumps(result, separators=(',', ':')))

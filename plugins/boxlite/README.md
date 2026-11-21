@@ -35,8 +35,8 @@ An explicit request such as **Run hello locally with BoxLite** selects Local dir
 ## Use
 
 [Setup](skills/boxlite-setup/SKILL.md) verifies your chosen connection, then [operations](skills/boxlite/SKILL.md) resumes your original task.
-Cloud work uses discovered MCP tools; the packaged file helper calls `uploadFiles` and `downloadFiles` with base64 handled entirely by programs.
-Select Codex or Claude and an already configured host connection; the helper passes data over local pipes without reading credentials or contacting BoxLite.
+
+For cloud files, select an existing MCP connection. Supply the Box ID and both paths to the Claude transfer tools or the Codex helper. The host sends the file-tool request using that connection’s credentials.
 
 See [file transfer](skills/boxlite/references/cloud.md#files) for commands and connection prerequisites.
 [API-key setup](skills/boxlite-setup/references/cloud-auth.md) uses the host's private credential reference, never a token bundled in the plugin.
@@ -59,14 +59,11 @@ Local runs the CLI on your execution host; runtime image pulls and commands you 
 There is no plugin telemetry, background service, bundled credential store, or installation hook.
 
 The file helper reads reviewed sources and writes requested downloads; it requires Python and host filesystem access.
-One plugin package supports both hosts.
+The marketplace distribution includes the Claude transfer tools.
 The helper uses existing MCP contracts without a BoxLite CLI dependency, new server API, transfer cache or additional checksum/readback step.
 
-Both hosts own their MCP connections and credentials; Claude adds one model request per file operation.
-
-Claude's model request includes the tool name, Box ID and remote path. A placeholder represents the upload archive.
-
-Claude uses a private persistent session for downloads, so its transcripts or saved result files can retain downloaded data.
+Claude authorizes the BoxLite upload or download in the current session using the connection, Box ID and both paths.
+Python handles the archive and the plugin sends the data through that MCP connection. The tool returns a short receipt.
 
 OAuth credentials stay with the host; API keys stay in the user's chosen private host environment.
 Keep mode selection, Box IDs, runtime homes, and app secrets outside the plugin and version control.
@@ -86,11 +83,12 @@ To roll back, install a retained verified package version, recheck its supported
 
 These files are a release candidate, not evidence of an approved public listing.
 OpenAI's public submission connection is OAuth; API-key setup currently requires a supported native host, and optional local execution needs platform eligibility review.
-The packaged file transfer script calls the existing remote MCP tools through the selected host.
+Both transfer entry points call the existing remote file tools through the selected host.
 
-A dedicated host process reloads existing configuration; it does not attach to the current interactive session.
+Codex starts its app-server with the selected configuration. Claude uses the connection in the current session.
+
 Native API-key acceptance does not establish OAuth file-transfer acceptance.
-The same package targets both clients; directory review must still confirm the execution surface and publisher eligibility.
+The marketplace targets both clients; directory review must still confirm the execution surface and publisher eligibility.
 
 Claude distribution requires the plugin repository plus a companion listing for the same hosted MCP service.
 

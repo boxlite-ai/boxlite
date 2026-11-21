@@ -43,17 +43,16 @@ Uninstalling the plugin does not remove Boxes, volumes, runtime homes, or indepe
 
 ## Programmatic file transfers
 
-A packaged Python helper calls the existing `uploadFiles` and `downloadFiles` tools.
-The model chooses paths while tar/base64 data stays inside the helper. File transfer uses the existing server and the selected host.
+The model chooses the connection, Box ID and paths. The selected host calls `uploadFiles` or `downloadFiles`, and Python handles archive I/O.
 
 Upload does not add a readback or checksum step.
 
 Select an existing Codex or Claude connection; only that host sends MCP requests and resolves credentials.
 The helper needs Python 3.9+ and host shell/filesystem access; it does not implement login or refresh.
-Claude uses a blocking execution hook in a dedicated child and adds one model request per operation.
 
-The child host reloads configuration instead of attaching to the interactive session; OAuth acceptance must be recorded separately.
-Claude needs its model login available to the child, and downloads can retain data in the host's private transcript/result storage.
+Claude authorizes the BoxLite transfer tool in the current session. Python prepares or extracts the archive, and the plugin uses that session's selected MCP connection.
+
+Codex loads its selected connection through app-server. Verify OAuth and API-key acceptance separately. See the [file-transfer prerequisites](../../../plugins/boxlite/skills/boxlite/references/cloud.md#files).
 
 ## Data handling
 
