@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ArgumentsHost, HttpStatus, NotFoundException, RequestTimeoutException } from '@nestjs/common'
+import {
+  ArgumentsHost,
+  BadRequestException,
+  HttpStatus,
+  NotFoundException,
+  RequestTimeoutException,
+  UnauthorizedException,
+} from '@nestjs/common'
 import { AllExceptionsFilter } from './all-exceptions.filter'
 import { RunnerApiError } from '../box/errors/runner-api-error'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
@@ -37,6 +44,8 @@ describe('AllExceptionsFilter', () => {
     ['/.well-known/oauth-protected-resource/mcp', false],
     // Express routes ignore case, so this reaches the metadata route too.
     ['/.WELL-KNOWN/oauth-protected-resource/mcp', false],
+    ['/v1/organizations/missing', false],
+    ['/V1/ORGANIZATIONS/missing', false],
     ['/boxes/some-client-route', true],
   ])('answers a missing %s with the dashboard: %p', async (path, dashboard) => {
     const json = jest.fn()
@@ -45,7 +54,7 @@ describe('AllExceptionsFilter', () => {
     const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never)
     const host = {
       switchToHttp: () => ({
-        getResponse: () => ({ status, sendFile }),
+        getResponse: () => ({ status, sendFile, getHeader: jest.fn() }),
         getRequest: () => ({ path, url: path }),
       }),
     } as ArgumentsHost
@@ -55,6 +64,50 @@ describe('AllExceptionsFilter', () => {
     expect(sendFile).toHaveBeenCalledTimes(dashboard ? 1 : 0)
     if (!dashboard) expect(status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND)
   })
+
+  it.each([
+    ['/api/v1/organizations/users', HttpStatus.BAD_REQUEST, 'InvalidArgumentError', 'invalid_argument'],
+    ['/API/V1/ORGANIZATIONS/USERS', HttpStatus.BAD_REQUEST, 'InvalidArgumentError', 'invalid_argument'],
+    ['/V1/ORGANIZATIONS/INVITES', HttpStatus.UNAUTHORIZED, 'AuthError', 'unauthenticated'],
+    ['/V1/ORGANIZATIONS/MISSING', HttpStatus.NOT_FOUND, 'NotFoundError', 'not_found'],
+  ])(
+    'formats %s errors with the admin error envelope in any case',
+    async (path, statusCode, expectedType, expectedCode) => {
+      const json = jest.fn()
+      const status = jest.fn().mockReturnValue({ json })
+      const sendFile = jest.fn()
+      const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn().mockResolvedValue(undefined) } as never)
+      const host = {
+        switchToHttp: () => ({
+          getResponse: () => ({ status, sendFile, getHeader: jest.fn() }),
+          getRequest: () => ({ path, url: path }),
+        }),
+      } as ArgumentsHost
+      const exception =
+        statusCode === HttpStatus.NOT_FOUND
+          ? new NotFoundException('Not Found')
+          : statusCode === HttpStatus.UNAUTHORIZED
+            ? new UnauthorizedException('Unauthorized')
+            : new BadRequestException('Bad Request')
+
+      await filter.catch(exception, host)
+
+      expect(sendFile).not.toHaveBeenCalled()
+      expect(status).toHaveBeenCalledWith(statusCode)
+      expect(json).toHaveBeenCalledWith({
+        error: {
+          message:
+            statusCode === HttpStatus.NOT_FOUND
+              ? 'Not Found'
+              : statusCode === HttpStatus.UNAUTHORIZED
+                ? 'Unauthorized'
+                : 'Bad Request',
+          type: expectedType,
+          code: expectedCode,
+        },
+      })
+    },
+  )
 
   it('serializes HttpException code fields into the JSON response', async () => {
     const json = jest.fn()
