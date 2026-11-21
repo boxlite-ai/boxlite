@@ -119,6 +119,32 @@ class FileTransferTests(unittest.TestCase):
                     transfer.upload(client, 'box-1', self.source, '/workspace/fresh')
                 self.assertNotIn('private detail', str(error.exception))
 
+    def test_claude_download_reports_safe_errors(self):
+        node = shutil.which('node')
+        if not node or int(subprocess.check_output([node, '-p', 'process.versions.node.split(".")[0]'])) < 18:
+            self.skipTest('Claude mod fixture requires Node.js 18+')
+        fixture = Path(__file__).parent / 'fixtures/claude_transfer_errors.mjs'
+        subprocess.run([node, str(fixture)], check=True, timeout=10)
+
+    def test_file_tool_errors_explain_the_recovery_without_returning_server_details(self):
+        for tool in ('uploadFiles', 'downloadFiles'):
+            invalid_box = {'type': 'text', 'text': 'Invalid value for path argument box_id'}
+            with self.subTest(tool=tool), self.assertRaisesRegex(transfer.TransferError, 'Invalid Box ID'):
+                transfer_hosts.tool_result(tool, {'isError': True, 'content': [invalid_box]})
+            for code, hint in (('invalid_argument', 'remote path'), ('not_found', 'Box ID'),
+                               ('invalid_state', 'Box state')):
+                detail = {'error': {'code': code, 'message': 'private detail'}}
+                for reply in ({'structuredContent': detail}, {'content': [{'type': 'text', 'text': json.dumps(detail)}]}):
+                    with self.subTest(tool=tool, code=code, reply=reply), self.assertRaisesRegex(transfer.TransferError, hint) as error:
+                        transfer_hosts.tool_result(tool, {'isError': True, **reply})
+                    self.assertNotIn('private detail', str(error.exception))
+        for text, hint in (('HTTP 403', 'write:boxes'), ('GET /private returned more than 8388608 bytes', '8 MiB'),
+                           ('Response of 8388609 bytes exceeds the 8388608-byte limit', '8 MiB'),
+                           ('upstream mentioned 8388608 bytes', 'completion is unknown')):
+            with self.subTest(text=text), self.assertRaisesRegex(transfer.TransferError, hint) as error:
+                transfer_hosts.tool_result('downloadFiles', {'isError': True, 'content': [{'type': 'text', 'text': text}]})
+            self.assertNotIn('/private', str(error.exception))
+
     def test_cleanup_kills_descendant_when_host_exits_first(self):
         endpoint = self.root / 'child.sock'
         child = ("import signal,socket,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "

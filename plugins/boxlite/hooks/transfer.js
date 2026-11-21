@@ -27,6 +27,31 @@ async function archive($, operation, path, input) {
   }
 }
 
+function fileErrorMessage(tool, result) {
+  const item = Array.isArray(result.content) && result.content.length === 1 ? result.content[0] : null
+  const text = item?.type === 'text' && typeof item.text === 'string' ? item.text : ''
+  let detail = result.structuredContent
+  if (detail == null && text.trimStart().startsWith('{')) {
+    try { detail = JSON.parse(text) } catch { /* Unrecognized server text uses the generic message. */ }
+  }
+  if (detail?.statusCode === 403 || text === 'HTTP 403') {
+    return tool === 'downloadFiles'
+      ? 'Server refused the download (HTTP 403). Check connection permissions. BoxLite Cloud requires write:boxes'
+      : 'Server refused the upload (HTTP 403). Check permissions for the selected connection'
+  }
+  const code = detail?.error?.code
+  if (text === 'Invalid value for path argument box_id') return 'Invalid Box ID. Check the selected Box ID'
+  if (code === 'invalid_argument') return 'Invalid transfer arguments. Check the remote path'
+  if (code === 'not_found' || detail?.statusCode === 404 || text === 'HTTP 404') {
+    return 'Resource not found. Check the Box ID and remote path'
+  }
+  if (code === 'invalid_state') return 'Transfer unavailable in the current Box state. Check the Box status'
+  if (tool === 'downloadFiles' && /^(?:GET \/\S+ returned more than 8388608 bytes|Response of [0-9]+ bytes exceeds the 8388608-byte limit)$/.test(text)) {
+    return 'Download exceeds the 8 MiB limit. Select fewer or smaller files'
+  }
+  return tool + ' failed on the selected connection; completion is unknown'
+}
+
 async function callFileTool($, connection, tool, input) {
   let result
   try {
@@ -35,12 +60,7 @@ async function callFileTool($, connection, tool, input) {
     // Host exceptions can contain the raw request or response.
   }
   if (result && !result.isError) return result
-  if (tool === 'uploadFiles' && result?.isError === true) {
-    const item = Array.isArray(result.content) && result.content.length === 1 ? result.content[0] : null
-    if (result.structuredContent?.statusCode === 403 || (item?.type === 'text' && item.text === 'HTTP 403')) {
-      throw new TransferError('Server refused the upload (HTTP 403). Check permissions for the selected connection')
-    }
-  }
+  if (result?.isError === true) throw new TransferError(fileErrorMessage(tool, result))
   throw new TransferError(tool + ' failed on the selected connection; completion is unknown')
 }
 

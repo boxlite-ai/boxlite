@@ -3,6 +3,7 @@ from contextlib import suppress
 import json
 import os
 from pathlib import Path
+import re
 import select
 import signal
 import subprocess
@@ -15,14 +16,38 @@ class TransferError(Exception):
     pass
 
 
+def file_error_message(name, result):
+    content = result.get('content')
+    item = content[0] if isinstance(content, list) and len(content) == 1 else None
+    text = item.get('text') if isinstance(item, dict) and item.get('type') == 'text' else None
+    detail = result.get('structuredContent')
+    if detail is None and isinstance(text, str) and text.lstrip().startswith('{'):
+        with suppress(ValueError, RecursionError):
+            detail = json.loads(text)
+    detail = detail if isinstance(detail, dict) else {}
+    if detail.get('statusCode') == 403 or text == 'HTTP 403':
+        if name == 'downloadFiles':
+            return 'Server refused the download (HTTP 403). Check connection permissions. BoxLite Cloud requires write:boxes'
+        return 'Server refused the upload (HTTP 403). Check permissions for the selected connection'
+    error = detail.get('error')
+    code = error.get('code') if isinstance(error, dict) else None
+    if text == 'Invalid value for path argument box_id':
+        return 'Invalid Box ID. Check the selected Box ID'
+    if code == 'invalid_argument':
+        return 'Invalid transfer arguments. Check the remote path'
+    if code == 'not_found' or detail.get('statusCode') == 404 or text == 'HTTP 404':
+        return 'Resource not found. Check the Box ID and remote path'
+    if code == 'invalid_state':
+        return 'Transfer unavailable in the current Box state. Check the Box status'
+    if name == 'downloadFiles' and isinstance(text, str) and re.fullmatch(
+            r'GET /\S+ returned more than 8388608 bytes|Response of [0-9]+ bytes exceeds the 8388608-byte limit', text):
+        return 'Download exceeds the 8 MiB limit. Select fewer or smaller files'
+    return 'MCP tool failed; completion is unknown'
+
+
 def tool_result(name, value):
-    if name == 'uploadFiles' and isinstance(value, dict) and value.get('isError') is True:
-        detail = value.get('structuredContent')
-        content = value.get('content')
-        item = content[0] if isinstance(content, list) and len(content) == 1 else None
-        if ((isinstance(detail, dict) and detail.get('statusCode') == 403)
-                or (isinstance(item, dict) and item.get('type') == 'text' and item.get('text') == 'HTTP 403')):
-            raise TransferError('Server refused the upload (HTTP 403). Check permissions for the selected connection')
+    if isinstance(value, dict) and value.get('isError') is True:
+        raise TransferError(file_error_message(name, value))
     if not isinstance(value, dict) or value.get('isError'):
         raise TransferError('MCP tool failed; completion is unknown')
     return value

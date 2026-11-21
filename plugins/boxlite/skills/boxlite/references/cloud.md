@@ -63,8 +63,11 @@ python3 SKILL_DIR/scripts/transfer.py --host codex --server SELECTED_SERVER down
 A successful transfer returns a receipt with `status: completed`. The Codex command also exits with code zero.
 
 Upload requires the existing server's `HTTP 204` acknowledgment; an empty or unexpected tool result leaves completion unknown.
-If the server refuses an upload with HTTP 403, check the selected connection's permissions.
 It makes one file-tool call and does not download files again or compute a checksum.
+
+For HTTP 403, check the selected connection's permissions. BoxLite Cloud requires `write:boxes` for both uploads and downloads.
+
+Invalid arguments, missing resources and Box state conflicts have specific messages. If a download exceeds the MCP response limit of 8 MiB, select fewer or smaller files.
 
 The helper never retries, changes credentials or leaves a transfer-ticket cache; after a failure, inspect possible destination effects before a new attempt.
 
