@@ -777,25 +777,273 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     })
   })
 
-  it.each(['before', 'after'] as const)('settles an owned replacement after a lost %s-COMMIT reply', async (fault) => {
-    const coordinator = new CompleteOutboundCoordinator(store)
-    const requests: string[] = []
-    const predecessor = persistedCompleteOutbound(await store.read(box.id, org))!
-    let installed = predecessor
-    try {
+  it.each([
+    { fault: 'before', available: true },
+    { fault: 'after', available: true },
+    { fault: 'after', available: false },
+  ] as const)(
+    'handles a lost $fault-COMMIT reply with primary availability $available',
+    async ({ fault, available }) => {
+      const coordinator = new CompleteOutboundCoordinator(store)
+      const requests: string[] = []
+      const predecessor = persistedCompleteOutbound(await store.read(box.id, org))!
+      let installed = predecessor
+      try {
+        await primary.query(
+          "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'fixture', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
+        )
+        await enrollV0('fixture')
+        completeCreatePeer = async (path, command, response) => {
+          expect(path).toBe(`/v1/boxes/${box.id}/network/outbound/complete/replace-control`)
+          requests.push(command.operation)
+          const current = await new OutboundPolicyStore(primary).read(box.id, org)
+          const pending = current.completeOutboundControl?.pending
+          switch (command.operation) {
+            case 'prepare':
+              expect(command.previous).toEqual(predecessor)
+              expect(current.completeOutboundControl).toBeNull()
+              response.end(
+                JSON.stringify({
+                  outcome: 'prepared',
+                  candidate: { snapshot: { ...complete, revision: command.revision }, deny_present: true },
+                }),
+              )
+              break
+            case 'apply':
+              expect(pending).toMatchObject({
+                kind: 'replace',
+                incarnation: command.attempt.incarnation,
+                attemptId: command.attempt.attempt_id,
+                generation: command.attempt.generation,
+                candidate: command.attempt.candidate,
+              })
+              installed = command.attempt.candidate.snapshot
+              proxy.rejectAfterCut = !available
+              proxy.arm(fault)
+              response.end(JSON.stringify({ outcome: 'applied', snapshot: installed }))
+              break
+            case 'cancel':
+              response.end(JSON.stringify({ outcome: 'applied', snapshot: installed }))
+              break
+            case 'restore':
+              expect(pending).toMatchObject({ restorationRevision: command.revision })
+              expect(command.revision).not.toBe(predecessor.revision)
+              installed = { ...predecessor, revision: command.revision }
+              response.end(JSON.stringify({ outcome: 'restored', snapshot: installed }))
+              break
+            case 'finalize':
+              expect(current.completeOutboundControl?.finalization?.attempt).toEqual(command.attempt)
+              expect(persistedCompleteOutbound(current)).toEqual(installed)
+              response.end(JSON.stringify({ outcome: 'finalized', snapshot: installed }))
+              break
+            default:
+              response.writeHead(500).end()
+          }
+        }
+        await expect(coordinator.replace(box.id, org, complete.policy, () => false)).rejects.toMatchObject({
+          status: 412,
+        })
+        expect(requests).toEqual([])
+        const result = coordinator.replace(box.id, org, complete.policy)
+        if (!available) {
+          await expect(result).rejects.toMatchObject({ status: 503 })
+          expect(requests).toEqual(['prepare', 'apply'])
+          const durable = await new OutboundPolicyStore(primary).read(box.id, org)
+          expect(persistedCompleteOutbound(durable)).toEqual(installed)
+          expect(durable.completeOutboundControl?.pending).toBeUndefined()
+          expect(durable.completeOutboundControl?.finalization).toBeDefined()
+          return
+        }
+        if (fault === 'before') {
+          await expect(result).rejects.toMatchObject({ status: 503 })
+          expect(requests).toEqual(['prepare', 'apply', 'cancel', 'restore', 'finalize'])
+        } else {
+          await expect(result).resolves.toMatchObject({ admission: 'extended_ipv4', policy: complete.policy })
+          expect(requests).toEqual(['prepare', 'apply', 'finalize'])
+        }
+        const resolved = await store.read(box.id, org)
+        expect(persistedCompleteOutbound(resolved)).toEqual(installed)
+        expect(resolved.completeOutboundGeneration).toBe(1)
+        expect(resolved.completeOutboundControl?.pending).toBeUndefined()
+        expect(resolved.completeOutboundControl?.finalization).toBeUndefined()
+        if (fault === 'before') expect(resolved.completeOutboundControl).toBeNull()
+        const completedRequests = [...requests]
+        await expect(
+          coordinator.replace(box.id, org, complete.policy, (revision) => revision === predecessor.revision),
+        ).rejects.toMatchObject({ status: 412 })
+        expect(requests).toEqual(completedRequests)
+      } finally {
+        await primary.query("UPDATE complete_outbound_admission SET phase = 'closed' WHERE id = 1")
+      }
+    },
+  )
+
+  it.each(['before', 'after'] as const)(
+    'preserves a successor that takes ownership %s primary readback',
+    async (timing) => {
+      const ownedCoordinator = new CompleteOutboundCoordinator(store)
+      const primaryStore = new OutboundPolicyStore(primary)
+      const predecessor = persistedCompleteOutbound(await primaryStore.read(box.id, org))!
+      const requests: string[] = []
+      const successorId = randomUUID()
+      const successorSnapshot = { ...complete, revision: randomUUID() }
       await primary.query(
         "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'fixture', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
       )
+      try {
+        await enrollV0('fixture')
+        completeCreatePeer = async (path, command, response) => {
+          expect(path).toBe(`/v1/boxes/${box.id}/network/outbound/complete/replace-control`)
+          requests.push(command.operation)
+          if (command.operation === 'prepare') {
+            expect(command.previous).toEqual(predecessor)
+            response.end(
+              JSON.stringify({
+                outcome: 'prepared',
+                candidate: { snapshot: { ...complete, revision: command.revision }, deny_present: true },
+              }),
+            )
+          } else if (command.operation === 'apply') {
+            response.destroy()
+          } else {
+            response.writeHead(500).end()
+          }
+        }
+
+        const read = store.read.bind(store)
+        jest.spyOn(store, 'read').mockImplementationOnce(async (id, organizationId) => {
+          const observed = timing === 'after' ? await read(id, organizationId) : undefined
+          await primaryStore.lockedComplete(id, organizationId, false, async ({ box: current, write }) => {
+            const previousOwner = current.completeOutboundControl?.pending
+            if (previousOwner?.kind !== 'replace') throw new Error('Expected the interrupted attempt')
+            if (observed) expect(observed.completeOutboundControl?.pending).toEqual(previousOwner)
+            const successor = {
+              ...previousOwner,
+              attemptId: successorId,
+              generation: previousOwner.generation + 1,
+              candidate: { snapshot: successorSnapshot, deny_present: true },
+            }
+            await write({ version: 2, committed: predecessor, pending: successor }, successor.generation)
+          })
+          return observed ?? read(id, organizationId)
+        })
+
+        await expect(ownedCoordinator.replace(box.id, org, complete.policy)).rejects.toMatchObject({ status: 503 })
+        expect(requests).toEqual(['prepare', 'apply'])
+        const durable = await primaryStore.read(box.id, org)
+        expect(durable.completeOutboundGeneration).toBe(2)
+        expect(durable.completeOutboundControl).toMatchObject({
+          committed: predecessor,
+          pending: { attemptId: successorId, candidate: { snapshot: successorSnapshot } },
+        })
+        expect(durable.completeOutboundControl?.pending).not.toHaveProperty('restorationRevision')
+        await expect(ownedCoordinator.replace(box.id, org, complete.policy)).rejects.toMatchObject({ status: 409 })
+        expect(requests).toEqual(['prepare', 'apply'])
+      } finally {
+        await primary.query("UPDATE complete_outbound_admission SET phase = 'closed' WHERE id = 1")
+      }
+    },
+  )
+
+  it.each(['cancelled', 'lost', 'wrong admission', 'restored', 'restore lost'] as const)(
+    'preserves the durable state for an owned apply with a %s outcome',
+    async (outcome) => {
+      const ownedCoordinator = new CompleteOutboundCoordinator(store)
+      const old = persistedCompleteOutbound(await store.read(box.id, org))!
+      const requests: string[] = []
+      const shouldRestore = outcome === 'restored' || outcome === 'restore lost'
+      let proposed: CompleteOutboundSnapshot | undefined
+      let restored: CompleteOutboundSnapshot | undefined
+      await primary.query(
+        "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'fixture', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
+      )
+      try {
+        await enrollV0('fixture')
+        completeCreatePeer = async (_path, command, response) => {
+          requests.push(command.operation)
+          if (command.operation === 'prepare') {
+            proposed = { ...complete, revision: command.revision }
+            response.end(JSON.stringify({ outcome: 'prepared', candidate: { snapshot: proposed, deny_present: true } }))
+          } else if (command.operation === 'apply' && (outcome === 'lost' || shouldRestore)) {
+            response.destroy()
+          } else if (outcome === 'cancelled' && ['apply', 'cancel'].includes(command.operation)) {
+            response.end(JSON.stringify({ outcome: 'cancelled' }))
+          } else if (outcome === 'wrong admission' && ['apply', 'reconcile'].includes(command.operation)) {
+            response.end(JSON.stringify({ outcome: 'applied', snapshot: { ...proposed, admission: 'legacy' } }))
+          } else if (shouldRestore && command.operation === 'reconcile') {
+            response.end(JSON.stringify({ outcome: 'applied', snapshot: proposed }))
+          } else if (shouldRestore && command.operation === 'restore') {
+            expect(command.revision).not.toBe(proposed?.revision)
+            expect(command.revision).not.toBe(old.revision)
+            const current = await new OutboundPolicyStore(primary).read(box.id, org)
+            expect(current.completeOutboundControl?.pending).toMatchObject({
+              restorationRevision: command.revision,
+            })
+            restored = { ...old, revision: command.revision }
+            if (outcome === 'restore lost') response.destroy()
+            else response.end(JSON.stringify({ outcome: 'restored', snapshot: restored }))
+          } else if (outcome === 'restored' && command.operation === 'finalize') {
+            response.end(JSON.stringify({ outcome: 'finalized', snapshot: restored }))
+          } else if (['cancel', 'reconcile'].includes(command.operation)) {
+            response.end(JSON.stringify({ outcome: 'pending' }))
+          } else {
+            response.writeHead(500).end()
+          }
+        }
+
+        await expect(ownedCoordinator.replace(box.id, org, complete.policy)).rejects.toMatchObject({
+          status: outcome === 'cancelled' ? 409 : 503,
+        })
+        const durable = await store.read(box.id, org)
+        expect(persistedCompleteOutbound(durable)).toEqual(outcome === 'restored' ? restored : old)
+        if (outcome === 'cancelled') {
+          expect(requests).toEqual(['prepare', 'apply', 'cancel'])
+          expect(durable.completeOutboundControl).toBeNull()
+        } else if (outcome === 'restored') {
+          expect(requests).toEqual(['prepare', 'apply', 'cancel', 'reconcile', 'restore', 'finalize'])
+          expect(durable.completeOutboundControl?.pending).toBeUndefined()
+        } else if (outcome === 'restore lost') {
+          expect(requests).toEqual(['prepare', 'apply', 'cancel', 'reconcile', 'restore'])
+          expect(durable.completeOutboundControl?.pending).toMatchObject({
+            candidate: { snapshot: proposed },
+            restorationRevision: restored?.revision,
+          })
+        } else {
+          expect(requests).toEqual(['prepare', 'apply', 'cancel', 'reconcile'])
+          expect(durable.completeOutboundControl?.pending).toMatchObject({ candidate: { snapshot: proposed } })
+        }
+      } finally {
+        await primary.query("UPDATE complete_outbound_admission SET phase = 'closed' WHERE id = 1")
+      }
+    },
+  )
+
+  it('keeps the hosted deny on omission and publishes an explicit empty deny after apply', async () => {
+    const ownedCoordinator = new CompleteOutboundCoordinator(store)
+    const predecessor = {
+      ...complete,
+      revision: 'active-deny',
+      policy: { ...complete.policy, deny_net: ['192.0.2.0/24:443'] },
+    }
+    const requests: string[] = []
+    await primary.query(
+      "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'fixture', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
+    )
+    try {
       await enrollV0('fixture')
-      completeCreatePeer = async (path, command, response) => {
-        expect(path).toBe(`/v1/boxes/${box.id}/network/outbound/complete/replace-control`)
+      await primary.getRepository(Box).update(box.id, {
+        completeOutboundControl: { version: 2, committed: predecessor },
+      })
+      completeCreatePeer = async (_path, command, response) => {
         requests.push(command.operation)
-        const current = await new OutboundPolicyStore(primary).read(box.id, org)
-        const pending = current.completeOutboundControl?.pending
         switch (command.operation) {
           case 'prepare':
             expect(command.previous).toEqual(predecessor)
-            expect(current.completeOutboundControl).toBeNull()
+            if (!Object.hasOwn(command.policy, 'deny_net')) {
+              response.writeHead(400).end(JSON.stringify({ error: { code: 'invalid_argument' } }))
+              break
+            }
+            expect(command.policy.deny_net).toEqual([])
             response.end(
               JSON.stringify({
                 outcome: 'prepared',
@@ -804,53 +1052,30 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
             )
             break
           case 'apply':
-            expect(pending).toMatchObject({
-              kind: 'replace',
-              incarnation: command.attempt.incarnation,
-              attemptId: command.attempt.attempt_id,
-              generation: command.attempt.generation,
-              candidate: command.attempt.candidate,
-            })
-            installed = command.attempt.candidate.snapshot
-            proxy.arm(fault)
-            response.end(JSON.stringify({ outcome: 'applied', snapshot: installed }))
-            break
-          case 'cancel':
-            response.end(JSON.stringify({ outcome: 'applied', snapshot: installed }))
-            break
-          case 'restore':
-            expect(pending).toMatchObject({ restorationRevision: command.revision })
-            expect(command.revision).not.toBe(predecessor.revision)
-            installed = { ...predecessor, revision: command.revision }
-            response.end(JSON.stringify({ outcome: 'restored', snapshot: installed }))
+            expect(command.attempt.candidate.deny_present).toBe(true)
+            response.end(JSON.stringify({ outcome: 'applied', snapshot: command.attempt.candidate.snapshot }))
             break
           case 'finalize':
-            expect(current.completeOutboundControl?.finalization?.attempt).toEqual(command.attempt)
-            expect(persistedCompleteOutbound(current)).toEqual(installed)
-            response.end(JSON.stringify({ outcome: 'finalized', snapshot: installed }))
+            response.end(JSON.stringify({ outcome: 'finalized', snapshot: command.attempt.candidate.snapshot }))
             break
           default:
             response.writeHead(500).end()
         }
       }
-      await expect(coordinator.replace(box.id, org, complete.policy, () => false)).rejects.toMatchObject({
-        status: 412,
+      await expect(ownedCoordinator.replace(box.id, org, { mode: 'enabled', allow_net: [] })).rejects.toMatchObject({
+        status: 400,
+        response: expect.objectContaining({ code: 'invalid_argument' }),
       })
-      expect(requests).toEqual([])
-      const result = coordinator.replace(box.id, org, complete.policy)
-      if (fault === 'before') {
-        await expect(result).rejects.toMatchObject({ status: 503 })
-        expect(requests).toEqual(['prepare', 'apply', 'cancel', 'restore', 'finalize'])
-      } else {
-        await expect(result).resolves.toMatchObject({ admission: 'extended_ipv4', policy: complete.policy })
-        expect(requests).toEqual(['prepare', 'apply', 'finalize'])
-      }
-      const resolved = await store.read(box.id, org)
-      expect(persistedCompleteOutbound(resolved)).toEqual(installed)
-      expect(resolved.completeOutboundGeneration).toBe(1)
-      expect(resolved.completeOutboundControl?.pending).toBeUndefined()
-      expect(resolved.completeOutboundControl?.finalization).toBeUndefined()
-      if (fault === 'before') expect(resolved.completeOutboundControl).toBeNull()
+      expect(requests).toEqual(['prepare'])
+      expect(persistedCompleteOutbound(await store.read(box.id, org))).toEqual(predecessor)
+      const cleared = await ownedCoordinator.replace(box.id, org, complete.policy)
+      expect(requests).toEqual(['prepare', 'prepare', 'apply', 'finalize'])
+      expect(cleared.revision).not.toBe(predecessor.revision)
+      expect(cleared.admission).toBe('extended_ipv4')
+      expect(cleared.policy.deny_net).toEqual([])
+      const durable = await store.read(box.id, org)
+      expect(persistedCompleteOutbound(durable)).toEqual(cleared)
+      expect(durable.completeOutboundControl?.pending).toBeUndefined()
     } finally {
       await primary.query("UPDATE complete_outbound_admission SET phase = 'closed' WHERE id = 1")
     }

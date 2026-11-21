@@ -1096,6 +1096,10 @@ The versioned request uses canonical deny rules and preserves whether the caller
 
 An unresolved attempt survives restart as uncertainty. The shim installs the committed snapshot only, and a read never replays the attempt. The Runtime records restoration with its fresh revision before dispatch so a later mutation can confirm the exact restored identity if publication was interrupted.
 
+If storing an applied candidate fails, the local Runtime reports failures to record or commit restoration as database errors. The diagnostic includes both write failures and identifies the recovery step. A missing Box still returns `NotFound`.
+
+If recording restoration fails, status shows the committed predecessor and the pending candidate, with the applied candidate visible in the live observation. If committing a confirmed restoration fails, the pending and live revisions instead identify the restoration. Both outcomes remain uncertain until reconciliation.
+
 ```mermaid
 sequenceDiagram
     participant R as Runtime
