@@ -50,6 +50,7 @@ export interface RunnerAdapter {
   runnerInfo(signal?: AbortSignal): Promise<RunnerInfo>
 
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
+  assertFilestoreVolumeSupport(box: Box): Promise<void>
   /** `image` is the ref the runner pulls, which may be pinned tighter than `box.image`. */
   createBox(
     box: Box,

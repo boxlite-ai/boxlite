@@ -116,7 +116,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   // The runner declares the capability in its healthcheck; refusing here —
   // instead of dispatching — keeps the failure at the API with the real
   // cause instead of a misleading bucket error on the runner.
-  private async assertFilestoreVolumeSupport(box: Box): Promise<void> {
+  async assertFilestoreVolumeSupport(box: Box): Promise<void> {
     if (!box.volumes?.some((volume) => volume.filestore)) return
 
     // Runner lookup caching is local to an API replica. Read the declaration
@@ -143,13 +143,13 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     ].join('; ')
     const error = Object.assign(
       new Error(
-        `FILESTORE_CAPABILITY_MISSING: Box ${box.id} requires a runner with the filestore capability, but runner ${this.runner.id} has not declared it (${diagnostics}). No CREATE_BOX job was dispatched. If the healthcheck is recent, inspect why the running binary omitted filestore; otherwise inspect healthcheck delivery to the API.`,
+        `FILESTORE_CAPABILITY_MISSING: Box ${box.id} requires a runner with the filestore capability, but runner ${this.runner.id} has not declared it (${diagnostics}). No Box job was dispatched. If the healthcheck is recent, inspect why the running binary omitted filestore; otherwise inspect healthcheck delivery to the API.`,
       ),
       { code: 'FILESTORE_CAPABILITY_MISSING' },
     )
     this.logger.error(
       {
-        event: 'box.create.dispatch_rejected',
+        event: 'box.dispatch_rejected',
         boxId: box.id,
         runnerId: this.runner.id,
         runnerRecordFound: runner !== null,

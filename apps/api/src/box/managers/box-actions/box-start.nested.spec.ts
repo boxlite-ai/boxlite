@@ -24,7 +24,14 @@ describe('Cloud create-only nesting', () => {
     const getCode = jest.fn().mockResolvedValue(lock)
     const action = new BoxStartAction(
       { findOneOrFail: jest.fn().mockResolvedValue({ id: 'runner', state: RunnerState.READY }) } as any,
-      { create: jest.fn().mockResolvedValue({ startBox, createBox, runnerInfo }) } as any,
+      {
+        create: jest.fn().mockResolvedValue({
+          startBox,
+          createBox,
+          runnerInfo,
+          assertFilestoreVolumeSupport: jest.fn(async () => undefined),
+        }),
+      } as any,
       { update } as any,
       { findOne: jest.fn().mockResolvedValue({ boxMetadata: {} }), isNestedVirtualizationEnabled: policy } as any,
       { getOrThrow: () => 0.01 } as any,

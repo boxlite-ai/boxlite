@@ -173,7 +173,7 @@ describe('RunnerAdapterV2 createBox', () => {
       'filestoreInstances=["ml-scratch"]',
       `lastChecked=${lastChecked.toISOString()}`,
       'lastHealthcheckAgeSeconds=',
-      'No CREATE_BOX job was dispatched',
+      'No Box job was dispatched',
       'FILESTORE_CAPABILITY_MISSING',
     ]) {
       expect(body.message).toContain(detail)

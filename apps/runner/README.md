@@ -583,7 +583,7 @@ FILESTORE_INSTANCES='[{"instance":"boxlite-filestore-stage","project_id":"boxlit
 ```
 
 Validation runs when the API starts: invalid JSON, a duplicate instance, a name
-outside `^[a-z0-9][a-z0-9-]{0,62}$`, or invalid project/zone values refuse to
+outside `^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`, or invalid project/zone values refuse to
 start the API. Until removed, an unset variable temporarily defaults to
 `boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`; stage deployments
 instead default to `boxlite-filestore-stage`, zone `us-east4-a`. An explicit

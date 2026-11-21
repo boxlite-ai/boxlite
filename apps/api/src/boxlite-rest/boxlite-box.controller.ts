@@ -174,6 +174,7 @@ export class BoxliteBoxController {
       response && typeof response === 'object' && !Array.isArray(response)
         ? (response as Record<string, unknown>).code
         : undefined
+    const databaseErrorCode = (error as { driverError?: { code?: unknown } })?.driverError?.code
     this.logger.error(
       {
         event: 'box.create.failed',
@@ -181,10 +182,11 @@ export class BoxliteBoxController {
         ...(boxId ? { boxId } : {}),
         statusCode,
         ...(typeof responseCode === 'string' ? { code: responseCode } : {}),
+        errorName: error instanceof Error ? error.name : 'Error',
+        ...(typeof databaseErrorCode === 'string' ? { databaseErrorCode } : {}),
         volumeCount: dto.volumes?.length ?? 0,
         volumeIds: dto.volumes?.map((volume) => volume.managed_volume) ?? [],
         mountPaths: dto.volumes?.map((volume) => volume.guest_path) ?? [],
-        err: error,
       },
       'Box creation failed',
     )
