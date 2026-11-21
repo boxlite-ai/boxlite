@@ -64,6 +64,24 @@ describe('sanitizeBoxError', () => {
     })
   })
 
+  it('keeps Filestore mount targets out of public error reasons', () => {
+    const failure =
+      'FILESTORE_VOLUME_PREPARE_FAILED: failed to prepare filestore volume volume-1 on instance ml-scratch for box box-1: ' +
+      'filestore ml-scratch mount target mismatch at /mnt/boxlite-filestore-ml-scratch: ' +
+      'mounted source "10.0.0.7:/vol1", requested source "10.0.0.9:/vol2"'
+
+    const { errorReason } = sanitizeBoxError(new Error(failure))
+
+    expect(errorReason).toBe(
+      'FILESTORE_VOLUME_PREPARE_FAILED: failed to prepare filestore volume volume-1 on instance ml-scratch for box box-1',
+    )
+    expect(errorReason).not.toContain('10.0.0.7')
+    expect(errorReason).not.toContain('10.0.0.9')
+    expect(errorReason).not.toContain('/vol1')
+    expect(errorReason).not.toContain('/vol2')
+    expect(errorReason).not.toContain('/mnt/')
+  })
+
   it('leaves a reason that names no registry proxy as it was', () => {
     process.env.REGISTRY_PROXY_HOST = PROXY
     const direct = failedPull('quay.io/acme/app:1', 'https://quay.io/v2/acme/app/manifests/1')

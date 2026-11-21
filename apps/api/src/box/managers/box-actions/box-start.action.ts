@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
 import { BoxState } from '../../enums/box-state.enum'
@@ -19,6 +19,8 @@ import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
 import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
+import { boxVolumeForDispatch } from '../../utils/box-volume.util'
+import { FilestoreInstanceResolver } from '../../services/filestore-instance.resolver'
 
 import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
 
@@ -34,6 +36,7 @@ export class BoxStartAction extends BoxAction {
     protected readonly redisLockProvider: RedisLockProvider,
     private readonly boxActivityService: BoxActivityService,
     private readonly curatedImagePins: CuratedImagePinService,
+    private readonly filestoreInstanceResolver: FilestoreInstanceResolver,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
@@ -74,12 +77,8 @@ export class BoxStartAction extends BoxAction {
 
     const organization = await this.organizationService.findOne(box.organizationId)
 
-    const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
-    if (box.volumes?.length) {
-      metadata['volumes'] = JSON.stringify(
-        box.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
-      )
-    }
+    const volumes = await this.resolveBoxVolumes(box)
+    const metadata = this.volumeMetadata({ ...organization?.boxMetadata }, volumes)
 
     // A tenant's image was pinned by the resolver when the box was created. A
     // curated one keeps its tag on the box — the warm pool matches on it — and
@@ -88,7 +87,7 @@ export class BoxStartAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
     await runnerAdapter.createBox(
-      box,
+      this.withVolumes(box, volumes),
       image,
       metadata,
       await resolveNestedVirtualization(
@@ -120,17 +119,51 @@ export class BoxStartAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
-    if (box.volumes?.length) {
-      metadata['volumes'] = JSON.stringify(
-        box.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
-      )
+    let volumes: Box['volumes']
+    try {
+      volumes = await this.resolveBoxVolumes(box)
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) {
+        this.logger.warn(`Filestore resolution for box ${box.id} is temporarily unavailable; restart will be retried`)
+        return DONT_SYNC_AGAIN
+      }
+      throw error
     }
+    const dispatchBox = this.withVolumes(box, volumes)
+    const metadata = this.volumeMetadata({ ...organization?.boxMetadata }, volumes)
 
-    await runnerAdapter.startBox(box.id, box.authToken, metadata)
+    await runnerAdapter.assertFilestoreVolumeSupport(dispatchBox)
+    await runnerAdapter.startBox(dispatchBox.id, dispatchBox.authToken, metadata)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
     return SYNC_AGAIN
+  }
+
+  private async resolveBoxVolumes(box: Box): Promise<Box['volumes']> {
+    if (!box.volumes?.length) return box.volumes
+
+    return Promise.all(
+      box.volumes.map(async (volume) => {
+        const dispatch = boxVolumeForDispatch(volume)
+        if (!volume.filestore) return dispatch
+
+        const target = await this.filestoreInstanceResolver.resolve(volume.filestore.instance, 'configured')
+        return {
+          ...dispatch,
+          filestore: { instance: volume.filestore.instance, ...target },
+        }
+      }),
+    )
+  }
+
+  private withVolumes(box: Box, volumes: Box['volumes']): Box {
+    if (!box.volumes?.length) return box
+    return Object.assign(Object.create(Object.getPrototypeOf(box)) as Box, box, { volumes })
+  }
+
+  private volumeMetadata(metadata: Record<string, string>, volumes: Box['volumes']): Record<string, string> {
+    if (!volumes?.length) return metadata
+    return { ...metadata, volumes: JSON.stringify(volumes) }
   }
 
   //  used to check if box is started on runner and update box state accordingly
