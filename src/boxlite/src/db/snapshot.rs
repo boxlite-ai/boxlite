@@ -26,16 +26,70 @@ impl SnapshotStore {
 
     /// Insert a new snapshot record.
     pub(crate) fn save(&self, info: &SnapshotInfo) -> BoxliteResult<()> {
+        Self::insert(&self.db.conn(), info)
+    }
+
+    fn insert(conn: &rusqlite::Connection, info: &SnapshotInfo) -> BoxliteResult<()> {
         let json = serde_json::to_string(info).map_err(|e| {
             BoxliteError::Database(format!("Failed to serialize SnapshotInfo: {}", e))
         })?;
-        let conn = self.db.conn();
         db_err!(conn.execute(
             "INSERT INTO snapshot (id, box_id, name, created_at, json) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![info.id, info.box_id, info.name, info.created_at, json],
         ))?;
         Ok(())
+    }
+
+    /// Register a committed snapshot exactly once without waiting on another SQLite writer.
+    pub(crate) fn register_live(
+        database: &std::path::Path,
+        info: &SnapshotInfo,
+    ) -> BoxliteResult<bool> {
+        use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
+
+        let mut conn = db_err!(Connection::open_with_flags(
+            database,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+        ))?;
+        db_err!(conn.busy_timeout(std::time::Duration::ZERO))?;
+        db_err!(conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON"))?;
+        let transaction = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+            Ok(transaction) => transaction,
+            Err(error) if error.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) => {
+                return Ok(false);
+            }
+            Err(error) => return Err(BoxliteError::Database(error.to_string())),
+        };
+        let matches = {
+            let mut lookup = db_err!(transaction.prepare(
+                "SELECT json FROM snapshot WHERE id = ?1 OR (box_id = ?2 AND name = ?3)",
+            ))?;
+            let rows = db_err!(
+                lookup.query_map(rusqlite::params![info.id, info.box_id, info.name], |row| {
+                    row.get::<_, String>(0)
+                })
+            )?;
+            db_err!(rows.collect::<Result<Vec<_>, _>>())?
+        };
+        match matches.as_slice() {
+            [] => Self::insert(&transaction, info)?,
+            [row]
+                if deserialize_optional(Some(row.clone()))?.is_some_and(|snapshot| {
+                    snapshot.id == info.id
+                        && snapshot.box_id == info.box_id
+                        && snapshot.name == info.name
+                        && snapshot.disk_info == info.disk_info
+                }) => {}
+            _ => {
+                return Err(BoxliteError::Storage(format!(
+                    "snapshot registration conflict for box {}, name {}, id {}; preserve the transaction files for recovery",
+                    info.box_id, info.name, info.id
+                )));
+            }
+        }
+        db_err!(transaction.commit())?;
+        Ok(true)
     }
 
     /// Find a snapshot by box ID and name.

@@ -1182,6 +1182,7 @@ impl RuntimeImpl {
 
         if let Some(box_impl) = box_impl {
             // Box exists in-memory only (not yet started/persisted)
+            crate::litebox::local_snapshot::require_resolved_snapshot(&box_impl.config.box_home)?;
             let state = box_impl.state.read();
             if state.status.is_active() && !force {
                 return Err(BoxliteError::InvalidState(format!(
@@ -1247,6 +1248,12 @@ impl RuntimeImpl {
         state: BoxState,
         lock_id: crate::lock::LockId,
     ) -> BoxliteResult<()> {
+        crate::litebox::live_snapshot::recover_if_exited(
+            &config.box_home,
+            id.as_str(),
+            &self.layout.db_dir().join("boxlite.db"),
+        )?;
+        crate::litebox::local_snapshot::require_resolved_snapshot(&config.box_home)?;
         let mut state = state;
         if state.status.is_active() || state.pid.is_some() {
             if force {
@@ -1560,6 +1567,19 @@ impl RuntimeImpl {
         // - Only Running boxes must have a directory
         let mut boxes_to_remove = Vec::new();
         for (config, state) in &persisted {
+            if crate::litebox::local_snapshot::has_live_snapshot_journal(&config.box_home) {
+                if let Err(error) = crate::litebox::live_snapshot::recover_if_exited(
+                    &config.box_home,
+                    config.id.as_str(),
+                    &self.layout.db_dir().join("boxlite.db"),
+                ) {
+                    tracing::warn!(box_id = %config.id, %error, "Live snapshot recovery deferred");
+                }
+                if crate::litebox::local_snapshot::has_live_snapshot_journal(&config.box_home) {
+                    // Normal start and removal both require the journal to settle first.
+                    continue;
+                }
+            }
             let should_remove = if config.options.removes_on_stop() {
                 tracing::info!(
                     box_id = %config.id,
@@ -1840,6 +1860,10 @@ impl RuntimeImpl {
 
         for orphan_id in orphaned {
             let orphan_dir = boxes_dir.join(orphan_id);
+            if crate::litebox::local_snapshot::has_live_snapshot_journal(&orphan_dir) {
+                tracing::warn!(box_id = %orphan_id, "Preserving orphaned live snapshot transaction");
+                continue;
+            }
             tracing::warn!(
                 box_id = %orphan_id,
                 path = %orphan_dir.display(),

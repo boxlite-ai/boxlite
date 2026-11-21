@@ -85,6 +85,9 @@ pub(crate) fn handle_control_op(vm: &VmControl, op: ControlOp) -> ControlRespons
                 }
                 _ => ControlError::Failed(error.to_string()),
             }),
+        ControlOp::DiskSnapshot(_) => Err(ControlError::Unsupported(
+            "online disk snapshots require the libkrun engine".into(),
+        )),
     }
 }
 

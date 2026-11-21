@@ -1,3 +1,4 @@
+use super::super::ControlReply;
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
@@ -22,6 +23,7 @@ fn a_request_reaches_the_handler_and_its_answer_returns() {
         ControlOp::ResizeDisk { block_id, .. } => {
             Err(ControlError::InvalidInput(format!("no disk {block_id}")))
         }
+        ControlOp::DiskSnapshot(_) => Err(ControlError::Unsupported("disk snapshot".into())),
     })
     .unwrap();
     let mode = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -70,7 +72,12 @@ fn accept_recovers_from_temporary_errors_with_bounded_backoff() {
     let mut waits = Vec::new();
     serve_connections(
         incoming,
-        |ControlOp::ResizeDisk { bytes, .. }| Ok(ControlReply::DiskSize(bytes)),
+        |op| {
+            let ControlOp::ResizeDisk { bytes, .. } = op else {
+                panic!("unexpected control operation");
+            };
+            Ok(ControlReply::DiskSize(bytes))
+        },
         |delay| waits.push(delay),
     );
 
@@ -136,6 +143,29 @@ fn serving_replaces_a_stale_socket() {
         request(&path, &grow_to("container", 7), Duration::from_secs(5)).unwrap(),
         Ok(ControlReply::DiskSize(7))
     );
+}
+
+#[tokio::test]
+async fn live_snapshot_socket_rejects_an_unexpected_process_fingerprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    let (seen, delivered) = std::sync::mpsc::channel();
+    serve(&path, move |_| {
+        seen.send(()).unwrap();
+        Ok(ControlReply::DiskSize(1))
+    })
+    .unwrap();
+    let mut expected = crate::util::PidRecord::current();
+    expected.start_time = expected.start_time.map(|time| time.saturating_add(1));
+    let result = super::super::request_from_shim(
+        &path,
+        &grow_to("container", 1),
+        expected,
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert!(delivered.try_recv().is_err());
 }
 
 #[test]

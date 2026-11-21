@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// ```text
 /// create()  → Configured (persisted to DB, no VM)
 /// start()   → Running (VM initialized)
-/// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
+/// SIGSTOP   → Paused (VM frozen during disk copy or export)
 /// SIGCONT   → Running (VM resumed)
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
@@ -43,7 +43,7 @@ pub enum BoxStatus {
     Stopped,
 
     /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
-    /// Used during export/snapshot for point-in-time consistency.
+    /// Used during disk copy or export for point-in-time consistency.
     /// Equivalent to Docker's cgroup freezer pause.
     Paused,
 

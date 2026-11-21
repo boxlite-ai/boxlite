@@ -376,6 +376,7 @@ impl VmmController for ShimController {
             &self.options,
         )
         .with_nested_virtualization(config.nested_virtualization)
+        .with_live_disk_snapshot(config.engine == VmmKind::Libkrun)
         .with_volume_access(config.volume_access.clone());
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess

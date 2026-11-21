@@ -4,10 +4,13 @@ mod constants;
 pub mod context;
 pub mod engine;
 pub mod factory;
+pub(crate) mod snapshot;
 
 use boxlite_shared::{BoxliteError, BoxliteResult};
 pub use engine::Krun;
 pub use factory::KrunFactory;
+#[doc(hidden)]
+pub use snapshot::SnapshotListener;
 
 pub(crate) fn check_status(label: &str, status: i32) -> BoxliteResult<()> {
     if status < 0 {

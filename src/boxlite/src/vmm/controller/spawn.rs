@@ -47,6 +47,7 @@ pub struct ShimSpawner<'a> {
     options: &'a BoxOptions,
     nested_virtualization: bool,
     volume_access: Vec<PathAccess>,
+    live_disk_snapshot: bool,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -63,6 +64,7 @@ impl<'a> ShimSpawner<'a> {
             options,
             nested_virtualization: false,
             volume_access: Vec::new(),
+            live_disk_snapshot: false,
         }
     }
 
@@ -100,6 +102,11 @@ impl<'a> ShimSpawner<'a> {
 
     pub fn with_volume_access(mut self, paths: Vec<PathAccess>) -> Self {
         self.volume_access = paths;
+        self
+    }
+
+    pub(crate) fn with_live_disk_snapshot(mut self, enabled: bool) -> Self {
+        self.live_disk_snapshot = enabled;
         self
     }
 
@@ -154,6 +161,7 @@ impl<'a> ShimSpawner<'a> {
             .with_volumes(self.options.volumes.clone())
             .with_mounts(self.options.mounts.clone())
             .with_additional_path_access(self.additional_path_access())
+            .with_live_disk_snapshot(self.live_disk_snapshot)
             .with_network_backend_enabled(matches!(
                 &self.options.network,
                 NetworkSpec::Enabled { .. }

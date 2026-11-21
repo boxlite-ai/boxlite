@@ -414,6 +414,10 @@ impl BoxStore {
 /// On macOS: Uses kern.bootsessionuuid
 /// On Linux: Uses /proc/sys/kernel/random/boot_id
 fn get_boot_id() -> String {
+    current_boot_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
+pub(crate) fn current_boot_id() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
@@ -421,21 +425,23 @@ fn get_boot_id() -> String {
             .args(["-n", "kern.bootsessionuuid"])
             .output()
             .ok()
+            .filter(|output| output.status.success())
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+            .filter(|id| !id.is_empty())
     }
 
     #[cfg(target_os = "linux")]
     {
         std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
             .map(|s| s.trim().to_string())
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+            .filter(|id| !id.is_empty())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        uuid::Uuid::new_v4().to_string()
+        None
     }
 }
 
