@@ -6,7 +6,7 @@
 
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { MemoryRouter, Outlet, useLocation, useParams } from 'react-router-dom'
+import { Link, MemoryRouter, Outlet, useLocation, useParams } from 'react-router-dom'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -16,11 +16,14 @@ vi.mock('@/components/OrganizationExperience', () => ({
 
 // The route table is what is under test, so everything it mounts around a page
 // is a pass-through and every page is a marker naming itself.
-vi.mock('react-oidc-context', () => ({
-  useAuth: () => ({ error: undefined, isAuthenticated: false, user: undefined, removeUser: vi.fn() }),
+const { useAuth, usePostHog, useConfig } = vi.hoisted(() => ({
+  useAuth: vi.fn(),
+  usePostHog: vi.fn(),
+  useConfig: vi.fn(),
 }))
-vi.mock('posthog-js/react', () => ({ usePostHog: () => undefined }))
-vi.mock('./hooks/useConfig', () => ({ useConfig: () => ({}) }))
+vi.mock('react-oidc-context', () => ({ useAuth }))
+vi.mock('posthog-js/react', () => ({ usePostHog }))
+vi.mock('./hooks/useConfig', () => ({ useConfig }))
 
 const { passThrough, registration, organizationMount, notificationMount } = vi.hoisted(() => ({
   passThrough: ({ children }: { children?: React.ReactNode }) => children,
@@ -81,6 +84,8 @@ describe('App routes', () => {
   let root: Root | null = null
 
   beforeAll(() => {
+    useAuth.mockReturnValue({ isAuthenticated: false })
+    useConfig.mockReturnValue({})
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
   })
 
@@ -93,13 +98,14 @@ describe('App routes', () => {
     notificationMount.mockClear()
   })
 
-  async function renderAt(path: string) {
+  async function renderAt(path: string, navigation?: React.ReactNode) {
     const host = document.createElement('div')
     document.body.appendChild(host)
     root = createRoot(host)
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={[path]}>
+          {navigation}
           <App />
         </MemoryRouter>,
       )
@@ -112,6 +118,41 @@ describe('App routes', () => {
     }
     return document.body.textContent
   }
+
+  it('suppresses the next pageview after another tab revokes analytics', async () => {
+    const sub = 'pageview-regression'
+    const consentKey = 'privacy_consent_' + sub
+    const allowed = { necessary: true, analytics: true, preferences: false, marketing: false }
+    const pageviews = vi.fn()
+    vi.stubEnv('PROD', true)
+    useAuth.mockReturnValue({ isAuthenticated: true, user: { profile: { sub } } })
+    useConfig.mockReturnValue({ posthog: { host: 'https://events.example', apiKey: 'test' } })
+    usePostHog.mockReturnValue({ get_distinct_id: () => sub, capture: pageviews })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url, request) => {
+        pageviews(JSON.parse(request.body).event)
+        return new Response()
+      }),
+    )
+    try {
+      localStorage.setItem(consentKey, JSON.stringify(allowed))
+      await renderAt('/dashboard/boxes', <Link to="/dashboard/domains">Next page</Link>)
+      expect(pageviews.mock.calls.map(([event]) => event)).toEqual(['$pageview'])
+      pageviews.mockClear()
+      localStorage.setItem(consentKey, JSON.stringify({ ...allowed, analytics: false }))
+      await act(async () => document.querySelector('a')!.click())
+      expect(document.body.textContent).toContain('domains page')
+      expect(pageviews, 'pageviews dispatched after revocation').not.toHaveBeenCalled()
+    } finally {
+      localStorage.removeItem(consentKey)
+      useAuth.mockReturnValue({ isAuthenticated: false })
+      useConfig.mockReturnValue({})
+      usePostHog.mockReturnValue(undefined)
+      vi.unstubAllGlobals()
+      vi.unstubAllEnvs()
+    }
+  })
 
   // A dashboard path without its own route ends on the box list (hidden) or on
   // not-found (unknown); the catalog is reachable only if both of its paths

@@ -45,7 +45,12 @@ export function CreateApiKeyDialog(props: CreateApiKeyDialogProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <AsciiButton variant="primary" title="New API key" className={props.className}>
+        <AsciiButton
+          data-console-action="new_api_key"
+          variant="primary"
+          title="New API key"
+          className={props.className}
+        >
           <Plus className="size-4" />
           New API key
         </AsciiButton>
@@ -418,7 +423,13 @@ function ApiKeyForm({
           {result ? 'Done' : 'Close'}
         </AsciiButton>
         {!result && (
-          <AsciiButton variant="primary" type="submit" form="create-api-key-form" disabled={!canSubmit}>
+          <AsciiButton
+            data-console-action="create_api_key"
+            variant="primary"
+            type="submit"
+            form="create-api-key-form"
+            disabled={!canSubmit}
+          >
             {submitting ? 'Creating…' : 'Create API key'}
           </AsciiButton>
         )}

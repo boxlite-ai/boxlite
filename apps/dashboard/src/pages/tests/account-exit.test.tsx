@@ -141,7 +141,9 @@ describe('account switch contract', () => {
       </ApiProvider>,
     )
     expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
-    expect(auth.signinRedirect).toHaveBeenCalledWith({ state: { returnTo: '/dashboard/keys' } })
+    expect(auth.signinRedirect).toHaveBeenCalledWith({
+      state: { returnTo: '/dashboard/keys', visit: expect.objectContaining({ visit_id: expect.any(String) }) },
+    })
   })
 })
 

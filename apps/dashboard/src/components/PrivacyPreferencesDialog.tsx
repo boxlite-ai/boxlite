@@ -61,7 +61,8 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
               <div className="space-y-1">
                 <p className="font-medium text-body">Analytics</p>
                 <p className="text-meta text-muted-foreground">
-                  Collects anonymous usage data to help us understand how the product is used and improve it.
+                  Shares the referring website, campaign tags, pages visited and control clicks with PostHog under your
+                  signed-in account. Turn this off and save to stop sharing future activity in this browser.
                 </p>
               </div>
               <Switch

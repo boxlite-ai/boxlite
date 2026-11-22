@@ -10,6 +10,7 @@ import ReactDOM from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
+import { currentVisit } from './lib/console-visit'
 import { ErrorBoundaryFallback } from './components/ErrorBoundaryFallback'
 import LoadingFallback from './components/LoadingFallback'
 import { PostHogProviderWrapper } from './components/PostHogProviderWrapper'
@@ -19,6 +20,8 @@ import { ConfigProvider } from './providers/ConfigProvider'
 import { QueryProvider } from './providers/QueryProvider'
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement)
+// Snapshot the original document before OIDC callbacks or router redirects rewrite the URL.
+currentVisit()
 
 async function enableMocking() {
   if (import.meta.env.VITE_ENABLE_MOCKING !== 'true') {
