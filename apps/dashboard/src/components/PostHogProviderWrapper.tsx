@@ -36,7 +36,7 @@ export const PostHogProviderWrapper: FC<PostHogProviderWrapperProps> = ({ childr
         disable_session_recording: true,
         save_referrer: false,
         store_google: false,
-        // Flag evaluation uses this client. Console events have their own consent-checked sender.
+        // Flag evaluation uses this client. Console events use a separate HTTP sender.
         before_send: () => null,
       }}
     >

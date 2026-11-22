@@ -40,8 +40,7 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
         </DialogHeader>
 
         <DialogDescription>
-          Choose which tracking technologies you allow. At account creation, BoxLite saves the referring website and
-          campaign tags once when available.
+          Choose which tracking technologies you allow. Essential tracking is always required.
         </DialogDescription>
 
         <ScrollArea fade="mask" className="h-[325px] overflow-auto -mx-5 min-h-0">
@@ -54,22 +53,6 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
                 </p>
               </div>
               <Switch checked disabled />
-            </div>
-
-            <Separator />
-
-            <div className="flex items-start justify-between space-x-2 p-3">
-              <div className="space-y-1">
-                <p className="font-medium text-body">Analytics</p>
-                <p className="text-meta text-muted-foreground">
-                  Shares the referring website, campaign tags, pages visited and control clicks with PostHog under your
-                  signed-in account. Turn this off and save to stop sharing future activity in this browser.
-                </p>
-              </div>
-              <Switch
-                checked={tempPreferences.analytics}
-                onCheckedChange={(checked) => setTempPreferences((prev) => ({ ...prev, analytics: checked }))}
-              />
             </div>
 
             <Separator />

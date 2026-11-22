@@ -6,7 +6,6 @@ import { createRoot } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
 import { useConsoleAnalytics } from './useConsoleAnalytics'
-import { usePrivacyConsentStore } from './usePrivacyConsent'
 import { incomingVisit, restoreVisit } from '@/lib/console-visit'
 
 const config = vi.hoisted(() => ({ posthog: { host: '', apiKey: 'test-project' } }))
@@ -20,7 +19,7 @@ function Page() {
   return <button data-console-action="new_volume">New Volume</button>
 }
 
-it('delivers the consented visit and control action to the configured HTTP endpoint', async () => {
+it('automatically delivers the signed-in visit and control action to the configured HTTP endpoint', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const received = vi.fn()
   const server = createServer(async (req, res) => {
@@ -43,8 +42,6 @@ it('delivers the consented visit and control action to the configured HTTP endpo
         </MemoryRouter>,
       ),
     )
-    const consent = usePrivacyConsentStore.getState()
-    act(() => consent.saveConsent({ ...consent.preferences, analytics: true }))
     host.querySelector('button')!.click()
     await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(2))
     for (const event of ['$pageview', 'console_control_click']) {
@@ -70,7 +67,6 @@ it('delivers the consented visit and control action to the configured HTTP endpo
     host.remove()
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
-    localStorage.clear()
     vi.unstubAllGlobals()
   }
 })

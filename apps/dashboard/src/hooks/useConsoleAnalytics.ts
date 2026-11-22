@@ -5,28 +5,17 @@ import { consolePage, currentVisit } from '@/lib/console-visit'
 import { billingTab } from '@/lib/billing-tab'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from './useConfig'
-import { analyticsAllowed, usePrivacyConsent, usePrivacyConsentStore } from './usePrivacyConsent'
 
 export function useConsoleAnalytics() {
   const { posthog, billingApiUrl } = useConfig()
   const { isAuthenticated, user } = useAuth()
-  const { preferences } = usePrivacyConsent()
-  const owner = usePrivacyConsentStore((state) => state.currentUserSub)
   const { pathname, search, key } = useLocation()
   const sub = isAuthenticated ? user?.profile.sub : undefined
   const lastView = useRef<string | undefined>(undefined)
 
   useLayoutEffect(() => {
     const page = consolePage(pathname)
-    if (
-      !sub ||
-      owner !== sub ||
-      !preferences.analytics ||
-      !posthog?.host ||
-      !posthog.apiKey ||
-      !page ||
-      !analyticsAllowed(sub)
-    ) {
+    if (!sub || !posthog?.host || !posthog.apiKey || !page) {
       lastView.current = undefined
       return
     }
@@ -34,8 +23,6 @@ export function useConsoleAnalytics() {
     const endpoint = (host === 'https://app.posthog.com' ? 'https://us.i.posthog.com' : host) + '/i/v0/e/'
     const source = currentVisit()
     const send = (event: string, properties: Record<string, string> = {}) => {
-      if (!analyticsAllowed(sub)) return
-      // Submit immediately without an application queue or a retry after revocation.
       void fetch(endpoint, {
         method: 'POST',
         credentials: 'omit',
@@ -77,5 +64,5 @@ export function useConsoleAnalytics() {
     }
     document.addEventListener('click', click, true)
     return () => document.removeEventListener('click', click, true)
-  }, [sub, owner, preferences.analytics, posthog, billingApiUrl, key, pathname, search])
+  }, [sub, posthog, billingApiUrl, key, pathname, search])
 }

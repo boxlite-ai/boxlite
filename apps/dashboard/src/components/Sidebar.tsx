@@ -5,8 +5,6 @@
  */
 
 import { NavigationIcon, type NavigationIconName } from '@/components/NavigationIcon'
-import { PrivacyPreferencesDialog } from './PrivacyPreferencesDialog'
-import { usePrivacyConsentStore } from '@/hooks/usePrivacyConsent'
 import { SidebarBalance } from '@/components/billing/SidebarBalance'
 import { AccountAvatar } from '@/components/AccountAvatar'
 import { LogoText } from '@/assets/Logo'
@@ -189,9 +187,6 @@ function readExpandedPreference(): boolean {
 
 /** Full-height desktop navigation beside the application header and route content. */
 export function Sidebar({ isBannerVisible, children }: SidebarProps) {
-  const [privacyOpen, setPrivacyOpen] = useState(false)
-  const preferences = usePrivacyConsentStore((state) => state.preferences)
-  const saveConsent = usePrivacyConsentStore((state) => state.saveConsent)
   const { theme, setTheme } = useTheme()
   const { user } = useAuth()
   const { pathname, search, hash } = useLocation()
@@ -342,12 +337,6 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <PrivacyPreferencesDialog
-        open={privacyOpen}
-        onOpenChange={setPrivacyOpen}
-        preferences={preferences}
-        onSave={saveConsent}
-      />
       <AlertDialog open={switchAccountOpen} onOpenChange={setSwitchAccountOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -703,7 +692,6 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <ThemeMenuItems theme={theme} setTheme={setTheme} />
-              <DropdownMenuItem onSelect={() => setPrivacyOpen(true)}>Privacy preferences</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild className="cursor-pointer">
                 <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">

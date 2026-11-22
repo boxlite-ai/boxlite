@@ -5,37 +5,13 @@ through Nx as the `dashboard` project.
 
 ## Console analytics
 
-Signed-in members can enable Analytics under the account menu's **Privacy preferences**.
+PostHog receives a `$pageview` when a signed-in user visits a console route and a
+`console_control_click` when they activate a supported control. Filter by account and `visit_id`
+to see the pages visited and their sequence.
 
-PostHog receives a `$pageview` for console navigation and a `console_control_click` for supported buttons,
-links, tabs and menu items. Filter by account and `visit_id` to inspect the sequence.
-
-Each event includes the direct referring hostname and available campaign tags.
-Previously unseen hosts appear automatically. Withheld or absent referrers appear as `direct/unknown`.
-
-An intervening website becomes the direct referrer.
-
-Routes use templates such as `/dashboard/boxes/:boxId`. Click properties describe the control kind,
-available stable action name and internal destination. Terminal contents, typed values and DOM text are excluded.
-
-Saving the disabled preference stops subsequent browser behavior requests in tabs sharing the account's local preference.
-The browser submits each event once without an application retry queue.
-
-To measure attempts, filter `console_control_click` by its `action` and group by `$pathname`.
-For example, compare `new_volume` (opened the dialog) with `create_volume` (activated Create by button or Enter).
-
-| Area | Example action values |
-| --- | --- |
-| Boxes and volumes | `new_box`, `create_box`, `new_volume`, `create_volume` |
-| Images and registries | `new_box`, `pin_image_tag`, `connect_registry` |
-| Managed and custom domains | `request_managed_domain`, `create_custom_domain`, `verify_custom_domain` |
-| CI | `connect_github`, `connect_github_account`, `update_ci_connection`, `save_ci_limit` |
-| Billing | `select_plan`, `confirm_plan_change`, `top_up_wallet`, `save_auto_top_up`, `redeem_coupon` |
-| API keys and checkpoints | `create_api_key`, `create_checkpoint` |
-
-These actions measure interaction with the control even if the operation subsequently fails.
-When billing is configured, its events carry the displayed `billing_tab` (overview, plans, usage or wallet), including direct visits.
-The coming-soon screen has no tab attribution.
+Events include the direct referring hostname, available campaign tags and a route template.
+Named actions such as `create_volume` count attempts, including keyboard submission.
+Billing events include the displayed tab when billing is available.
 
 ## Create Box sizing
 
@@ -68,19 +44,10 @@ Their existing defaults, validation and submission behavior are unchanged.
 
 ## Registration attribution
 
-The account creation transaction writes the console entry hostname to PostgreSQL in `"user"."registrationSource"`.
-This JSONB field also stores valid `utm_source`, `utm_medium` and `utm_campaign` tags.
+The account creation transaction stores the immediate referring hostname and available UTM tags
+in PostgreSQL under `"user"."registrationSource"`. Subsequent logins preserve the original value.
 
-Protected signup and automatic JWT provisioning use the same insert.
-Returning logins and duplicate registrations preserve the original value.
-
-Attribution works independently of PostHog page tracking. A saved analytics opt-out suppresses the source header.
-
-A console visit without an external referrer records `direct/unknown`.
-Earlier accounts and clients that supply no attribution have SQL NULL.
-
-To count registrations by source, group by `"registrationSource"->>'referring_domain'`.
-The console uses its immediate referrer.
+An absent browser referrer is recorded as `direct/unknown`. Accounts created without attribution have SQL NULL.
 
 ## New-account email policy
 

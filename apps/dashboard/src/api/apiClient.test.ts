@@ -230,23 +230,6 @@ describe('ApiClient registration', () => {
     expect(requests[2].headers.has('X-BoxLite-Registration-Source')).toBe(false)
   })
 
-  it('checks saved preferences on each registration request before sending the source', async () => {
-    const requests: any[] = []
-    const api = await makeClient(vi.fn(), 201, {}, requests, {}, 'opt-out-test')
-    const { usePrivacyConsentStore } = await import('@/hooks/usePrivacyConsent')
-    const store = usePrivacyConsentStore.getState()
-    store.init('opt-out-test')
-    await api.register('first')
-    store.saveConsent({ ...store.preferences, analytics: false })
-    try {
-      await api.register('second')
-      expect(requests[0].headers.has('X-BoxLite-Registration-Source')).toBe(true)
-      expect(requests[1].headers.has('X-BoxLite-Registration-Source')).toBe(false)
-    } finally {
-      localStorage.removeItem('privacy_consent_opt-out-test')
-    }
-  })
-
   it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {
     const user = { id: 'auth0|new-user', name: 'User' }
     const requests: any[] = []

@@ -12,7 +12,6 @@ import { getLocalStorageItem } from '@/lib/local-storage'
 
 const ConsentPreferencesSchema = z.object({
   necessary: z.boolean(),
-  analytics: z.boolean(),
   preferences: z.boolean(),
   marketing: z.boolean(),
 })
@@ -21,30 +20,8 @@ export type ConsentPreferences = z.infer<typeof ConsentPreferencesSchema>
 
 const CONSENT_KEY_PREFIX = 'privacy_consent_'
 
-export function registrationAttributionAllowed(sub: string) {
-  const state = usePrivacyConsentStore.getState()
-  if (state.currentUserSub === sub && state.hasConsented && !state.preferences.analytics) return false
-  try {
-    const saved = localStorage.getItem(CONSENT_KEY_PREFIX + sub)
-    return saved === null || ConsentPreferencesSchema.parse(JSON.parse(saved)).analytics
-  } catch {
-    return false
-  }
-}
-
-export function analyticsAllowed(sub: string) {
-  const state = usePrivacyConsentStore.getState()
-  if (state.currentUserSub !== sub || !state.preferences.analytics) return false
-  try {
-    return JSON.parse(localStorage.getItem(CONSENT_KEY_PREFIX + sub) ?? 'null')?.analytics === true
-  } catch {
-    return false
-  }
-}
-
 const DEFAULT_PREFERENCES: ConsentPreferences = {
   necessary: true,
-  analytics: false,
   preferences: false,
   marketing: false,
 }
@@ -89,7 +66,6 @@ const usePrivacyConsentStore = create<PrivacyConsentState>()((set, get) => ({
       localStorage.setItem(consentKey, JSON.stringify(newPreferences))
       set({ preferences: newPreferences, hasConsented: true })
     } catch {
-      if (!newPreferences.analytics) set({ preferences: newPreferences, hasConsented: true })
       toast.error('Failed to save privacy preferences. Please try again.')
     }
   },

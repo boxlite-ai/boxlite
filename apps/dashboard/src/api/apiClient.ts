@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { registrationAttributionAllowed } from '@/hooks/usePrivacyConsent'
 import { currentVisit } from '@/lib/console-visit'
 import type { FirstRunUseCase } from '@/lib/first-run'
 import type {
@@ -403,11 +402,7 @@ export class ApiClient {
         const controlPlane = new URL(config.apiUrl, window.location.origin)
         const target = new URL(axiosInstance.getUri(request), window.location.origin)
         const root = controlPlane.pathname.replace(/\/$/, '')
-        if (
-          target.origin === controlPlane.origin &&
-          target.pathname.startsWith(root + '/') &&
-          registrationAttributionAllowed(registrationSub)
-        ) {
+        if (target.origin === controlPlane.origin && target.pathname.startsWith(root + '/')) {
           const { referring_domain, utm_source, utm_medium, utm_campaign } = currentVisit()
           request.headers.set(
             registrationHeader,
