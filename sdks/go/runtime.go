@@ -160,6 +160,7 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 }
 
 // CreateWithOutboundPolicy opts in to complete Cloud or native outbound policy.
+// It checks the context before dispatching the request.
 func (r *Runtime) CreateWithOutboundPolicy(ctx context.Context, image string, policy CompleteOutboundPolicy, opts ...BoxOption) (*Box, error) {
 	body, err := json.Marshal(policy)
 	if err != nil {
@@ -191,11 +192,18 @@ func (r *Runtime) create(ctx context.Context, image string, policy *C.char, opts
 	var cerr C.CBoxliteError
 	var code C.enum_BoxliteErrorCode
 	r.nativeCallMu.Lock()
-	if r.handle == nil {
+	var dispatchErr error
+	switch {
+	case r.handle == nil:
+		dispatchErr = ErrRuntimeClosed
+	case policy != nil:
+		dispatchErr = ctx.Err()
+	}
+	if dispatchErr != nil {
 		r.nativeCallMu.Unlock()
 		deleteHandleForDispatch(h)
 		C.boxlite_options_free(cOpts)
-		return nil, ErrRuntimeClosed
+		return nil, dispatchErr
 	}
 	r.ensureDrainRunning()
 	if policy == nil {
@@ -269,6 +277,7 @@ func (r *Runtime) GetOrCreateWithPreparedOutbound(ctx context.Context, image str
 }
 
 // GetOrCreateWithOutboundPolicy reuses a named Box only with matching committed policy.
+// It checks the context before dispatching the request.
 func (r *Runtime) GetOrCreateWithOutboundPolicy(ctx context.Context, image string, policy CompleteOutboundPolicy, opts ...BoxOption) (*Box, bool, error) {
 	body, err := json.Marshal(policy)
 	if err != nil {
@@ -300,11 +309,18 @@ func (r *Runtime) getOrCreate(ctx context.Context, image string, prepared, polic
 	var cerr C.CBoxliteError
 	var code C.enum_BoxliteErrorCode
 	r.nativeCallMu.Lock()
-	if r.handle == nil {
+	var dispatchErr error
+	switch {
+	case r.handle == nil:
+		dispatchErr = ErrRuntimeClosed
+	case policy != nil:
+		dispatchErr = ctx.Err()
+	}
+	if dispatchErr != nil {
 		r.nativeCallMu.Unlock()
 		deleteHandleForDispatch(h)
 		C.boxlite_options_free(cOpts)
-		return nil, false, ErrRuntimeClosed
+		return nil, false, dispatchErr
 	}
 	r.ensureDrainRunning()
 	switch {

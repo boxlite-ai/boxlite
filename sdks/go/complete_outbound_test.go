@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCompleteOutboundPolicyREST(t *testing.T) {
@@ -139,6 +140,48 @@ func TestCompleteOutboundPolicyREST(t *testing.T) {
 			}
 			if len(captured) != 2 || (<-captured).path != "/v1/config" || (<-captured).method != "POST" {
 				t.Fatal("allocated failure must follow fresh config and one POST")
+			}
+		})
+	}
+}
+
+func TestCompleteOutboundCreateCanceledContextDoesNotDispatch(t *testing.T) {
+	for _, method := range []string{"create", "get-or-create"} {
+		t.Run(method, func(t *testing.T) {
+			requests := make(chan string, 4)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				requests <- req.Method + " " + req.URL.Path
+				if req.URL.Path == "/v1/config" {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"capabilities":{"complete_outbound_policy_enabled":true}}`))
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+			runtime, err := NewRest(BoxliteRestOptions{
+				URL: server.URL, Credential: NewApiKeyCredential("test-token"), PathPrefix: "org",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			policy := CompleteOutboundPolicy{Mode: NetworkModeEnabled}
+			if method == "create" {
+				_, err = runtime.CreateWithOutboundPolicy(ctx, "alpine", policy)
+			} else {
+				_, _, err = runtime.GetOrCreateWithOutboundPolicy(ctx, "alpine", policy, WithName("worker"))
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected canceled context error, got %v", err)
+			}
+			select {
+			case request := <-requests:
+				t.Fatalf("canceled call dispatched %s", request)
+			case <-time.After(500 * time.Millisecond):
 			}
 		})
 	}
