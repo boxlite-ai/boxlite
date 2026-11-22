@@ -193,12 +193,17 @@ impl BoxRunner {
     ) -> anyhow::Result<LiteBox> {
         let options = build_options(&self.args, self.home.as_deref(), rootfs, command_args)?;
 
-        let litebox = self
-            .rt
-            .create(options, self.args.management.name.clone())
-            .await?;
-
-        Ok(litebox)
+        let name = self.args.management.name.clone();
+        match self.args.network.outbound_policy.as_deref() {
+            Some(path) => {
+                let policy = super::network::policy::read_complete_policy(path).await?;
+                Ok(self
+                    .rt
+                    .create_with_complete_outbound_policy(options, name, policy)
+                    .await?)
+            }
+            None => Ok(self.rt.create(options, name).await?),
+        }
     }
 
     fn validate_flags(&self) -> anyhow::Result<()> {

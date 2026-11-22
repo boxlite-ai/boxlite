@@ -156,7 +156,24 @@ func (r *Runtime) Shutdown(ctx context.Context, timeout time.Duration) error {
 
 // Create creates and returns a new box.
 func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (*Box, error) {
-	r.ensureDrainRunning()
+	return r.create(ctx, image, nil, opts)
+}
+
+// CreateWithOutboundPolicy opts in to complete Cloud or native outbound policy.
+func (r *Runtime) CreateWithOutboundPolicy(ctx context.Context, image string, policy CompleteOutboundPolicy, opts ...BoxOption) (*Box, error) {
+	body, err := json.Marshal(policy)
+	if err != nil {
+		return nil, err
+	}
+	cPolicy := C.CString(string(body))
+	defer C.free(unsafe.Pointer(cPolicy))
+	return r.create(ctx, image, cPolicy, opts)
+}
+
+func (r *Runtime) create(ctx context.Context, image string, policy *C.char, opts []BoxOption) (*Box, error) {
+	if r == nil {
+		return nil, ErrRuntimeClosed
+	}
 
 	cfg := &boxConfig{}
 	for _, o := range opts {
@@ -172,7 +189,21 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_create_box(r.handle, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
+	var code C.enum_BoxliteErrorCode
+	r.nativeCallMu.Lock()
+	if r.handle == nil {
+		r.nativeCallMu.Unlock()
+		deleteHandleForDispatch(h)
+		C.boxlite_options_free(cOpts)
+		return nil, ErrRuntimeClosed
+	}
+	r.ensureDrainRunning()
+	if policy == nil {
+		code = C.boxlite_create_box(r.handle, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
+	} else {
+		code = C.boxlite_create_box_with_outbound_policy(r.handle, cOpts, policy, C.cbCreateBox(), handleToPtr(h), &cerr)
+	}
+	r.nativeCallMu.Unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		// boxlite_create_box consumes opts on success but not on synchronous failure.
@@ -180,6 +211,10 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 		return nil, freeError(&cerr)
 	}
 
+	cleanup := r.forceRemoveOrphanBox
+	if policy != nil {
+		cleanup = func(handle *C.CBoxHandle) { C.boxlite_box_free(handle) }
+	}
 	select {
 	case res := <-ch:
 		if res.err != nil {
@@ -188,12 +223,12 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 		return newBoxFromHandle(r, res.value, cfg.name), nil
 	case <-ctx.Done():
 		// Caller's ctx fired before the create completed. The Tokio task is
-		// still running on the C side; if it succeeds, abandonAsync force-
-		// removes the orphan box so we don't leak a live VM.
-		abandonAsync(ch, h, r.closing, r.forceRemoveOrphanBox)
+		// still running on the C side. Complete policy requests retain the Box
+		// so callers can inspect a creation whose outcome was uncertain.
+		abandonAsync(ch, h, r.closing, cleanup)
 		return nil, ctx.Err()
 	case <-r.closing:
-		abandonAsync(ch, h, r.closing, r.forceRemoveOrphanBox)
+		abandonAsync(ch, h, r.closing, cleanup)
 		return nil, ErrRuntimeClosed
 	}
 }
@@ -219,7 +254,7 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 // plane's unique box id, so a replayed CREATE_BOX re-adopts the orphan.
 // Force-removing only the created case on cancel is a tracked follow-up.
 func (r *Runtime) GetOrCreate(ctx context.Context, image string, opts ...BoxOption) (*Box, bool, error) {
-	return r.getOrCreate(ctx, image, nil, opts)
+	return r.getOrCreate(ctx, image, nil, nil, opts)
 }
 
 // GetOrCreateWithPreparedOutbound installs or adopts the exact hosted policy.
@@ -230,10 +265,21 @@ func (r *Runtime) GetOrCreateWithPreparedOutbound(ctx context.Context, image str
 	}
 	cPrepared := C.CString(string(body))
 	defer C.free(unsafe.Pointer(cPrepared))
-	return r.getOrCreate(ctx, image, cPrepared, opts)
+	return r.getOrCreate(ctx, image, cPrepared, nil, opts)
 }
 
-func (r *Runtime) getOrCreate(ctx context.Context, image string, prepared *C.char, opts []BoxOption) (*Box, bool, error) {
+// GetOrCreateWithOutboundPolicy reuses a named Box only with matching committed policy.
+func (r *Runtime) GetOrCreateWithOutboundPolicy(ctx context.Context, image string, policy CompleteOutboundPolicy, opts ...BoxOption) (*Box, bool, error) {
+	body, err := json.Marshal(policy)
+	if err != nil {
+		return nil, false, err
+	}
+	cPolicy := C.CString(string(body))
+	defer C.free(unsafe.Pointer(cPolicy))
+	return r.getOrCreate(ctx, image, nil, cPolicy, opts)
+}
+
+func (r *Runtime) getOrCreate(ctx context.Context, image string, prepared, policy *C.char, opts []BoxOption) (*Box, bool, error) {
 	if r == nil {
 		return nil, false, ErrRuntimeClosed
 	}
@@ -261,10 +307,13 @@ func (r *Runtime) getOrCreate(ctx context.Context, image string, prepared *C.cha
 		return nil, false, ErrRuntimeClosed
 	}
 	r.ensureDrainRunning()
-	if prepared == nil {
-		code = C.boxlite_get_or_create_box(r.handle, cOpts, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
-	} else {
+	switch {
+	case policy != nil:
+		code = C.boxlite_get_or_create_box_with_outbound_policy(r.handle, cOpts, policy, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	case prepared != nil:
 		code = C.boxlite_get_or_create_box_with_prepared_outbound(r.handle, cOpts, prepared, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	default:
+		code = C.boxlite_get_or_create_box(r.handle, cOpts, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
 	}
 	r.nativeCallMu.Unlock()
 	if code != C.Ok {

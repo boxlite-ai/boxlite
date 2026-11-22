@@ -11,6 +11,7 @@ package boxlite
 */
 import "C"
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -35,6 +36,12 @@ func freeError(cerr *C.CBoxliteError) error {
 		msg = C.GoString(cerr.message)
 	}
 	C.boxlite_error_free(cerr)
+	if code == ErrOutboundPolicy {
+		var detailed OutboundPolicyError
+		if json.Unmarshal([]byte(msg), &detailed) == nil && detailed.Effect != "" {
+			return &detailed
+		}
+	}
 	return &Error{Code: code, Message: msg}
 }
 

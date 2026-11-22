@@ -55,6 +55,18 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
+    async fn create_with_complete_outbound_policy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        policy: crate::net::CompleteOutboundPolicy,
+        reuse_existing: bool,
+    ) -> crate::net::OutboundPolicyResult<(LiteBox, bool)> {
+        Ok(self
+            .create_with_outbound_policy(options, name, policy, reuse_existing)
+            .await?)
+    }
+
     async fn prepare_hosted_outbound_create(
         &self,
         _policy: crate::net::CompleteOutboundPolicy,
@@ -242,6 +254,41 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
         Err(BoxliteError::Unsupported(
             "this backend does not support complete outbound policies".into(),
         ))
+    }
+
+    async fn outbound_policy_status(&self) -> BoxliteResult<crate::net::OutboundPolicyStatus> {
+        Ok(self.complete_outbound_status().await?.into())
+    }
+
+    async fn replace_verified_outbound_policy(
+        &self,
+        policy: crate::net::CompleteOutboundPolicy,
+        expected: Option<crate::net::OutboundRevision>,
+    ) -> crate::net::OutboundPolicyResult<crate::net::OutboundPolicyReplacement> {
+        use crate::net::{OutboundPolicyReplacement, OutboundReplaceOutcome, OutboundRevision};
+
+        let previous = self.complete_outbound_snapshot().await?;
+        if expected
+            .as_ref()
+            .is_some_and(|expected| *expected != previous.revision)
+        {
+            return Err(
+                BoxliteError::InvalidState("outbound revision does not match".into()).into(),
+            );
+        }
+        let candidate = policy.prepare(previous.admission, OutboundRevision::fresh())?;
+        match self
+            .replace_complete_outbound(policy, candidate.revision.clone(), Some(previous.revision))
+            .await?
+        {
+            OutboundReplaceOutcome::Applied => Ok(OutboundPolicyReplacement::from_readback(
+                candidate,
+                self.outbound_policy_status().await,
+            )),
+            OutboundReplaceOutcome::PreconditionFailed => {
+                Err(BoxliteError::InvalidState("outbound revision does not match".into()).into())
+            }
+        }
     }
 
     async fn hosted_outbound(

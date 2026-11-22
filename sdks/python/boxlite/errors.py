@@ -19,6 +19,7 @@ __all__ = [
     "MetadataError",
     "NetworkError",
     "NotFoundError",
+    "OutboundPolicyError",
     "ParseError",
     "ResourceExhaustedError",
     "SessionReapedError",
@@ -32,6 +33,17 @@ __all__ = [
 
 class BoxliteError(Exception):
     """Base exception for all boxlite errors."""
+
+
+class OutboundPolicyError(BoxliteError, RuntimeError):
+    """A complete policy request with server or application-effect details."""
+
+    def __init__(self, message, effect, status, code, box_id):
+        super().__init__(message)
+        self.effect = effect
+        self.status = status
+        self.code = code
+        self.box_id = box_id
 
 
 class ExecError(BoxliteError):

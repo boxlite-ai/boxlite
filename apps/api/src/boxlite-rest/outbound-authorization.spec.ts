@@ -1,7 +1,7 @@
 import { createSign, generateKeyPairSync } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { UnauthorizedException, type INestApplication } from '@nestjs/common'
+import { NotFoundException, UnauthorizedException, type INestApplication } from '@nestjs/common'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { PassportModule } from '@nestjs/passport'
 import { Test } from '@nestjs/testing'
@@ -17,6 +17,7 @@ import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { BoxliteConfigController } from './boxlite-config.controller'
 
 // HTTP exercises the production Passport strategies and organization guards.
 // Credential, membership, Redis and Box persistence are controlled fixtures.
@@ -115,7 +116,7 @@ describe('outbound policy HTTP authorization', () => {
     })
     const moduleRef = await Test.createTestingModule({
       imports: [PassportModule.register({ session: false })],
-      controllers: [BoxliteBoxController],
+      controllers: [BoxliteBoxController, BoxliteConfigController],
       providers: [
         {
           provide: BoxService,
@@ -199,9 +200,10 @@ describe('outbound policy HTTP authorization', () => {
     status: boolean | 'complete' | 'complete/status' = false,
     headers: Record<string, string> = {},
     body: object = { mode: 'disabled' },
+    boxId = 'box1',
   ): Promise<Response> {
     return fetch(
-      `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/v1${prefix}/boxes/box1/network/outbound${typeof status === 'string' ? '/' + status : status ? '/status' : ''}`,
+      `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/v1${prefix}/boxes/${encodeURIComponent(boxId)}/network/outbound${typeof status === 'string' ? '/' + status : status ? '/status' : ''}`,
       {
         method,
         headers: {
@@ -268,6 +270,20 @@ describe('outbound policy HTTP authorization', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     expect(await response.json()).toEqual({ application_state: 'pending', pending_revision: 'complete-b' })
     expect(getCompleteStatus).toHaveBeenCalledWith('box1', organizationId)
+
+    getCompleteStatus.mockRejectedValueOnce(new NotFoundException('Box not found in organization'))
+    const missing = await request('GET', '/org-1', 'outbound-read-key', 'complete/status', {}, {}, 'foreign-box')
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).not.toHaveProperty('persisted')
+    expect(getCompleteStatus).toHaveBeenLastCalledWith('foreign-box', organizationId)
+  })
+
+  it('advertises complete outbound policy through the Cloud config route', async () => {
+    const response = await fetch(
+      `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/v1/config`,
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ capabilities: { complete_outbound_policy_enabled: true } })
   })
 
   it('requires a scoped writer for complete PUT and preserves explicit empty deny', async () => {

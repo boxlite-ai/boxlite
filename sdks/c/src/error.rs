@@ -7,6 +7,7 @@ use std::os::raw::c_char;
 use std::ptr;
 
 use boxlite::BoxliteError;
+use boxlite::net::OutboundPolicyError;
 
 // ============================================================================
 // Error Code Enum - Maps to BoxliteError variants
@@ -64,6 +65,8 @@ pub enum BoxliteErrorCode {
     /// Interactive execution session was reaped server-side after disconnect.
     /// Reattach is no longer possible — start a new exec.
     SessionReaped = 21,
+    /// A complete policy request failed. The error message contains JSON details.
+    OutboundPolicy = 22,
 }
 
 /// Extended error information for C API.
@@ -131,6 +134,34 @@ pub fn error_to_c_error(err: BoxliteError) -> FFIError {
     let code = error_to_code(&err);
     let message = error_to_c_string(&err);
     FFIError { code, message }
+}
+
+impl From<BoxliteError> for FFIError {
+    fn from(error: BoxliteError) -> Self {
+        error_to_c_error(error)
+    }
+}
+
+impl From<OutboundPolicyError> for FFIError {
+    fn from(error: OutboundPolicyError) -> Self {
+        match error {
+            OutboundPolicyError::Runtime(error) => error.into(),
+            OutboundPolicyError::Request {
+                effect,
+                status,
+                code,
+                box_id,
+                message,
+            } => {
+                let details = serde_json::json!({"effect": effect, "status": status, "code": code, "box_id": box_id, "message": message});
+                let message = CString::new(details.to_string()).expect("JSON escapes NUL bytes");
+                Self {
+                    code: BoxliteErrorCode::OutboundPolicy,
+                    message: message.into_raw(),
+                }
+            }
+        }
+    }
 }
 
 /// Write error to output parameter (if not NULL)

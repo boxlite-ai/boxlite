@@ -9,9 +9,21 @@ use crate::domains::JsDomainHandle;
 use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
+use crate::network::CompletePolicyArg;
 use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
-use crate::util::map_err;
+use crate::util::{map_err, map_outbound_error};
 use crate::volumes::JsVolumeHandle;
+
+fn complete_create_options(options: JsBoxOptions) -> Result<BoxOptions> {
+    if options.network.as_ref().is_some_and(|network| {
+        network.outbound.is_some() || network.mode.is_some() || network.allow_net.is_some()
+    }) {
+        return Err(Error::from_reason(
+            "complete policy cannot be combined with legacy outbound options",
+        ));
+    }
+    BoxOptions::try_from(options).map_err(map_err)
+}
 
 /// BoxLite runtime instance.
 ///
@@ -25,6 +37,49 @@ pub struct JsBoxlite {
 
 #[napi]
 impl JsBoxlite {
+    #[napi(
+        strict,
+        ts_args_type = "options: JsBoxOptions, policy: { mode: 'enabled' | 'disabled'; allowNet?: string[]; denyNet?: string[] }, name?: string"
+    )]
+    pub async fn create_with_outbound_policy(
+        &self,
+        options: JsBoxOptions,
+        policy: CompletePolicyArg,
+        name: Option<String>,
+    ) -> Result<JsBox> {
+        let options = complete_create_options(options)?;
+        let handle = self
+            .runtime
+            .create_with_complete_outbound_policy(options, name, policy.0)
+            .await
+            .map_err(map_outbound_error)?;
+        Ok(JsBox {
+            handle: Arc::new(handle),
+        })
+    }
+
+    #[napi(
+        strict,
+        ts_args_type = "options: JsBoxOptions, policy: { mode: 'enabled' | 'disabled'; allowNet?: string[]; denyNet?: string[] }, name?: string"
+    )]
+    pub async fn get_or_create_with_outbound_policy(
+        &self,
+        options: JsBoxOptions,
+        policy: CompletePolicyArg,
+        name: Option<String>,
+    ) -> Result<JsGetOrCreateResult> {
+        let options = complete_create_options(options)?;
+        let (handle, created) = self
+            .runtime
+            .get_or_create_with_complete_outbound_policy(options, name, policy.0)
+            .await
+            .map_err(map_outbound_error)?;
+        Ok(JsGetOrCreateResult {
+            inner_handle: Arc::new(handle),
+            inner_created: created,
+        })
+    }
+
     /// Create a new runtime with custom options.
     ///
     /// # Arguments

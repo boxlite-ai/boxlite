@@ -430,12 +430,12 @@ pub enum RuntimeEvent {
     CreateBox {
         cb: CBoxCreateBoxFn,
         user_data: usize,
-        result: Result<OwnedFfiPtr<crate::CBoxHandle>, BoxliteError>,
+        result: Result<OwnedFfiPtr<crate::CBoxHandle>, boxlite::net::OutboundPolicyError>,
     },
     GetOrCreateBox {
         cb: CBoxGetOrCreateBoxFn,
         user_data: usize,
-        result: Result<(OwnedFfiPtr<crate::CBoxHandle>, bool), BoxliteError>,
+        result: Result<(OwnedFfiPtr<crate::CBoxHandle>, bool), boxlite::net::OutboundPolicyError>,
     },
     BoxExport {
         cb: CBoxExportFn,

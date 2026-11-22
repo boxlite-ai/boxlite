@@ -6,9 +6,11 @@ import { Box, NetworkMode } from '@boxlite-ai/api-client'
 import { useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
+import { useAuth } from 'react-oidc-context'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { BoxDomainBindings } from './BoxDomainBindings'
 import { BoxNetworkPanel } from './BoxNetworkPanel'
+import { BoxOutboundPolicy } from './BoxOutboundPolicy'
 import { BoxTunnelDialog } from './BoxTunnelDialog'
 
 /** Scope the dialog to its authenticated client; switching context discards secrets and late results. */
@@ -22,6 +24,7 @@ export function BoxNetworkSection({
   children?: ReactNode
 }) {
   const api = useApi()
+  const { user } = useAuth()
   const { selectedOrganization } = useSelectedOrganization()
   const organizationId = selectedOrganization?.id
   const toggleInbound = useUpdateBoxInboundMutation()
@@ -70,6 +73,19 @@ export function BoxNetworkSection({
     <>
       <BoxNetworkPanel
         network={box.network}
+        outboundDetails={
+          user && organizationId ? (
+            <BoxOutboundPolicy
+              key={JSON.stringify([user.profile.iss, user.profile.sub, organizationId, box.id])}
+              api={api}
+              organizationId={organizationId}
+              boxId={box.id}
+              accessToken={user.access_token}
+            />
+          ) : (
+            <span>Policy unavailable</span>
+          )
+        }
         inboundPending={toggleInbound.isPending}
         canManage={canManage}
         onToggleInbound={setInbound}

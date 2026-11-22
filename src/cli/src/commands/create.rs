@@ -77,7 +77,15 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
         None => (args.to_box_options(global)?, global.create_runtime()?),
     };
 
-    let litebox = rt.create(box_options, args.management.name.clone()).await?;
+    let name = args.management.name;
+    let litebox = match args.network.outbound_policy.as_deref() {
+        Some(path) => {
+            let policy = super::network::policy::read_complete_policy(path).await?;
+            rt.create_with_complete_outbound_policy(box_options, name, policy)
+                .await?
+        }
+        None => rt.create(box_options, name).await?,
+    };
     println!("{}", litebox.id());
 
     Ok(())

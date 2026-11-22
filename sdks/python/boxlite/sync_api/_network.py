@@ -70,6 +70,18 @@ class SyncNetworkHandle:
         """Replace outbound policy. Enabled with an empty list clears restrictions."""
         self._owner._sync(self._owner._box.network.update_outbound(spec))
 
+    def outbound_policy_status(self) -> dict:
+        """Read complete outbound policy status without booting the Box."""
+        return self._owner._sync(self._owner._box.network.outbound_policy_status())
+
+    def replace_outbound_policy(
+        self, policy: dict, expected_revision: str | None = None
+    ) -> dict:
+        """Conditionally replace policy and read back the current application state."""
+        return self._owner._sync(
+            self._owner._box.network.replace_outbound_policy(policy, expected_revision)
+        )
+
     def tunnel(
         self,
         target: "tuple[str, int] | tuple[str, int, int, int]",

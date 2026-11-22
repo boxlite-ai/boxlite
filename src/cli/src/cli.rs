@@ -232,6 +232,7 @@ const NETWORK_SCOPES: &[CommandScope] = &[
         globals: BOX_GLOBALS,
         children: &[],
     },
+    box_command_scope("replace-outbound", &[]),
     CommandScope {
         name: "tunnel",
         globals: BOX_GLOBALS,
@@ -1469,6 +1470,10 @@ pub struct NetworkFlags {
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
 
+    /// Complete outbound policy JSON file, including optional deny rules.
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["network", "allow_net"])]
+    pub outbound_policy: Option<std::path::PathBuf>,
+
     /// Inbound mode: "enabled" (services the box exposes are reachable
     /// through the remote proxy under each tunnel's access policy) or
     /// "disabled" (default —
@@ -2575,6 +2580,7 @@ mod tests {
         NetworkFlags {
             network: network.map(str::to_string),
             allow_net: allow_net.iter().map(|s| s.to_string()).collect(),
+            outbound_policy: None,
             inbound: None,
             net_tx_kbps: None,
             net_rx_kbps: None,

@@ -6,6 +6,7 @@
 //! Enabled with the `rest` feature flag.
 
 pub(crate) mod client;
+mod complete_outbound;
 pub mod credential;
 pub(crate) mod error;
 mod exec;

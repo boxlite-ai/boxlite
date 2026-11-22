@@ -6,6 +6,8 @@
 
 import { BadRequestException, Logger } from '@nestjs/common'
 import { Transform, Type, plainToInstance } from 'class-transformer'
+import { isIPv6 } from 'node:net'
+import { domainToASCII } from 'node:url'
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
@@ -109,8 +111,16 @@ function usesCompleteCreateOutbound(outbound: unknown): boolean {
   return (
     Array.isArray(allow_net) &&
     (allow_net.length > MAX_NETWORK_ALLOW_LIST_ENTRIES ||
-      allow_net.some((entry) => typeof entry === 'string' && /:\d+$/.test(entry.trim())))
+      allow_net.some((entry) => typeof entry === 'string' && usesCompleteOutboundRule(entry)))
   )
+}
+
+function usesCompleteOutboundRule(entry: string): boolean {
+  const rule = entry.trim()
+  if (/:\d+$/.test(rule)) return true
+  const [address] = rule.split('/', 1)
+  // The complete parser normalizes mapped literals to IPv4, including mapped CIDRs.
+  return isIPv6(address) && /^\[::ffff:[\da-f]{1,4}:[\da-f]{1,4}\]$/.test(domainToASCII(`[${address}]`))
 }
 
 // Rejects any non-empty inbound allowlist: no layer enforces it yet (the

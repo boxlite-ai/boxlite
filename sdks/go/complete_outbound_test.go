@@ -6,12 +6,143 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestCompleteOutboundPolicyREST(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		deny      []string
+		admission OutboundAdmission
+	}{
+		{"omitted", nil, OutboundAdmissionLegacy},
+		{"empty", []string{}, OutboundAdmissionExtendedIPv4},
+		{"nonempty", []string{"example.com"}, OutboundAdmissionExtendedIPv4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const base = "/v1/org/boxes"
+			const path = base + "/outbound-box/network/outbound/complete"
+			type request struct {
+				method, path, auth, etag string
+				body                     map[string]any
+			}
+			captured := make(chan request, 8)
+			var refuseAfterAllocation atomic.Bool
+			snapshot := CompleteOutboundSnapshot{
+				Revision: "r1", Admission: tc.admission,
+				Policy: EffectiveOutboundPolicy{Mode: NetworkModeEnabled, AllowNet: []string{}, DenyNet: append([]string{}, tc.deny...)},
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				entry := request{method: req.Method, path: req.URL.Path, auth: req.Header.Get("Authorization"), etag: req.Header.Get("If-Match")}
+				if req.Method == "POST" || req.Method == "PUT" {
+					if err := json.NewDecoder(req.Body).Decode(&entry.body); err != nil {
+						t.Errorf("request body: %v", err)
+					}
+				}
+				captured <- entry
+				w.Header().Set("Content-Type", "application/json")
+				switch req.Method + " " + req.URL.Path {
+				case "GET /v1/config":
+					_, _ = w.Write([]byte(`{"capabilities":{"complete_outbound_policy_enabled":true}}`))
+				case "POST " + base:
+					if refuseAfterAllocation.Load() {
+						w.WriteHeader(501)
+						_, _ = w.Write([]byte(`{"code":"unsupported","creation_effect":"allocated","box_id":"outbound-box","message":"Runner refused policy"}`))
+						return
+					}
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"box_id":"outbound-box","status":"running","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine","cpus":1,"memory_mib":512}`))
+				case "GET " + path:
+					w.Header().Set("ETag", `"r1"`)
+					_ = json.NewEncoder(w).Encode(snapshot)
+				case "PUT " + path:
+					w.Header().Set("ETag", `"r2"`)
+					updated := snapshot
+					updated.Revision = "r2"
+					_ = json.NewEncoder(w).Encode(updated)
+				case "GET " + path + "/status":
+					updated := snapshot
+					updated.Revision = "r2"
+					_ = json.NewEncoder(w).Encode(OutboundPolicyStatus{Persisted: &updated, RuntimePersisted: &updated,
+						Observed: &CompleteOutboundObservation{Snapshot: updated, ApplicationState: OutboundConfirmed}, ApplicationState: OutboundUncertain})
+				default:
+					t.Errorf("unexpected request: %s %s", req.Method, req.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			runtime, err := NewRest(BoxliteRestOptions{URL: server.URL, Credential: NewApiKeyCredential("test-token"), PathPrefix: "org"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			ctx := context.Background()
+			policy := CompleteOutboundPolicy{Mode: NetworkModeEnabled, DenyNet: tc.deny}
+			_, err = runtime.CreateWithOutboundPolicy(ctx, "alpine", policy,
+				WithNetwork(NetworkSpec{Outbound: OutboundNetworkSpec{Mode: NetworkModeEnabled}}))
+			if !IsInvalidArgument(err) || len(captured) != 0 {
+				t.Fatalf("explicit legacy outbound input must be refused before dispatch: %v", err)
+			}
+			inboundOnly := WithNetwork(NetworkSpec{Inbound: InboundNetworkSpec{Mode: NetworkModeEnabled}})
+			box, err := runtime.CreateWithOutboundPolicy(ctx, "alpine", policy, inboundOnly)
+			if err != nil {
+				t.Fatalf("create with independent inbound policy: %v", err)
+			}
+			defer box.Close()
+			network, err := box.Network()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer network.Close()
+			result, err := network.ReplaceOutboundPolicy(ctx, policy, "r1")
+			if err != nil || result.Acknowledged.Revision != "r2" || result.Status == nil || result.Status.ApplicationState != OutboundUncertain || result.ApplicationVerified {
+				t.Fatalf("unexpected result: %+v, %v", result, err)
+			}
+			if len(captured) != 6 {
+				t.Fatalf("expected 6 requests, got %d", len(captured))
+			}
+			config, create, read := <-captured, <-captured, <-captured
+			previous, replace, status := <-captured, <-captured, <-captured
+			for _, req := range []request{config, create, read, previous, replace, status} {
+				if req.auth != "Bearer test-token" {
+					t.Fatalf("unexpected authorization: %+v", req)
+				}
+			}
+			if create.method != "POST" || create.path != base || replace.method != "PUT" || replace.path != path || replace.etag != `"r1"` {
+				t.Fatalf("unexpected write requests: %+v %+v", create, replace)
+			}
+			createdNetwork := create.body["network"].(map[string]any)
+			if mode := createdNetwork["inbound"].(map[string]any)["mode"]; mode != "enabled" {
+				t.Fatalf("independent inbound mode = %v, want enabled", mode)
+			}
+			outbound := createdNetwork["outbound"].(map[string]any)
+			for _, body := range []map[string]any{outbound, replace.body} {
+				value, present := body["deny_net"]
+				want, _ := json.Marshal(tc.deny)
+				got, _ := json.Marshal(value)
+				if present != (tc.deny != nil) || string(want) != string(got) {
+					t.Fatalf("deny_net presence=%t value=%s, want %s", present, got, want)
+				}
+			}
+			refuseAfterAllocation.Store(true)
+			_, _, err = runtime.GetOrCreateWithOutboundPolicy(ctx, "alpine", policy, inboundOnly)
+			var failure *OutboundPolicyError
+			if !errors.As(err, &failure) || failure.Effect != "allocated" || failure.Status != 501 || failure.BoxID != "outbound-box" || failure.Code != "unsupported" {
+				t.Fatalf("allocated create failure: %+v (%v)", failure, err)
+			}
+			if len(captured) != 2 || (<-captured).path != "/v1/config" || (<-captured).method != "POST" {
+				t.Fatal("allocated failure must follow fresh config and one POST")
+			}
+		})
+	}
+}
 
 func TestPreparedOutboundCreateValidatesAcrossFFI(t *testing.T) {
 	ctx := context.Background()

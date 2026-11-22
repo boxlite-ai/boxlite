@@ -381,6 +381,33 @@ impl BoxliteRuntime {
             .await
     }
 
+    /// Create a Box with complete outbound policy on a native or capable Cloud runtime.
+    pub async fn create_with_complete_outbound_policy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        policy: crate::net::CompleteOutboundPolicy,
+    ) -> crate::net::OutboundPolicyResult<LiteBox> {
+        options.sanitize_create()?;
+        self.backend
+            .create_with_complete_outbound_policy(options, name, policy, false)
+            .await
+            .map(|(handle, _)| handle)
+    }
+
+    /// Reuse a named Box only when the committed complete policy and admission match.
+    pub async fn get_or_create_with_complete_outbound_policy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        policy: crate::net::CompleteOutboundPolicy,
+    ) -> crate::net::OutboundPolicyResult<(LiteBox, bool)> {
+        options.sanitize_create()?;
+        self.backend
+            .create_with_complete_outbound_policy(options, name, policy, true)
+            .await
+    }
+
     /// Prepare a canonical hosted create snapshot on this local Runtime.
     #[doc(hidden)]
     pub async fn prepare_hosted_outbound_create(

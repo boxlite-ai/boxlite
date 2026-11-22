@@ -25,6 +25,10 @@ pub struct InspectArgs {
     /// Output format: json, yaml, or a Go template (e.g. '{{.State}}', '{{.State.Status}}')
     #[arg(short, long, default_value = "json")]
     pub format: String,
+
+    /// Include complete outbound policy and its current application status.
+    #[arg(long)]
+    pub outbound_policy: bool,
 }
 
 /// Single view for inspect: JSON/YAML
@@ -51,6 +55,8 @@ struct InspectPresenter {
     /// not know it, such as a REST server that predates the field.
     #[serde(rename = "Network")]
     network: Option<InspectNetworkPresenter>,
+    #[serde(rename = "OutboundPolicy", skip_serializing_if = "Option::is_none")]
+    outbound_policy: Option<boxlite::net::OutboundPolicyStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +129,7 @@ impl From<&BoxInfo> for InspectPresenter {
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
             network: info.network.as_ref().map(InspectNetworkPresenter::from),
+            outbound_policy: None,
         }
     }
 }
@@ -145,7 +152,18 @@ pub async fn execute(args: InspectArgs, global: &GlobalFlags) -> anyhow::Result<
         return Err(errs.into_iter().next().unwrap());
     }
 
-    let presenters: Vec<InspectPresenter> = infos.iter().map(InspectPresenter::from).collect();
+    let mut presenters = Vec::with_capacity(infos.len());
+    for info in &infos {
+        let mut presenter = InspectPresenter::from(info);
+        if args.outbound_policy {
+            let handle = rt
+                .get(info.id.as_str())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("No such box: {}", info.id))?;
+            presenter.outbound_policy = Some(handle.network().outbound_policy_status().await?);
+        }
+        presenters.push(presenter);
+    }
     let mut stdout = std::io::stdout().lock();
     write_inspect_output(&presenters, &args.format, &mut stdout)?;
 

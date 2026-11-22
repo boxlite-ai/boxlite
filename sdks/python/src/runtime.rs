@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyDict};
 
 use crate::box_handle::PyBox;
 use crate::domains::PyDomainHandle;
@@ -9,8 +9,21 @@ use crate::images::PyImageHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
-use crate::util::map_err;
+use crate::util::{map_err, map_outbound_err, outbound_policy};
 use crate::volumes::PyVolumeHandle;
+
+fn complete_create_options(options: PyBoxOptions) -> PyResult<BoxOptions> {
+    if options
+        .network
+        .as_ref()
+        .is_some_and(|network| network.outbound.is_some())
+    {
+        return Err(map_err(boxlite::BoxliteError::InvalidArgument(
+            "complete policy cannot be combined with legacy outbound options".into(),
+        )));
+    }
+    BoxOptions::try_from(options).map_err(map_err)
+}
 
 #[pyclass(name = "Boxlite")]
 pub(crate) struct PyBoxlite {
@@ -84,6 +97,53 @@ impl PyBoxlite {
             Ok(PyBox {
                 handle: Arc::new(handle),
             })
+        })
+    }
+
+    #[pyo3(signature = (options, policy, name=None))]
+    fn create_with_outbound_policy<'py>(
+        &self,
+        py: Python<'py>,
+        options: PyBoxOptions,
+        policy: &Bound<'_, PyDict>,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = complete_create_options(options)?;
+        let policy = outbound_policy(policy)?;
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let handle = runtime
+                .create_with_complete_outbound_policy(options, name, policy)
+                .await
+                .map_err(map_outbound_err)?;
+            Ok(PyBox {
+                handle: Arc::new(handle),
+            })
+        })
+    }
+
+    #[pyo3(signature = (options, policy, name=None))]
+    fn get_or_create_with_outbound_policy<'py>(
+        &self,
+        py: Python<'py>,
+        options: PyBoxOptions,
+        policy: &Bound<'_, PyDict>,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = complete_create_options(options)?;
+        let policy = outbound_policy(policy)?;
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let (handle, created) = runtime
+                .get_or_create_with_complete_outbound_policy(options, name, policy)
+                .await
+                .map_err(map_outbound_err)?;
+            Ok((
+                PyBox {
+                    handle: Arc::new(handle),
+                },
+                created,
+            ))
         })
     }
 

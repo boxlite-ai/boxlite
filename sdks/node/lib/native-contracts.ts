@@ -631,7 +631,49 @@ export interface JsSshHandle {
   disable(): Promise<JsSshStatus>;
 }
 
+export interface CompleteOutboundPolicy {
+  mode: "enabled" | "disabled";
+  allowNet?: string[];
+  denyNet?: string[];
+}
+
+export interface CompleteOutboundSnapshot {
+  revision: string;
+  admission: "legacy" | "extended_ipv4";
+  policy: {
+    mode: "enabled" | "disabled";
+    allow_net: string[];
+    deny_net: string[];
+  };
+}
+
+type OutboundApplicationState = "pending" | "confirmed" | "uncertain";
+
+export interface OutboundPolicyStatus {
+  persisted: CompleteOutboundSnapshot | null;
+  runtime_persisted: CompleteOutboundSnapshot | null;
+  observed: {
+    snapshot: CompleteOutboundSnapshot;
+    application_state: OutboundApplicationState;
+  } | null;
+  application_state: OutboundApplicationState;
+  pending_revision: string | null;
+  observation_error: string | null;
+}
+
+export interface OutboundPolicyReplacement {
+  acknowledged: CompleteOutboundSnapshot;
+  status: OutboundPolicyStatus | null;
+  application_verified: boolean;
+  status_error: string | null;
+}
+
 export interface JsNetworkHandle {
+  outboundPolicyStatus(): Promise<OutboundPolicyStatus>;
+  replaceOutboundPolicy(
+    policy: CompleteOutboundPolicy,
+    expectedRevision?: string,
+  ): Promise<OutboundPolicyReplacement>;
   updateInbound(spec: {
     mode: "enabled" | "disabled";
     allowNet?: string[];
@@ -777,6 +819,16 @@ export interface JsGetOrCreateResult {
 export interface JsBoxlite {
   importBox(archivePath: string, name?: string | null): Promise<JsBox>;
   create(options: JsBoxOptions, name?: string | null): Promise<JsBox>;
+  createWithOutboundPolicy(
+    options: JsBoxOptions,
+    policy: CompleteOutboundPolicy,
+    name?: string | null,
+  ): Promise<JsBox>;
+  getOrCreateWithOutboundPolicy(
+    options: JsBoxOptions,
+    policy: CompleteOutboundPolicy,
+    name?: string | null,
+  ): Promise<JsGetOrCreateResult>;
   getOrCreate(
     options: JsBoxOptions,
     name?: string | null,
