@@ -47,7 +47,7 @@ export function incomingVisit(referrer: string, href: string) {
 export type ConsoleVisit = z.infer<typeof visitSchema>
 let visit: ConsoleVisit | undefined
 
-export function currentVisit(): ConsoleVisit {
+export function currentVisit(): ConsoleVisit | undefined {
   if (visit) return visit
   try {
     const navigation = performance.getEntriesByType?.('navigation')[0] as PerformanceNavigationTiming | undefined
@@ -63,17 +63,28 @@ export function currentVisit(): ConsoleVisit {
   } catch {
     // Storage and navigation timing are optional.
   }
-  const entry = incomingVisit(document.referrer, window.location.href)
-  restoreVisit(entry)
-  return entry
+  try {
+    restoreVisit(incomingVisit(document.referrer, window.location.href))
+    return visit
+  } catch {
+    return undefined
+  }
 }
 
 export function restoreVisit(source?: unknown) {
-  const parsed = visitSchema.safeParse(source)
-  visit = parsed.success ? parsed.data : incomingVisit('', window.location.origin)
+  visit = undefined
   try {
+    const parsed = visitSchema.safeParse(source)
+    visit = parsed.success ? parsed.data : incomingVisit('', window.location.origin)
     sessionStorage.setItem('boxlite-console-visit', JSON.stringify(visit))
   } catch {
     // In-memory attribution still spans client-side navigation.
   }
+}
+
+export function registrationSourceHeaders(): Record<string, string> | undefined {
+  const source = currentVisit()
+  if (!source) return undefined
+  const { referring_domain, utm_source, utm_medium, utm_campaign } = source
+  return { 'X-BoxLite-Registration-Source': JSON.stringify({ referring_domain, utm_source, utm_medium, utm_campaign }) }
 }

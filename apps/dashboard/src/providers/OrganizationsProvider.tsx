@@ -5,6 +5,7 @@
  */
 
 import { ReactNode, useCallback, useMemo, useState } from 'react'
+import { registrationSourceHeaders } from '@/lib/console-visit'
 import { suspend } from 'suspend-react'
 import { useApi } from '@/hooks/useApi'
 import { OrganizationsContext, IOrganizationsContext } from '@/contexts/OrganizationsContext'
@@ -13,23 +14,30 @@ import { handleApiError } from '@/lib/error-handling'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 
 type Props = {
+  attributeRegistration?: boolean
   children: ReactNode
 }
 
 export function OrganizationsProvider(props: Props) {
   const { organizationsApi } = useApi()
 
-  const getOrganizations = useCallback(async () => {
-    try {
-      return (await organizationsApi.listOrganizations()).data
-    } catch (error) {
-      handleApiError(error, 'Failed to fetch your organizations')
-      throw error
-    }
-  }, [organizationsApi])
+  const getOrganizations = useCallback(
+    async (headers?: Record<string, string>) => {
+      try {
+        return (await organizationsApi.listOrganizations(headers ? { headers } : undefined)).data
+      } catch (error) {
+        handleApiError(error, 'Failed to fetch your organizations')
+        throw error
+      }
+    },
+    [organizationsApi],
+  )
 
   const [organizations, setOrganizations] = useState<Organization[]>(
-    suspend(getOrganizations, [organizationsApi, 'organizations']),
+    suspend(
+      () => getOrganizations(props.attributeRegistration ? registrationSourceHeaders() : undefined),
+      [organizationsApi, 'organizations'],
+    ),
   )
 
   const refreshOrganizations = useCallback(

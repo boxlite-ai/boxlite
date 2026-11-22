@@ -354,6 +354,12 @@ const Volumes: React.FC = () => {
               <input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && (!newName.trim() || !nameValid)) {
+                    event.preventDefault()
+                    void handleCreate()
+                  }
+                }}
                 placeholder="subtitle-models"
                 aria-label="Volume name"
                 aria-invalid={!nameValid}

@@ -14,7 +14,7 @@ vi.mock('./useConfig', () => ({
 
 function Page() {
   useConsoleAnalytics()
-  return <button data-console-action="new_box">customer content</button>
+  return null
 }
 
 it.each([

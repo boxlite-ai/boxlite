@@ -141,7 +141,7 @@ function App() {
           <Suspense fallback={<LoadingFallback />}>
             <ApiProvider>
               <RegistrationGate key={user?.profile.sub}>
-                <OrganizationsProvider>
+                <OrganizationsProvider attributeRegistration={!config.turnstile?.sitekey}>
                   <OrganizationGate>
                     <SelectedOrganizationProvider>
                       <RegionsProvider>

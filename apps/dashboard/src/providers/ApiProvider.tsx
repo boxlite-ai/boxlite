@@ -41,7 +41,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // (surface an error). The redirect stays owned by the effect below to
         // avoid a double-redirect.
         clientOwner.current = sub
-        apiRef.current = new ApiClient(config, user.access_token, () => removeUser(), sub)
+        apiRef.current = new ApiClient(config, user.access_token, () => removeUser())
       } else {
         apiRef.current.setAccessToken(user.access_token)
       }

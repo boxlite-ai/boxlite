@@ -151,7 +151,6 @@ async function makeClient(
   body: unknown = {},
   requests: any[] = [],
   headers: Record<string, string> = {},
-  registrationSub?: string,
 ) {
   vi.resetModules()
   const axios = (await import('axios')).default
@@ -172,7 +171,7 @@ async function makeClient(
     throw new axios.AxiosError(`Request failed with status code ${status}`, undefined, cfg, undefined, response)
   }
   const { ApiClient } = await import('./apiClient')
-  return new ApiClient(config, 'tok', onUnauthorized, registrationSub)
+  return new ApiClient(config, 'tok', onUnauthorized)
 }
 
 describe('ApiClient registration deadline', () => {
@@ -217,17 +216,18 @@ describe('ApiClient registration deadline', () => {
 })
 
 describe('ApiClient registration', () => {
-  it('sends attribution to the provisioning request and omits it after account access succeeds', async () => {
+  it('attaches the source to explicit registration and omits it from unrelated requests', async () => {
     const requests: any[] = []
-    const api = await makeClient(vi.fn(), 200, {}, requests, {}, 'account')
+    const api = await makeClient(vi.fn(), 200, {}, requests)
     const { restoreVisit, incomingVisit } = await import('@/lib/console-visit')
     restoreVisit(incomingVisit('https://github.com/private', 'https://app.boxlite.ai/?utm_medium=docs'))
     const source = '{"referring_domain":"github.com","utm_medium":"docs"}'
     await api.getCheckpointCapabilities()
     await api.userApi.getAuthenticatedUser()
-    await api.userApi.getAuthenticatedUser()
-    expect(requests[1].headers.get('X-BoxLite-Registration-Source')).toBe(source)
-    expect(requests[2].headers.has('X-BoxLite-Registration-Source')).toBe(false)
+    await api.register('challenge')
+    expect(requests[0].headers.has('X-BoxLite-Registration-Source')).toBe(false)
+    expect(requests[2].headers.get('X-BoxLite-Registration-Source')).toBe(source)
+    expect(requests[1].headers.has('X-BoxLite-Registration-Source')).toBe(false)
   })
 
   it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {

@@ -40,7 +40,7 @@ export function useConsoleAnalytics() {
               billingApiUrl && { billing_tab: billingTab(new URLSearchParams(search)) }),
             ...source,
             ...properties,
-            $set_once: { first_console_referring_domain: source.referring_domain },
+            ...(source && { $set_once: { first_console_referring_domain: source.referring_domain } }),
           },
         }),
       }).catch(() => {})

@@ -81,7 +81,7 @@ describe('OrganizationsProvider', () => {
       root = createRoot(host)
       root.render(
         <Suspense fallback={<div>Loading</div>}>
-          <OrganizationsProvider>
+          <OrganizationsProvider attributeRegistration>
             <RefreshProbe />
           </OrganizationsProvider>
         </Suspense>,
@@ -95,5 +95,9 @@ describe('OrganizationsProvider', () => {
     expect(document.body.textContent).toContain('Renamed Org')
     expect(localStorage.getItem('SelectedOrganizationId')).toBe('org-renamed')
     expect(organizationsApiMock.listOrganizations).toHaveBeenCalledTimes(2)
+    expect(
+      organizationsApiMock.listOrganizations.mock.calls[0][0]?.headers['X-BoxLite-Registration-Source'],
+    ).toBeTruthy()
+    expect(organizationsApiMock.listOrganizations.mock.calls[1][0]?.headers).toBeUndefined()
   })
 })

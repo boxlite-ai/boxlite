@@ -148,9 +148,15 @@ describe('Volumes row action "New Box"', () => {
     await act(async () => rowAction('New Volume')!.click())
     const button = rowAction('Create')!
     expect(button.getAttribute('data-console-action')).toBe('create_volume')
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Volume name"]')!
+    await act(async () => {
+      input.focus()
+      await user.keyboard('{Enter}')
+    })
+    expect(toast.error).toHaveBeenCalledWith('Volume name is required')
     const clicks = vi.fn()
     button.addEventListener('click', clicks)
-    await act(async () => user.type(document.querySelector<HTMLInputElement>('[aria-label="Volume name"]')!, 'sample'))
+    await act(async () => user.type(input, 'sample'))
     await act(async () => user.keyboard('{Enter}'))
     expect(toast.success).toHaveBeenCalledTimes(1)
     expect(clicks).toHaveBeenCalledTimes(1)
@@ -200,7 +206,6 @@ describe('Volumes row action "New Box"', () => {
     await act(async () => rowAction('New Volume')!.click())
     expect(document.querySelector('input[aria-label="Volume name"]')).not.toBeNull()
     expect((rowAction('Create') as HTMLButtonElement).disabled).toBe(true)
-    expect(rowAction('Create')?.getAttribute('data-console-action')).toBe('create_volume')
 
     await act(async () => rowAction('Cancel')!.click())
 

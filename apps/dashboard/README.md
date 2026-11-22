@@ -51,6 +51,10 @@ These properties describe the console visit that created the account. Later logi
 leave that event unchanged. An empty browser referrer appears as `direct/unknown`;
 requests without attribution omit the properties.
 
+Explicit signup sends the source on `POST /auth/register`. With automatic signup, the
+console attaches it to the initial `GET /organizations` in the dashboard. If another
+client creates the account first, the registration event can lack a source.
+
 The API queues this event after the account transaction commits. PostHog delivery
 is best effort, so a delivery failure can leave a signup out of the report.
 
