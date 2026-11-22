@@ -44,10 +44,15 @@ Their existing defaults, validation and submission behavior are unchanged.
 
 ## Registration attribution
 
-The account creation transaction stores the immediate referring hostname and available UTM tags
-in PostgreSQL under `"user"."registrationSource"`. Subsequent logins preserve the original value.
+Filter PostHog's `user.registration` events to `event.outcome = success` and break
+them down by `referring_domain`, `utm_source`, `utm_medium`, or `utm_campaign`.
 
-An absent browser referrer is recorded as `direct/unknown`. Accounts created without attribution have SQL NULL.
+These properties describe the console visit that created the account. Later logins
+leave that event unchanged. An empty browser referrer appears as `direct/unknown`;
+requests without attribution omit the properties.
+
+The API queues this event after the account transaction commits. PostHog delivery
+is best effort, so a delivery failure can leave a signup out of the report.
 
 ## New-account email policy
 

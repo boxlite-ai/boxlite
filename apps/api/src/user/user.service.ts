@@ -39,7 +39,6 @@ export class UserService {
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
     user.id = createUserDto.id
-    user.registrationSource = parseRegistrationSource(sourceHeader)
     user.name = createUserDto.name
     user.publicKeys = []
     user.emailVerified = createUserDto.emailVerified
@@ -80,6 +79,7 @@ export class UserService {
         }),
       (error) => (error instanceof UserAlreadyExistsException ? 'user_conflict' : 'internal'),
       (organization) => organization?.id,
+      parseRegistrationSource(sourceHeader),
     )
 
     return user

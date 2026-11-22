@@ -5,7 +5,6 @@
  */
 
 import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm'
-import type { RegistrationSource } from './registration-source'
 import { SystemRole } from './enums/system-role.enum'
 
 export interface UserPublicKey {
@@ -40,9 +39,6 @@ export class User {
     default: SystemRole.USER,
   })
   role: SystemRole
-
-  @Column({ type: 'jsonb', nullable: true, update: false, select: false })
-  registrationSource?: RegistrationSource | null
 
   @CreateDateColumn({
     type: 'timestamp with time zone',
