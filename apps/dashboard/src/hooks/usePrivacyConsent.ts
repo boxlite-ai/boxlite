@@ -21,6 +21,17 @@ export type ConsentPreferences = z.infer<typeof ConsentPreferencesSchema>
 
 const CONSENT_KEY_PREFIX = 'privacy_consent_'
 
+export function registrationAttributionAllowed(sub: string) {
+  const state = usePrivacyConsentStore.getState()
+  if (state.currentUserSub === sub && state.hasConsented && !state.preferences.analytics) return false
+  try {
+    const saved = localStorage.getItem(CONSENT_KEY_PREFIX + sub)
+    return saved === null || ConsentPreferencesSchema.parse(JSON.parse(saved)).analytics
+  } catch {
+    return false
+  }
+}
+
 export function analyticsAllowed(sub: string) {
   const state = usePrivacyConsentStore.getState()
   if (state.currentUserSub !== sub || !state.preferences.analytics) return false

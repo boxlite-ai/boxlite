@@ -151,6 +151,7 @@ async function makeClient(
   body: unknown = {},
   requests: any[] = [],
   headers: Record<string, string> = {},
+  registrationSub?: string,
 ) {
   vi.resetModules()
   const axios = (await import('axios')).default
@@ -171,7 +172,7 @@ async function makeClient(
     throw new axios.AxiosError(`Request failed with status code ${status}`, undefined, cfg, undefined, response)
   }
   const { ApiClient } = await import('./apiClient')
-  return new ApiClient(config, 'tok', onUnauthorized)
+  return new ApiClient(config, 'tok', onUnauthorized, registrationSub)
 }
 
 describe('ApiClient registration deadline', () => {
@@ -216,6 +217,36 @@ describe('ApiClient registration deadline', () => {
 })
 
 describe('ApiClient registration', () => {
+  it('sends attribution to the provisioning request and omits it after account access succeeds', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests, {}, 'account')
+    const { restoreVisit, incomingVisit } = await import('@/lib/console-visit')
+    restoreVisit(incomingVisit('https://github.com/private', 'https://app.boxlite.ai/?utm_medium=docs'))
+    const source = '{"referring_domain":"github.com","utm_medium":"docs"}'
+    await api.getCheckpointCapabilities()
+    await api.userApi.getAuthenticatedUser()
+    await api.userApi.getAuthenticatedUser()
+    expect(requests[1].headers.get('X-BoxLite-Registration-Source')).toBe(source)
+    expect(requests[2].headers.has('X-BoxLite-Registration-Source')).toBe(false)
+  })
+
+  it('checks saved preferences on each registration request before sending the source', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 201, {}, requests, {}, 'opt-out-test')
+    const { usePrivacyConsentStore } = await import('@/hooks/usePrivacyConsent')
+    const store = usePrivacyConsentStore.getState()
+    store.init('opt-out-test')
+    await api.register('first')
+    store.saveConsent({ ...store.preferences, analytics: false })
+    try {
+      await api.register('second')
+      expect(requests[0].headers.has('X-BoxLite-Registration-Source')).toBe(true)
+      expect(requests[1].headers.has('X-BoxLite-Registration-Source')).toBe(false)
+    } finally {
+      localStorage.removeItem('privacy_consent_opt-out-test')
+    }
+  })
+
   it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {
     const user = { id: 'auth0|new-user', name: 'User' }
     const requests: any[] = []

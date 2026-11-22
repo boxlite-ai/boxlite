@@ -8,6 +8,7 @@ import { ApiExcludeController } from '@nestjs/swagger'
 import { Response } from 'express'
 import { RegistrationJwtGuard, RegistrationRequest } from './registration-jwt.guard'
 import { registrationToken } from './registration-request'
+import { REGISTRATION_SOURCE_HEADER } from '../user/registration-source'
 import { RegistrationService } from './registration.service'
 
 @ApiExcludeController()
@@ -22,7 +23,11 @@ export class RegistrationController {
     @Body() body: unknown,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const result = await this.registration.register(request.registrationIdentity, registrationToken(body))
+    const result = await this.registration.register(
+      request.registrationIdentity,
+      registrationToken(body),
+      request.get(REGISTRATION_SOURCE_HEADER),
+    )
     response.status(result.created ? 201 : 200)
     return result.user
   }

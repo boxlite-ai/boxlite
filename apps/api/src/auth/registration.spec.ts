@@ -129,17 +129,26 @@ describe('POST /api/auth/register', () => {
       .setProtectedHeader({ alg: 'RS256', kid: 'registration-test-key' })
       .sign(signingKey)
 
-  const post = async (body: unknown = { turnstileToken: CHALLENGE }, authorization?: string | null) => {
+  const post = async (
+    body: unknown = { turnstileToken: CHALLENGE },
+    authorization?: string | null,
+    source?: string,
+  ) => {
     const header = authorization === undefined ? `Bearer ${await sign(identity)}` : authorization
     return axios.post(endpoint, body, {
-      headers: header ? { Authorization: header } : {},
+      headers: { ...(header && { Authorization: header }), ...(source && { 'X-BoxLite-Registration-Source': source }) },
       validateStatus: () => true,
       proxy: false,
     })
   }
 
   it('creates a user from verified JWT claims and returns only UserDto with 201', async () => {
-    const response = await post({ turnstileToken: CHALLENGE, id: 'spoofed', email: 'spoofed@gmail.com', role: 'admin' })
+    const source = '{"referring_domain":"example.com","utm_source":"docs"}'
+    const response = await post(
+      { turnstileToken: CHALLENGE, id: 'spoofed', email: 'spoofed@gmail.com', role: 'admin' },
+      undefined,
+      source,
+    )
 
     expect(response.status).toBe(201)
     expect(response.data).toEqual({
@@ -158,6 +167,7 @@ describe('POST /api/auth/register', () => {
         defaultOrganizationDefaultRegionId: 'platform-default-region',
       },
       Context.user({ userId: storedUser.id, authMethod: 'jwt' }),
+      source,
     )
     expect(verifyJwt).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
       audience: AUDIENCE,
@@ -253,6 +263,7 @@ describe('POST /api/auth/register', () => {
         emailVerified: false,
       }),
       Context.user({ userId: 'okta-user', authMethod: 'jwt' }),
+      undefined,
     )
   })
 
@@ -262,6 +273,7 @@ describe('POST /api/auth/register', () => {
     expect(users.create).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Unknown' }),
       Context.user({ userId: storedUser.id, authMethod: 'jwt' }),
+      undefined,
     )
   })
 

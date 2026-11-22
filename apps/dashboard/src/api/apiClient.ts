@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { registrationAttributionAllowed } from '@/hooks/usePrivacyConsent'
+import { currentVisit } from '@/lib/console-visit'
 import type { FirstRunUseCase } from '@/lib/first-run'
 import type {
   CiSettings,
@@ -373,23 +375,56 @@ export class ApiClient {
   private _analyticsUsageApi: AnalyticsUsageApi | null
   private _analyticsTelemetryApi: AnalyticsTelemetryApi | null
 
-  constructor(config: DashboardConfig, accessToken: string, onUnauthorized?: () => Promise<void> | void) {
+  constructor(
+    config: DashboardConfig,
+    accessToken: string,
+    onUnauthorized?: () => Promise<void> | void,
+    registrationSub?: string,
+  ) {
     this.onUnauthorized = onUnauthorized
     this.config = new Configuration({
       basePath: config.apiUrl,
       accessToken: accessToken,
     })
 
+    const registrationHeader = 'X-BoxLite-Registration-Source'
+    let automaticRegistrationPending = !config.turnstile?.sitekey
     const axiosInstance = axios.create({ headers: activityHeaders })
     axiosInstance.interceptors.request.use((request) => {
       request.headers?.delete?.('User-Agent')
       if (request.headers) {
         delete (request.headers as Record<string, unknown>)['User-Agent']
       }
+      if (
+        registrationSub &&
+        request.headers.Authorization &&
+        (automaticRegistrationPending || request.url === '/auth/register')
+      ) {
+        const controlPlane = new URL(config.apiUrl, window.location.origin)
+        const target = new URL(axiosInstance.getUri(request), window.location.origin)
+        const root = controlPlane.pathname.replace(/\/$/, '')
+        if (
+          target.origin === controlPlane.origin &&
+          target.pathname.startsWith(root + '/') &&
+          registrationAttributionAllowed(registrationSub)
+        ) {
+          const { referring_domain, utm_source, utm_medium, utm_campaign } = currentVisit()
+          request.headers.set(
+            registrationHeader,
+            JSON.stringify({ referring_domain, utm_source, utm_medium, utm_campaign }),
+          )
+        }
+      }
       return request
     })
     axiosInstance.interceptors.response.use(
       (response) => {
+        if (automaticRegistrationPending && response.config?.headers?.has?.(registrationHeader)) {
+          const path = new URL(axiosInstance.getUri(response.config), window.location.origin).pathname
+          // Public capability endpoints can also succeed before provisioning has happened.
+          const base = new URL(config.apiUrl, window.location.origin).pathname.replace(/\/$/, '')
+          if (path === base + '/users/me' || path === base + '/organizations') automaticRegistrationPending = false
+        }
         // A request succeeded → the token is good again; clear the cross-reload
         // marker so a future stale token still gets its one silent recovery.
         clearReauthAttempted()

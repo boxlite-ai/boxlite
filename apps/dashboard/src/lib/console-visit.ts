@@ -47,7 +47,7 @@ export function incomingVisit(referrer: string, href: string) {
 export type ConsoleVisit = z.infer<typeof visitSchema>
 let visit: ConsoleVisit | undefined
 
-export function currentVisit() {
+export function currentVisit(): ConsoleVisit {
   if (visit) return visit
   try {
     const navigation = performance.getEntriesByType?.('navigation')[0] as PerformanceNavigationTiming | undefined

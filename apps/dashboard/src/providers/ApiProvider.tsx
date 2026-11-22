@@ -24,13 +24,15 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [failed, setFailed] = useState(false)
   const redirecting = useRef(false)
   const manual = getSignInIntent()
+  const clientOwner = useRef<string | undefined>(undefined)
   const apiRef = useRef<ApiClient | null>(null)
   const [isApiReady, setIsApiReady] = useState(false)
 
   // Initialize API client as soon as user is available
   useEffect(() => {
     if (user) {
-      if (!apiRef.current) {
+      const sub = user.profile.sub
+      if (!apiRef.current || clientOwner.current !== sub) {
         // On a 401 the stored token is invalid (expired, or signed by a rotated
         // Rauthy key). Clearing the user flips isAuthenticated false, which the
         // effect below turns into a redirect to a fresh login (preserving
@@ -38,7 +40,8 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // handler can tell a started recovery (suspend) from a failed one
         // (surface an error). The redirect stays owned by the effect below to
         // avoid a double-redirect.
-        apiRef.current = new ApiClient(config, user.access_token, () => removeUser())
+        clientOwner.current = sub
+        apiRef.current = new ApiClient(config, user.access_token, () => removeUser(), sub)
       } else {
         apiRef.current.setAccessToken(user.access_token)
       }

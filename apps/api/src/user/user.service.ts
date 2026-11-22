@@ -19,6 +19,7 @@ import { recordOutcomes } from '../common/utils/business-event.util'
 import { Organization } from '../organization/entities/organization.entity'
 import { Context } from '../common/context/context'
 import { normalizeRegistrationEmail } from './registration-email'
+import { parseRegistrationSource } from './registration-source'
 import { UserAlreadyExistsException } from './user-already-exists.exception'
 
 @Injectable()
@@ -31,13 +32,14 @@ export class UserService {
   ) {}
 
   /** Records the user.registration events of the new user, started by ctx. */
-  async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
+  async create(createUserDto: CreateUserDto, ctx: Context, sourceHeader?: string): Promise<User> {
     const email = createUserDto.email ? normalizeRegistrationEmail(createUserDto.email) : undefined
 
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
     user.id = createUserDto.id
+    user.registrationSource = parseRegistrationSource(sourceHeader)
     user.name = createUserDto.name
     user.publicKeys = []
     user.emailVerified = createUserDto.emailVerified

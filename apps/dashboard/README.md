@@ -66,6 +66,22 @@ reference sent to the API.
 Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
 Their existing defaults, validation and submission behavior are unchanged.
 
+## Registration attribution
+
+The account creation transaction writes the console entry hostname to PostgreSQL in `"user"."registrationSource"`.
+This JSONB field also stores valid `utm_source`, `utm_medium` and `utm_campaign` tags.
+
+Protected signup and automatic JWT provisioning use the same insert.
+Returning logins and duplicate registrations preserve the original value.
+
+Attribution works independently of PostHog page tracking. A saved analytics opt-out suppresses the source header.
+
+A console visit without an external referrer records `direct/unknown`.
+Earlier accounts and clients that supply no attribution have SQL NULL.
+
+To count registrations by source, group by `"registrationSource"->>'referring_domain'`.
+The console uses its immediate referrer.
+
 ## New-account email policy
 
 First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without

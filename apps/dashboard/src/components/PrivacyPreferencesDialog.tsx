@@ -40,7 +40,8 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
         </DialogHeader>
 
         <DialogDescription>
-          Choose which tracking technologies you allow. Essential tracking is always required.
+          Choose which tracking technologies you allow. At account creation, BoxLite saves the referring website and
+          campaign tags once when available.
         </DialogDescription>
 
         <ScrollArea fade="mask" className="h-[325px] overflow-auto -mx-5 min-h-0">

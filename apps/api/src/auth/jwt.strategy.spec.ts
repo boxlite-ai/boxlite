@@ -50,7 +50,10 @@ describe('JwtStrategy.validate — local account access', () => {
 
   it('records the first login after automatic registration when protection is disabled', async () => {
     const { strategy, userService, loginEvents } = buildStrategy(false)
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+    const source = JSON.stringify({ referring_domain: 'github.com' })
+    const request = {
+      get: (name: string) => (name === 'X-BoxLite-Registration-Source' ? source : undefined),
+    } as unknown as Request
     const payload = { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true, iat: 1000, exp: 4600 }
 
     await strategy.validate(request, payload)
@@ -58,6 +61,7 @@ describe('JwtStrategy.validate — local account access', () => {
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1', email: 'new@boxlite.dev', defaultOrganizationDefaultRegionId: 'us' }),
       Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+      source,
     )
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
   })

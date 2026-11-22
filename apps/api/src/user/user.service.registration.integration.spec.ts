@@ -4,6 +4,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import type { Request } from 'express'
+import { JwtStrategy } from '../auth/jwt.strategy'
+import { AddRegistrationSource1795348800000 } from '../migrations/pre-deploy/1795348800000-add-registration-source-migration'
 import { EventEmitter2, EventEmitterModule } from '@nestjs/event-emitter'
 import { Test, TestingModule } from '@nestjs/testing'
 import { getRepositoryToken } from '@nestjs/typeorm'
@@ -83,7 +86,7 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
           { provide: BoxRepository, useValue: {} },
           { provide: TypedConfigService, useValue: { get: () => false, getOrThrow: () => false } },
           { provide: RedisLockProvider, useValue: { lock: async () => false } },
-          { provide: RegionService, useValue: {} },
+          { provide: RegionService, useValue: { findOne: async () => ({ regionType: 'shared' }) } },
           { provide: EncryptionService, useValue: {} },
         ],
       }).compile()
@@ -98,15 +101,58 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
       jest.restoreAllMocks()
     })
 
+    it('keeps the registration source when the same identity signs in again from another website', async () => {
+      const strategy = new JwtStrategy(
+        { audience: 'test', issuer: 'test', jwksUri: 'https://issuer.example/keys' },
+        service,
+        { get: () => undefined, getOrThrow: () => 'region' } as never,
+        { recordFirstUse: jest.fn() } as never,
+      )
+      const payload = { sub: 'account', email: 'person@gmail.com', name: 'Person' }
+      const login = (source: string) =>
+        strategy.validate(
+          {
+            get: (name: string) =>
+              name === 'X-BoxLite-Registration-Source' ? JSON.stringify({ referring_domain: source }) : undefined,
+          } as Request,
+          payload,
+        )
+      await login('github.com')
+      await login('docs.example')
+      const stored = await db
+        .getRepository(User)
+        .findOneOrFail({ where: { id: payload.sub }, select: { registrationSource: true } })
+      expect(stored.registrationSource).toEqual({ referring_domain: 'github.com' })
+    })
+
+    it('adds the nullable source to preexisting accounts without backfilling them', async () => {
+      await service.create({ id: 'before-migration', name: 'Earlier account' }, Context.admin())
+      const runner = db.createQueryRunner()
+      try {
+        const migration = new AddRegistrationSource1795348800000()
+        await migration.down(runner)
+        await migration.up(runner)
+        const [row] = await runner.query('SELECT "registrationSource" FROM "user" WHERE id = $1', ['before-migration'])
+        expect(row.registrationSource).toBeNull()
+      } finally {
+        await runner.release()
+      }
+    })
+
     it('rejects a duplicate ID with 409 without changing the user or emitting another creation event', async () => {
       const original = await service.create(
         { id: 'existing', name: 'Original', email: 'original@gmail.com' },
         Context.admin(),
+        JSON.stringify({ referring_domain: 'github.com', utm_source: 'docs', ignored: 'private' }),
       )
       createDefaultOrganization.mockClear()
 
       await expect(
-        service.create({ id: original.id, name: 'Replacement', email: 'replacement@gmail.com' }, Context.admin()),
+        service.create(
+          { id: original.id, name: 'Replacement', email: 'replacement@gmail.com' },
+          Context.admin(),
+          '{"referring_domain":"other.example"}',
+        ),
       ).rejects.toMatchObject({
         status: 409,
         response: { code: 'user_already_exists' },
@@ -114,6 +160,11 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
       })
 
       expect(await db.getRepository(User).findOneByOrFail({ id: original.id })).toEqual(original)
+      await service.update(original.id, { name: 'Updated profile' })
+      const row = await db
+        .getRepository(User)
+        .findOneOrFail({ where: { id: original.id }, select: { registrationSource: true } })
+      expect(row.registrationSource).toEqual({ referring_domain: 'github.com', utm_source: 'docs' })
       expect(createDefaultOrganization).not.toHaveBeenCalled()
       expect(await db.getRepository(Organization).count()).toBe(1)
       expect(await db.getRepository(OrganizationUser).count()).toBe(1)

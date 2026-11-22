@@ -45,6 +45,21 @@ describe('UserService registration events', () => {
 
   afterEach(() => jest.restoreAllMocks())
 
+  it.each([
+    [
+      '{"referring_domain":"docs.example","utm_source":"docs","utm_medium":"bad/private","visit_id":"private"}',
+      { referring_domain: 'docs.example', utm_source: 'docs' },
+    ],
+    ['{"referring_domain":"direct/unknown"}', { referring_domain: 'direct/unknown' }],
+    ['{"referring_domain":"docs.example/private"}', null],
+    ['invalid', null],
+    [undefined, null],
+  ] as const)('stores only registration attribution at insert for %s', async (header, expected) => {
+    const service = makeService(committingTransaction())
+    const user = await service.create({ id: 'new', name: 'Test' }, Context.user(), header)
+    expect(user.registrationSource).toEqual(expected)
+  })
+
   it('records requested then success with the context actor, and the default organization on success', async () => {
     const organization = Object.assign(new Organization(), { id: 'org-1' })
     const service = makeService(committingTransaction(), [undefined, organization])
