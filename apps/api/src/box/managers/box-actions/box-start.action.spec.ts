@@ -53,17 +53,29 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     return { box, lockCode, action, update, filestoreInstanceResolver }
   }
 
-  it('does not dispatch a restart after the runner loses Filestore capability', async () => {
+  it('keeps a stopped box retryable until the runner regains Filestore capability', async () => {
     const capabilityError = Object.assign(new Error('FILESTORE_CAPABILITY_MISSING'), {
       code: 'FILESTORE_CAPABILITY_MISSING',
     })
-    const assertFilestoreVolumeSupport = jest.fn().mockRejectedValue(capabilityError)
+    const assertFilestoreVolumeSupport = jest
+      .fn()
+      .mockRejectedValueOnce(capabilityError)
+      .mockResolvedValueOnce(undefined)
     const startBox = jest.fn(async () => undefined)
-    const { box, lockCode, action } = stoppedFilestoreFixture({ assertFilestoreVolumeSupport, startBox })
+    const { box, lockCode, action, update } = stoppedFilestoreFixture({ assertFilestoreVolumeSupport, startBox })
 
-    await expect((action as BoxAction).run(box, lockCode)).rejects.toBe(capabilityError)
+    await expect((action as BoxAction).run(box, lockCode)).resolves.toBe(DONT_SYNC_AGAIN)
     expect(assertFilestoreVolumeSupport).toHaveBeenCalledWith(expect.objectContaining({ id: box.id }))
     expect(startBox).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(box.state).toBe(BoxState.STOPPED)
+
+    await expect((action as BoxAction).run(box, lockCode)).resolves.toBe(SYNC_AGAIN)
+    expect(startBox).toHaveBeenCalledTimes(1)
+    expect(update).toHaveBeenCalledWith(
+      box.id,
+      expect.objectContaining({ updateData: expect.objectContaining({ state: BoxState.STARTING }) }),
+    )
   })
 
   it('does not send a Filestore restart to a v0 runner', async () => {

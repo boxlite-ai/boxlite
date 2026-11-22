@@ -132,7 +132,15 @@ export class BoxStartAction extends BoxAction {
     const dispatchBox = this.withVolumes(box, volumes)
     const metadata = this.volumeMetadata({ ...organization?.boxMetadata }, volumes)
 
-    await runnerAdapter.assertFilestoreVolumeSupport(dispatchBox)
+    try {
+      await runnerAdapter.assertFilestoreVolumeSupport(dispatchBox)
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'FILESTORE_CAPABILITY_MISSING') {
+        this.logger.warn(`Filestore capability for box ${box.id} is not currently available; restart will be retried`)
+        return DONT_SYNC_AGAIN
+      }
+      throw error
+    }
     await runnerAdapter.startBox(dispatchBox.id, dispatchBox.authToken, metadata)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
