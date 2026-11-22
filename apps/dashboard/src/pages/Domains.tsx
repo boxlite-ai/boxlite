@@ -82,8 +82,12 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
 
       <Tabs defaultValue="managed" className="min-h-0 flex-1 gap-5">
         <TabsList variant="underline" aria-label="Domain views">
-          <TabsTrigger value="managed">Managed domain</TabsTrigger>
-          <TabsTrigger value="custom">Custom domain</TabsTrigger>
+          <TabsTrigger data-console-action="view_managed_domains" value="managed">
+            Managed domain
+          </TabsTrigger>
+          <TabsTrigger data-console-action="view_custom_domains" value="custom">
+            Custom domain
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="managed" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
           <div className="grid min-h-9 shrink-0 grid-cols-1 items-start gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] [&_.resource-filter]:max-w-full">
@@ -98,6 +102,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
               variant="primary"
               className="h-11 shrink-0 justify-self-start sm:h-9 sm:justify-self-end"
               disabled={!canClaim}
+              data-console-action="new_managed_domain"
               onClick={openForm}
             >
               <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
@@ -324,7 +329,12 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
               <AsciiButton disabled={claim.isPending} onClick={() => setOpen(false)}>
                 Cancel
               </AsciiButton>
-              <AsciiButton type="submit" variant="primary" disabled={!canClaim || !nameValid || claim.isPending}>
+              <AsciiButton
+                data-console-action="request_managed_domain"
+                type="submit"
+                variant="primary"
+                disabled={!canClaim || !nameValid || claim.isPending}
+              >
                 {claim.isPending ? 'Requesting…' : 'Request domain'}
               </AsciiButton>
             </DialogFooter>

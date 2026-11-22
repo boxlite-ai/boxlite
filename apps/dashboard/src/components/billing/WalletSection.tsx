@@ -597,6 +597,7 @@ export function WalletSection({
                 <div className="relative w-full sm:ml-auto sm:w-auto">
                   <AsciiButton
                     variant="primary"
+                    data-console-action="top_up_wallet"
                     onClick={handleTopUpWallet}
                     disabled={!topUp.enabled || topUpWalletMutation.isPending}
                     className={cn('inline-flex w-full items-center justify-center gap-2', topUpDiscount && 'pr-14')}
@@ -728,6 +729,7 @@ export function WalletSection({
                       </div>
                     </div>
                     <AsciiButton
+                      data-console-action="save_auto_top_up"
                       onClick={handleSetAutomaticTopUp}
                       disabled={!cardConnected || saveAutomaticTopUpDisabled || walletQuery.isLoading || !wallet}
                       className="inline-flex items-center gap-2"
@@ -787,6 +789,7 @@ export function WalletSection({
                           className="h-9 w-full font-mono text-body sm:w-[200px]"
                         />
                         <AsciiButton
+                          data-console-action="redeem_coupon"
                           onClick={handleRedeemCoupon}
                           disabled={redeemCouponMutation.isPending}
                           className="inline-flex shrink-0 items-center gap-2"

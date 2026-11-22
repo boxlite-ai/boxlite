@@ -2,15 +2,17 @@ import { useLayoutEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from 'react-oidc-context'
 import { consolePage, currentVisit } from '@/lib/console-visit'
+import { billingTab } from '@/lib/billing-tab'
+import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from './useConfig'
 import { analyticsAllowed, usePrivacyConsent, usePrivacyConsentStore } from './usePrivacyConsent'
 
 export function useConsoleAnalytics() {
-  const { posthog } = useConfig()
+  const { posthog, billingApiUrl } = useConfig()
   const { isAuthenticated, user } = useAuth()
   const { preferences } = usePrivacyConsent()
   const owner = usePrivacyConsentStore((state) => state.currentUserSub)
-  const { pathname, key } = useLocation()
+  const { pathname, search, key } = useLocation()
   const sub = isAuthenticated ? user?.profile.sub : undefined
   const lastView = useRef<string | undefined>(undefined)
 
@@ -47,6 +49,8 @@ export function useConsoleAnalytics() {
           properties: {
             $current_url: window.location.origin + page,
             $pathname: page,
+            ...(page === RoutePath.BILLING &&
+              billingApiUrl && { billing_tab: billingTab(new URLSearchParams(search)) }),
             ...source,
             ...properties,
             $set_once: { first_console_referring_domain: source.referring_domain },
@@ -73,5 +77,5 @@ export function useConsoleAnalytics() {
     }
     document.addEventListener('click', click, true)
     return () => document.removeEventListener('click', click, true)
-  }, [sub, owner, preferences.analytics, posthog, key, pathname])
+  }, [sub, owner, preferences.analytics, posthog, billingApiUrl, key, pathname, search])
 }

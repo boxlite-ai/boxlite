@@ -120,6 +120,7 @@ describe('Domains page', () => {
     )!
   }
   async function openForm() {
+    expect(requestButton().getAttribute('data-console-action')).toBe('new_managed_domain')
     await act(async () => requestButton().click())
     const input = document.querySelector<HTMLInputElement>('#domain-short-name')!
     act(() => {

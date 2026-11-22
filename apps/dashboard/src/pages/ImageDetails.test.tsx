@@ -265,6 +265,7 @@ describe('image usage guidance', () => {
 describe('pinning and unpinning tags', () => {
   it('pins a tag to the version chosen', async () => {
     await renderPage()
+    expect(button('Pin a tag')?.getAttribute('data-console-action')).toBe('new_image_tag')
     await act(async () => button('Pin a tag')?.click())
 
     await act(async () => typeInto(document.getElementById('pin-tag') as HTMLInputElement, 'stable'))

@@ -164,7 +164,7 @@ export function CapacitySummary({ capacity }: { capacity: CiCapacity }) {
                 <Button variant="quiet" size="sm" type="button" onClick={() => setOpen(false)} disabled={busy}>
                   Cancel
                 </Button>
-                <Button size="sm" type="submit" disabled={busy}>
+                <Button size="sm" data-console-action="save_ci_limit" type="submit" disabled={busy}>
                   {busy ? 'Saving…' : 'Save'}
                 </Button>
               </div>

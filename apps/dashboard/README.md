@@ -21,6 +21,22 @@ available stable action name and internal destination. Terminal contents, typed 
 Saving the disabled preference stops subsequent browser behavior requests in tabs sharing the account's local preference.
 The browser submits each event once without an application retry queue.
 
+To measure attempts, filter `console_control_click` by its `action` and group by `$pathname`.
+For example, compare `new_volume` (opened the dialog) with `create_volume` (activated Create by button or Enter).
+
+| Area | Example action values |
+| --- | --- |
+| Boxes and volumes | `new_box`, `create_box`, `new_volume`, `create_volume` |
+| Images and registries | `new_box`, `pin_image_tag`, `connect_registry` |
+| Managed and custom domains | `request_managed_domain`, `create_custom_domain`, `verify_custom_domain` |
+| CI | `connect_github`, `connect_github_account`, `update_ci_connection`, `save_ci_limit` |
+| Billing | `select_plan`, `confirm_plan_change`, `top_up_wallet`, `save_auto_top_up`, `redeem_coupon` |
+| API keys and checkpoints | `create_api_key`, `create_checkpoint` |
+
+These actions measure interaction with the control even if the operation subsequently fails.
+When billing is configured, its events carry the displayed `billing_tab` (overview, plans, usage or wallet), including direct visits.
+The coming-soon screen has no tab attribution.
+
 ## Create Box sizing
 
 New Box presents six named presets from 0.125 to 4 vCPU, retaining the existing

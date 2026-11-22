@@ -362,7 +362,11 @@ const ImageDetails: React.FC = () => {
                   <Button type="button" variant="outline" onClick={() => setPinning(false)}>
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={!tagIsValid || tagTaken || !pinForm.versionId || pinTag.isPending}>
+                  <Button
+                    data-console-action="pin_image_tag"
+                    type="submit"
+                    disabled={!tagIsValid || tagTaken || !pinForm.versionId || pinTag.isPending}
+                  >
                     Pin
                   </Button>
                 </DialogFooter>
@@ -407,7 +411,11 @@ function TagsSection({
         count={`${image.aliases.length} pinned`}
         right={
           canWrite && (
-            <AsciiButton onClick={onPin} disabled={busy || image.versions.length === 0}>
+            <AsciiButton
+              data-console-action="new_image_tag"
+              onClick={onPin}
+              disabled={busy || image.versions.length === 0}
+            >
               Pin a tag
             </AsciiButton>
           )
