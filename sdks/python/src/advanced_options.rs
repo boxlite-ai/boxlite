@@ -72,23 +72,21 @@ impl From<PyHealthCheckOptions> for HealthCheckOptions {
 /// Security isolation options for a box.
 ///
 /// Controls how the boxlite-shim process is isolated from the host.
-/// Different presets are available: `development()`, `standard()`, `maximum()`.
+/// Different presets are available: `enabled()`, `disabled()`, `standard()`, `maximum()`, `development()`.
 ///
 /// Example:
 ///     ```python
 ///     from boxlite import SecurityOptions
 ///
-///     # Use preset with customizations
-///     security = SecurityOptions.standard()
+///     # Secure by default
+///     security = SecurityOptions()
 ///     security.max_open_files = 2048
 ///     security.max_memory = 1024 * 1024 * 1024  # 1 GiB
 ///
-///     # Or create from scratch
-///     security = SecurityOptions(
-///         jailer_enabled=True,
-///         seccomp_enabled=True,
-///         max_open_files=1024,
-///     )
+///     # Or use presets
+///     disabled = SecurityOptions.disabled()
+///     standard = SecurityOptions.standard()
+///     maximum = SecurityOptions.maximum()
 ///     ```
 #[pyclass(name = "SecurityOptions")]
 #[derive(Clone, Debug)]
@@ -130,13 +128,31 @@ pub struct PySecurityOptions {
     pub close_fds: bool,
 }
 
+impl Default for PySecurityOptions {
+    fn default() -> Self {
+        Self {
+            jailer_enabled: true,
+            seccomp_enabled: cfg!(target_os = "linux"),
+            max_open_files: None,
+            max_file_size: None,
+            max_processes: None,
+            max_memory: None,
+            max_cpu_time: None,
+            network_enabled: true,
+            close_fds: true,
+        }
+    }
+}
+
 #[pymethods]
 impl PySecurityOptions {
     /// Create a new SecurityOptions with custom settings.
+    ///
+    /// By default, jailer is enabled and seccomp is enabled on Linux (secure by default).
     #[new]
     #[pyo3(signature = (
-        jailer_enabled=false,
-        seccomp_enabled=false,
+        jailer_enabled=true,
+        seccomp_enabled=None,
         max_open_files=None,
         max_file_size=None,
         max_processes=None,
@@ -148,7 +164,7 @@ impl PySecurityOptions {
     #[allow(clippy::too_many_arguments)]
     fn new(
         jailer_enabled: bool,
-        seccomp_enabled: bool,
+        seccomp_enabled: Option<bool>,
         max_open_files: Option<u64>,
         max_file_size: Option<u64>,
         max_processes: Option<u64>,
@@ -159,7 +175,7 @@ impl PySecurityOptions {
     ) -> Self {
         Self {
             jailer_enabled,
-            seccomp_enabled,
+            seccomp_enabled: seccomp_enabled.unwrap_or(cfg!(target_os = "linux")),
             max_open_files,
             max_file_size,
             max_processes,
@@ -170,11 +186,19 @@ impl PySecurityOptions {
         }
     }
 
-    /// Development mode: minimal isolation for debugging.
+    /// Enabled mode: full host isolation (default, secure by default).
     ///
-    /// Use this when debugging issues where isolation interferes.
+    /// Enables jailer on supported platforms and seccomp syscall filtering on Linux.
     #[staticmethod]
-    fn development() -> Self {
+    fn enabled() -> Self {
+        Self::default()
+    }
+
+    /// Disabled mode: disables jailer and seccomp syscall filtering.
+    ///
+    /// Use this when debugging or in environments that cannot sandbox.
+    #[staticmethod]
+    fn disabled() -> Self {
         Self {
             jailer_enabled: false,
             seccomp_enabled: false,
@@ -188,22 +212,20 @@ impl PySecurityOptions {
         }
     }
 
+    /// Development mode: minimal isolation for debugging.
+    ///
+    /// Use this when debugging issues where isolation interferes.
+    #[staticmethod]
+    fn development() -> Self {
+        Self::disabled()
+    }
+
     /// Standard mode: recommended for most use cases.
     ///
-    /// Enables jailer on Linux/macOS and seccomp on Linux.
+    /// Enables jailer on supported platforms and seccomp syscall filtering on Linux.
     #[staticmethod]
     fn standard() -> Self {
-        Self {
-            jailer_enabled: cfg!(any(target_os = "linux", target_os = "macos")),
-            seccomp_enabled: cfg!(target_os = "linux"),
-            max_open_files: None,
-            max_file_size: None,
-            max_processes: None,
-            max_memory: None,
-            max_cpu_time: None,
-            network_enabled: true,
-            close_fds: true,
-        }
+        Self::default()
     }
 
     /// Maximum mode: all isolation features enabled.
@@ -338,5 +360,89 @@ impl PyAdvancedBoxOptions {
             capabilities,
             privileged,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_security_options_default() {
+        let opts = PySecurityOptions::default();
+        assert!(opts.jailer_enabled);
+        assert_eq!(opts.seccomp_enabled, cfg!(target_os = "linux"));
+        assert!(opts.network_enabled);
+        assert!(opts.close_fds);
+        assert!(opts.max_open_files.is_none());
+    }
+
+    #[test]
+    fn test_security_options_new_defaults() {
+        let opts = PySecurityOptions::new(true, None, None, None, None, None, None, true, true);
+        assert!(opts.jailer_enabled);
+        assert_eq!(opts.seccomp_enabled, cfg!(target_os = "linux"));
+        assert!(opts.network_enabled);
+        assert!(opts.close_fds);
+    }
+
+    #[test]
+    fn test_security_options_enabled_matches_default() {
+        let enabled = PySecurityOptions::enabled();
+        let default = PySecurityOptions::default();
+        assert_eq!(enabled.jailer_enabled, default.jailer_enabled);
+        assert_eq!(enabled.seccomp_enabled, default.seccomp_enabled);
+        assert_eq!(enabled.close_fds, default.close_fds);
+        assert_eq!(enabled.network_enabled, default.network_enabled);
+    }
+
+    #[test]
+    fn test_security_options_disabled() {
+        let disabled = PySecurityOptions::disabled();
+        assert!(!disabled.jailer_enabled);
+        assert!(!disabled.seccomp_enabled);
+        assert!(!disabled.close_fds);
+        assert!(disabled.network_enabled);
+    }
+
+    #[test]
+    fn test_security_options_development_matches_disabled() {
+        let dev = PySecurityOptions::development();
+        let disabled = PySecurityOptions::disabled();
+        assert_eq!(dev.jailer_enabled, disabled.jailer_enabled);
+        assert_eq!(dev.seccomp_enabled, disabled.seccomp_enabled);
+        assert_eq!(dev.close_fds, disabled.close_fds);
+    }
+
+    #[test]
+    fn test_security_options_standard_matches_default() {
+        let standard = PySecurityOptions::standard();
+        let default = PySecurityOptions::default();
+        assert_eq!(standard.jailer_enabled, default.jailer_enabled);
+        assert_eq!(standard.seccomp_enabled, default.seccomp_enabled);
+    }
+
+    #[test]
+    fn test_security_options_conversion_to_rust_core() {
+        let py_opts = PySecurityOptions::default();
+        let core: SecurityOptions = py_opts.into();
+        assert!(core.jailer_enabled);
+        assert_eq!(core.seccomp_enabled, cfg!(target_os = "linux"));
+        // Core defaults like uid/gid 65534 and sanitize_env must remain intact.
+        assert_eq!(core.uid, Some(65534));
+        assert_eq!(core.gid, Some(65534));
+        assert!(core.sanitize_env);
+    }
+
+    #[test]
+    fn test_security_options_disabled_conversion_to_rust_core() {
+        let py_opts = PySecurityOptions::disabled();
+        let core: SecurityOptions = py_opts.into();
+        assert!(!core.jailer_enabled);
+        assert!(!core.seccomp_enabled);
+        assert!(!core.close_fds);
+        // Privilege drop remains intact from Default::default().
+        assert_eq!(core.uid, Some(65534));
+        assert_eq!(core.gid, Some(65534));
     }
 }

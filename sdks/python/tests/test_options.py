@@ -86,6 +86,63 @@ class TestBoxOptionsDefaults:
         assert opts.detach is False
 
 
+class TestSecurityOptionsDefaults:
+    """Test SecurityOptions default values and named profiles."""
+
+    def test_security_options_default_is_secure(self):
+        """SecurityOptions() must default to secure settings with jailer enabled."""
+        opts = boxlite.SecurityOptions()
+        assert opts.jailer_enabled is True
+        assert opts.close_fds is True
+        assert opts.network_enabled is True
+        assert opts.max_open_files is None
+
+    def test_security_options_enabled_profile(self):
+        """SecurityOptions.enabled() matches default secure profile."""
+        enabled = boxlite.SecurityOptions.enabled()
+        default = boxlite.SecurityOptions()
+        assert enabled.jailer_enabled is True
+        assert enabled.jailer_enabled == default.jailer_enabled
+        assert enabled.seccomp_enabled == default.seccomp_enabled
+        assert enabled.close_fds == default.close_fds
+
+    def test_security_options_disabled_profile(self):
+        """SecurityOptions.disabled() turns off jailer, seccomp, and close_fds."""
+        disabled = boxlite.SecurityOptions.disabled()
+        assert disabled.jailer_enabled is False
+        assert disabled.seccomp_enabled is False
+        assert disabled.close_fds is False
+        assert disabled.network_enabled is True
+
+    def test_security_options_development_profile(self):
+        """SecurityOptions.development() matches disabled profile."""
+        dev = boxlite.SecurityOptions.development()
+        disabled = boxlite.SecurityOptions.disabled()
+        assert dev.jailer_enabled is False
+        assert dev.jailer_enabled == disabled.jailer_enabled
+        assert dev.seccomp_enabled == disabled.seccomp_enabled
+        assert dev.close_fds == disabled.close_fds
+
+    def test_security_options_standard_profile(self):
+        """SecurityOptions.standard() matches default secure profile."""
+        standard = boxlite.SecurityOptions.standard()
+        default = boxlite.SecurityOptions()
+        assert standard.jailer_enabled is True
+        assert standard.jailer_enabled == default.jailer_enabled
+        assert standard.seccomp_enabled == default.seccomp_enabled
+
+    def test_security_options_explicit_overrides(self):
+        """Explicit constructor parameters are respected."""
+        opts = boxlite.SecurityOptions(
+            jailer_enabled=False,
+            seccomp_enabled=False,
+            max_open_files=2048,
+        )
+        assert opts.jailer_enabled is False
+        assert opts.seccomp_enabled is False
+        assert opts.max_open_files == 2048
+
+
 @pytest.mark.asyncio
 class TestAutoRemoveBehavior:
     """Test auto_remove option behavior."""
