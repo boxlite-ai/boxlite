@@ -86,8 +86,12 @@ const SlackRedirect = () => {
 // belongs in deployment headers. The terminal Paste action also refuses to
 // read clipboard when the dashboard itself is framed.
 
-function App() {
+function AdmittedDashboard() {
   useConsoleAnalytics()
+  return <Dashboard />
+}
+
+function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
@@ -147,7 +151,7 @@ function App() {
                       <RegionsProvider>
                         <NotificationSocketProvider>
                           <BannerProvider>
-                            <Dashboard />
+                            <AdmittedDashboard />
                           </BannerProvider>
                         </NotificationSocketProvider>
                       </RegionsProvider>

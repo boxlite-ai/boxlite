@@ -5,9 +5,9 @@ through Nx as the `dashboard` project.
 
 ## Console analytics
 
-PostHog receives a `$pageview` when a signed-in user visits a console route and a
-`console_control_click` when they activate a supported control. Filter by account and `visit_id`
-to see the pages visited and their sequence.
+Console analytics starts after registration and organization selection admit the user.
+PostHog receives a `$pageview` for each console route visit and a `console_control_click` for supported control activations.
+Filter by account and `visit_id` to see the pages visited and their sequence.
 
 Events include the direct referring hostname, available campaign tags and a route template.
 Named actions such as `create_volume` count attempts, including keyboard submission.
