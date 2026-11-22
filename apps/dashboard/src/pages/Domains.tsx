@@ -33,6 +33,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useState } from 'react'
 import { generatePath, Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { recordConsoleTabSelection } from '@/hooks/useConsoleAnalytics'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import CustomDomains from './CustomDomains'
 
@@ -80,14 +81,16 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </p>
       </div>
 
-      <Tabs defaultValue="managed" className="min-h-0 flex-1 gap-5">
-        <TabsList variant="underline" aria-label="Domain views">
-          <TabsTrigger data-console-action="view_managed_domains" value="managed">
-            Managed domain
-          </TabsTrigger>
-          <TabsTrigger data-console-action="view_custom_domains" value="custom">
-            Custom domain
-          </TabsTrigger>
+      <Tabs
+        defaultValue="managed"
+        onValueChange={(tab) =>
+          recordConsoleTabSelection(tab === 'custom' ? 'view_custom_domains' : 'view_managed_domains')
+        }
+        className="min-h-0 flex-1 gap-5"
+      >
+        <TabsList variant="underline" aria-label="Domain views" data-console-tab-selections>
+          <TabsTrigger value="managed">Managed domain</TabsTrigger>
+          <TabsTrigger value="custom">Custom domain</TabsTrigger>
         </TabsList>
         <TabsContent value="managed" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
           <div className="grid min-h-9 shrink-0 grid-cols-1 items-start gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] [&_.resource-filter]:max-w-full">

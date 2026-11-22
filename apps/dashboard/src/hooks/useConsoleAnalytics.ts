@@ -6,6 +6,12 @@ import { billingTab } from '@/lib/billing-tab'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from './useConfig'
 
+const tabSelections = new EventTarget()
+
+export function recordConsoleTabSelection(action: string) {
+  tabSelections.dispatchEvent(new CustomEvent('select', { detail: action }))
+}
+
 export function useConsoleAnalytics() {
   const { posthog, billingApiUrl } = useConfig()
   const { isAuthenticated, user } = useAuth()
@@ -55,6 +61,7 @@ export function useConsoleAnalytics() {
       const control = event.target.closest('button,a[href],[role="button"],[role="menuitem"],[role="tab"]')
       if (!control || control.closest('.xterm,[contenteditable="true"]')) return
       const kind = control.getAttribute('role') ?? control.tagName.toLowerCase()
+      if (kind === 'tab' && control.closest('[data-console-tab-selections]')) return
       const action = control.getAttribute('data-console-action')
       const destination =
         control instanceof HTMLAnchorElement && control.origin === window.location.origin
@@ -62,7 +69,13 @@ export function useConsoleAnalytics() {
           : undefined
       send('console_control_click', { control: kind, ...(action && { action }), ...(destination && { destination }) })
     }
+    const select = (event: Event) =>
+      send('console_control_click', { control: 'tab', action: (event as CustomEvent<string>).detail })
+    tabSelections.addEventListener('select', select)
     document.addEventListener('click', click, true)
-    return () => document.removeEventListener('click', click, true)
+    return () => {
+      tabSelections.removeEventListener('select', select)
+      document.removeEventListener('click', click, true)
+    }
   }, [sub, posthog, billingApiUrl, key, pathname, search])
 }

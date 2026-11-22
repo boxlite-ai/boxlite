@@ -13,6 +13,8 @@ Events include the direct referring hostname, available campaign tags and a rout
 Named actions such as `create_volume` count attempts, including keyboard submission.
 Billing events include the displayed tab when billing is available.
 
+Domains records one named action when a keyboard or mouse selection changes the active tab.
+
 ## Create Box sizing
 
 New Box presents six named presets from 0.125 to 4 vCPU, retaining the existing
