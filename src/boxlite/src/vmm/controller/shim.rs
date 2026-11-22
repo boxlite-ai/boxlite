@@ -10,7 +10,7 @@ use std::{
 use crate::{
     BoxID,
     runtime::layout::BoxFilesystemLayout,
-    util::{PidFileReader, ShimPidRecord, process::pid_may_be_alive},
+    util::{PidFileReader, ShimPidRecord, ShimPresence, process_start_time, shim_pid_may_be_alive},
     vmm::{InstanceSpec, VmmKind},
 };
 
@@ -94,8 +94,10 @@ impl ShimHandler {
         box_id: &BoxID,
         persisted_pid: Option<u32>,
         pid_file: &Path,
+        rebooted: bool,
     ) -> BoxliteResult<()> {
-        let Some(shim) = Self::verified_stop_shim(box_id, persisted_pid, pid_file)? else {
+        let Some(shim) = Self::verified_stop_shim(box_id, persisted_pid, pid_file, rebooted)?
+        else {
             crate::jailer::reap_box(box_id);
             return Ok(());
         };
@@ -128,7 +130,7 @@ impl ShimHandler {
         persisted_pid: Option<u32>,
         pid_file: &Path,
     ) -> BoxliteResult<()> {
-        let Some(shim) = Self::verified_stop_shim(box_id, persisted_pid, pid_file)? else {
+        let Some(shim) = Self::verified_stop_shim(box_id, persisted_pid, pid_file, false)? else {
             crate::jailer::reap_box(box_id);
             return Ok(());
         };
@@ -174,7 +176,7 @@ impl ShimHandler {
     fn attached_shim_has_exited(pid: u32) -> bool {
         let mut status = 0;
         let result = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
-        result > 0 || (result < 0 && !pid_may_be_alive(pid))
+        result > 0 || (result < 0 && !shim_pid_may_be_alive(pid, process_start_time))
     }
 
     fn wait_for_attached_exit_sync(pid: u32, timeout: Duration, poll_interval: Duration) -> bool {
@@ -199,40 +201,26 @@ impl ShimHandler {
         box_id: &BoxID,
         persisted_pid: Option<u32>,
         pid_file: &Path,
+        rebooted: bool,
     ) -> BoxliteResult<Option<ShimPidRecord>> {
-        let reader = PidFileReader::at(pid_file);
-        if let Some(shim) = reader.verified_shim().filter(|shim| {
-            let pid = shim.identity().pid;
-            persisted_pid == Some(pid) && (1..=i32::MAX as u32).contains(&pid)
-        }) {
-            return Ok(Some(shim));
-        }
-
-        let pid_file_may_be_alive = match reader.read() {
-            Ok(record)
-                if persisted_pid.is_none()
-                    && (record.pid == 0 || i32::try_from(record.pid).is_err()) =>
-            {
-                return Err(BoxliteError::InvalidState(format!(
-                    "Invalid shim PID {} for box {box_id}",
-                    record.pid
-                )));
+        match PidFileReader::at(pid_file).probe_presence(persisted_pid, rebooted) {
+            ShimPresence::Verified(shim) if persisted_pid == Some(shim.identity().pid) => {
+                Ok(Some(shim))
             }
-            Ok(record) => pid_may_be_alive(record.pid),
-            Err(error)
-                if !std::fs::symlink_metadata(pid_file)
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                return Err(error);
-            }
-            Err(_) => false,
-        };
-        if persisted_pid.is_some_and(pid_may_be_alive) || pid_file_may_be_alive {
-            return Err(BoxliteError::InvalidState(format!(
+            ShimPresence::Absent { .. } => Ok(None),
+            ShimPresence::UnverifiedLive {
+                error: Some(BoxliteError::InvalidState(message)),
+                ..
+            } => Err(BoxliteError::InvalidState(format!(
+                "{message} for box {box_id}"
+            ))),
+            ShimPresence::UnverifiedLive {
+                error: Some(error), ..
+            } => Err(error),
+            _ => Err(BoxliteError::InvalidState(format!(
                 "Cannot verify live shim identity for box {box_id}"
-            )));
+            ))),
         }
-        Ok(None)
     }
 
     /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
@@ -560,6 +548,7 @@ impl VmmController for ShimController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::process::pid_may_be_alive;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -569,7 +558,7 @@ mod tests {
         let box_id = crate::runtime::id::BoxIDMint::mint();
         let results = [0, u32::MAX].map(|pid| {
             std::fs::write(&pid_file, pid.to_string()).unwrap();
-            ShimHandler::stop_verified(&box_id, None, &pid_file)
+            ShimHandler::stop_verified(&box_id, None, &pid_file, false)
         });
         assert!(
             results
@@ -601,7 +590,7 @@ mod tests {
         let start_time = crate::util::process_start_time(pid).unwrap();
         std::fs::write(&pid_file, format!("{pid}\n{start_time}\n")).unwrap();
 
-        let result = ShimHandler::stop_verified(&box_id, Some(pid), &pid_file);
+        let result = ShimHandler::stop_verified(&box_id, Some(pid), &pid_file, false);
         let alive = pid_may_be_alive(pid);
         let _ = child.kill();
         let _ = child.wait();

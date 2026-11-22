@@ -404,7 +404,8 @@ impl BoxState {
     /// shim writing its PID file and this row being saved. A `started_at` written
     /// for the PID we are replacing cannot describe the adopted one, so recovery
     /// clears it. This keeps the PID and timestamp safe to read together as one
-    /// snapshot. `Paused` is preserved only for the same verified PID.
+    /// snapshot. `Unknown` is preserved, and `Paused` is preserved only for the
+    /// same verified PID.
     pub fn adopt_recovered_shim(&mut self, pid: u32) {
         let same_pid = self.pid == Some(pid);
         if !same_pid {
@@ -414,9 +415,7 @@ impl BoxState {
             // Reattaching does not resume a frozen VM. A different shim is
             // live, but we cannot claim it has the recorded frozen state.
             BoxStatus::Paused if !same_pid => BoxStatus::Unknown,
-            BoxStatus::Paused => self.status,
-            // A live shim still does not establish guest state on subsequent recovery.
-            BoxStatus::Unknown if self.pid.is_some() => BoxStatus::Unknown,
+            BoxStatus::Paused | BoxStatus::Unknown => self.status,
             _ => BoxStatus::Running,
         };
         self.set_pid(Some(pid));

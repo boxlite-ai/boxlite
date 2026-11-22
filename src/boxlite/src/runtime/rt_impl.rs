@@ -13,8 +13,9 @@ use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
-use crate::util::process::pid_may_be_alive;
-use crate::util::{PidFileReader, PidRecord, ProcessIdentity};
+use crate::util::{
+    PidFileReader, ShimPresence, is_valid_shim_pid, process_start_time, shim_pid_may_be_alive,
+};
 use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
@@ -48,7 +49,7 @@ fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
 ///
 /// Two callers reach this from opposite directions and must agree: the live
 /// watcher in `BoxImpl` (a long-lived runtime sees the shim die) and
-/// `recover_boxes` (a fresh process finds a Running box with a dead shim).
+/// `recover_boxes` (a fresh process settles a box without a verified shim).
 /// A missing record leaves `exit_code` as None rather than inventing a 0 —
 /// the box stopped, but nobody witnessed how.
 pub(crate) fn record_main_command_exit(state: &mut BoxState, exit_file: &std::path::Path) {
@@ -72,44 +73,6 @@ pub(crate) fn stash_exit_file(layout: &BoxFilesystemLayout) {
             src = %src.display(),
             "Failed to stash exit file"
         ),
-    }
-}
-
-fn unverified_shim_may_be_alive(pid: u32) -> bool {
-    if pid_may_be_alive(pid) {
-        return true;
-    }
-
-    // macOS may withhold both process details and the executable path for a
-    // live PID. A successful signal probe still establishes its presence.
-    cfg!(target_os = "macos")
-        && (1..=i32::MAX as u32).contains(&pid)
-        && unsafe { libc::kill(pid as i32, 0) } == 0
-        && crate::util::process_start_time(pid).is_none()
-}
-
-fn shim_pid_was_reused(
-    record: PidRecord,
-    process_start_time: impl FnOnce(u32) -> Option<u64>,
-) -> bool {
-    record.start_time.is_some_and(|disk_start| {
-        process_start_time(record.pid).is_some_and(|os_start| os_start != disk_start)
-    })
-}
-
-pub(crate) fn shim_pid_file_may_be_alive(
-    pid_path: &std::path::Path,
-    candidate: Option<PidRecord>,
-) -> bool {
-    match candidate {
-        Some(record) if (1..=i32::MAX as u32).contains(&record.pid) => {
-            unverified_shim_may_be_alive(record.pid)
-                && !shim_pid_was_reused(record, crate::util::process_start_time)
-        }
-        Some(_) => true,
-        // An unreadable record is inconclusive unless the file is missing.
-        None => !std::fs::symlink_metadata(pid_path)
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
     }
 }
 
@@ -962,9 +925,10 @@ impl RuntimeImpl {
             let Ok(layout) = self.layout.box_layout(config.id.as_str(), false) else {
                 return true;
             };
-            let pid_path = layout.pid_file_path();
-            let candidate = PidFileReader::at(&pid_path).read().ok();
-            shim_pid_file_may_be_alive(&pid_path, candidate)
+            !matches!(
+                PidFileReader::at(layout.pid_file_path()).probe_presence(None, false),
+                ShimPresence::Absent { .. }
+            )
         })
     }
 
@@ -1054,7 +1018,7 @@ impl RuntimeImpl {
 
             let stopped_shim = if frozen {
                 let result = if guard.is_some() {
-                    ShimHandler::stop_verified(&config.id, state.pid, &pid_path)
+                    ShimHandler::stop_verified(&config.id, state.pid, &pid_path, false)
                 } else {
                     Err(BoxliteError::InvalidState(
                         "Frozen box is missing a lifecycle lock".into(),
@@ -1066,63 +1030,62 @@ impl RuntimeImpl {
                     continue;
                 }
                 pid_reader.read_shim().ok()
-            } else if let Some(shim) = pid_reader.verified_shim().filter(|shim| {
-                let pid = shim.identity().pid;
-                state.pid == Some(pid) && (1..=i32::MAX as u32).contains(&pid)
-            }) {
-                let pid = shim.identity().pid;
-
-                // SIGTERM triggers shim's graceful shutdown handler (Guest.Shutdown RPC)
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGTERM);
-                }
-                eprintln!(
-                    "[boxlite] Auto-stopping non-detached box: id={}, pid={pid}",
-                    config.id
-                );
-
-                // Wait for shim to finish graceful shutdown (3s guest RPC + margin)
-                let start = std::time::Instant::now();
-                let timeout = std::time::Duration::from_secs(5);
-                let mut stopped = false;
-                loop {
-                    if !pid_may_be_alive(pid) {
-                        stopped = true;
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        if pid_reader.verified_shim() == Some(shim) {
-                            force_kill(pid);
-                            eprintln!(
-                                "[boxlite] Shim didn't exit after SIGTERM, force killing: id={}, pid={pid}",
-                                config.id
-                            );
-                            let deadline =
-                                std::time::Instant::now() + std::time::Duration::from_secs(1);
-                            while pid_may_be_alive(pid) && std::time::Instant::now() < deadline {
-                                std::thread::sleep(std::time::Duration::from_millis(10));
-                            }
-                            stopped = !pid_may_be_alive(pid);
-                        }
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                if !stopped {
-                    self.sync_cleanup_pending.store(true, Ordering::Release);
-                    continue;
-                }
-                Some(shim)
             } else {
-                let shim = pid_reader.read_shim().ok();
-                if state.pid.is_some_and(unverified_shim_may_be_alive)
-                    || shim_pid_file_may_be_alive(&pid_path, shim.map(|shim| shim.identity()))
-                {
-                    self.sync_cleanup_pending.store(true, Ordering::Release);
-                    tracing::warn!(box_id = %config.id, "Sync shutdown deferred: shim identity unverified");
-                    continue;
+                match pid_reader.probe_presence(state.pid, false) {
+                    ShimPresence::Verified(shim) if state.pid == Some(shim.identity().pid) => {
+                        let pid = shim.identity().pid;
+
+                        // SIGTERM triggers shim's graceful shutdown handler (Guest.Shutdown RPC)
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGTERM);
+                        }
+                        eprintln!(
+                            "[boxlite] Auto-stopping non-detached box: id={}, pid={pid}",
+                            config.id
+                        );
+
+                        // Wait for shim to finish graceful shutdown (3s guest RPC + margin)
+                        let start = std::time::Instant::now();
+                        let timeout = std::time::Duration::from_secs(5);
+                        let mut stopped = false;
+                        loop {
+                            if !shim_pid_may_be_alive(pid, process_start_time) {
+                                stopped = true;
+                                break;
+                            }
+                            if start.elapsed() > timeout {
+                                if pid_reader.verified_shim() == Some(shim) {
+                                    force_kill(pid);
+                                    eprintln!(
+                                        "[boxlite] Shim didn't exit after SIGTERM, force killing: id={}, pid={pid}",
+                                        config.id
+                                    );
+                                    let deadline = std::time::Instant::now()
+                                        + std::time::Duration::from_secs(1);
+                                    while shim_pid_may_be_alive(pid, process_start_time)
+                                        && std::time::Instant::now() < deadline
+                                    {
+                                        std::thread::sleep(std::time::Duration::from_millis(10));
+                                    }
+                                    stopped = !shim_pid_may_be_alive(pid, process_start_time);
+                                }
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        if !stopped {
+                            self.sync_cleanup_pending.store(true, Ordering::Release);
+                            continue;
+                        }
+                        Some(shim)
+                    }
+                    ShimPresence::Absent { stale_file_record } => stale_file_record,
+                    _ => {
+                        self.sync_cleanup_pending.store(true, Ordering::Release);
+                        tracing::warn!(box_id = %config.id, "Sync shutdown deferred: shim identity unverified");
+                        continue;
+                    }
                 }
-                shim
             };
 
             // The third way a box dies, and it must report the exit code like the
@@ -1143,7 +1106,7 @@ impl RuntimeImpl {
                 continue;
             }
 
-            if pid_reader.read_shim().ok() == stopped_shim {
+            if stopped_shim.is_some() && pid_reader.read_shim().ok() == stopped_shim {
                 let _ = std::fs::remove_file(pid_path);
             }
         }
@@ -1347,36 +1310,40 @@ impl RuntimeImpl {
         lock_id: crate::lock::LockId,
     ) -> BoxliteResult<()> {
         let mut state = state;
-        if state.status.is_active() || state.pid.is_some() {
-            if force {
+        let active_or_has_pid = state.status.is_active() || state.pid.is_some();
+        if force {
+            let frozen = matches!(state.status, BoxStatus::Paused | BoxStatus::Unknown);
+            if frozen {
+                let pid_path = self.layout.box_layout(id.as_str(), false)?.pid_file_path();
+                ShimHandler::stop_verified(id, state.pid, &pid_path, false)?;
+            } else if let Some(pid) = state.pid {
                 // Stop the box's whole process tree through the same handler
                 // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
                 // pid (the outer launcher), then reaps any survivors of a
                 // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
                 // which a single-pid kill misses, since #851 stopped tying
                 // detached boxes to the launcher's lifetime.
-                if let Some(pid) = state.pid {
-                    tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
-                    let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                    let _ = handler.stop();
-                }
-                // Update status to stopped and save
-                state.set_status(BoxStatus::Stopped);
-                state.set_pid(None);
+                tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
+                let mut handler = ShimHandler::from_pid(pid, config.id.clone());
+                let _ = handler.stop();
+            }
+            if frozen || active_or_has_pid {
+                state.mark_stop();
                 self.box_manager.save_box(id, &state)?;
-            } else {
-                // Non-force mode: error on active box
+            }
+        } else {
+            if active_or_has_pid {
                 return Err(BoxliteError::InvalidState(format!(
                     "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
                     id, state.pid, state.status
                 )));
             }
-        }
 
-        if !force {
             let pid_path = self.layout.box_layout(id.as_str(), false)?.pid_file_path();
-            let candidate = PidFileReader::at(&pid_path).read().ok();
-            if shim_pid_file_may_be_alive(&pid_path, candidate) {
+            if !matches!(
+                PidFileReader::at(pid_path).probe_presence(None, false),
+                ShimPresence::Absent { .. }
+            ) {
                 return Err(BoxliteError::InvalidState(format!(
                     "cannot remove box {id} while shim.pid may refer to a live process"
                 )));
@@ -1590,7 +1557,7 @@ impl RuntimeImpl {
     }
 
     fn recover_boxes_with_boot_id(&self, current_boot_id: Option<&str>) -> BoxliteResult<()> {
-        self.recover_boxes_with_process_start_time(current_boot_id, crate::util::process_start_time)
+        self.recover_boxes_with_process_start_time(current_boot_id, process_start_time)
     }
 
     fn recover_boxes_with_process_start_time(
@@ -1635,9 +1602,9 @@ impl RuntimeImpl {
                     .layout
                     .box_layout(config.id.as_str(), false)?
                     .pid_file_path();
-                // Only the persisted PID can authorize signaling. Reboot
-                // recovery can clear it while leaving a stale PID file.
-                if let Err(error) = ShimHandler::stop_verified(&config.id, state.pid, &pid_file) {
+                if let Err(error) =
+                    ShimHandler::stop_verified(&config.id, state.pid, &pid_file, rebooted)
+                {
                     tracing::warn!(box_id = %config.id, %error, "Ephemeral box cleanup deferred");
                     deferred_ephemeral.insert(config.id.clone());
                     continue;
@@ -1742,12 +1709,20 @@ impl RuntimeImpl {
                 self.disk_lock_manager.allocate_and_retrieve(lock_id)?;
                 state.set_lock_id(lock_id);
             }
+            if state
+                .pid
+                .is_some_and(|pid| rebooted || !is_valid_shim_pid(pid))
+            {
+                state.set_pid(None);
+            }
             if deferred_ephemeral.contains(box_id) {
-                if state.status.can_start() {
-                    state.status = BoxStatus::Unknown;
-                    state.started_at = None;
-                }
-                if state.status != original_status || state.lock_id != original_lock_id {
+                state.set_status(BoxStatus::Unknown);
+                state.started_at = None;
+                if state.status != original_status
+                    || state.pid != original_pid
+                    || state.lock_id != original_lock_id
+                    || state.started_at != original_started_at
+                {
                     self.box_manager.save_box(box_id, &state)?;
                 }
                 continue;
@@ -1757,14 +1732,18 @@ impl RuntimeImpl {
             let pid_path = box_layout.pid_file_path();
             let exit_path = box_layout.exit_file_path();
             let had_stale_exit = exit_path.exists();
+            let frozen = matches!(state.status, BoxStatus::Paused | BoxStatus::Unknown);
 
-            // Truth-source precedence: a live shim (ProcessIdentity) is
-            // ground truth. The exit file is at-best an artifact of a past
-            // lifecycle, so it only matters when no shim is alive.
+            // A live shim takes precedence over the exit file, which may
+            // describe a prior lifecycle.
             let pid_reader = PidFileReader::at(&pid_path);
-            let mut stale_shim = None;
-            match pid_reader.process_identity() {
-                ProcessIdentity::Verified(pid) => {
+            let stale_shim = match pid_reader.probe_presence_with(
+                state.pid,
+                rebooted,
+                &process_start_time,
+            ) {
+                ShimPresence::Verified(shim) => {
+                    let pid = shim.identity().pid;
                     state.adopt_recovered_shim(pid);
                     // Live shim wins — archive any prior-lifecycle exit
                     // file so the next crash gets the canonical slot.
@@ -1783,8 +1762,10 @@ impl RuntimeImpl {
                         status = %state.status,
                         "Recovered live box from PID file"
                     );
+                    None
                 }
-                ProcessIdentity::Legacy(pid) if !rebooted => {
+                ShimPresence::Legacy(shim) => {
+                    let pid = shim.identity().pid;
                     // Pre-fingerprint PID file. Adopt the live PID so VMs
                     // aren't lost on upgrade; the next stop/start writes a
                     // two-line file and the fingerprint check takes over.
@@ -1810,45 +1791,23 @@ impl RuntimeImpl {
                         "Recovered legacy box without start-time fingerprint; \
                          restart to upgrade"
                     );
+                    None
                 }
-                ProcessIdentity::Absent | ProcessIdentity::Legacy(_) => {
-                    let shim = pid_reader.read_shim().ok();
-                    let mut reused_pid = None;
-                    let mut file_candidate_alive = false;
-                    if let Some(shim) = shim {
-                        let record = shim.identity();
-                        if !unverified_shim_may_be_alive(record.pid) {
-                            stale_shim = Some(Some(shim));
-                        } else if shim_pid_was_reused(record, &process_start_time) {
-                            reused_pid = Some(record.pid);
-                            stale_shim = Some(Some(shim));
-                        } else {
-                            file_candidate_alive = true;
-                        }
-                    }
-                    let frozen = matches!(state.status, BoxStatus::Paused | BoxStatus::Unknown);
-                    let preserve_state_pid = state.pid.is_some_and(unverified_shim_may_be_alive)
-                        && (state.status == BoxStatus::Unknown || state.pid != reused_pid);
-                    let preserve_frozen_state = frozen
-                        && ((!rebooted && (preserve_state_pid || file_candidate_alive))
-                            || (shim.is_none() && shim_pid_file_may_be_alive(&pid_path, None)));
-
-                    if preserve_frozen_state {
-                        if state.status == BoxStatus::Paused {
-                            state.set_status(BoxStatus::Unknown);
-                            state.started_at = None;
-                        }
-                        if had_stale_exit {
-                            stash_exit_file(&box_layout);
-                        }
-                        tracing::warn!(
-                            box_id = %box_id,
-                            pid = ?state.pid,
-                            "Preserving Unknown because recovery could not rule out a live shim"
-                        );
-                    } else if had_stale_exit
-                        && crate::vmm::ExitInfo::from_file(&exit_path).is_some()
-                    {
+                ShimPresence::UnverifiedLive { .. } if frozen => {
+                    state.set_status(BoxStatus::Unknown);
+                    state.started_at = None;
+                    tracing::warn!(
+                        box_id = %box_id,
+                        pid = ?state.pid,
+                        "Marked box Unknown because recovery could not rule out a live shim"
+                    );
+                    None
+                }
+                ShimPresence::Absent { stale_file_record }
+                | ShimPresence::UnverifiedLive {
+                    stale_file_record, ..
+                } => {
+                    if had_stale_exit && crate::vmm::ExitInfo::from_file(&exit_path).is_some() {
                         // Shim crashed in a prior lifecycle. Surface as
                         // Failed with the crash report; the exit file
                         // stays as the failure artifact (active slot).
@@ -1870,18 +1829,18 @@ impl RuntimeImpl {
                             "Box crashed; marked Failed with crash report"
                         );
                     } else if frozen {
-                        state.mark_stop();
+                        record_main_command_exit(
+                            &mut state,
+                            &box_layout.container_exit_file(config.container.id.as_str()),
+                        );
                         tracing::warn!(
                             box_id = %box_id,
                             previous_status = %original_status,
                             "Marked box Stopped after recovery found no matching live shim or valid exit record"
                         );
                     } else if state.status == BoxStatus::Running {
-                        // A Running box whose shim is gone: the guest powered
-                        // off because its main command exited (docker
-                        // semantics), and no live watcher was around to see it
-                        // — this process was not running at the time. Take the
-                        // exit code from the record the guest left behind.
+                        // A Running box without a recoverable shim settles with
+                        // the exit code from the record the guest left behind.
                         //
                         // The container id lives in the box *config*
                         // (BoxState.container_id is never persisted).
@@ -1896,11 +1855,17 @@ impl RuntimeImpl {
                              marked Stopped"
                         );
                     }
-                    if matches!(state.status, BoxStatus::Stopped | BoxStatus::Failed) {
-                        stale_shim = Some(shim);
+                    // Settled rows can also discard a PID file that failed to
+                    // decode or could not be read.
+                    if stale_file_record.is_some()
+                        || matches!(state.status, BoxStatus::Stopped | BoxStatus::Failed)
+                    {
+                        Some(stale_file_record)
+                    } else {
+                        None
                     }
                 }
-            }
+            };
 
             // Save updated state to database if changed
             if state.status != original_status
@@ -2379,6 +2344,7 @@ mod tests {
     use crate::runtime::backend::RuntimeBackend;
     use crate::runtime::images::ImageBackend;
     use crate::runtime::options::RootfsSpec;
+    use crate::util::process::pid_may_be_alive;
     use crate::vmm::guest_binary::GuestBinary;
     use tempfile::TempDir;
 
@@ -3721,6 +3687,7 @@ mod tests {
             "Box should remain in DB after rejected remove"
         );
 
+        write_pid_file_with_fingerprint(&config.box_home.join("shim.pid"), pid);
         runtime
             .remove_box(&config.id, true)
             .expect("Force remove should kill process and remove box");
@@ -3732,6 +3699,67 @@ mod tests {
         assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
 
         child.wait().ok();
+    }
+
+    #[test]
+    fn test_force_remove_frozen_box_requires_shim_identity() {
+        for status in [BoxStatus::Unknown, BoxStatus::Paused] {
+            let (runtime, _dir) = create_test_runtime();
+            let (pid, child) = spawn_dummy_process();
+            let mut child = ChildGuard(child);
+            let config = test_running_box_config(true, &runtime, pid);
+            let pid_file = config.box_home.join("shim.pid");
+            let lock_id = runtime.lock_manager.allocate().unwrap();
+            runtime
+                .disk_lock_manager
+                .allocate_and_retrieve(lock_id)
+                .unwrap();
+            let mut state = BoxState::new();
+            state.set_status(status);
+            state.set_lock_id(lock_id);
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            let disk = config
+                .box_home
+                .join("disks")
+                .join(crate::disk::constants::filenames::CONTAINER_DISK);
+            std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+            std::fs::write(&disk, b"disk").unwrap();
+
+            let error = runtime.remove(config.id.as_str(), true).unwrap_err();
+            assert!(matches!(error, BoxliteError::InvalidState(_)), "{error:?}");
+            assert!(disk.is_file());
+            let saved = runtime.box_manager.update_box(&config.id).unwrap();
+            assert_eq!((saved.status, saved.pid), (status, None));
+            assert!(child.0.try_wait().unwrap().is_none());
+
+            std::fs::remove_file(&pid_file).unwrap();
+            std::os::unix::fs::symlink(pid_file.with_extension("missing"), &pid_file).unwrap();
+            let error = runtime.remove(config.id.as_str(), true).unwrap_err();
+            assert!(matches!(error, BoxliteError::Storage(_)), "{error:?}");
+            assert!(disk.is_file());
+            let saved = runtime.box_manager.update_box(&config.id).unwrap();
+            assert_eq!((saved.status, saved.pid), (status, None));
+
+            // A stale shim.pid leaves the live persisted PID unverified.
+            std::fs::remove_file(&pid_file).unwrap();
+            let start = process_start_time(pid).unwrap();
+            std::fs::write(&pid_file, format!("{pid}\n{}\n", start + 1)).unwrap();
+            state.set_pid(Some(pid));
+            runtime.box_manager.save_box(&config.id, &state).unwrap();
+            let error = runtime.remove(config.id.as_str(), true).unwrap_err();
+            assert!(matches!(error, BoxliteError::InvalidState(_)), "{error:?}");
+            assert!(pid_file.is_file());
+            assert!(disk.is_file());
+            let saved = runtime.box_manager.update_box(&config.id).unwrap();
+            assert_eq!((saved.status, saved.pid), (status, Some(pid)));
+
+            state.set_pid(None);
+            runtime.box_manager.save_box(&config.id, &state).unwrap();
+            runtime.remove(config.id.as_str(), true).unwrap();
+            assert!(child.0.try_wait().unwrap().is_none());
+            assert!(!config.box_home.exists());
+            assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
+        }
     }
 
     /// Write a two-line `shim.pid` whose start-time matches the live PID
@@ -3858,20 +3886,31 @@ mod tests {
         runtime.recover_boxes_with_boot_id(Some("boot-a")).unwrap();
         let (pid, child) = spawn_dummy_process();
         let mut child = ChildGuard(child);
-        let ids = [BoxStatus::Paused, BoxStatus::Unknown].map(|status| {
+        let ids = [
+            (BoxStatus::Paused, false),
+            (BoxStatus::Unknown, false),
+            (BoxStatus::Paused, true),
+            (BoxStatus::Unknown, true),
+        ]
+        .map(|(status, matching_fingerprint)| {
             let config = test_box_config_in_layout(false, &runtime);
             std::fs::create_dir_all(&config.box_home).unwrap();
+            let pid_file = config.box_home.join("shim.pid");
+            if matching_fingerprint {
+                write_pid_file_with_fingerprint(&pid_file, pid);
+            }
             let mut state = running_state(pid);
             state.set_status(status);
             runtime.box_manager.add_box(&config, &state).unwrap();
-            config.id
+            (config.id, pid_file)
         });
 
         runtime.recover_boxes_with_boot_id(Some("boot-b")).unwrap();
 
-        for id in ids {
+        for (id, pid_file) in ids {
             let state = runtime.box_manager.update_box(&id).unwrap();
             assert_eq!((state.status, state.pid), (BoxStatus::Stopped, None));
+            assert!(!pid_file.exists(), "pre-reboot record was retained");
             runtime.remove_box(&id, true).unwrap();
             assert!(child.0.try_wait().unwrap().is_none());
         }
@@ -3941,10 +3980,217 @@ mod tests {
 
             let state = runtime.box_manager.update_box(&config.id).unwrap();
             assert_eq!((state.status, state.pid), (BoxStatus::Stopped, None));
-            assert!(
-                !pid_path.exists(),
-                "stale shim.pid remains (corrupt={corrupt})"
-            );
+            assert!(!pid_path.exists(), "stale or corrupt shim.pid remains");
+        }
+    }
+
+    #[test]
+    fn test_recovery_settles_unverified_running_boxes() {
+        for identity in ["missing", "stale", "corrupt", "unreadable"] {
+            let (runtime, _dir) = create_test_runtime();
+            let (pid, child) = spawn_dummy_process();
+            let _child = ChildGuard(child);
+            let config = test_box_config_in_layout(true, &runtime);
+            let layout = runtime
+                .layout
+                .box_layout(config.id.as_str(), false)
+                .unwrap();
+            let pid_file = layout.pid_file_path();
+            let unavailable = pid_file.with_extension("unavailable");
+            let guest_exit = layout.container_exit_file(config.container.id.as_str());
+            std::fs::create_dir_all(guest_exit.parent().unwrap()).unwrap();
+            boxlite_shared::layout::ExitRecord { exit_code: 23 }
+                .write(&guest_exit)
+                .unwrap();
+            let stale_child = (identity == "stale").then(|| ChildGuard(spawn_dummy_process().1));
+            match identity {
+                "missing" => {}
+                "stale" => {
+                    let file_pid = stale_child.as_ref().unwrap().0.id();
+                    let start = process_start_time(file_pid).unwrap();
+                    std::fs::write(&pid_file, format!("{file_pid}\n{}\n", start + 1)).unwrap();
+                }
+                "corrupt" => std::fs::write(&pid_file, "not-a-valid-pid").unwrap(),
+                "unreadable" => std::os::unix::fs::symlink(&unavailable, &pid_file).unwrap(),
+                _ => unreachable!(),
+            }
+            let mut state = running_state(pid);
+            state.mark_started();
+            runtime.box_manager.add_box(&config, &state).unwrap();
+
+            for _ in 0..2 {
+                runtime.recover_boxes().unwrap();
+
+                let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+                assert_eq!(
+                    (recovered.status, recovered.pid, recovered.exit_code),
+                    (BoxStatus::Stopped, None, Some(23)),
+                    "{identity} shim.pid"
+                );
+                assert!(crate::util::is_process_alive(pid));
+                assert!(
+                    pid_file
+                        .symlink_metadata()
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+                    "{identity} shim.pid was retained"
+                );
+            }
+            runtime.remove(config.id.as_str(), true).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_recovery_clears_proven_reused_running_pid() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let config = test_box_config_in_layout(true, &runtime);
+        std::fs::create_dir_all(&config.box_home).unwrap();
+        let pid_file = config.box_home.join("shim.pid");
+        let start = process_start_time(pid).unwrap();
+        std::fs::write(&pid_file, format!("{pid}\n{}\n", start + 1)).unwrap();
+        runtime
+            .box_manager
+            .add_box(&config, &running_state(pid))
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(
+            (recovered.status, recovered.pid),
+            (BoxStatus::Stopped, None)
+        );
+        assert!(!pid_file.exists());
+        assert!(child.0.try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_recovery_marks_running_box_failed_with_corrupt_pid_file_and_shim_exit() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+        let config = test_box_config_in_layout(true, &runtime);
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .unwrap();
+        let pid_file = layout.pid_file_path();
+        let exit_path = layout.exit_file_path();
+        std::fs::create_dir_all(layout.root()).unwrap();
+        std::fs::write(&pid_file, "not-a-valid-pid").unwrap();
+        let exit = crate::vmm::ExitInfo::Signal {
+            exit_code: 134,
+            signal: "SIGABRT".into(),
+        };
+        std::fs::write(&exit_path, serde_json::to_vec(&exit).unwrap()).unwrap();
+        runtime
+            .box_manager
+            .add_box(&config, &running_state(pid))
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!((recovered.status, recovered.pid), (BoxStatus::Failed, None));
+        assert!(exit_path.is_file());
+        assert!(!layout.exit_previous_path().exists());
+        assert!(!pid_file.exists());
+    }
+
+    #[test]
+    fn test_recovery_retains_shim_crash_record_while_pid_file_is_unreadable() {
+        check_recovery_after_unreadable_pid_file(true);
+    }
+
+    #[test]
+    fn test_recovery_records_guest_exit_code_after_unknown() {
+        check_recovery_after_unreadable_pid_file(false);
+    }
+
+    fn check_recovery_after_unreadable_pid_file(crashed: bool) {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let config = test_box_config_in_layout(true, &runtime);
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .unwrap();
+        let pid_file = layout.pid_file_path();
+        let pid_record = pid_file.with_extension("record");
+        std::fs::create_dir_all(layout.root()).unwrap();
+        std::os::unix::fs::symlink(&pid_record, &pid_file).unwrap();
+        let exit_path = layout.exit_file_path();
+        let guest_exit = layout.container_exit_file(config.container.id.as_str());
+        if crashed {
+            let exit = crate::vmm::ExitInfo::Signal {
+                exit_code: 134,
+                signal: "SIGABRT".into(),
+            };
+            std::fs::write(&exit_path, serde_json::to_vec(&exit).unwrap()).unwrap();
+        } else {
+            std::fs::create_dir_all(guest_exit.parent().unwrap()).unwrap();
+            boxlite_shared::layout::ExitRecord { exit_code: 23 }
+                .write(&guest_exit)
+                .unwrap();
+        }
+        let mut state = running_state(pid);
+        state.set_status(BoxStatus::Paused);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let first = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!((first.status, first.pid), (BoxStatus::Unknown, Some(pid)));
+        if crashed {
+            assert!(exit_path.is_file());
+            assert!(!layout.exit_previous_path().exists());
+        }
+        write_pid_file_with_fingerprint(&pid_record, pid);
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        std::fs::rename(&pid_record, &pid_file).unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let second = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(second.pid, None);
+        if crashed {
+            assert_eq!(second.status, BoxStatus::Failed);
+            assert!(exit_path.is_file());
+        } else {
+            assert_eq!(second.status, BoxStatus::Stopped);
+            assert_eq!(second.exit_code, Some(23));
+        }
+    }
+
+    #[test]
+    fn test_recovery_clears_invalid_persisted_unknown_pid() {
+        for (pid, corrupt) in [(0, false), (i32::MAX as u32 + 1, true)] {
+            let (runtime, _dir) = create_test_runtime();
+            let config = test_box_config_in_layout(true, &runtime);
+            std::fs::create_dir_all(&config.box_home).unwrap();
+            let pid_file = config.box_home.join("shim.pid");
+            if corrupt {
+                std::fs::write(&pid_file, b"invalid PID").unwrap();
+            }
+            let mut state = running_state(pid);
+            state.set_status(BoxStatus::Unknown);
+            runtime.box_manager.add_box(&config, &state).unwrap();
+
+            runtime.recover_boxes().unwrap();
+
+            let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+            let expected = if corrupt {
+                BoxStatus::Unknown
+            } else {
+                BoxStatus::Stopped
+            };
+            assert_eq!((recovered.status, recovered.pid), (expected, None));
+            if corrupt {
+                assert_eq!(std::fs::read(&pid_file).unwrap(), b"invalid PID");
+            }
         }
     }
 
@@ -3984,7 +4230,7 @@ mod tests {
     }
 
     #[test]
-    fn test_recovery_adopts_legacy_pid_for_unknown_box_without_recorded_pid() {
+    fn test_recovery_adopts_legacy_pid_without_changing_unknown_status() {
         let (runtime, _dir) = create_test_runtime();
         let (pid, child) = spawn_dummy_process();
         let _child = ChildGuard(child);
@@ -4006,7 +4252,7 @@ mod tests {
         let recovered = runtime.box_manager.update_box(&config.id).unwrap();
         assert_eq!(
             (recovered.status, recovered.pid, recovered.started_at),
-            (BoxStatus::Running, Some(pid), None)
+            (BoxStatus::Unknown, Some(pid), None)
         );
     }
 
@@ -4044,8 +4290,10 @@ mod tests {
             std::fs::create_dir_all(layout.root()).unwrap();
             let pid_file = layout.pid_file_path();
             match identity {
-                "verified" | "different_pid" => write_pid_file_with_fingerprint(&pid_file, pid),
-                "mismatched" | "start_time_unavailable" => {
+                "verified" | "different_pid" | "start_time_unavailable" => {
+                    write_pid_file_with_fingerprint(&pid_file, pid)
+                }
+                "mismatched" => {
                     let start = crate::util::process_start_time(pid).unwrap();
                     std::fs::write(&pid_file, format!("{pid}\n{}\n", start + 1)).unwrap();
                 }
@@ -4077,8 +4325,6 @@ mod tests {
 
             let recover = || {
                 if identity == "start_time_unavailable" {
-                    // The initial identity check returns Absent. Simulate an unavailable
-                    // OS start time at the confirmation read, without requiring root.
                     runtime.recover_boxes_with_process_start_time(None, |checked_pid| {
                         assert_eq!(checked_pid, pid);
                         None
@@ -4092,18 +4338,22 @@ mod tests {
             let (_, recovered) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
             let expected = match identity {
                 "verified" => frozen,
-                "absent_dead" | "mismatched" => BoxStatus::Stopped,
+                "absent_dead" => BoxStatus::Stopped,
                 _ => BoxStatus::Unknown,
             };
             if recovered.status != expected {
                 unexpected.push((identity, recovered.status, expected));
                 continue;
             }
-            if matches!(identity, "unreadable" | "start_time_unavailable") {
+            if matches!(
+                identity,
+                "mismatched" | "unreadable" | "start_time_unavailable"
+            ) {
                 assert!(pid_file.exists(), "{identity}: recovery removed shim.pid");
             }
             if identity == "absent_with_stale_exit" {
-                assert!(!layout.exit_file_path().exists());
+                assert!(layout.exit_file_path().is_file());
+                assert!(!layout.exit_previous_path().exists());
             }
             if expected == BoxStatus::Stopped {
                 assert_eq!(recovered.pid, None);
@@ -4178,10 +4428,7 @@ mod tests {
                     .unwrap();
                 std::fs::create_dir_all(layout.root()).unwrap();
                 let pid_file = layout.pid_file_path();
-                let start = crate::util::process_start_time(pid).unwrap();
-                // Mismatched fingerprint forces initial ProcessIdentity::Absent while
-                // the injected None start_time simulates unreadable OS metadata on re-check.
-                std::fs::write(&pid_file, format!("{pid}\n{}\n", start + 1)).unwrap();
+                write_pid_file_with_fingerprint(&pid_file, pid);
                 runtime.box_manager.add_box(&config, &state).unwrap();
 
                 runtime
@@ -4286,6 +4533,45 @@ mod tests {
     }
 
     #[test]
+    fn test_recovery_keeps_file_only_paused_box_unknown_after_pid_file_becomes_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+        let config = test_running_box_config(true, &runtime, pid);
+        let pid_file = config.box_home.join("shim.pid");
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Paused);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        let target = pid_file.with_extension("record");
+        std::fs::set_permissions(&pid_file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A privileged test runner may still read the file. Use a dangling link in that case.
+        let use_dangling_link = std::fs::read(&pid_file).is_ok();
+        if use_dangling_link {
+            std::fs::rename(&pid_file, &target).unwrap();
+            std::os::unix::fs::symlink(target.with_extension("unavailable"), &pid_file).unwrap();
+        }
+
+        runtime.recover_boxes().unwrap();
+
+        let first = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!((first.status, first.pid), (BoxStatus::Unknown, None));
+
+        if use_dangling_link {
+            std::fs::rename(&target, &pid_file).unwrap();
+        }
+        std::fs::set_permissions(&pid_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        runtime.recover_boxes().unwrap();
+
+        let second = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(second.status, BoxStatus::Unknown);
+        assert_eq!(second.pid, Some(pid));
+        assert_eq!(second.started_at, None);
+    }
+
+    #[test]
     fn test_recovery_blocks_start_for_deferred_ephemeral_box() {
         let (runtime, _dir) = create_test_runtime();
         let (pid, child) = spawn_dummy_process();
@@ -4305,6 +4591,94 @@ mod tests {
         assert!(!recovered.status.can_start());
         assert!(recovered.started_at.is_none());
         assert!(recovered.lock_id.is_some());
+    }
+
+    #[test]
+    fn test_recovery_clears_old_pid_for_unknown_ephemeral_deferred_after_reboot() {
+        let (runtime, _dir) = create_test_runtime();
+        runtime.recover_boxes_with_boot_id(Some("boot-a")).unwrap();
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&config.box_home).unwrap();
+        let pid_file = config.box_home.join("shim.pid");
+        std::fs::write(&pid_file, b"invalid PID").unwrap();
+        let lock_id = runtime.lock_manager.allocate().unwrap();
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
+        let mut state = running_state(pid);
+        state.set_status(BoxStatus::Unknown);
+        state.mark_started();
+        state.set_lock_id(lock_id);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        runtime.recover_boxes_with_boot_id(Some("boot-b")).unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(
+            (
+                recovered.status,
+                recovered.pid,
+                recovered.started_at,
+                recovered.lock_id
+            ),
+            (BoxStatus::Unknown, None, None, Some(lock_id))
+        );
+        assert_eq!(std::fs::read(&pid_file).unwrap(), b"invalid PID");
+        assert!(child.0.try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_recovery_removes_ephemeral_with_legacy_pid_file_after_reboot() {
+        let (runtime, _dir) = create_test_runtime();
+        runtime.recover_boxes_with_boot_id(Some("boot-a")).unwrap();
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&config.box_home).unwrap();
+        let pid_file = config.box_home.join("shim.pid");
+        std::fs::write(&pid_file, pid.to_string()).unwrap();
+        runtime
+            .box_manager
+            .add_box(&config, &running_state(pid))
+            .unwrap();
+
+        runtime.recover_boxes_with_boot_id(Some("boot-b")).unwrap();
+
+        assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
+        assert!(!config.box_home.exists());
+        assert!(child.0.try_wait().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_recovery_blocks_exec_for_deferred_ephemeral_running_box() {
+        let (runtime, _dir) = create_test_runtime();
+        let (shim_pid, shim_child) = spawn_dummy_process();
+        let _shim = ChildGuard(shim_child);
+        let (persisted_pid, persisted_child) = spawn_dummy_process();
+        let _persisted = ChildGuard(persisted_child);
+        let mut config = test_running_box_config(false, &runtime, shim_pid);
+        config.options.auto_delete = Some(1);
+        let mut state = running_state(persisted_pid);
+        state.mark_started();
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(recovered.status, BoxStatus::Unknown);
+        assert_eq!(recovered.pid, Some(persisted_pid));
+        assert_eq!(recovered.started_at, None);
+        assert!(!recovered.status.can_exec());
+        let litebox = runtime.get(config.id.as_str()).await.unwrap().unwrap();
+        let result = litebox.exec(crate::litebox::BoxCommand::new("true")).await;
+        assert!(
+            matches!(result, Err(BoxliteError::InvalidState(message)) if message.contains("unknown"))
+        );
     }
 
     #[test]

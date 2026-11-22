@@ -8,8 +8,9 @@ pub use binary_finder::{RuntimeBinaryFinder, find_binary};
 pub(crate) use diagnostic::HostDiagnostic;
 #[cfg(test)]
 pub(crate) use diagnostic::assert_client_safe;
+pub(crate) use pid_file::ShimPresence;
 pub use pid_file::{PidFileReader, PidRecord, ProcessIdentity};
-pub(crate) use pid_file::{PidFileWriter, ShimPidRecord};
+pub(crate) use pid_file::{PidFileWriter, ShimPidRecord, is_valid_shim_pid, shim_pid_may_be_alive};
 
 use std::path::PathBuf;
 use std::process::Command;

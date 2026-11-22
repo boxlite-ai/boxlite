@@ -31,6 +31,8 @@ use std::path::{Path, PathBuf};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use super::process::{is_process_alive, pid_may_be_alive, process_start_time};
+
 /// Max bytes any encoded [`PidRecord`] can produce. PID is u32 (≤10
 /// digits), start-time is u64 (≤20 digits), plus two newlines.
 pub const PID_RECORD_MAX_BYTES: usize = 48;
@@ -186,6 +188,20 @@ impl ShimPidRecord {
 // PID FILE READER — parent-side I/O
 // ============================================================================
 
+/// Evidence about a shim from its PID file and the persisted box PID.
+#[derive(Debug)]
+pub(crate) enum ShimPresence {
+    Verified(ShimPidRecord),
+    Legacy(ShimPidRecord),
+    UnverifiedLive {
+        stale_file_record: Option<ShimPidRecord>,
+        error: Option<BoxliteError>,
+    },
+    Absent {
+        stale_file_record: Option<ShimPidRecord>,
+    },
+}
+
 /// Parent-side reader for a `shim.pid` file. Read-only; lifecycle ops
 /// (existence checks, removal) are direct filesystem calls on the path.
 #[derive(Debug, Clone)]
@@ -212,39 +228,140 @@ impl PidFileReader {
         ShimPidRecord::decode(&bytes)
     }
 
+    pub(crate) fn probe_presence(
+        &self,
+        persisted_pid: Option<u32>,
+        rebooted: bool,
+    ) -> ShimPresence {
+        self.probe_presence_with(persisted_pid, rebooted, process_start_time)
+    }
+
+    pub(crate) fn probe_presence_with(
+        &self,
+        persisted_pid: Option<u32>,
+        rebooted: bool,
+        process_start_time: impl Fn(u32) -> Option<u64>,
+    ) -> ShimPresence {
+        use ShimPresence::*;
+
+        let stale_file_record = match self.read_shim() {
+            Ok(shim) => {
+                let PidRecord { pid, start_time } = shim.identity();
+                if !is_valid_shim_pid(pid) {
+                    return UnverifiedLive {
+                        stale_file_record: Some(shim),
+                        error: Some(BoxliteError::InvalidState(format!(
+                            "Invalid shim PID {pid}"
+                        ))),
+                    };
+                }
+                // Linux start times are boot-relative. Even an exact match
+                // cannot establish that the live PID belongs to the old shim.
+                if rebooted {
+                    return Absent {
+                        stale_file_record: Some(shim),
+                    };
+                }
+
+                let signalable = is_process_alive(pid);
+                if signalable || shim_pid_may_be_alive(pid, &process_start_time) {
+                    match (start_time, start_time.and_then(|_| process_start_time(pid))) {
+                        (Some(expected), Some(actual)) if expected != actual => {
+                            // The mismatch invalidates the file record. The persisted
+                            // PID still needs its own liveness check.
+                        }
+                        (Some(_), Some(_)) if signalable => return Verified(shim),
+                        (None, _) if signalable => return Legacy(shim),
+                        _ => {
+                            return UnverifiedLive {
+                                stale_file_record: None,
+                                error: None,
+                            };
+                        }
+                    }
+                }
+                Some(shim)
+            }
+            Err(error) => {
+                // A dangling symlink or inaccessible path is evidence of an inconclusive file.
+                if !std::fs::symlink_metadata(&self.path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                {
+                    return UnverifiedLive {
+                        stale_file_record: None,
+                        error: Some(error),
+                    };
+                }
+                None
+            }
+        };
+
+        if !rebooted
+            && persisted_pid.is_some_and(|pid| shim_pid_may_be_alive(pid, &process_start_time))
+        {
+            return UnverifiedLive {
+                stale_file_record,
+                error: None,
+            };
+        }
+        Absent { stale_file_record }
+    }
+
     /// Return the verified lifecycle together with the shim's capabilities.
     /// This is the trust boundary for runtime operations that must not attach
     /// to a recycled PID or attribute resources to the wrong VM lifecycle.
     pub(crate) fn verified_shim(&self) -> Option<ShimPidRecord> {
-        let record = self.read_shim().ok()?;
-        let identity = record.identity();
-        let expected_start_time = identity.start_time?;
-        if !crate::util::is_process_alive(identity.pid)
-            || crate::util::process_start_time(identity.pid) != Some(expected_start_time)
-        {
-            return None;
+        match self.probe_presence(None, false) {
+            ShimPresence::Verified(shim) => Some(shim),
+            _ => None,
         }
-        Some(record)
     }
 
     /// Read the PID file and classify the recorded process against the
-    /// live OS view. `Absent` collapses three failure modes (file gone,
-    /// process dead, fingerprint mismatch) — all map to "nothing to act on".
+    /// live OS view. Only verified and legacy records are actionable here.
     pub fn process_identity(&self) -> ProcessIdentity {
-        let Ok(record) = self.read() else {
-            return ProcessIdentity::Absent;
-        };
-        if !crate::util::is_process_alive(record.pid) {
-            return ProcessIdentity::Absent;
-        }
-        match record.start_time {
-            None => ProcessIdentity::Legacy(record.pid),
-            Some(expected) if crate::util::process_start_time(record.pid) == Some(expected) => {
-                ProcessIdentity::Verified(record.pid)
+        match self.probe_presence(None, false) {
+            ShimPresence::Verified(shim) => ProcessIdentity::Verified(shim.identity().pid),
+            ShimPresence::Legacy(shim) => ProcessIdentity::Legacy(shim.identity().pid),
+            ShimPresence::UnverifiedLive { .. } | ShimPresence::Absent { .. } => {
+                ProcessIdentity::Absent
             }
-            Some(_) => ProcessIdentity::Absent,
         }
     }
+}
+
+pub(crate) fn is_valid_shim_pid(pid: u32) -> bool {
+    (1..=i32::MAX as u32).contains(&pid)
+}
+
+pub(crate) fn shim_pid_may_be_alive(
+    pid: u32,
+    process_start_time: impl Fn(u32) -> Option<u64>,
+) -> bool {
+    if pid_may_be_alive(pid) {
+        return true;
+    }
+    // macOS can hide both process details and executable path for a live PID.
+    if !cfg!(target_os = "macos")
+        || !is_valid_shim_pid(pid)
+        || unsafe { libc::kill(pid as i32, 0) } != 0
+        || process_start_time(pid).is_some()
+    {
+        return false;
+    }
+
+    // An exited child can look opaque too. Leave its exit status available
+    // to the owner of the child handle.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    result != 0 || unsafe { info.si_pid() } == 0
 }
 
 // ============================================================================
@@ -641,6 +758,103 @@ mod tests {
             .read()
             .unwrap_err();
         assert!(matches!(err, BoxliteError::Storage(_)));
+    }
+
+    #[test]
+    fn presence_reports_corrupt_pid_file_as_storage_error() {
+        let file = temp_with("invalid PID\n");
+        let reader = PidFileReader::at(file.path());
+
+        assert!(matches!(
+            reader.probe_presence(None, false),
+            ShimPresence::UnverifiedLive {
+                error: Some(BoxliteError::Storage(_)),
+                stale_file_record: None,
+            }
+        ));
+        assert_eq!(reader.process_identity(), ProcessIdentity::Absent);
+    }
+
+    #[test]
+    fn presence_ignores_invalid_persisted_pids() {
+        let dir = tempfile::tempdir().unwrap();
+        let reader = PidFileReader::at(dir.path().join("shim.pid"));
+
+        for pid in [0, i32::MAX as u32 + 1] {
+            let presence = reader.probe_presence(Some(pid), false);
+            assert!(
+                matches!(
+                    presence,
+                    ShimPresence::Absent {
+                        stale_file_record: None
+                    }
+                ),
+                "invalid persisted PID {pid}: {presence:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn presence_rejects_matching_fingerprint_after_reboot() {
+        let pid = std::process::id();
+        let file = temp_with(&format!("{pid}\n12\n"));
+        let reader = PidFileReader::at(file.path());
+        let record = reader.read_shim().unwrap();
+
+        assert!(matches!(
+            reader.probe_presence_with(Some(pid), false, |_| Some(12)),
+            ShimPresence::Verified(shim) if shim == record
+        ));
+        let presence = reader.probe_presence_with(Some(pid), true, |_| Some(12));
+        assert!(
+            matches!(presence, ShimPresence::Absent { stale_file_record: Some(shim) } if shim == record),
+            "matching PID and fingerprint across boots: {presence:?}"
+        );
+    }
+
+    #[test]
+    fn presence_preserves_stale_record_when_persisted_pid_may_be_live() {
+        let persisted_pid = std::process::id();
+        let mut child = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        let file_pid = child.id();
+        let file = temp_with(&format!("{file_pid}\n12\n"));
+        let reader = PidFileReader::at(file.path());
+        let stale = reader.read_shim().unwrap();
+        let presence = reader.probe_presence_with(Some(persisted_pid), false, |_| Some(34));
+        let rebooted = reader.probe_presence_with(Some(persisted_pid), true, |_| Some(34));
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        assert!(matches!(
+            presence,
+            ShimPresence::UnverifiedLive { stale_file_record: Some(record), error: None }
+                if record == stale
+        ));
+        assert!(matches!(
+            rebooted,
+            ShimPresence::Absent { stale_file_record: Some(record) } if record == stale
+        ));
+    }
+
+    #[test]
+    fn presence_keeps_live_persisted_pid_when_file_fingerprint_differs() {
+        let pid = std::process::id();
+        let file = temp_with(&format!("{pid}\n12\n"));
+        let reader = PidFileReader::at(file.path());
+        let stale = reader.read_shim().unwrap();
+
+        let presence = reader.probe_presence_with(Some(pid), false, |_| Some(34));
+        assert!(
+            matches!(presence, ShimPresence::UnverifiedLive { stale_file_record: Some(record), error: None } if record == stale),
+            "{presence:?}"
+        );
+        assert!(matches!(
+            reader.probe_presence_with(None, false, |_| Some(34)),
+            ShimPresence::Absent { stale_file_record: Some(record) } if record == stale
+        ));
     }
 
     // ---- PidFileWriter ------------------------------------------------------

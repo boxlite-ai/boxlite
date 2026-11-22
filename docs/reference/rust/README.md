@@ -532,12 +532,14 @@ A paused box counts as active and can be stopped. Execution and operations
 that would implicitly start the box return an invalid-state error.
 
 Recovery preserves `Paused` when the recorded PID matches a verified shim
-identity. A different PID or an unverifiable legacy live shim is reported as
-`Unknown`. A missing shim is reported as `Stopped`, or `Failed` if a crash
-report exists.
+identity. A different PID or a legacy live shim moves a `Paused` box to
+`Unknown`. A `Paused` box also moves to `Unknown` when recovery cannot rule out
+a live shim, for example when `shim.pid` is unreadable.
 
-Repeated recovery of the verified shim preserves `Paused`. A box recorded as
-`Unknown` with a PID stays `Unknown` when recovery finds a live shim.
+Recovery preserves `Unknown` even when it verifies a live shim. When recovery
+rules out a live shim, these boxes become `Stopped`, or `Failed` if a crash
+report exists. A confirmed host reboot invalidates previously recorded shim
+PIDs and fingerprints.
 
 ```rust
 pub enum BoxStatus {

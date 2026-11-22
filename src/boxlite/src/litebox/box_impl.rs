@@ -33,7 +33,7 @@ use crate::portal::GuestSession;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
-use crate::util::PidFileReader;
+use crate::util::{PidFileReader, ShimPresence};
 use crate::vmm::controller::{ShimHandler, VmmHandler};
 use crate::{BoxID, BoxInfo};
 
@@ -1665,13 +1665,12 @@ impl BoxImpl {
         if state.status != BoxStatus::Unknown {
             return Ok(());
         }
-        let pid_file = self.layout.pid_file_path();
-        let shim_may_be_alive = state.pid.is_some()
-            || crate::runtime::rt_impl::shim_pid_file_may_be_alive(
-                &pid_file,
-                PidFileReader::at(&pid_file).read().ok(),
-            );
-        if shim_may_be_alive {
+        if state.pid.is_some()
+            || !matches!(
+                PidFileReader::at(self.layout.pid_file_path()).probe_presence(None, false),
+                ShimPresence::Absent { .. }
+            )
+        {
             return Err(BoxliteError::InvalidState(format!(
                 "Cannot operate on disks of box {}: shim state is unknown",
                 self.id()
