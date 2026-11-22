@@ -3,6 +3,24 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Console analytics
+
+Signed-in members can enable Analytics under the account menu's **Privacy preferences**.
+
+PostHog receives a `$pageview` for console navigation and a `console_control_click` for supported buttons,
+links, tabs and menu items. Filter by account and `visit_id` to inspect the sequence.
+
+Each event includes the direct referring hostname and available campaign tags.
+Previously unseen hosts appear automatically. Withheld or absent referrers appear as `direct/unknown`.
+
+An intervening website becomes the direct referrer.
+
+Routes use templates such as `/dashboard/boxes/:boxId`. Click properties describe the control kind,
+available stable action name and internal destination. Terminal contents, typed values and DOM text are excluded.
+
+Saving the disabled preference stops subsequent browser behavior requests in tabs sharing the account's local preference.
+The browser submits each event once without an application retry queue.
+
 ## Create Box sizing
 
 New Box presents six named presets from 0.125 to 4 vCPU, retaining the existing

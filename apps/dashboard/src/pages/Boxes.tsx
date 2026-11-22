@@ -739,7 +739,13 @@ const Boxes: React.FC = () => {
               updateOnboardingProgress({ boxCreated: true })
             }}
           >
-            <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" title="New Box">
+            <AsciiButton
+              variant="primary"
+              className="h-11 sm:h-9"
+              type="button"
+              title="New Box"
+              data-console-action="new_box"
+            >
               <Plus className="size-3.5" strokeWidth={2.4} />
               New Box
             </AsciiButton>

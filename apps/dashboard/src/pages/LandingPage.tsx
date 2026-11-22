@@ -7,6 +7,7 @@ import LoadingFallback from '@/components/LoadingFallback'
 import { AccountEntryLayout } from '@/components/SetupLayout'
 import { AsciiButton } from '@/components/ascii'
 import { getSignInIntent, prepareSignIn, safeReturnTo } from '@/lib/auth-session'
+import { currentVisit } from '@/lib/console-visit'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Navigate, useLocation } from 'react-router-dom'
@@ -36,7 +37,7 @@ const LandingPage: React.FC = () => {
         // The context wrapper returns null on failure rather than rejecting.
         const result: unknown = await signinRedirect({
           ...(chooseAccount ? { prompt: 'login' } : {}),
-          state: { returnTo },
+          state: { returnTo, visit: currentVisit() },
         })
         if (result !== null) return
       } catch {

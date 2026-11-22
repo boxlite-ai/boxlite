@@ -5,6 +5,7 @@
  */
 
 import { ApiContext } from '@/contexts/ApiContext'
+import { currentVisit } from '@/lib/console-visit'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import LoadingFallback from '@/components/LoadingFallback'
@@ -53,7 +54,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const returnTo = location.pathname + location.search + location.hash
     try {
       prepareSignIn(returnTo)
-      void signinRedirect({ state: { returnTo } })
+      void signinRedirect({ state: { returnTo, visit: currentVisit() } })
         .then((result: unknown) => {
           if (result === null) setFailed(true)
         })

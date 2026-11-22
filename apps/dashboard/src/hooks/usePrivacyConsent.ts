@@ -21,6 +21,16 @@ export type ConsentPreferences = z.infer<typeof ConsentPreferencesSchema>
 
 const CONSENT_KEY_PREFIX = 'privacy_consent_'
 
+export function analyticsAllowed(sub: string) {
+  const state = usePrivacyConsentStore.getState()
+  if (state.currentUserSub !== sub || !state.preferences.analytics) return false
+  try {
+    return JSON.parse(localStorage.getItem(CONSENT_KEY_PREFIX + sub) ?? 'null')?.analytics === true
+  } catch {
+    return false
+  }
+}
+
 const DEFAULT_PREFERENCES: ConsentPreferences = {
   necessary: true,
   analytics: false,
@@ -42,7 +52,6 @@ const usePrivacyConsentStore = create<PrivacyConsentState>()((set, get) => ({
   preferences: DEFAULT_PREFERENCES,
 
   init: (userSub: string) => {
-    if (get().currentUserSub === userSub) return
     set({ currentUserSub: userSub })
 
     const consentKey = `${CONSENT_KEY_PREFIX}${userSub}`
@@ -69,6 +78,7 @@ const usePrivacyConsentStore = create<PrivacyConsentState>()((set, get) => ({
       localStorage.setItem(consentKey, JSON.stringify(newPreferences))
       set({ preferences: newPreferences, hasConsented: true })
     } catch {
+      if (!newPreferences.analytics) set({ preferences: newPreferences, hasConsented: true })
       toast.error('Failed to save privacy preferences. Please try again.')
     }
   },
@@ -85,7 +95,13 @@ export function usePrivacyConsent() {
 
   useEffect(() => {
     if (user?.profile?.sub) {
-      init(user.profile.sub)
+      const sub = user.profile.sub
+      init(sub)
+      const refresh = (event: StorageEvent) => {
+        if (event.key === null || event.key === CONSENT_KEY_PREFIX + sub) init(sub)
+      }
+      window.addEventListener('storage', refresh)
+      return () => window.removeEventListener('storage', refresh)
     }
   }, [user?.profile?.sub, init])
 
