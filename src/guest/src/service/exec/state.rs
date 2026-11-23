@@ -312,6 +312,7 @@ impl ExecutionState {
     pub(crate) async fn wait_terminal_output_summary(&self) -> OutputTerminalSummary {
         let output = self.inner.lock().await.output.clone();
         let summary = output.wait_terminal_summary().await;
+        tracing::debug!(truncated = summary.truncated, "execution output finalized");
         let sealed = output.seal().await;
         debug_assert!(sealed, "terminal output must be sealable after its summary");
         summary
@@ -325,6 +326,19 @@ impl ExecutionState {
     pub(crate) async fn retained_output_bytes(&self) -> usize {
         let output = self.inner.lock().await.output.clone();
         output.retained_bytes().await
+    }
+
+    pub(super) async fn start_timeout(
+        &self,
+        target: super::timeout::TimeoutTarget,
+        exec_id: String,
+        timeout: std::time::Duration,
+    ) {
+        let output = self.inner.lock().await.output.clone();
+        self.set_timeout_task(super::timeout::start_timeout_watcher(
+            target, exec_id, timeout, output,
+        ))
+        .await;
     }
 
     pub(super) async fn set_timeout_task(&self, task: TimeoutTask) {
@@ -546,10 +560,10 @@ impl ExecutionState {
             task.abort();
             let _ = task.await;
         }
+        output.cut_off().await;
         if let Some(task) = timeout_task {
             task.finish().await;
         }
-        output.shutdown_drains().await;
         if self.shutdown_managed {
             if let Some(reaper) = crate::reaper::REAPER.get() {
                 reaper.release_slot(&self.exit);
@@ -1119,3 +1133,7 @@ mod idle_reader_regression {
         state.release_resources().await;
     }
 }
+
+#[cfg(test)]
+#[path = "tests/timeout_output.rs"]
+mod timeout_output_tests;

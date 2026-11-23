@@ -11,8 +11,10 @@ use std::time::Duration;
 use nix::errno::Errno;
 use nix::sys::signal::Signal;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 use tracing::{info, warn};
 
+use crate::service::exec::output::OutputManager;
 use crate::service::exec::process_instance::{ProcessGroup, ProcessInstance};
 
 /// Grace period between SIGTERM and SIGKILL on exec timeout.
@@ -22,7 +24,7 @@ use crate::service::exec::process_instance::{ProcessGroup, ProcessInstance};
 /// files, and exit cleanly. Mirrors the SIGTERM→wait→SIGKILL pattern
 /// used by `ExecRegistry::shutdown_all` and `Container::shutdown`.
 const TIMEOUT_GRACE: Duration = Duration::from_secs(2);
-/// Poll interval limiting how long a detached watcher outlives its last group member.
+/// Poll interval for the group-empty condition of detached cleanup.
 const GROUP_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(super) struct TimeoutTarget {
@@ -61,6 +63,7 @@ impl TimeoutTarget {
 
 pub(super) struct TimeoutTask {
     target: Arc<TimeoutTarget>,
+    output: OutputManager,
     task: tokio::task::JoinHandle<()>,
     detached: oneshot::Sender<()>,
 }
@@ -70,20 +73,22 @@ impl TimeoutTask {
     pub(super) fn without_group_for_test(task: tokio::task::JoinHandle<()>) -> Self {
         Self {
             target: Arc::new(TimeoutTarget::from_spawn(None, None)),
+            output: OutputManager::new(None, None),
             task,
             detached: oneshot::channel().0,
         }
     }
 
     pub(super) async fn finish(self) {
-        if self
-            .target
-            .group
-            .as_ref()
-            .is_some_and(ProcessGroup::has_members)
+        if self.output.terminal_summary().await.is_none()
+            || self
+                .target
+                .group
+                .as_ref()
+                .is_some_and(ProcessGroup::has_members)
         {
             // Dropping the handle detaches the watcher. Its deadline still
-            // applies to this group even if the leader or execution state is gone.
+            // applies to the group and output even after the leader exits.
             let _ = self.detached.send(());
             return;
         }
@@ -94,49 +99,65 @@ impl TimeoutTask {
 
 /// Start timeout watcher.
 ///
-/// After `timeout` elapses, sends SIGTERM and waits up to `TIMEOUT_GRACE`
-/// for the process to exit, then escalates to SIGKILL. SIGKILL is
-/// uncatchable, so a workload that installs `SIG_IGN`/handlers for
-/// SIGTERM (or SIGALRM, etc.) cannot outlive its deadline.
-///
-/// Terminal executions cancel their watcher once its original group is empty.
+/// Sends SIGTERM at the deadline and escalates successful signaling to SIGKILL
+/// after the grace period. Output closes at the same cutoff independently of
+/// signal delivery. Terminal executions cancel the watcher only after output
+/// ends and the original group is empty.
 pub(super) fn start_timeout_watcher(
     target: TimeoutTarget,
     exec_id: String,
     timeout: Duration,
+    output: OutputManager,
 ) -> TimeoutTask {
     let target = Arc::new(target);
     let task_target = Arc::clone(&target);
     let (detached, wait_for_detach) = oneshot::channel();
+    let task_output = output.clone();
+    let deadline = Instant::now() + timeout;
     let task = tokio::spawn(async move {
-        let deadline = enforce_timeout(&task_target, &exec_id, timeout);
-        if let Some(group) = &task_target.group {
-            tokio::select! {
-                _ = deadline => {}
-                _ = wait_for_group_exit(group, wait_for_detach) => {}
-            }
-        } else {
-            deadline.await;
+        let cleanup = async {
+            let cutoff = async {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(deadline + TIMEOUT_GRACE) => {
+                        task_output.cut_off().await;
+                    }
+                    _ = task_output.wait_terminal_summary() => {}
+                }
+            };
+            tokio::join!(enforce_timeout(&task_target, &exec_id, deadline), cutoff);
+        };
+        tokio::select! {
+            _ = cleanup => {}
+            _ = wait_for_completion(task_target.group.as_ref(), &task_output, wait_for_detach) => {}
         }
     });
     TimeoutTask {
         target,
+        output,
         task,
         detached,
     }
 }
 
-async fn wait_for_group_exit(group: &ProcessGroup, detached: oneshot::Receiver<()>) {
-    // Active executions are reaped normally. Only poll after the state that
-    // owned the watcher has gone away and descendants may still be alive.
+async fn wait_for_completion(
+    group: Option<&ProcessGroup>,
+    output: &OutputManager,
+    detached: oneshot::Receiver<()>,
+) {
+    // Only poll group membership after the leader's lifecycle has finished.
     let _ = detached.await;
-    while group.has_members() {
-        tokio::time::sleep(GROUP_EXIT_POLL_INTERVAL).await;
-    }
+    let group_exit = async {
+        if let Some(group) = group {
+            while group.has_members() {
+                tokio::time::sleep(GROUP_EXIT_POLL_INTERVAL).await;
+            }
+        }
+    };
+    tokio::join!(group_exit, output.wait_terminal_summary());
 }
 
-async fn enforce_timeout(target: &TimeoutTarget, exec_id: &str, timeout: Duration) {
-    tokio::time::sleep(timeout).await;
+async fn enforce_timeout(target: &TimeoutTarget, exec_id: &str, deadline: Instant) {
+    tokio::time::sleep_until(deadline).await;
 
     match target.signal_if_live(Signal::SIGTERM) {
         Ok(true) => {}
@@ -152,7 +173,7 @@ async fn enforce_timeout(target: &TimeoutTarget, exec_id: &str, timeout: Duratio
         "SIGTERM on timeout; grace before SIGKILL"
     );
 
-    tokio::time::sleep(TIMEOUT_GRACE).await;
+    tokio::time::sleep_until(deadline + TIMEOUT_GRACE).await;
 
     match target.signal_if_live(Signal::SIGKILL) {
         Ok(true) => {

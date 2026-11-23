@@ -20,6 +20,8 @@ pub(crate) struct OutputTerminalSummary {
     pub(crate) stdout: OutputStreamSummary,
     pub(crate) stderr: OutputStreamSummary,
     pub(crate) reader_failure: Option<String>,
+    /// Readers closed at the execution deadline; independent of process exit.
+    pub(crate) truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +36,7 @@ pub(crate) struct OutputManager {
     updated: watch::Sender<()>,
     consumer_lease: Arc<AtomicBool>,
     drain_tasks: Arc<StdMutex<Vec<JoinHandle<()>>>>,
+    cutoff_lock: Arc<Mutex<()>>,
 }
 
 struct OutputState {
@@ -43,6 +46,7 @@ struct OutputState {
     next_sequence: u64,
     failure: Option<ReaderFailure>,
     sealed: bool,
+    truncated: bool,
     stdout: StreamState,
     stderr: StreamState,
 }
@@ -96,6 +100,7 @@ impl OutputManager {
                 next_sequence: 0,
                 failure: None,
                 sealed: false,
+                truncated: false,
                 stdout: StreamState {
                     enabled: stdout_enabled,
                     finished: !stdout_enabled,
@@ -112,6 +117,7 @@ impl OutputManager {
             updated,
             consumer_lease: Arc::new(AtomicBool::new(false)),
             drain_tasks: Arc::new(StdMutex::new(Vec::new())),
+            cutoff_lock: Arc::new(Mutex::new(())),
         };
 
         if let Some(stdout) = stdout {
@@ -150,6 +156,26 @@ impl OutputManager {
         for task in tasks {
             let _ = task.await;
         }
+    }
+
+    /// Freeze buffered output, close unfinished readers, then publish stream ends.
+    pub(crate) async fn cut_off(&self) {
+        let _cutoff = self.cutoff_lock.lock().await;
+        {
+            let mut state = self.inner.lock().await;
+            if state.stdout.finished && state.stderr.finished {
+                return;
+            }
+            // Freeze appends before cancelling readers. Mark streams finished only
+            // after joining them, so terminal observers cannot cancel cleanup early.
+            state.truncated = true;
+        }
+        self.shutdown_drains().await;
+        let mut state = self.inner.lock().await;
+        state.stdout.finished = true;
+        state.stderr.finished = true;
+        drop(state);
+        self.updated.send_replace(());
     }
 
     // `tonic::Status` is the guest's gRPC error type and is wide enough to trip
@@ -289,6 +315,7 @@ impl OutputManager {
                 enabled: state.stderr.enabled,
                 total_bytes: state.stderr.total_bytes,
             },
+            truncated: state.truncated,
             reader_failure: state
                 .failure
                 .as_ref()
@@ -310,6 +337,7 @@ impl OutputManager {
                 enabled: state.stderr.enabled,
                 total_bytes: state.stderr.total_bytes,
             },
+            truncated: state.truncated,
             reader_failure: state
                 .failure
                 .as_ref()
@@ -369,6 +397,9 @@ impl OutputManager {
         let byte_len = data.len();
 
         let mut state = self.inner.lock().await;
+        if state.truncated {
+            return;
+        }
         let sequence = state.next_sequence;
         state.next_sequence += 1;
         let stream = state.stream_mut(source);
@@ -401,6 +432,9 @@ impl OutputManager {
 
     async fn reader_finished(&self, source: OutputSource) {
         let mut state = self.inner.lock().await;
+        if state.truncated {
+            return;
+        }
         state.stream_mut(source).finished = true;
         drop(state);
         self.updated.send_replace(());
@@ -408,6 +442,9 @@ impl OutputManager {
 
     async fn reader_failed(&self, source: OutputSource, error: std::io::Error) {
         let mut state = self.inner.lock().await;
+        if state.truncated {
+            return;
+        }
         state.stream_mut(source).finished = true;
         if state.failure.is_none() {
             state.failure = Some(ReaderFailure {
@@ -743,3 +780,7 @@ mod tests {
         assert_eq!(stdout.total_bytes, Some(8));
     }
 }
+
+#[cfg(test)]
+#[path = "tests/output_cutoff.rs"]
+mod cutoff_tests;

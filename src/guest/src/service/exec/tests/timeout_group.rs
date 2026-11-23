@@ -129,7 +129,12 @@ async fn detached_timeout_watcher_releases_empty_group_before_deadline() {
         (target, member)
     };
 
-    let timeout = start_timeout_watcher(target, "detached".to_owned(), Duration::from_secs(30));
+    let timeout = start_timeout_watcher(
+        target,
+        "detached".to_owned(),
+        Duration::from_secs(30),
+        crate::service::exec::output::OutputManager::new(None, None),
+    );
     let retained_target = Arc::downgrade(&timeout.target);
     timeout.finish().await;
     let still_watching = retained_target.upgrade().is_some();

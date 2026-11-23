@@ -484,12 +484,13 @@ async fn spawn_execution(
 
     // Step 3: Start timeout watcher (if requested)
     if let Some(target) = timeout_target {
-        let timeout_task = timeout::start_timeout_watcher(
-            target,
-            execution_id.clone(),
-            std::time::Duration::from_millis(req.timeout_ms),
-        );
-        state.set_timeout_task(timeout_task).await;
+        state
+            .start_timeout(
+                target,
+                execution_id.clone(),
+                std::time::Duration::from_millis(req.timeout_ms),
+            )
+            .await;
     }
 
     if reservation.is_some() {
@@ -1116,6 +1117,7 @@ mod container_id_path_tests {
                             total_bytes: 0,
                         },
                         reader_failure: None,
+                        truncated: false,
                     },
                 },
             )
@@ -1196,6 +1198,7 @@ mod container_id_path_tests {
                             total_bytes: 0,
                         },
                         reader_failure: Some("stdout reader failed".into()),
+                        truncated: false,
                     },
                 },
             )

@@ -737,6 +737,12 @@ async with SimpleBox(image="python:slim") as box:
     result = await box.exec("sleep", "60", timeout=5)   # timeout in seconds
 ```
 
+For timed commands, Guest closes unfinished stdout and stderr readers two seconds
+after the execution deadline. Each stream delivers bytes already received before
+its end event, even if an escaped descendant still holds the pipe. Scheduling and
+transport can delay delivery. This cutoff preserves the process exit code; a
+shell that already exited successfully still reports `0`.
+
 A timed `SimpleBox.exec()` call allows up to three extra seconds after
 its execution deadline to collect output and exit status. If collection
 stalls, the result keeps stdout and stderr already received and reports
@@ -1097,9 +1103,9 @@ guest sends SIGTERM and then SIGKILL when the deadline passes. `run()` does not
 raise on a timeout: it returns whatever the snippet wrote to stdout before it
 was terminated.
 
-The guest signals the execution's process group on supported kernels. If a
-descendant keeps an output pipe open, the SDK can wait up to three additional
-seconds after the execution deadline to collect output and exit status.
+The guest signals the execution's process group on supported kernels and closes
+unfinished output readers after its two-second grace. Python retains a separate
+three-second collection allowance for a stalled Guest or result delivery.
 
 ```python
 with SyncCodeBox() as cb:
