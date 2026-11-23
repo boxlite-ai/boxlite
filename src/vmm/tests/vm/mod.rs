@@ -308,7 +308,7 @@ fn with_fresh_backend<H: HostVm + 'static>(
         true,
         VirtioWorkers::new,
         boot,
-        |chipset, ctx, _, _| devices(chipset, ctx).map(|()| None),
+        |chipset, ctx, _, _| devices(chipset, ctx),
     )
 }
 
@@ -690,7 +690,7 @@ fn failed_boot_keeps_registration_and_backing_when_workers_fail_to_join() {
             failed_boot,
             |_, ctx, _, _| {
                 backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
-                Ok(None)
+                Ok(())
             },
         )
     });
@@ -1970,10 +1970,11 @@ fn an_invalid_hotplug_capacity_fails_before_the_host_vm_exists() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
-fn a_hotplug_capacity_adds_virtio_mem_and_returns_its_handle() {
+fn a_hotplug_capacity_adds_virtio_mem_and_registers_its_control() {
     use crate::devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES};
     use boxlite_hypervisor::VcpuExit;
-    for (capacity, present) in [(0, false), (256, true)] {
+    for (capacity, activate) in [(0, false), (128, false), (256, true)] {
+        let present = capacity != 0;
         let mut configuration = config(1, 2);
         configuration.hotplug_mib = capacity;
         let window = present.then(|| {
@@ -1987,7 +1988,7 @@ fn a_hotplug_capacity_adds_virtio_mem_and_returns_its_handle() {
         });
         let (writer, mut console) =
             ConsoleWorker::spawn(Box::new(io::sink()), DEFAULT_QUEUE_BYTES).unwrap();
-        let vm = Vm::with_devices(
+        let mut vm = Vm::with_devices(
             configuration,
             || Ok(MockVm::new()),
             |_, config| {
@@ -2006,28 +2007,108 @@ fn a_hotplug_capacity_adds_virtio_mem_and_returns_its_handle() {
             },
         )
         .unwrap();
-        let handle = vm.memory_handle();
-        assert_eq!(handle.is_some(), present);
-        if let Some(handle) = handle {
+        let control = vm.control();
+        let expected = if present {
+            io::ErrorKind::WouldBlock
+        } else {
+            io::ErrorKind::Unsupported
+        };
+        let timeout = std::time::Duration::ZERO;
+        assert_eq!(
+            control
+                .set_memory_target_mib(128, timeout)
+                .unwrap_err()
+                .kind(),
+            expected
+        );
+        assert_eq!(control.memory_status(timeout).unwrap_err().kind(), expected);
+        if present {
             let mut id = [0; 4];
             vm.chipset.as_ref().unwrap().dispatch(VcpuExit::MmioRead {
                 guest_addr: 0xd000_1008,
                 bytes: &mut id,
             });
             assert_eq!(u32::from_le_bytes(id), 24);
-            assert!(matches!(
-                handle.request(64),
-                Err(Error::InvalidHotplugSize(64))
-            ));
-            handle.request(128).unwrap();
-            let status = handle.status();
+        }
+        if activate {
+            let write = |offset: u64, value: u32| {
+                assert!(
+                    vm.chipset
+                        .as_ref()
+                        .unwrap()
+                        .dispatch(VcpuExit::MmioWrite {
+                            guest_addr: 0xd000_1000 + offset,
+                            bytes: &value.to_le_bytes(),
+                        })
+                        .is_none()
+                );
+            };
+            let activate = [
+                (0x070, 1),
+                (0x070, 3),
+                (0x024, 0),
+                (0x020, 2),
+                (0x024, 1),
+                (0x020, 1),
+                (0x070, 0xb),
+                (0x038, 16),
+                (0x080, 0x10000),
+                (0x090, 0x11000),
+                (0x0a0, 0x12000),
+                (0x044, 1),
+                (0x070, 0xf),
+            ];
+            for (offset, value) in activate {
+                write(offset, value);
+            }
+            let budget = std::time::Duration::from_secs(1);
+            assert_eq!(control.memory_status(budget).unwrap().requested_mib, 0);
+            assert_eq!(
+                control
+                    .set_memory_target_mib(64, budget)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
+            control.set_memory_target_mib(128, budget).unwrap();
+            let status = control.memory_status(budget).unwrap();
             assert_eq!(
                 (
                     status.capacity_mib,
                     status.requested_mib,
                     status.plugged_mib
                 ),
-                (256, 128, 0)
+                (capacity, 128, 0)
+            );
+            write(0x070, 0x80);
+            assert_eq!(
+                control.memory_status(timeout).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+            write(0x070, 0);
+            for (offset, value) in activate {
+                write(offset, value);
+            }
+            assert_eq!(control.memory_status(budget).unwrap().requested_mib, 128);
+            write(0x070, 0);
+            assert_eq!(
+                control.memory_status(timeout).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+        }
+        vm.stop_handle().stop();
+        vm.run().unwrap();
+        if present {
+            assert_eq!(
+                control.memory_status(timeout).unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+            assert_eq!(
+                control
+                    .set_memory_target_mib(128, timeout)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::BrokenPipe
             );
         }
         drop(vm);

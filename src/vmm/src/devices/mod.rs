@@ -44,8 +44,7 @@ const HOTPLUG_CMDLINE: &str =
 
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, disks, reporting balloon, and optional filesystem,
-/// vsock, network, console and virtio-mem. Returns the hotplug handle when
-/// the configuration set a hotplug capacity.
+/// vsock, network, console and virtio-mem.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
     chipset: &mut ChipsetBuilder,
@@ -54,7 +53,7 @@ pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
     console: ConsoleWriter,
     host_vm: &Arc<H>,
     hotplug_window: Option<HotplugWindow>,
-) -> Result<Option<mem::MemoryHandle>> {
+) -> Result<()> {
     add_legacy_devices(chipset, console.clone(), Box::new(cmos::host_clock))?;
 
     let mut slots = Slots::new();
@@ -99,19 +98,16 @@ pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
             mmio::add_device(chipset, &ctx, "virtio-console", slot, device)
         })?;
     }
-    let mut memory = None;
     if let Some(window) = hotplug_window {
         let hotplug = HotplugMemory::new(Arc::clone(host_vm), ctx.memory.clone(), window);
         add_slot_device(&mut slots, &mut used, |slot| {
-            memory = Some(mem::add(chipset, &ctx, slot, hotplug)?);
-            Ok(())
+            mem::add(chipset, &mut ctx, slot, hotplug)
         })?;
         config.cmdline.push_str(HOTPLUG_CMDLINE);
     }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.
-    mmio::announce(&mut config.cmdline, &used)?;
-    Ok(memory)
+    mmio::announce(&mut config.cmdline, &used)
 }
 
 /// Takes the next slot, runs `attach` with it, and records it for

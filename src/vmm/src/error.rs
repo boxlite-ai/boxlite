@@ -54,6 +54,8 @@ pub enum Error {
     OpenDisk { path: PathBuf, source: io::Error },
     /// Creating the channel that grows a disk failed.
     DiskControl(io::Error),
+    /// The VM already has a memory control endpoint.
+    RegisterMemoryControl(io::Error),
     /// Every virtio-mmio window and interrupt line is taken.
     VirtioSlotsExhausted,
     /// Devices claimed resources the chipset cannot give them.
@@ -138,6 +140,7 @@ impl fmt::Display for Error {
             Self::InvalidDiskCount(count) => write!(f, "too many disks: {count}"),
             Self::InvalidDiskId(id) => write!(f, "empty or duplicate disk ID: {id:?}"),
             Self::DiskControl(_) => f.write_str("failed to create a disk grow channel"),
+            Self::RegisterMemoryControl(_) => f.write_str("failed to register memory control"),
             Self::OpenDisk { path, .. } => {
                 write!(f, "failed to open the disk image {}", path.display())
             }
@@ -206,6 +209,7 @@ impl error::Error for Error {
             | Self::AllocateMemory { source, .. }
             | Self::OpenDisk { source, .. }
             | Self::DiskControl(source)
+            | Self::RegisterMemoryControl(source)
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. }

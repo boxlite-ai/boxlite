@@ -3,26 +3,26 @@
 
 //! The virtio-mem device (VIRTIO 1.4 §5.15) over [`HotplugMemory`].
 //!
-//! The host sets a target with [`MemoryHandle::request`]; the device publishes
+//! The host sets a target with [`crate::VmControl::set_memory_target_mib`]; the device publishes
 //! it as `requested_size` and raises a configuration interrupt. The guest
 //! driver then plugs or unplugs blocks through the request queue. A plug above
 //! the target gets NACK, never ERROR: Linux marks the device broken after an
-//! ERROR. Shrinking is best effort; [`MemoryHandle::status`] reports what the
+//! ERROR. Shrinking is best effort; [`crate::VmControl::memory_status`] reports what the
 //! guest actually holds.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::{io, sync::Arc};
 
 use boxlite_hypervisor::Vm;
 use virtio_queue::DescriptorChain;
 use vm_memory::Bytes;
 
 use crate::{
-    error::{Error, Result},
+    control::{MemoryRequest, MemoryRequests},
     hotplug::{BLOCK_SIZE, BlockState, HotplugMemory, SLOT_SIZE},
     memory::GuestMemoryMmap,
     virtio::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, SnapshotSupport,
-        VirtioDevice, queue::Completion,
+        SourceId, VirtioDevice, queue::Completion,
     },
 };
 
@@ -61,90 +61,92 @@ pub struct MemoryStatus {
     pub mapped_mib: u32,
 }
 
-/// Sets the hotplug target of a running VM from any thread.
-#[derive(Clone)]
-pub struct MemoryHandle(Arc<dyn MemoryControl>);
-
-impl std::fmt::Debug for MemoryHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // No status: formatting must not take the device lock.
-        f.debug_struct("MemoryHandle").finish_non_exhaustive()
-    }
+/// The virtio-mem device and the hotplug window it drives.
+pub(crate) struct VirtioMem<H: Vm + ?Sized> {
+    memory: HotplugMemory<H>,
+    controls: MemoryRequests,
+    requested: u64,
+    features: u64,
+    active: Option<Active>,
 }
 
-impl MemoryHandle {
-    /// Asks the guest to hold `added_mib` above the boot RAM: a multiple of
-    /// 128 up to the capacity. A lower value shrinks. Returns once the target
-    /// is published; poll [`Self::status`] for the guest's progress.
-    pub fn request(&self, added_mib: u32) -> Result<()> {
-        self.0.request(added_mib)
-    }
-
-    /// The current capacity, target, plugged and mapped sizes.
-    pub fn status(&self) -> MemoryStatus {
-        self.0.status()
-    }
+struct Active {
+    context: ActivationContext,
+    control: SourceId,
 }
 
-trait MemoryControl: Send + Sync {
-    fn request(&self, added_mib: u32) -> Result<()>;
-    fn status(&self) -> MemoryStatus;
+/// Adds the device on `slot` and registers its VM control endpoint.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn add<H: Vm + Send + Sync + 'static>(
+    chipset: &mut crate::chipset::ChipsetBuilder,
+    ctx: &mut crate::virtio::DeviceContext<'_>,
+    slot: crate::virtio::mmio::Slot,
+    memory: HotplugMemory<H>,
+) -> crate::Result<()> {
+    let controls = ctx
+        .controls
+        .register_memory()
+        .map_err(crate::Error::RegisterMemoryControl)?;
+    let device = Arc::new(std::sync::Mutex::new(VirtioMem::new(memory, controls)));
+    crate::virtio::mmio::add_device(chipset, ctx, SPEC.name, slot, device)
 }
 
-impl<H: Vm + Send + Sync + 'static> MemoryControl for Mutex<VirtioMem<H>> {
-    fn request(&self, added_mib: u32) -> Result<()> {
-        let mut device = self.lock().unwrap_or_else(PoisonError::into_inner);
+impl<H: Vm + ?Sized> VirtioMem<H> {
+    pub(crate) fn new(memory: HotplugMemory<H>, controls: MemoryRequests) -> Self {
+        Self {
+            memory,
+            controls,
+            requested: 0,
+            features: 0,
+            active: None,
+        }
+    }
+
+    fn apply_controls(&mut self) {
+        let count = match self.controls.batch_len() {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::warn!(%error, "virtio-mem control wakeup failed");
+                return;
+            }
+        };
+        for _ in 0..count {
+            match self.controls.claim() {
+                Some(MemoryRequest::SetTarget { added_mib, reply }) => {
+                    let _ = reply.try_send(self.set_target(added_mib));
+                }
+                Some(MemoryRequest::Status(reply)) => {
+                    let _ = reply.try_send(Ok(self.status()));
+                }
+                None => break,
+            }
+        }
+    }
+
+    fn set_target(&mut self, added_mib: u32) -> io::Result<()> {
         let bytes = u64::from(added_mib) * MIB;
-        if !bytes.is_multiple_of(SLOT_SIZE) || bytes > device.memory.size() {
-            return Err(Error::InvalidHotplugSize(added_mib));
+        if !bytes.is_multiple_of(SLOT_SIZE) || bytes > self.memory.size() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid hotplug memory size: {added_mib} MiB"),
+            ));
         }
-        device.requested = bytes;
-        if let Some(ctx) = &device.context {
-            ctx.interrupt.raise_config();
-        }
+        let active = self
+            .active
+            .as_ref()
+            .expect("host controls run on the active device");
+        self.requested = bytes;
+        active.context.interrupt.raise_config();
         Ok(())
     }
 
     fn status(&self) -> MemoryStatus {
-        let device = self.lock().unwrap_or_else(PoisonError::into_inner);
         let mib = |bytes: u64| (bytes / MIB) as u32;
         MemoryStatus {
-            capacity_mib: mib(device.memory.size()),
-            requested_mib: mib(device.requested),
-            plugged_mib: mib(device.memory.plugged_bytes()),
-            mapped_mib: mib(device.memory.mapped_bytes()),
-        }
-    }
-}
-
-/// The virtio-mem device and the hotplug window it drives.
-pub(crate) struct VirtioMem<H: Vm + ?Sized> {
-    memory: HotplugMemory<H>,
-    requested: u64,
-    features: u64,
-    context: Option<ActivationContext>,
-}
-
-/// Adds the device on `slot` and returns its host handle.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn add<H: Vm + Send + Sync + 'static>(
-    chipset: &mut crate::chipset::ChipsetBuilder,
-    ctx: &crate::virtio::DeviceContext<'_>,
-    slot: crate::virtio::mmio::Slot,
-    memory: HotplugMemory<H>,
-) -> Result<MemoryHandle> {
-    let device = Arc::new(Mutex::new(VirtioMem::new(memory)));
-    crate::virtio::mmio::add_device(chipset, ctx, SPEC.name, slot, device.clone())?;
-    Ok(MemoryHandle(device))
-}
-
-impl<H: Vm + ?Sized> VirtioMem<H> {
-    pub(crate) fn new(memory: HotplugMemory<H>) -> Self {
-        Self {
-            memory,
-            requested: 0,
-            features: 0,
-            context: None,
+            capacity_mib: mib(self.memory.size()),
+            requested_mib: mib(self.requested),
+            plugged_mib: mib(self.memory.plugged_bytes()),
+            mapped_mib: mib(self.memory.mapped_bytes()),
         }
     }
 
@@ -277,35 +279,57 @@ impl<H: Vm + Send + Sync + ?Sized> VirtioDevice for VirtioMem<H> {
     }
 
     fn activate(&mut self, ctx: ActivationContext) -> std::result::Result<(), DeviceError> {
-        if self.context.is_some()
+        if self.active.is_some()
             || self.features & UNPLUGGED_INACCESSIBLE == 0
             || ctx.queues.len() != 1
             || !ctx.queues.is_ready(0)
         {
             return Err(DeviceError::NeedsReset("virtio-mem activation"));
         }
-        self.context = Some(ctx);
+        let control = self
+            .controls
+            .prepare()
+            .and_then(|source| ctx.events.register(source).map_err(io::Error::other))
+            .map_err(|error| {
+                tracing::warn!(%error, "virtio-mem control source was not registered");
+                DeviceError::NeedsReset("virtio-mem control source")
+            })?;
+        self.active = Some(Active {
+            context: ctx,
+            control,
+        });
         Ok(())
     }
 
     fn reset(&mut self) -> std::result::Result<(), DeviceError> {
         // Plugged blocks survive a reset: a reprobing driver unplugs them all.
         self.features = 0;
-        self.context = None;
+        if let Some(active) = self.active.take() {
+            active.context.events.deregister(active.control);
+        }
         Ok(())
     }
 
     fn on_event(&mut self, event: DeviceEvent) -> std::result::Result<(), DeviceError> {
+        if let DeviceEvent::BackendReady(id) = event
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.control == id)
+        {
+            self.apply_controls();
+            return Ok(());
+        }
         let DeviceEvent::QueueKick(0) = event else {
             return Err(DeviceError::Unsupported("virtio-mem event"));
         };
-        let mut ctx = self
-            .context
+        let mut active = self
+            .active
             .take()
             .ok_or(DeviceError::NeedsReset("inactive virtio-mem"))?;
-        let result = ctx.queues.drain(0, |chain| self.request(chain));
-        let interrupt = Arc::clone(&ctx.interrupt);
-        self.context = Some(ctx);
+        let result = active.context.queues.drain(0, |chain| self.request(chain));
+        let interrupt = Arc::clone(&active.context.interrupt);
+        self.active = Some(active);
         if result? {
             interrupt.raise();
         }

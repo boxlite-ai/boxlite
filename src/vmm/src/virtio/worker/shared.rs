@@ -155,10 +155,17 @@ impl Slot {
         .unwrap_or(Err(DeviceError::Fatal("quiesce panicked")))
     }
 
+    fn stop_sources(state: &mut SlotState) {
+        for registered in state.sources.values_mut() {
+            registered.source.worker_stopped();
+        }
+    }
+
     /// Ends the open generation: drops its kicks, deregisters and drops its
     /// sources, and moves to `phase`.
     fn close(&self, state: &mut SlotState, registry: &Registry, phase: Phase) {
         state.phase = phase;
+        Self::stop_sources(state);
         self.kicks.store(0, Ordering::SeqCst);
         for (_, mut registered) in state.sources.drain() {
             if let Err(error) = registry.deregister(registered.source.as_source()) {
@@ -209,6 +216,7 @@ impl Slot {
             Err(DeviceError::NeedsReset(_)) => {
                 if current && state.phase == Phase::Running {
                     state.phase = Phase::Halted;
+                    Self::stop_sources(&mut state);
                 }
             }
             Err(DeviceError::Fatal(reason)) => {
@@ -415,6 +423,9 @@ impl WorkerRuntime for SharedRuntime {
             return Err(DeviceError::Fatal("virtio worker is not prepared"));
         }
         state.phase = Phase::Running;
+        for registered in state.sources.values_mut() {
+            registered.source.worker_started();
+        }
         drop(state);
         // Readiness marked while the slot was prepared runs in the next pass.
         wake(&self.shared.waker);
@@ -444,6 +455,7 @@ impl WorkerRuntime for SharedRuntime {
             }
             Phase::Running | Phase::Stopping => state.phase = Phase::Stopping,
         }
+        Slot::stop_sources(&mut state);
         let (mut state, wait) = slot
             .idle
             .wait_timeout_while(state, self.shared.timeouts.stop, |state| state.in_flight)

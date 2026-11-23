@@ -10,20 +10,37 @@ use std::sync::atomic::AtomicBool;
 use super::*;
 
 /// Drives the target from the guest's console markers until `stop` is set.
-fn control(log: &SerialLog, handle: &crate::MemoryHandle, stop: &AtomicBool) {
+fn control(
+    log: &SerialLog,
+    control: &crate::VmControl,
+    done: &AtomicBool,
+    stop: &crate::StopHandle,
+) -> Option<crate::MemoryStatus> {
+    let timeout = Duration::from_secs(2);
     let (mut grew, mut shrank) = (false, false);
-    while !stop.load(Ordering::SeqCst) {
+    while !done.load(Ordering::SeqCst) {
         let text = log.text();
         if !grew && text.contains("HOTPLUG_BASE") {
-            handle.request(1024).unwrap();
-            grew = true;
+            match control.set_memory_target_mib(1024, timeout) {
+                Ok(()) => grew = true,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("set grow target: {error}"),
+            }
         }
         if !shrank && text.contains("HOTPLUG_USED") {
-            handle.request(256).unwrap();
+            control.set_memory_target_mib(256, timeout).unwrap();
             shrank = true;
+        }
+        if shrank && text.contains("HOTPLUG_GUEST_OK") {
+            let status = control.memory_status(timeout).unwrap();
+            if status.plugged_mib == 256 {
+                stop.stop();
+                return Some(status);
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    None
 }
 
 #[test]
@@ -53,20 +70,20 @@ fn grow_and_shrink(boot_mib: u32, window_base: u64) {
     config.memory_mib = boot_mib;
     config.hotplug_mib = 1024;
     let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
-    let handle = vm.memory_handle().expect("hotplug_mib adds the device");
-    let stop = Arc::new(AtomicBool::new(false));
+    let control_handle = vm.control();
+    let vm_stop = vm.stop_handle();
+    let done = Arc::new(AtomicBool::new(false));
     let controller = {
-        let (log, handle, stop) = (log.clone(), handle.clone(), Arc::clone(&stop));
-        std::thread::spawn(move || control(&log, &handle, &stop))
+        let (log, done) = (log.clone(), Arc::clone(&done));
+        std::thread::spawn(move || control(&log, &control_handle, &done, &vm_stop))
     };
     let (exit, elapsed) = run_with_watchdog(&mut vm, Duration::from_secs(120));
-    stop.store(true, Ordering::SeqCst);
-    controller.join().unwrap();
-    let after_shrink = handle.status();
+    done.store(true, Ordering::SeqCst);
+    let after_shrink = controller.join().unwrap();
     let log = log.text();
     eprintln!("virtio-mem KVM elapsed={elapsed:?} status={after_shrink:?}\n{log}");
 
-    assert_eq!(exit.unwrap(), VmExit::GuestReset, "{log}");
+    assert_eq!(exit.unwrap(), VmExit::StopRequested, "{log}");
     assert!(!log.contains("HOTPLUG_FAIL"), "{log}");
     let expected_base = format!("{window_base:#x}");
     assert!(
@@ -86,6 +103,16 @@ fn grow_and_shrink(boot_mib: u32, window_base: u64) {
     ] {
         assert!(log.contains(marker), "{marker} missing: {log}");
     }
+    let used_gpa = log.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("HOTPLUG_GPA 0x")
+            .and_then(|value| u64::from_str_radix(value, 16).ok())
+    });
+    assert!(
+        used_gpa.is_some_and(|gpa| (window_base..window_base + (1 << 30)).contains(&gpa)),
+        "guest write/readback should use the hotplug window: {log}"
+    );
+    let after_shrink = after_shrink.expect("recorded while the worker was still active");
     assert_eq!(after_shrink.requested_mib, 256);
     assert_eq!(after_shrink.plugged_mib, 256, "the guest returned the rest");
     assert_eq!(

@@ -25,7 +25,8 @@ __attribute__((noreturn)) static void finish(unsigned error) {
     if (error) { print("HOTPLUG_FAIL ", 13); number(error); }
     else print("HOTPLUG_GUEST_OK\n", 17);
     call(16, 1, 0x5409, 1, 0, 0, 0); /* drain tty */
-    call(169, 0xfee1dead, 0x28121969, 0x01234567, 0, 0, 0);
+    if (error) call(169, 0xfee1dead, 0x28121969, 0x01234567, 0, 0, 0);
+    /* On success the host takes a live status sample before stopping the VM. */
     for (;;) call(34, 0, 0, 0, 0, 0, 0);
 }
 static void check(long value, unsigned error) { if (value < 0) finish(error); }
@@ -50,6 +51,39 @@ static word wait_for(int (*ready)(word, word), word base, word seconds) {
 static const word MIB = 1UL << 20;
 static int grown(word now, word base) { return now >= base + 896 * MIB; }
 static int shrunk(word now, word base) { return now <= base + 384 * MIB; }
+
+/* x86_64 pagemap: 4 KiB pages with the PFN in bits 0–54 and present in bit 63. */
+static void check_written_gpa(word address, word length) {
+    const word page = 4096, pfn_mask = (1UL << 55) - 1;
+    check(call(83, (long)"/proc", 0755, 0, 0, 0, 0), 8);
+    check(call(165, (long)"proc", (long)"/proc", (long)"proc", 0, 0, 0), 9);
+    long fd = call(2, (long)"/proc/self/pagemap", 0, 0, 0, 0, 0);
+    check(fd, 10);
+    word entries[128], highest = 0, offset = 0;
+    for (word first = 0; first < length / page; first += 128) {
+        long read = call(17, fd, (long)entries, sizeof(entries),
+                         (address / page + first) * sizeof(word), 0, 0);
+        if (read != sizeof(entries)) finish(11);
+        for (word i = 0; i < 128; i++) {
+            word pfn = entries[i] & pfn_mask;
+            if ((entries[i] >> 63) && pfn > highest) {
+                highest = pfn;
+                offset = (first + i) * page;
+            }
+        }
+    }
+    if (!highest) finish(12);
+    volatile word *sample = (volatile word *)(address + offset);
+    *sample = 0xb07117e;
+    if (*sample != 0xb07117e) finish(13);
+    long read = call(17, fd, (long)entries, sizeof(word),
+                     (address + offset) / page * sizeof(word), 0, 0);
+    if (read != sizeof(word) || !(entries[0] >> 63) ||
+        (entries[0] & pfn_mask) != highest) finish(14);
+    check(call(3, fd, 0, 0, 0, 0, 0), 15);
+    print("HOTPLUG_GPA ", 12); number(highest * page);
+}
+
 __attribute__((used,noreturn)) void run(void) {
     const word use_bytes = 640 * MIB;
     word base = capacity();
@@ -65,6 +99,7 @@ __attribute__((used,noreturn)) void run(void) {
     for (word i = 0; i < use_bytes / sizeof(word); i++) memory[i] = i ^ 0x5a5a;
     for (word i = 0; i < use_bytes / sizeof(word); i++)
         if (memory[i] != (i ^ 0x5a5a)) finish(5);
+    check_written_gpa(address, use_bytes);
     check(call(11, address, use_bytes, 0, 0, 0, 0), 6);
     print("HOTPLUG_USED\n", 13);
     /* The host lowers the target to +256 MiB once it reads the line above. */

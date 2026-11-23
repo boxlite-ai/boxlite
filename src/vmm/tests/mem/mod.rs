@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! virtio-mem device tests: request responses, the configuration layout, the
-//! host handle, activation and one request through a real queue.
+//! host target, activation and one request through a real queue.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
 
 use virtio_queue::{Queue, QueueT, desc::split::Descriptor};
@@ -41,7 +44,11 @@ fn device(capacity_mib: u32) -> (GuestMemoryView, VirtioMem<MockVm>) {
     let window =
         HotplugWindow::plan(&[(GuestAddress(0), 0x1_0000)], capacity_mib, 1 << 36, 16).unwrap();
     let memory = HotplugMemory::new(Arc::new(MockVm::new()), view.clone(), window);
-    (view, VirtioMem::new(memory))
+    let mut registry = crate::control::ControlRegistry::default();
+    (
+        view,
+        VirtioMem::new(memory, registry.register_memory().unwrap()),
+    )
 }
 
 fn block(index: u64) -> u64 {
@@ -107,19 +114,20 @@ fn the_configuration_follows_the_virtio_layout() {
 }
 
 #[test]
-fn the_handle_accepts_slot_multiples_within_capacity_in_both_directions() {
-    let (_, mem) = device(256);
-    let control: Mutex<VirtioMem<MockVm>> = Mutex::new(mem);
+fn the_device_accepts_slot_multiples_within_capacity_in_both_directions() {
+    let (view, mut mem) = device(256);
+    mem.set_features(UNPLUGGED_INACCESSIBLE).unwrap();
+    mem.activate(context(&view, Arc::default())).unwrap();
     for bad in [64, 384] {
-        assert!(matches!(
-            control.request(bad),
-            Err(Error::InvalidHotplugSize(mib)) if mib == bad
-        ));
+        assert_eq!(
+            mem.set_target(bad).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
-    control.request(256).unwrap();
-    control.request(128).unwrap();
+    mem.set_target(256).unwrap();
+    mem.set_target(128).unwrap();
     assert_eq!(
-        control.status(),
+        mem.status(),
         MemoryStatus {
             capacity_mib: 256,
             requested_mib: 128,
@@ -163,12 +171,16 @@ impl VirtioInterrupt for Interrupt {
     fn set_needs_reset(&self) {}
 }
 
-struct NoSources;
-impl EventRegistrar for NoSources {
-    fn register(&self, _: Box<dyn EventSource>) -> std::result::Result<SourceId, EventError> {
-        Err(EventError::Closed)
+#[derive(Default)]
+struct Sources(Mutex<Option<Box<dyn EventSource>>>);
+impl EventRegistrar for Sources {
+    fn register(&self, source: Box<dyn EventSource>) -> std::result::Result<SourceId, EventError> {
+        assert!(self.0.lock().unwrap().replace(source).is_none());
+        Ok(SourceId(1))
     }
-    fn deregister(&self, _: SourceId) {}
+    fn deregister(&self, _: SourceId) {
+        self.0.lock().unwrap().take();
+    }
 }
 
 fn context(view: &GuestMemoryView, interrupt: Arc<Interrupt>) -> ActivationContext {
@@ -187,7 +199,7 @@ fn context(view: &GuestMemoryView, interrupt: Arc<Interrupt>) -> ActivationConte
         queues: VirtQueues::prepare(vec![queue], SPEC.queue_max, false, false, view.clone())
             .unwrap(),
         interrupt,
-        events: Arc::new(NoSources),
+        events: Arc::new(Sources::default()),
         waker: Arc::new(|| {}),
         sender: EventLoop::new().unwrap().sender(),
     }
@@ -203,18 +215,44 @@ fn activation_requires_unplugged_inaccessible() {
 }
 
 #[test]
-fn a_plug_request_through_the_queue_maps_the_slot_and_answers_ack() {
-    let (view, mem) = device(128);
-    let mem = Mutex::new(mem);
+fn a_timed_out_control_command_can_still_publish_its_target() {
+    let view = view();
+    let window = HotplugWindow::plan(&[(GuestAddress(0), 0x1_0000)], 256, 1 << 36, 16).unwrap();
+    let memory = HotplugMemory::new(Arc::new(MockVm::new()), view.clone(), window);
+    let mut registry = crate::control::ControlRegistry::default();
+    let mut mem = VirtioMem::new(memory, registry.register_memory().unwrap());
+    let control = registry.finish();
+    let sources = Arc::new(Sources::default());
     let interrupt = Arc::new(Interrupt::default());
-    {
-        let mut device = mem.lock().unwrap();
-        device.set_features(UNPLUGGED_INACCESSIBLE).unwrap();
-        device
-            .activate(context(&view, Arc::clone(&interrupt)))
-            .unwrap();
-    }
-    mem.request(128).unwrap();
+    let mut context = context(&view, interrupt.clone());
+    context.events = sources.clone();
+    mem.set_features(UNPLUGGED_INACCESSIBLE).unwrap();
+    mem.activate(context).unwrap();
+    sources.0.lock().unwrap().as_mut().unwrap().worker_started();
+    let timeout = Duration::ZERO;
+    assert_eq!(
+        control
+            .set_memory_target_mib(128, timeout)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(mem.status().requested_mib, 0);
+    assert_eq!(interrupt.config.load(Ordering::SeqCst), 0);
+    mem.on_event(DeviceEvent::BackendReady(SourceId(1)))
+        .unwrap();
+    assert_eq!(mem.status().requested_mib, 128);
+    assert_eq!(interrupt.config.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_plug_request_through_the_queue_maps_the_slot_and_answers_ack() {
+    let (view, mut mem) = device(128);
+    let interrupt = Arc::new(Interrupt::default());
+    mem.set_features(UNPLUGGED_INACCESSIBLE).unwrap();
+    mem.activate(context(&view, Arc::clone(&interrupt)))
+        .unwrap();
+    mem.set_target(128).unwrap();
     assert_eq!(interrupt.config.load(Ordering::SeqCst), 1);
 
     let ram = view.memory();
@@ -234,10 +272,7 @@ fn a_plug_request_through_the_queue_maps_the_slot_and_answers_ack() {
     ram.write_obj(0xffffu16, GuestAddress(RESPONSE)).unwrap();
     drop(ram);
 
-    mem.lock()
-        .unwrap()
-        .on_event(DeviceEvent::QueueKick(0))
-        .unwrap();
+    mem.on_event(DeviceEvent::QueueKick(0)).unwrap();
 
     let ram = view.memory();
     assert_eq!(ram.read_obj::<u16>(GuestAddress(RESPONSE)).unwrap(), ACK);

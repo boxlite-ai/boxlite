@@ -116,7 +116,7 @@ fn block_id_routes_growth_independently_of_disk_order() {
                 for (index, disk) in config.disks.iter().enumerate() {
                     blk::add_disk(chipset, &mut ctx, disk, index, slots.take()?)?;
                 }
-                Ok(None)
+                Ok(())
             },
         )
         .unwrap();

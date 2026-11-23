@@ -12,7 +12,7 @@ use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
     control::{ControlRegistry, VmControl},
-    devices::{console::ConsoleWorker, mem::MemoryHandle},
+    devices::console::ConsoleWorker,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
@@ -81,8 +81,6 @@ pub struct Vm<H: HostVm> {
     vcpu_count: u8,
     state: VmState,
     fresh_vm: bool,
-    /// The hotplug handle when the configuration set a hotplug capacity.
-    memory: Option<MemoryHandle>,
     host_vm: Option<Arc<H>>,
     ram: GuestRam,
 }
@@ -173,7 +171,7 @@ impl<H: HostVm> Vm<H> {
         H: 'static,
     {
         Self::with_devices(config, host_vm, boot, |chipset, ctx, _, _| {
-            devices(chipset, ctx).map(|()| None)
+            devices(chipset, ctx)
         })
     }
 
@@ -187,7 +185,7 @@ impl<H: HostVm> Vm<H> {
             DeviceContext<'_>,
             &mut VmConfig,
             &Arc<H>,
-        ) -> Result<Option<MemoryHandle>>,
+        ) -> Result<()>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -199,8 +197,7 @@ impl<H: HostVm> Vm<H> {
     /// `host_vm`, builds the chipset from the devices `devices` adds,
     /// registers every RAM range and writes the boot data with `boot`.
     /// `devices` also gets the guest memory, the virtio workers, the mutable
-    /// configuration and the host VM, and returns the hotplug handle if it
-    /// added a virtio-mem device. Invalid configuration fails before `host_vm`
+    /// configuration and the host VM. Invalid configuration fails before `host_vm`
     /// runs, and a chipset conflict before any RAM is registered.
     /// `fresh_vm` requires a newly created VM with no independent vCPUs.
     #[cfg_attr(
@@ -221,7 +218,7 @@ impl<H: HostVm> Vm<H> {
             DeviceContext<'_>,
             &mut VmConfig,
             &Arc<H>,
-        ) -> Result<Option<MemoryHandle>>,
+        ) -> Result<()>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -239,7 +236,7 @@ impl<H: HostVm> Vm<H> {
         let workers = create_workers(sender.clone()).map_err(Error::VirtioWorker)?;
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
         let mut controls = ControlRegistry::default();
-        let memory = devices(
+        devices(
             &mut chipset,
             DeviceContext {
                 memory: ram.memory(),
@@ -251,7 +248,6 @@ impl<H: HostVm> Vm<H> {
         )?;
         let chipset = chipset.build()?;
         if let Err(error) = ram.map(&*host_vm) {
-            drop(memory);
             drop(chipset);
             drop(workers);
             if fresh_vm && let Some(host_vm) = Arc::into_inner(host_vm) {
@@ -274,7 +270,6 @@ impl<H: HostVm> Vm<H> {
             vcpu_count: config.vcpu_count,
             state: VmState::Created,
             fresh_vm,
-            memory,
             host_vm: Some(host_vm),
             ram,
         };
@@ -288,15 +283,9 @@ impl<H: HostVm> Vm<H> {
         StopHandle(self.sender.clone())
     }
 
-    /// Controls the VM from another thread, addressing disks by their configured IDs.
+    /// Controls the VM from another thread.
     pub fn control(&self) -> VmControl {
         self.control.clone()
-    }
-
-    /// A handle that grows or shrinks guest RAM from another thread, when the
-    /// configuration set `hotplug_mib`.
-    pub fn memory_handle(&self) -> Option<MemoryHandle> {
-        self.memory.clone()
     }
 }
 
@@ -365,6 +354,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         });
         // No vCPU notifies a queue any more. Stop the virtio devices before the
         // console finishes, so a device's last output still reaches the sink.
+        self.control.close_memory();
         let workers = self.workers.as_ref().expect("live VM has virtio workers");
         let shutdown = workers.shutdown().map_err(Error::from);
         let console = self
@@ -403,6 +393,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
 
 impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
+        self.control.close_memory();
         // A device event that outlived the shutdown may still touch guest
         // RAM, so the registrations stay and `GuestRam` leaks the backing.
         let workers = self.workers.as_ref().expect("live VM has virtio workers");
@@ -420,7 +411,6 @@ impl<H: HostVm> Drop for Vm<H> {
             );
         }
         if self.fresh_vm && self.state == VmState::Created {
-            drop(self.memory.take());
             drop(self.chipset.take());
             drop(self.workers.take());
             let host_vm = self.host_vm.take().expect("live VM has a host VM");
