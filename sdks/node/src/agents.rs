@@ -137,7 +137,7 @@ impl JsAgentEventStream {
         };
         tokio::select! {
             item = stream.next() => match item {
-                Some(Ok(event)) => Ok(Some(records::event(&event))),
+                Some(Ok(event)) => checked_record(records::event(&event)).map(Some),
                 Some(Err(error)) => { *guard = None; Err(map_err(error)) },
                 None => { *guard = None; Ok(None) },
             },
@@ -288,7 +288,7 @@ impl JsAgent {
     #[napi]
     pub async fn requests(&self) -> Result<Vec<Value>> {
         let requests = self.agent.requests().await.map_err(map_err)?;
-        Ok(records::requests(&requests)
+        Ok(checked_record(records::requests(&requests))?
             .as_array()
             .cloned()
             .unwrap_or_default())
@@ -312,17 +312,17 @@ impl JsAgent {
 
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
-        Ok(records::agent_state(&self.agent.state().map_err(map_err)?))
+        checked_record(records::agent_state(&self.agent.state().map_err(map_err)?))
     }
 
     #[napi(getter)]
     pub fn config(&self) -> Result<Value> {
-        Ok(records::config(&self.agent.config().map_err(map_err)?))
+        checked_record(records::config(&self.agent.config().map_err(map_err)?))
     }
 
     #[napi(getter)]
     pub fn capabilities(&self) -> Result<Value> {
-        Ok(records::capabilities(
+        checked_record(records::capabilities(
             &self.agent.capabilities().map_err(map_err)?,
         ))
     }
@@ -351,7 +351,7 @@ impl JsAgentTurn {
                 .await
                 .map_err(map_err)?,
         );
-        native_json_record(&result, 0)
+        native_json_record(&result, 0).and_then(checked_record)
     }
 
     #[napi]
@@ -365,7 +365,7 @@ impl JsAgentTurn {
 
     #[napi]
     pub async fn steer(&self, text: String, options: Option<Value>) -> Result<Value> {
-        Ok(records::receipt(
+        checked_record(records::receipt(
             &self
                 .turn
                 .steer(&text, control_options(options)?)
@@ -385,8 +385,30 @@ impl JsAgentTurn {
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
         let state = records::turn_state(&self.turn.state().map_err(map_err)?);
-        native_json_record(&state, 0)
+        native_json_record(&state, 0).and_then(checked_record)
     }
+}
+
+// napi 3.16 converts JSON numbers through i64, finite f64, or u64. Its
+// last branch unwraps the u64, so reject unsupported tokens before dispatch.
+fn checked_record(record: Value) -> Result<Value> {
+    fn check(value: &Value, depth: usize) -> Result<()> {
+        if depth > 128 {
+            return Err(invalid("agent record exceeds the N-API JSON depth limit"));
+        }
+        match value {
+            Value::Number(n) if !(n.is_i64() || n.is_f64() || n.is_u64()) => {
+                Err(napi::Error::from_reason(
+                    "agent JSON number exceeds the Node binding's numeric range",
+                ))
+            }
+            Value::Array(items) => items.iter().try_for_each(|item| check(item, depth + 1)),
+            Value::Object(fields) => fields.values().try_for_each(|item| check(item, depth + 1)),
+            _ => Ok(()),
+        }
+    }
+    check(&record, 0)?;
+    Ok(record)
 }
 
 // N-API requires a value tree. Decode JSON objects as literal maps so user keys

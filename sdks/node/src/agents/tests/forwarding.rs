@@ -87,6 +87,24 @@ fn agent_bindings_forward_to_core_test_backend() {
             .unwrap();
         assert_eq!(turn.wait(None).await.unwrap()["data"], payload);
         assert_eq!(turn.state().unwrap()["result"]["data"], payload);
+        for token in ["18446744073709551615", "-9223372036854775808", "0.125"] {
+            let payload: Value = serde_json::from_str(token).unwrap();
+            let turn = agent
+                .send("echo".into(), Some(json!({"data":payload})))
+                .await
+                .unwrap();
+            assert_eq!(turn.wait(None).await.unwrap()["data"], payload);
+        }
+        for token in ["18446744073709551616", "-9223372036854775809", "1e400"] {
+            let options =
+                serde_json::from_str(&format!(r#"{{"data":[{{"n":{token}}}]}}"#)).unwrap();
+            let turn = agent.send("echo".into(), Some(options)).await.unwrap();
+            assert!(
+                turn.wait(None).await.is_err(),
+                "wait exposed {token} to N-API"
+            );
+            assert!(turn.state().is_err(), "turn state exposed {token} to N-API");
+        }
         assert!(
             agent
                 .send("bad".into(), Some(json!({"mode":"bad"})))

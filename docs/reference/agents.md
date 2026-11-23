@@ -197,6 +197,13 @@ maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
 headers. Agent HTTP routes and REST client support are unavailable.
 
+### Node agent JSON numbers
+
+Node agent calls, getters and event reads report a conversion error when a
+returned JSON number exceeds the native binding's supported numeric range.
+This also applies to numbers inside arrays or objects. Finite fractions still
+use JavaScript number precision.
+
 ### Go JSON mapping
 
 Go's internal agent converters use the core's snake_case JSON fields. Nullable
