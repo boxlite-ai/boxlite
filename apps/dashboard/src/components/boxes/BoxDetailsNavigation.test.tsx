@@ -306,6 +306,18 @@ describe('BoxTerminal page', () => {
     expect(buttonNamed('Start Box').disabled).toBe(false)
   })
 
+  it('announces terminal startup without a busy ancestor suppressing the status', async () => {
+    mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
+    await renderPage()
+    const status = document.querySelector('[data-slot="empty-title"][role="status"]')
+    expect(status?.textContent).toBe('Box is not running')
+    mocks.pending = true
+    await renderPage()
+    expect(status?.textContent).toBe('Starting Box…')
+    expect(status?.closest('[aria-busy="true"]')).toBeNull()
+    expect(buttonNamed('Start Box').disabled).toBe(true)
+  })
+
   it('retains the Overview start action', async () => {
     mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
     await renderPage('overview')

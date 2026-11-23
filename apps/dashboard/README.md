@@ -1556,6 +1556,7 @@ A stopped Box shows a compact bordered panel with guidance and Start Box, replac
 the header Start in this view. The action uses the existing permission check and
 start mutation. Pending requests disable it, starting waits for the Box state, and
 a failed start retains a local notice alongside the existing API error notification.
+Startup progress uses a polite status region; failures use a separate alert.
 Read-only members receive permission guidance. Overview keeps its header Start.
 
 For mock layout review, open `/dashboard/boxes/mock-box-stopped` and its

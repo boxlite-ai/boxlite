@@ -31,7 +31,7 @@ export function BoxTerminalSession({
   if (!running) {
     const waitingForStart = starting || box.state === BoxState.STARTING
     return (
-      <Empty className="flex-none border border-solid border-border/60 bg-background py-12" aria-busy={waitingForStart}>
+      <Empty className="flex-none border border-solid border-border/60 bg-background py-12">
         <EmptyHeader>
           <EmptyMedia>
             {waitingForStart ? (
@@ -40,7 +40,7 @@ export function BoxTerminalSession({
               <TerminalSquare className="size-9 text-muted-foreground" />
             )}
           </EmptyMedia>
-          <EmptyTitle>{waitingForStart ? 'Starting Box…' : 'Box is not running'}</EmptyTitle>
+          <EmptyTitle role="status">{waitingForStart ? 'Starting Box…' : 'Box is not running'}</EmptyTitle>
           <EmptyDescription>
             {waitingForStart
               ? 'The terminal will connect when this Box is running.'
