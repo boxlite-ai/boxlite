@@ -456,12 +456,15 @@ impl RuntimeBackend for RestRuntime {
         if options.advanced.privileged {
             self.client.require_privileged_enabled().await?;
         }
-        let typed_mounts = !options.mounts.is_empty();
-        let read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+        let uses_mounts_field_for_new_mountspec = !options.mounts.is_empty();
+        let has_read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
             || options.mounts.iter().any(|mount| mount.read_only);
-        if typed_mounts || read_only_mounts {
+        if uses_mounts_field_for_new_mountspec || has_read_only_mounts {
             self.client
-                .require_mount_capabilities(typed_mounts, read_only_mounts)
+                .require_mount_capabilities(
+                    uses_mounts_field_for_new_mountspec,
+                    has_read_only_mounts,
+                )
                 .await?;
         }
 
@@ -485,12 +488,15 @@ impl RuntimeBackend for RestRuntime {
             ));
         }
         options.sanitize_remote()?;
-        let typed_mounts = !options.mounts.is_empty();
-        let read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+        let uses_mounts_field_for_new_mountspec = !options.mounts.is_empty();
+        let has_read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
             || options.mounts.iter().any(|mount| mount.read_only);
-        if typed_mounts || read_only_mounts {
+        if uses_mounts_field_for_new_mountspec || has_read_only_mounts {
             self.client
-                .require_mount_capabilities(typed_mounts, read_only_mounts)
+                .require_mount_capabilities(
+                    uses_mounts_field_for_new_mountspec,
+                    has_read_only_mounts,
+                )
                 .await?;
         }
 
@@ -498,7 +504,9 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
-                    if !options.volumes.is_empty() || !options.mounts.is_empty() {
+                    // TODO DISCUSS: Legacy read-write volumes retain name-based reuse without
+                    // verifying mount metadata; decide whether tighter protection is preferable.
+                    if uses_mounts_field_for_new_mountspec || has_read_only_mounts {
                         return Err(BoxliteError::Unsupported(format!(
                             "cannot reuse box {box_name:?}: the REST response does not expose its \
                              existing mount configuration; use a different name or recreate the box"
@@ -1581,14 +1589,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_or_create_reuses_legacy_read_write_volume_without_mount_metadata() {
+        use crate::runtime::options::VolumeSpec;
+
+        let mut response = serde_json::from_str::<serde_json::Value>(BOX_RESPONSE).unwrap();
+        response["privileged"] = false.into();
+        let response = Box::leak(response.to_string().into_boxed_str());
+        let (port, server) = json_server(vec![response]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("workspace", "/workspace")],
+            ..Default::default()
+        };
+
+        let (litebox, created) =
+            RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .expect("legacy read-write volumes preserve name-based reuse");
+
+        assert!(!created);
+        assert_eq!(litebox.id().as_str(), "01HJK4TNRPQSXYZ8WM6NCVT9R5");
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+    }
+
+    #[tokio::test]
     async fn get_or_create_rejects_mount_reuse_without_configuration_metadata() {
         use crate::runtime::options::{MountSpec, VolumeSpec};
 
         for options in [
-            BoxOptions {
-                volumes: vec![VolumeSpec::managed_volume("workspace", "/workspace")],
-                ..Default::default()
-            },
             BoxOptions {
                 volumes: vec![VolumeSpec {
                     read_only: true,
@@ -1609,20 +1638,17 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let requires_probe =
-                !options.mounts.is_empty() || options.volumes.iter().any(|volume| volume.read_only);
             let mut response = serde_json::from_str::<serde_json::Value>(BOX_RESPONSE).unwrap();
             response["privileged"] = false.into();
             let response = Box::leak(response.to_string().into_boxed_str());
-            let mut replies = Vec::new();
-            if requires_probe {
-                replies.push((
+            let (port, server) = capture_server(vec![
+                (
                     200,
                     r#"{"capabilities":{"typed_mounts_enabled":true,"volume_read_only_enabled":true}}"#,
-                ));
-            }
-            replies.push((200, response));
-            let (port, server) = capture_server(replies).await;
+                ),
+                (200, response),
+            ])
+            .await;
             let runtime =
                 RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
                     .unwrap();
@@ -1635,17 +1661,12 @@ mod tests {
             assert!(error.to_string().contains("mount configuration"), "{error}");
 
             let requests = server.await.unwrap();
-            let mut expected = Vec::new();
-            if requires_probe {
-                expected.push("GET /v1/config HTTP/1.1");
-            }
-            expected.push("GET /v1/boxes/named HTTP/1.1");
             assert_eq!(
                 requests
                     .iter()
                     .map(|(headers, _)| headers.lines().next().unwrap())
                     .collect::<Vec<_>>(),
-                expected
+                ["GET /v1/config HTTP/1.1", "GET /v1/boxes/named HTTP/1.1"]
             );
         }
     }
