@@ -32,6 +32,31 @@ reference sent to the API.
 Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
 Their existing defaults, validation and submission behavior are unchanged.
 
+## Subscription value when creating a Box
+
+The price footer compares the selected CPU, memory and disk configuration with
+subscription included usage. The published **PAYG estimate** stays primary for all
+users, including subscribers. A muted supplementary line expresses the percentage
+lower effective hourly cost within included usage (75% for a fourfold quota ratio).
+The summary says "with a subscription", without implying the benefit is exclusive
+to Starter. Price breakdown keeps a concise allowance assumption and PAYG overage explanation,
+without repeating plan-specific monthly pricing or an effective dollar estimate.
+The ratio is the catalog monthly price divided by included usage value, shared with
+Billing Plans; it never uses the wallet purchase multiplier.
+
+The price breakdown retains published per-resource consumption and explains that
+the estimate assumes the full monthly allowance is used. It is not an invoice or
+historical paid-price calculation. Remaining quota is consumed at published rates;
+ordinary wallet funding uses those same rates after quota is exhausted.
+Trials, expired cycles, unmatched/custom plans, quota mismatches and read errors do
+not produce a paid-benefit claim. Converted trials and scheduled cancellations
+retain paid benefits while otherwise eligible. Organization placeholder data is ignored.
+
+PAYG recommendations use the same documented numeric Box limits as the Billing
+benefits table. Unknown tiers or configurations beyond those limits do not get a
+plan-specific quote. View plans opens a separate tab, preserving the mounted create
+draft without storing environment variables or triggering payment or creation.
+
 ## New-account email policy
 
 First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without

@@ -9,6 +9,7 @@ import { BOXLITE_CONTACT_URL, BOXLITE_SUBSCRIPTION_DOCS_URL } from '@/constants/
 import { RoutePath } from '@/enums/RoutePath'
 import { generatePath, useNavigate } from 'react-router-dom'
 import './PlanComparison.css'
+import { subscriptionValue, formatUsageMultiple } from '@/lib/subscription-value'
 
 const currency = (cents: number) =>
   new Intl.NumberFormat('en-US', {
@@ -163,11 +164,7 @@ export function PlanComparison({
                         <span>{presentation?.name ?? plan.name}</span>
                         {index !== 0 && (
                           <span className="font-mono text-em font-normal text-foreground">
-                            {presentation
-                              ? currency(presentation.priceCents)
-                              : plan.priceMonthlyCents == null
-                                ? 'Custom'
-                                : currency(plan.priceMonthlyCents)}
+                            {plan.priceMonthlyCents == null ? 'Custom' : currency(plan.priceMonthlyCents)}
                           </span>
                         )}
                       </div>
@@ -238,12 +235,29 @@ export function PlanComparison({
               ))}
               {custom}
             </ComparisonRow>
-            <ComparisonRow label="Bonus amount">
+            <ComparisonRow label="Included usage value">
               {plans.map((plan) => {
-                const bonusCents = PLAN_PRESENTATION[planTierIndex(plan.name)]?.bonusCents
+                const includedCents = plan.includedQuotaCents
                 return (
                   <td key={plan.id} className={CELL}>
-                    {bonusCents != null ? currency(bonusCents) : <UnspecifiedValue />}
+                    {includedCents === null ? (
+                      'Unlimited'
+                    ) : includedCents != null ? (
+                      currency(includedCents)
+                    ) : (
+                      <UnspecifiedValue />
+                    )}
+                  </td>
+                )
+              })}
+              {custom}
+            </ComparisonRow>
+            <ComparisonRow label="Usage per dollar">
+              {plans.map((plan) => {
+                const value = subscriptionValue(plan)
+                return (
+                  <td key={plan.id} className={CELL}>
+                    {value ? `${formatUsageMultiple(value.usageMultiple)}× PAYG` : <UnspecifiedValue />}
                   </td>
                 )
               })}
@@ -282,6 +296,10 @@ export function PlanComparison({
           </tbody>
         </table>
       </div>
+      <p className="mt-4 text-body text-muted-foreground">
+        Monthly fees and included usage come from the current plan catalog. The effective cost assumes the full
+        allowance is used; unused allowance expires. Additional usage is charged at PAYG rates.
+      </p>
       <a
         href={BOXLITE_SUBSCRIPTION_DOCS_URL}
         target="_blank"
