@@ -153,17 +153,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     if (enabled && secrets.some((secret) => !secret.secretId)) {
       throw new Error('Secret Server requires secret references; migrate inline secrets before enabling')
     }
-    const secretCredential =
-      enabled && secrets.length
-        ? await this.credentials.issue({
-            runnerId: this.runner.id,
-            boxId: box.id,
-            organizationId: box.organizationId,
-            secretIds: secrets.map((secret) => secret.secretId),
-          })
-        : undefined
     const payload = {
-      ...(secretCredential ? { secretCredential } : {}),
       id: box.id,
       ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
       image,
@@ -198,7 +188,25 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       regionId: box.region,
     }
 
-    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+    if (enabled && secrets.length) {
+      await this.jobRepository.manager.transaction(async (manager) => {
+        const secretCredential = await this.credentials.issue(
+          {
+            runnerId: this.runner.id,
+            boxId: box.id,
+            organizationId: box.organizationId,
+            secretIds: secrets.map((secret) => secret.secretId),
+          },
+          manager,
+        )
+        await this.jobService.createJob(manager, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, {
+          ...payload,
+          secretCredential,
+        })
+      })
+    } else {
+      await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+    }
 
     this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
 

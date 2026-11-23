@@ -9,7 +9,7 @@ describe('Secret credential database failures', () => {
     const driverError = Object.assign(new Error(privateDetail), { parameters: [privateDetail] })
     const query = jest.fn().mockRejectedValue(driverError)
     if (operation === 'replay lookup') query.mockResolvedValueOnce([[]])
-    const service = new SecretCredentialService({ query } as any)
+    const service = new SecretCredentialService({ query, transaction: (fn: any) => fn({ query }) } as any)
     const log = jest.spyOn(Logger.prototype, 'error').mockImplementation()
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation()
     try {

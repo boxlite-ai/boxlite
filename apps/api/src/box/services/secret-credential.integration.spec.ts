@@ -49,7 +49,9 @@ describeDatabase('Secret credentials with real PostgreSQL and HTTP', () => {
       extra: { options: `-c search_path=${schema}` },
     }).initialize()
     await db.query(`CREATE SCHEMA "${schema}"`)
-    await db.query('CREATE TABLE box (id varchar(64) PRIMARY KEY)')
+    await db.query(
+      'CREATE TABLE box (id varchar(64) PRIMARY KEY, "runnerId" text, "organizationId" uuid, "desiredState" text, state text)',
+    )
     const runner = db.createQueryRunner()
     try {
       await new AddSecretCredential1794873600000().up(runner)
@@ -68,7 +70,11 @@ describeDatabase('Secret credentials with real PostgreSQL and HTTP', () => {
 
   beforeEach(async () => {
     await db.query('TRUNCATE box CASCADE')
-    await db.query('INSERT INTO box VALUES ($1)', [binding.boxId])
+    await db.query("INSERT INTO box VALUES ($1, $2, $3, 'started', 'starting')", [
+      binding.boxId,
+      binding.runnerId,
+      binding.organizationId,
+    ])
   })
 
   afterAll(async () => {
@@ -81,7 +87,7 @@ describeDatabase('Secret credentials with real PostgreSQL and HTTP', () => {
 
   it('issues from v2 refs with only hash stored and consumes exactly once over HTTP', async () => {
     const jobs = { createJob: jest.fn() }
-    const adapter = new RunnerAdapterV2({} as any, {} as any, jobs as any)
+    const adapter = new RunnerAdapterV2({} as any, { manager: db.manager } as any, jobs as any)
     Object.assign(adapter, { config: { get: () => true }, credentials: service })
     await adapter.init({ id: binding.runnerId } as any)
     await adapter.createBox(

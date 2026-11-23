@@ -2,7 +2,7 @@
 
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { createHash, randomBytes } from 'node:crypto'
-import { DataSource } from 'typeorm'
+import { DataSource, EntityManager } from 'typeorm'
 
 type CredentialGrant = { secret_id: string }
 type ActiveCredential = {
@@ -21,11 +21,22 @@ export class SecretCredentialService {
 
   constructor(private readonly database: DataSource) {}
 
-  async issue(binding: { runnerId: string; boxId: string; organizationId: string; secretIds: string[] }) {
+  async issue(
+    binding: { runnerId: string; boxId: string; organizationId: string; secretIds: string[] },
+    manager?: EntityManager,
+  ): Promise<{ token: string; expiresAt: string }> {
+    if (!manager) return this.database.transaction((transaction) => this.issue(binding, transaction))
     const token = `bxsc_${randomBytes(32).toString('base64url')}`
     const grants = binding.secretIds.map((secret_id) => ({ secret_id }))
     try {
-      const [row] = await this.database.query(
+      // Serialize issuance with logical deletion, which locks Box before revoking credentials.
+      const [box] = await manager.query(
+        `SELECT id FROM box WHERE id = $1 AND "runnerId" = $2 AND "organizationId" = $3
+         AND "desiredState" <> 'destroyed' AND state <> 'destroyed' FOR UPDATE`,
+        [binding.boxId, binding.runnerId, binding.organizationId],
+      )
+      if (!box) throw new Error('Box is not eligible for a secret credential')
+      const [row] = await manager.query(
         `INSERT INTO secret_credential (token_hash, runner_id, box_id, organization_id, grants, expires_at)
          VALUES ($1, $2, $3, $4, $5, now() + interval '15 minutes') RETURNING expires_at`,
         [this.hash(token), binding.runnerId, binding.boxId, binding.organizationId, JSON.stringify(grants)],

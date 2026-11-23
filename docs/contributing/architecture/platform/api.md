@@ -610,7 +610,12 @@ while consuming the credential. Success returns `active`, `credential_id`,
 `runner_id`, `box_id`, `organization_id`, `grants: [{secret_id}]`, and `expires_at`.
 Invalid requests return only `{active:false}`; a wrong runner does not consume
 the credential. A second valid request is inactive and logs the credential ID
-as a replay warning. Deleting the Box cascades to its credentials.
+as a replay warning. Recording logical Box deletion revokes its credentials in
+that same transaction, including deletion during checkpoint recovery. Physical
+deletion also cascades to credentials. Issuance locks the Box row and checks its
+runner, organization and deletion state, so deletion cannot leave a newly issued
+credential behind. Credential insertion and CREATE_BOX job insertion share one
+transaction; a rejected duplicate job leaves no extra credential.
 
 The route has no caller authentication in this MVP and is excluded from OpenAPI.
 GCP's external backend denies decoded internal namespace paths using Cloud Armor; only the
@@ -627,7 +632,16 @@ aliases, mixed case, encoded paths and spoofed Host headers; verify private
 redemption of a fresh token. Local tests do not establish deployed isolation.
 Observe staging queue delays before rollout: delays beyond 15 minutes fail creation.
 
-There is no reissue or fetch retry. V0 creation and recovery reject references,
+The credential expiry limits redemption, not the lifetime of an already fetched
+secret. A token that expires before redemption fails creation; there is no reissue
+or fetch retry. START_BOX after stop/resume reuses the existing local runtime
+configuration; it does not fetch updated secret values or issue another credential.
+This requires successful initial fetch and retained runtime state. This API change
+alone does not implement Runner-side fetching. Checkpoint creation rejects Boxes
+with secrets, so backup/restore through that API is unsupported for them. V2
+recoverBox is also unsupported; these paths must not be described as secret refresh.
+
+V0 creation and recovery reject references,
 and reject any secrets while the flag is enabled. V2 rejects inline secrets when
 enabled and references when disabled; migrate inline Boxes explicitly before rollout.
 Never log bearer tokens, hashes or grants. Caller authentication and expiration

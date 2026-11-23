@@ -1,3 +1,5 @@
+import { SecretCredentialService } from './secret-credential.service'
+import { AddSecretCredential1794873600000 } from '../../migrations/pre-deploy/1794873600000-add-secret-credential-migration'
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -101,6 +103,12 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schema}"`)
     await dataSource.synchronize()
+    const migrationRunner = dataSource.createQueryRunner()
+    try {
+      await new AddSecretCredential1794873600000().up(migrationRunner)
+    } finally {
+      await migrationRunner.release()
+    }
     checkpoints = dataSource.getRepository(Checkpoint)
     boxes = dataSource.getRepository(Box)
     states = dataSource.getRepository(BoxCheckpointState)
@@ -779,9 +787,17 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     const operation = await dataSource
       .getRepository(CheckpointOperation)
       .findOneByOrFail({ jobId: created.activeJobId! })
+    const credentials = new SecretCredentialService(dataSource)
+    const issued = await credentials.issue({
+      boxId: created.id,
+      runnerId: created.runnerId,
+      organizationId,
+      secretIds: [randomUUID()],
+    })
     const deleted = await lifecycleService()
       .destroy(created.id, organizationId, Context.user())
       .then(withCheckpointState)
+    expect(await credentials.consume(issued.token, created.runnerId)).toEqual({ active: false })
     expect(deleted).toMatchObject({
       desiredState: BoxDesiredState.DESTROYED,
       pending: true,
