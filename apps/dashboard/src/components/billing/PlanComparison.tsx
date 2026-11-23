@@ -99,7 +99,7 @@ export function PlanComparison({
     const duration = durations.get(name)
     if (duration === null) return 'Not eligible'
     if (!duration) return <UnspecifiedValue />
-    return <>{duration.toLowerCase()} · checked again at checkout</>
+    return <>{duration.toLowerCase()} · card verification required</>
   }
 
   if (!plans.length) {

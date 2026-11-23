@@ -130,7 +130,7 @@ describe('billing surface contracts', () => {
     expect(team.textContent).toContain('Team$100')
     expect(team.textContent).toContain(`Free Trial ${label}`)
     const row = [...host.querySelectorAll('tr')].find((tr) => tr.cells[0].textContent === 'Trial eligibility')!
-    expect(row.cells[2].textContent).toContain(String(label).toLowerCase())
+    expect(row.cells[2].textContent).toBe(`${String(label).toLowerCase()} · card verification required`)
   })
   it('keeps documented benefits attached to named tiers when the catalogue is reordered or incomplete', () => {
     const host = render(

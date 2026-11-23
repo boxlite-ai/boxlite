@@ -52,9 +52,8 @@ has no documented duration and is kept separate.
 ### Free trial offers
 
 Owners see a gold ribbon beside the action on plans with a free trial, for example **Free Trial 3 Days**.
-It fits inside the existing button row and wraps in narrow columns. The **Trial eligibility** row shows
-the full duration. Owners can retry from Plans if offers are temporarily unavailable. Checkout confirms
-the current offer.
+It fits inside the existing button row and wraps in narrow columns. For this offer, the **Trial eligibility**
+row reads **3 days · card verification required**. Owners can retry from Plans if offers are temporarily unavailable.
 
 | Plan actions | With a three-day trial |
 | --- | --- |
