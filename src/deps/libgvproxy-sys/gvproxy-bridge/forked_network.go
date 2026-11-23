@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
@@ -33,6 +34,18 @@ import (
 )
 
 func newGvproxyNetwork(ctx context.Context, config *types.Configuration, startup GvproxyConfig, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy) (*virtualnetwork.VirtualNetwork, *outboundPolicyController, error) {
+	var linkPolicy atomic.Pointer[outboundPolicyController]
+	if startup.ipv6Gateway != nil {
+		linkConfig := *config
+		linkConfig.IPv6Link = &types.IPv6Link{
+			Gateway: *startup.ipv6Gateway,
+			AllowTraffic: func() bool {
+				policy := linkPolicy.Load()
+				return policy != nil && guestTrafficAllowed(policy.guard, policy.active.Load)
+			},
+		}
+		config = &linkConfig
+	}
 	var vn *virtualnetwork.VirtualNetwork
 	var resolve resolveFunc
 	var inventory guardinventory.Observation
@@ -73,6 +86,7 @@ func newGvproxyNetwork(ctx context.Context, config *types.Configuration, startup
 		}
 		return nil, nil, fmt.Errorf("initialize outbound policy: %w", err)
 	}
+	linkPolicy.Store(policy)
 	if startup.guard.epoch != nil {
 		if !startup.guard.active() {
 			startup.guard.epoch.retire()

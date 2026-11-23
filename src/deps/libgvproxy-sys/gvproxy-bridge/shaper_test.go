@@ -312,7 +312,7 @@ func TestUnlimitedConfigReturnsUnwrappedConn(t *testing.T) {
 		"empty":     {},
 		"zero size": {TX: &TokenBucketConfig{Size: 0}, RX: &TokenBucketConfig{Size: 0}},
 	} {
-		if got := wrapConn(c, 4, cfg); got != net.Conn(c) {
+		if got := wrapConn(c, 4, cfg, nil); got != net.Conn(c) {
 			t.Errorf("%s: wrapConn returned a wrapper, want the conn untouched", name)
 		}
 	}
@@ -329,7 +329,7 @@ func TestRxWriteNeverBlocksAndNeverErrors(t *testing.T) {
 	})
 	defer close(blocked)
 	cfg := &RateLimitConfig{RX: bucketCfg(1_000_000, 100)}
-	c := newShapedConn(inner, 4, cfg, nil)
+	c := newShapedConn(inner, 4, cfg, nil, nil)
 	defer c.Close()
 	frame := qemuFrame(bytes.Repeat([]byte{0x04}, 1500))
 	done := make(chan struct{})
@@ -364,7 +364,7 @@ func TestCloseDoesNotBlockWhilePacerIsWriting(t *testing.T) {
 		return 0, net.ErrClosed
 	})
 	cfg := &RateLimitConfig{RX: bucketCfg(1_000_000, 100)}
-	c := newShapedConn(inner, 4, cfg, nil)
+	c := newShapedConn(inner, 4, cfg, nil, nil)
 	if _, err := c.Write(qemuFrame(bytes.Repeat([]byte{0x05}, 1500))); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestRxQueueFullDropsAndCounts(t *testing.T) {
 	defer close(blocked)
 	// Smallest queue the bounds allow: 2 * maxFrameBytes, 16 frames.
 	cfg := &RateLimitConfig{RX: bucketCfg(1000, 1000)}
-	c := newShapedConn(inner, 4, cfg, nil)
+	c := newShapedConn(inner, 4, cfg, nil, nil)
 	defer c.Close()
 	frame := qemuFrame(bytes.Repeat([]byte{0x06}, 1500))
 	for i := 0; i < 200; i++ {
@@ -414,7 +414,7 @@ func TestRxPacerRetriesOnENOBUFS(t *testing.T) {
 		return len(p), nil
 	})
 	cfg := &RateLimitConfig{RX: bucketCfg(1_000_000, 100)}
-	c := newShapedConn(inner, 4, cfg, nil)
+	c := newShapedConn(inner, 4, cfg, nil, nil)
 	defer c.Close()
 	body := bytes.Repeat([]byte{0x07}, 1500)
 	frame := qemuFrame(body)
@@ -444,7 +444,7 @@ func TestRxPacerRetriesOnENOBUFS(t *testing.T) {
 func TestRxPacerClosesConnOnOtherWriteError(t *testing.T) {
 	inner := newFakeConn(func(p []byte) (int, error) { return 0, io.ErrClosedPipe })
 	cfg := &RateLimitConfig{RX: bucketCfg(1_000_000, 100)}
-	c := newShapedConn(inner, 4, cfg, nil)
+	c := newShapedConn(inner, 4, cfg, nil, nil)
 	defer c.Close()
 	if _, err := c.Write(qemuFrame(bytes.Repeat([]byte{0x08}, 1500))); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -463,7 +463,7 @@ func TestRxPacerClosesConnOnOtherWriteError(t *testing.T) {
 func TestFramesSurviveShapingIntactAndInOrder(t *testing.T) {
 	inner := newFakeConn(nil)
 	cfg := &RateLimitConfig{RX: bucketCfg(100_000_000, 100)} // generous
-	c := newShapedConn(inner, 4, cfg, nil)
+	c := newShapedConn(inner, 4, cfg, nil, nil)
 	defer c.Close()
 	const count = 100
 	want := make([][]byte, count)
@@ -510,7 +510,7 @@ func newTXDebtConn(t *testing.T) (*shapedConn, <-chan struct{}) {
 	inner, peer := net.Pipe()
 	clock := newFakeClock()
 	cfg := &RateLimitConfig{TX: bucketCfg(deadlineTestBucketBytes, deadlineTestRefillPeriod.Milliseconds())}
-	c := newShapedConn(inner, deadlineTestQEMUHeaderBytes, cfg, clock.now)
+	c := newShapedConn(inner, deadlineTestQEMUHeaderBytes, cfg, nil, clock.now)
 	c.txTokenBucket.reserve(c.txTokenBucket.capacity + deadlineTestTXDebtBytes)
 	started := make(chan struct{}, 1)
 	c.txTokenBucket.now = func() time.Time {
@@ -686,7 +686,7 @@ func TestShapedConnReadDeadlineDoesNotStopRXPacer(t *testing.T) {
 
 	inner, peer := net.Pipe()
 	cfg := &RateLimitConfig{RX: bucketCfg(deadlineTestBucketBytes, deadlineTestRefillPeriod.Milliseconds())}
-	c := newShapedConn(inner, deadlineTestQEMUHeaderBytes, cfg, newFakeClock().now)
+	c := newShapedConn(inner, deadlineTestQEMUHeaderBytes, cfg, nil, newFakeClock().now)
 	defer c.Close()
 	defer peer.Close()
 	c.rxTokenBucket.reserve(c.rxTokenBucket.capacity)
@@ -724,7 +724,7 @@ func TestTxShapingTakesAtLeastTheConfiguredTime(t *testing.T) {
 	}()
 	defer server.Close()
 	cfg := &RateLimitConfig{TX: bucketCfg(rate, 1000)}
-	c := newShapedConn(client, 0, cfg, nil)
+	c := newShapedConn(client, 0, cfg, nil, nil)
 	defer c.Close()
 	start := time.Now()
 	buf := make([]byte, 4096)
@@ -916,7 +916,7 @@ func TestRxMaximumFramesRespectSustainedRate(t *testing.T) {
 		delivered <- struct{}{}
 		return len(p), nil
 	})
-	c := newShapedConn(inner, 4, &RateLimitConfig{RX: bucketCfg(12500, 100)}, nil)
+	c := newShapedConn(inner, 4, &RateLimitConfig{RX: bucketCfg(12500, 100)}, nil, nil)
 	defer c.Close()
 	frame := qemuFrame(bytes.Repeat([]byte{0x42}, maxFrameBytes))
 	start := time.Now()

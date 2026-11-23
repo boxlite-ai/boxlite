@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 )
 
 // Per-box bandwidth shaping for the guest link.
@@ -400,6 +402,7 @@ type shapedConn struct {
 	// Nil in an unlimited direction; that side then passes through untouched.
 	txTokenBucket *tokenBucket // guest -> internet, charged in Read
 	rxTokenBucket *tokenBucket // internet -> guest, charged in pace
+	allowIPv6     func() bool
 
 	// Tracks frame boundaries on the read side so TX is charged for frame bytes
 	// only, not the length prefix. Its state is advanced by Read alone, and
@@ -431,17 +434,17 @@ type shapedConn struct {
 //
 // An unlimited configuration returns the connection untouched, so a box with no
 // limit pays nothing, not even an interface indirection.
-func wrapConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig) net.Conn {
+func wrapConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig, allowIPv6 func() bool) net.Conn {
 	if cfg.unlimited() {
 		return conn
 	}
-	return newShapedConn(conn, prefixLen, cfg, nil)
+	return newShapedConn(conn, prefixLen, cfg, allowIPv6, nil)
 }
 
 // The accepted connection owns the guest link. Closing it outside the switch
 // wakes any read or write already in progress when the Box is destroyed.
-func runGuestLink(ctx context.Context, conn net.Conn, prefixLen int, cfg *RateLimitConfig, accept func(context.Context, net.Conn) error) error {
-	link := wrapConn(conn, prefixLen, cfg)
+func runGuestLink(ctx context.Context, conn net.Conn, prefixLen int, cfg *RateLimitConfig, allowIPv6 func() bool, accept func(context.Context, net.Conn) error) error {
+	link := wrapConn(conn, prefixLen, cfg, allowIPv6)
 	closeLink := sync.OnceFunc(func() { link.Close() })
 	stop := context.AfterFunc(ctx, closeLink)
 	defer stop()
@@ -449,9 +452,10 @@ func runGuestLink(ctx context.Context, conn net.Conn, prefixLen int, cfg *RateLi
 	return accept(ctx, link)
 }
 
-func newShapedConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig, now func() time.Time) *shapedConn {
+func newShapedConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig, allowIPv6 func() bool, now func() time.Time) *shapedConn {
 	c := &shapedConn{
 		Conn:                conn,
+		allowIPv6:           allowIPv6,
 		framer:              framer{prefixLen: prefixLen},
 		stop:                make(chan struct{}),
 		readDeadlineChanged: make(chan struct{}),
@@ -698,34 +702,38 @@ func (c *shapedConn) pace() {
 					return
 				}
 			}
-			if !c.writeFrame(frame) {
+			if !c.writeFrame(frame, charge) {
 				return
 			}
-			c.stats.rxDeliveredBytes.Add(charge)
 		}
 	}
 }
 
 // writeFrame reports whether the pacer should keep running.
-func (c *shapedConn) writeFrame(frame []byte) bool {
+func (c *shapedConn) writeFrame(frame []byte, charge int64) bool {
+	prefix := c.framer.prefixLen
+	isIPv6 := c.allowIPv6 != nil && len(frame) >= prefix+header.EthernetMinimumSize &&
+		header.Ethernet(frame[prefix:]).Type() == ipv6.ProtocolNumber
 	for {
-		if _, err := c.Conn.Write(frame); err != nil {
-			if errors.Is(err, syscall.ENOBUFS) {
-				// The same retry upstream performs (gvisor-tap-vsock#367), but
-				// paced: a bare continue spins a core while the buffer drains.
-				if !c.sleep(200 * time.Microsecond) {
-					return false
-				}
-				continue
-			}
-			// Closing the inner conn makes rxStream's ReadFull fail, which
-			// returns Switch.Accept and lets the library run its own deferred
-			// disconnect. Reaching into the switch from here is neither possible
-			// (disconnect is unexported) nor desirable.
-			_ = c.Conn.Close()
-			return false
+		if isIPv6 && !c.allowIPv6() {
+			c.dropped(int64(len(frame)))
+			return true
 		}
-		return true
+		n, err := c.Conn.Write(frame)
+		if err == nil && (!isIPv6 || n == len(frame)) {
+			c.stats.rxDeliveredBytes.Add(charge)
+			return true
+		}
+		if errors.Is(err, syscall.ENOBUFS) && (!isIPv6 || n == 0) {
+			// A bare retry spins a core while the socket buffer drains.
+			if !c.sleep(200 * time.Microsecond) {
+				return false
+			}
+			continue
+		}
+		// Closing the link discards a partial frame and lets the switch disconnect.
+		_ = c.Conn.Close()
+		return false
 	}
 }
 

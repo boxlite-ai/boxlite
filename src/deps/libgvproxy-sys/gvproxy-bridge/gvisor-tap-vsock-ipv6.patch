@@ -1,0 +1,308 @@
+diff --git a/pkg/tap/link.go b/pkg/tap/link.go
+index 3735945..203be6b 100644
+--- a/pkg/tap/link.go
++++ b/pkg/tap/link.go
+@@ -120,3 +120,3 @@ func (e *LinkEndpoint) writePacket(r stack.RouteInfo, protocol tcpip.NetworkProt
+ 	h := header.ARP(pkt.NetworkHeader().Slice())
+-	if h.IsValid() &&
++	if protocol == header.ARPProtocolNumber && h.IsValid() &&
+ 		h.Op() == header.ARPReply {
+diff --git a/pkg/tap/switch.go b/pkg/tap/switch.go
+index 3b02fd7..e8f547a 100644
+--- a/pkg/tap/switch.go
++++ b/pkg/tap/switch.go
+@@ -50,2 +50,11 @@ type Switch struct {
+ 	gateway VirtualDevice
++
++	ipv6Addresses []ipv6GatewayAddress
++	allowIPv6     func() bool
++}
++
++type ipv6GatewayAddress struct {
++	address       tcpip.Address
++	prefix        tcpip.Subnet
++	solicitedNode tcpip.Address
+ }
+@@ -75,2 +84,13 @@ func (e *Switch) Connect(ep VirtualDevice) {
+ 
++// ConfigureIPv6 sets the link addresses and admission policy before accepting peers.
++func (e *Switch) ConfigureIPv6(addresses []tcpip.AddressWithPrefix, allowTraffic func() bool) {
++	for _, address := range addresses {
++		e.ipv6Addresses = append(e.ipv6Addresses, ipv6GatewayAddress{
++			address: address.Address, prefix: address.Subnet(),
++			solicitedNode: header.SolicitedNodeAddr(address.Address),
++		})
++	}
++	e.allowIPv6 = allowTraffic
++}
++
+ func (e *Switch) DeliverNetworkPacket(_ tcpip.NetworkProtocolNumber, pkt *stack.PacketBuffer) {
+@@ -129,2 +149,3 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ 	src := eth.SourceAddress()
++	ipv6 := e.allowIPv6 != nil && eth.Type() == header.IPv6ProtocolNumber
+ 
+@@ -134,3 +155,3 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ 	}
+-	if dst == header.EthernetBroadcastAddress {
++	if dst == header.EthernetBroadcastAddress || (ipv6 && dst[:2] == "\x33\x33") {
+ 		e.camLock.RLock()
+@@ -146,3 +167,3 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ 
+-			err := e.txBuf(id, conn, buf)
++			sent, err := e.txBuf(id, conn, buf, ipv6)
+ 			if err != nil {
+@@ -151,3 +172,5 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ 
+-			atomic.AddUint64(&e.Sent, uint64(size))
++			if sent {
++				atomic.AddUint64(&e.Sent, uint64(size))
++			}
+ 		}
+@@ -162,3 +185,3 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ 		conn := e.conns[id]
+-		err := e.txBuf(id, conn, buf)
++		sent, err := e.txBuf(id, conn, buf, ipv6)
+ 		if err != nil {
+@@ -166,3 +189,5 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ 		}
+-		atomic.AddUint64(&e.Sent, uint64(size))
++		if sent {
++			atomic.AddUint64(&e.Sent, uint64(size))
++		}
+ 	}
+@@ -171,3 +196,3 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ 
+-func (e *Switch) txBuf(id int, conn protocolConn, buf []byte) error {
++func (e *Switch) txBuf(id int, conn protocolConn, buf []byte, ipv6 bool) (bool, error) {
+ 	if conn.protocolImpl.Stream() {
+@@ -178,4 +203,8 @@ func (e *Switch) txBuf(id int, conn protocolConn, buf []byte) error {
+ 	for {
+-		if _, err := conn.Write(buf); err != nil {
+-			if errors.Is(err, syscall.ENOBUFS) {
++		if ipv6 && !e.allowIPv6() {
++			return false, nil
++		}
++		n, err := conn.Write(buf)
++		if err != nil || (ipv6 && n != len(buf)) {
++			if errors.Is(err, syscall.ENOBUFS) && (!ipv6 || n == 0) {
+ 				// socket buffer can be full keep retrying sending the same data
+@@ -185,6 +214,9 @@ func (e *Switch) txBuf(id int, conn protocolConn, buf []byte) error {
+ 			}
++			if err == nil {
++				err = io.ErrShortWrite
++			}
+ 			e.disconnect(id, conn)
+-			return err
++			return false, err
+ 		}
+-		return nil
++		return true, nil
+ 	}
+@@ -260,2 +292,6 @@ loop:
+ func (e *Switch) rxBuf(_ context.Context, id int, buf []byte) {
++	if len(buf) < header.EthernetMinimumSize {
++		return
++	}
++
+ 	if e.debug {
+@@ -266,6 +302,16 @@ func (e *Switch) rxBuf(_ context.Context, id int, buf []byte) {
+ 	eth := header.Ethernet(buf)
++	if eth.Type() == header.IPv6ProtocolNumber {
++		ip := header.IPv6(buf[header.EthernetMinimumSize:])
++		if e.allowIPv6 == nil || !e.acceptsIPv6(eth, ip) || !e.allowIPv6() {
++			return
++		}
++		if ip.SourceAddress() != header.IPv6Any {
++			e.learnSource(eth.SourceAddress(), id)
++		}
++		e.deliver(eth.Type(), buf)
++		atomic.AddUint64(&e.Received, uint64(len(buf)))
++		return
++	}
+ 
+-	e.camLock.Lock()
+-	e.cam[eth.SourceAddress()] = id
+-	e.camLock.Unlock()
++	e.learnSource(eth.SourceAddress(), id)
+ 
+@@ -281,9 +327,3 @@ func (e *Switch) rxBuf(_ context.Context, id int, buf []byte) {
+ 	if eth.DestinationAddress() == e.gateway.LinkAddress() || eth.DestinationAddress() == header.EthernetBroadcastAddress {
+-		data := buffer.MakeWithData(buf)
+-		data.TrimFront(header.EthernetMinimumSize)
+-		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+-			Payload: data,
+-		})
+-		e.gateway.DeliverNetworkPacket(eth.Type(), pkt)
+-		pkt.DecRef()
++		e.deliver(eth.Type(), buf)
+ 	}
+@@ -293,2 +333,61 @@ func (e *Switch) rxBuf(_ context.Context, id int, buf []byte) {
+ 
++func (e *Switch) learnSource(source tcpip.LinkAddress, id int) {
++	e.camLock.Lock()
++	e.cam[source] = id
++	e.camLock.Unlock()
++}
++
++func (e *Switch) deliver(protocol tcpip.NetworkProtocolNumber, buf []byte) {
++	data := buffer.MakeWithData(buf)
++	data.TrimFront(header.EthernetMinimumSize)
++	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: data})
++	e.gateway.DeliverNetworkPacket(protocol, pkt)
++	pkt.DecRef()
++}
++
++func (e *Switch) acceptsIPv6(eth header.Ethernet, ip header.IPv6) bool {
++	if !ip.IsValid(len(ip)) || ip.TransportProtocol() != header.ICMPv6ProtocolNumber ||
++		ip.PayloadLength() < header.ICMPv6MinimumSize {
++		return false
++	}
++	icmp := header.ICMPv6(ip.Payload())
++	switch icmp.Type() {
++	case header.ICMPv6NeighborSolicit, header.ICMPv6NeighborAdvert, header.ICMPv6EchoRequest, header.ICMPv6EchoReply:
++	default:
++		return false
++	}
++
++	source, destination := ip.SourceAddress(), ip.DestinationAddress()
++	if source == header.IPv6Any {
++		if icmp.Type() != header.ICMPv6NeighborSolicit || len(icmp) < header.ICMPv6NeighborSolicitMinimumSize {
++			return false
++		}
++		target := header.NDPNeighborSolicit(icmp.MessageBody()).TargetAddress()
++		for _, gateway := range e.ipv6Addresses {
++			if target == gateway.address && destination == gateway.solicitedNode {
++				return eth.DestinationAddress() == header.EthernetAddressFromMulticastIPv6Address(destination)
++			}
++		}
++		return false
++	}
++
++	var onLink, local, solicited bool
++	for _, gateway := range e.ipv6Addresses {
++		onLink = onLink || gateway.prefix.Contains(source)
++		local = local || destination == gateway.address
++		solicited = solicited || destination == gateway.solicitedNode
++	}
++	if !onLink {
++		return false
++	}
++	if local {
++		return eth.DestinationAddress() == e.gateway.LinkAddress()
++	}
++	if (solicited && icmp.Type() == header.ICMPv6NeighborSolicit) ||
++		(destination == header.IPv6AllNodesMulticastAddress && icmp.Type() == header.ICMPv6NeighborAdvert) {
++		return eth.DestinationAddress() == header.EthernetAddressFromMulticastIPv6Address(destination)
++	}
++	return false
++}
++
+ func protocolImplementation(protocol types.Protocol) protocol {
+diff --git a/pkg/types/configuration.go b/pkg/types/configuration.go
+index 8535a94..3a82fa0 100644
+--- a/pkg/types/configuration.go
++++ b/pkg/types/configuration.go
+@@ -4,2 +4,3 @@ import (
+ 	"net"
++	"net/netip"
+ 	"regexp"
+@@ -7,2 +8,7 @@ import (
+ 
++type IPv6Link struct {
++	Gateway      netip.Prefix
++	AllowTraffic func() bool
++}
++
+ type Configuration struct {
+@@ -27,2 +33,4 @@ type Configuration struct {
+ 
++	IPv6Link *IPv6Link `json:"-"`
++
+ 	// Built-in DNS records that will be served by the DNS server embedded in the gateway
+diff --git a/pkg/virtualnetwork/virtualnetwork.go b/pkg/virtualnetwork/virtualnetwork.go
+index 584b334..3913be1 100644
+--- a/pkg/virtualnetwork/virtualnetwork.go
++++ b/pkg/virtualnetwork/virtualnetwork.go
+@@ -14,2 +14,3 @@ import (
+ 	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/header"
+ 	"gvisor.dev/gvisor/pkg/tcpip/link/sniffer"
+@@ -17,2 +18,3 @@ import (
+ 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
++	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
+ 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+@@ -65,2 +67,9 @@ func newNetwork(ctx context.Context, configuration *types.Configuration, resolve
+ 	networkSwitch := tap.NewSwitch(configuration.Debug, mtu)
++	ipv6Addresses, err := configuredIPv6Addresses(configuration, tapEndpoint.LinkAddress())
++	if err != nil {
++		return nil, err
++	}
++	if configuration.IPv6Link != nil {
++		networkSwitch.ConfigureIPv6(ipv6Addresses, configuration.IPv6Link.AllowTraffic)
++	}
+ 	tapEndpoint.Connect(networkSwitch)
+@@ -82,3 +91,3 @@ func newNetwork(ctx context.Context, configuration *types.Configuration, resolve
+ 
+-	stack, err := createStack(configuration, endpoint)
++	stack, err := createStack(configuration, endpoint, ipv6Addresses)
+ 	if err != nil {
+@@ -115,4 +124,26 @@ func (n *VirtualNetwork) BytesReceived() uint64 {
+ 
+-func createStack(configuration *types.Configuration, endpoint stack.LinkEndpoint) (*stack.Stack, error) {
+-	s := stack.New(stack.Options{
++func configuredIPv6Addresses(configuration *types.Configuration, mac tcpip.LinkAddress) ([]tcpip.AddressWithPrefix, error) {
++	link := configuration.IPv6Link
++	if link == nil {
++		return nil, nil
++	}
++	gateway := link.Gateway.Addr()
++	if !link.Gateway.IsValid() || link.Gateway.Bits() != 64 || !gateway.Is6() ||
++		gateway.Zone() != "" || gateway.As16()[0] != 0xfd || gateway == link.Gateway.Masked().Addr() {
++		return nil, errors.New("IPv6 link requires a locally assigned ULA gateway with a nonzero /64 host part")
++	}
++	if len(mac) != header.EthernetAddressSize || mac[0]&1 != 0 || mac == "\x00\x00\x00\x00\x00\x00" {
++		return nil, errors.New("IPv6 link requires a nonzero unicast Ethernet gateway MAC")
++	}
++	if configuration.MTU < header.IPv6MinimumMTU || link.AllowTraffic == nil {
++		return nil, errors.New("IPv6 link requires an MTU of at least 1280 and an admission policy")
++	}
++	return []tcpip.AddressWithPrefix{
++		{Address: tcpip.AddrFrom16(gateway.As16()), PrefixLen: 64},
++		{Address: header.LinkLocalAddr(mac), PrefixLen: 64},
++	}, nil
++}
++
++func createStack(configuration *types.Configuration, endpoint stack.LinkEndpoint, ipv6Addresses []tcpip.AddressWithPrefix) (*stack.Stack, error) {
++	options := stack.Options{
+ 		NetworkProtocols: []stack.NetworkProtocolFactory{
+@@ -126,3 +157,8 @@ func createStack(configuration *types.Configuration, endpoint stack.LinkEndpoint
+ 		},
+-	})
++	}
++	if len(ipv6Addresses) != 0 {
++		options.NetworkProtocols = append(options.NetworkProtocols, ipv6.NewProtocol)
++		options.TransportProtocols = append(options.TransportProtocols, icmp.NewProtocol6)
++	}
++	s := stack.New(options)
+ 
+@@ -151,3 +187,3 @@ func createStack(configuration *types.Configuration, endpoint stack.LinkEndpoint
+ 	}
+-	s.SetRouteTable([]tcpip.Route{
++	routes := []tcpip.Route{
+ 		{
+@@ -157,3 +193,14 @@ func createStack(configuration *types.Configuration, endpoint stack.LinkEndpoint
+ 		},
+-	})
++	}
++	for _, address := range ipv6Addresses {
++		if err := s.AddProtocolAddress(1, tcpip.ProtocolAddress{
++			Protocol: ipv6.ProtocolNumber, AddressWithPrefix: address,
++		}, stack.AddressProperties{}); err != nil {
++			s.Close()
++			s.Wait()
++			return nil, errors.New(err.String())
++		}
++		routes = append(routes, tcpip.Route{Destination: address.Subnet(), NIC: 1})
++	}
++	s.SetRouteTable(routes)
+ 

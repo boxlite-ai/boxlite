@@ -30,6 +30,39 @@ Box                    gvproxy                  Internet
 - Built-in DHCP and DNS
 - Network metrics (bytes sent/received)
 
+### IPv6 on the gvproxy virtual link
+
+The internal gvproxy link configuration supports an IPv6 gateway on the same
+virtual NIC as IPv4. With this option, gvproxy assigns a local ULA with a
+`/64` prefix and a link-local address. The vfkit and QEMU links carry Neighbor
+Discovery and ICMPv6 echo for those addresses.
+
+The link checks the current outbound mode and platform guard before passing
+IPv6 control frames. When receive shaping queues a frame, the pacer checks
+again before writing it to the guest connection.
+
+```mermaid
+sequenceDiagram
+    participant Peer as Guest link
+    participant Switch as Ethernet switch
+    participant Stack as IPv6 stack
+    participant Pacer as Receive pacer
+    Peer->>Switch: IPv6 control frame
+    Switch->>Stack: Deliver after the ingress check
+    Stack->>Switch: Local reply
+    alt Direct write
+        Switch->>Peer: Check mode and guard, then write if allowed
+    else Paced write
+        Switch->>Pacer: Queue after the switch check
+        Pacer->>Pacer: Wait for receive capacity
+        Pacer->>Peer: Check mode and guard again, then write if allowed
+    end
+```
+
+Public Box startup uses IPv4. Guest IPv6 provisioning and IPv6 host forwarding
+remain unavailable, and policies that contain native IPv6 rules return an
+unsupported error.
+
 ### Host-protected IPv4 destinations
 
 Set `BOXLITE_PLATFORM_PROTECTED_CIDRS` in the host Runtime process environment

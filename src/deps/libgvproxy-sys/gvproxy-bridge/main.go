@@ -19,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -209,6 +210,7 @@ type GvproxyConfig struct {
 	CloudGuard              *cloudBootstrap `json:"cloud_guard,omitempty"`
 	guard                   platformGuard
 	cloudInventoryDirectory string
+	ipv6Gateway             *netip.Prefix
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -519,7 +521,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				logrus.WithFields(logrus.Fields{"id": id, "remote": wrappedConn.RemoteAddr().String()}).Info("VFKit connection accepted")
 
 				// Handle the VFKit protocol with the wrapped connection
-				if err := policy.guard.runGuestLink(traffic, wrappedConn, 0, config.RateLimit, vn.AcceptVfkit); err != nil {
+				if err := policy.runGuestLink(traffic, wrappedConn, 0, config.RateLimit, vn.AcceptVfkit); err != nil {
 					if traffic.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptVfkit error")
 					}
@@ -554,7 +556,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				}
 
 				// Handle the Qemu protocol
-				if err := policy.guard.runGuestLink(traffic, acceptedConn, 4, config.RateLimit, vn.AcceptQemu); err != nil {
+				if err := policy.runGuestLink(traffic, acceptedConn, 4, config.RateLimit, vn.AcceptQemu); err != nil {
 					if traffic.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptQemu error")
 					}
