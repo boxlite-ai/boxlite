@@ -681,6 +681,19 @@ impl BoxBackend for RestBox {
 
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
+    async fn set_managed_proxy(&self, proxy: Option<&str>) -> BoxliteResult<crate::ProxyMutation> {
+        self.client
+            .replace_managed_binding(&self.box_id_str(), proxy)
+            .await
+    }
+
+    async fn managed_proxy_status(&self) -> BoxliteResult<crate::ManagedProxyStatus> {
+        self.client.require_managed_proxy().await?;
+        self.client
+            .read_managed_proxy_status(&self.box_id_str())
+            .await
+    }
+
     async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
         self.client.read_outbound_snapshot(&self.box_id_str()).await
     }
@@ -1499,6 +1512,10 @@ mod tests {
                 requests.push((
                     header.lines().next().unwrap().to_owned(),
                     serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    header.lines().any(|line| {
+                        line.split_once(':')
+                            .is_some_and(|(name, _)| name.eq_ignore_ascii_case("if-match"))
+                    }),
                 ));
                 let response = if status == 200 {
                     "{}"
@@ -1530,6 +1547,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         let requests = server.await.unwrap();
+        assert!(requests.iter().all(|(_, _, has_if_match)| !has_if_match));
         assert_eq!(
             requests[0].0,
             "PUT /v1/boxes/policy-box/network/inbound HTTP/1.1"

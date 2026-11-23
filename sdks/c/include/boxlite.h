@@ -77,6 +77,19 @@ typedef enum BoxlitePortProtocol {
   BoxlitePortProtocolUdp = 1,
 } BoxlitePortProtocol;
 
+typedef enum CProxyMutationState {
+  ProxyRejected = 0,
+  ProxyAccepted = 1,
+  ProxyUnknown = 2,
+  ProxyAcceptedReleaseUnconfirmed = 3,
+} CProxyMutationState;
+
+typedef enum CManagedCreateAdmission {
+  ManagedCreateRejected = 0,
+  ManagedCreateAdmitted = 1,
+  ManagedCreateUnknown = 2,
+} CManagedCreateAdmission;
+
 typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttps = 0,
   BoxliteRegistryTransportHttp = 1,
@@ -730,6 +743,20 @@ typedef struct BoxliteSocketAddress {
   uint16_t port;
   const char *path;
 } BoxliteSocketAddress;
+
+// Outcome of a single registry or binding write. Free revision with boxlite_free_string.
+typedef struct CProxyMutation {
+  enum CProxyMutationState state;
+  uint16_t http_status;
+  char *revision;
+} CProxyMutation;
+
+// Admission evidence on a failed create. Free box_id with boxlite_free_string.
+typedef struct CManagedCreateOutcome {
+  enum CManagedCreateAdmission admission;
+  uint16_t http_status;
+  char *box_id;
+} CManagedCreateOutcome;
 
 // A registry login the server pulls private images with. It has no
 // password field: the server never returns one.
@@ -1920,6 +1947,56 @@ void boxlite_options_set_entrypoint(CBoxliteOptions *opts, const char *const *ar
 void boxlite_options_set_cmd(CBoxliteOptions *opts, const char *const *args, int argc);
 
 void boxlite_options_free(CBoxliteOptions *opts);
+
+// Read a public registry item, or list when name is NULL. Free *out_json with boxlite_free_string.
+enum BoxliteErrorCode boxlite_outbound_proxy_read(CBoxliteRuntime *runtime,
+                                                  const char *name,
+                                                  char **out_json,
+                                                  CBoxliteError *out_error);
+
+// Register an endpoint. Username and password must both be NULL or both be set.
+enum BoxliteErrorCode boxlite_outbound_proxy_create(CBoxliteRuntime *runtime,
+                                                    const char *name,
+                                                    const char *url,
+                                                    const char *username,
+                                                    const char *password,
+                                                    struct CProxyMutation *out,
+                                                    CBoxliteError *out_error);
+
+// PATCH an endpoint. NULL url preserves it. Set clear_credential to 1 to clear both fields.
+enum BoxliteErrorCode boxlite_outbound_proxy_update(CBoxliteRuntime *runtime,
+                                                    const char *name,
+                                                    const char *url,
+                                                    const char *username,
+                                                    const char *password,
+                                                    uint8_t clear_credential,
+                                                    struct CProxyMutation *out,
+                                                    CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_outbound_proxy_delete(CBoxliteRuntime *runtime,
+                                                    const char *name,
+                                                    struct CProxyMutation *out,
+                                                    CBoxliteError *out_error);
+
+// Bind by name; NULL requests unbind. The outcome retains the acknowledged revision.
+enum BoxliteErrorCode boxlite_network_set_managed_proxy(CBoxNetworkHandle *network,
+                                                        const char *name,
+                                                        struct CProxyMutation *out,
+                                                        CBoxliteError *out_error);
+
+// Read public binding status. Free *out_json with boxlite_free_string.
+enum BoxliteErrorCode boxlite_network_managed_proxy_status(CBoxNetworkHandle *network,
+                                                           char **out_json,
+                                                           CBoxliteError *out_error);
+
+// Blocking Cloud create with explicit selection. NULL proxy is explicit unbound.
+// Options remain caller-owned. Free a returned box ID with boxlite_free_string.
+enum BoxliteErrorCode boxlite_create_box_with_managed_proxy(CBoxliteRuntime *runtime,
+                                                            const CBoxliteOptions *options,
+                                                            const char *proxy,
+                                                            CBoxHandle **out_box,
+                                                            struct CManagedCreateOutcome *out,
+                                                            CBoxliteError *out_error);
 
 // Queue a read of every login the organization holds, oldest first.
 //

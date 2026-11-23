@@ -18,6 +18,7 @@ mod info;
 mod metrics;
 mod network;
 mod options;
+mod outbound_proxy;
 mod registries;
 mod runtime;
 mod snapshot_options;

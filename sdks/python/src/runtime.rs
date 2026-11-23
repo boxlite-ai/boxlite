@@ -9,6 +9,7 @@ use crate::images::PyImageHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
+use crate::outbound_proxy::{PyOutboundProxyHandle, map_managed_create_error};
 use crate::util::map_err;
 use crate::volumes::PyVolumeHandle;
 
@@ -19,6 +20,33 @@ pub(crate) struct PyBoxlite {
 
 #[pymethods]
 impl PyBoxlite {
+    fn outbound_proxies(&self) -> PyResult<PyOutboundProxyHandle> {
+        self.runtime
+            .outbound_proxies()
+            .map(PyOutboundProxyHandle)
+            .map_err(map_err)
+    }
+
+    #[pyo3(signature = (options, proxy, name=None))]
+    fn create_with_outbound_proxy<'py>(
+        &self,
+        py: Python<'py>,
+        options: PyBoxOptions,
+        proxy: Option<String>,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        let options = BoxOptions::try_from(options).map_err(map_err)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let handle = runtime
+                .create_with_managed_outbound_proxy(options, name, proxy.as_deref())
+                .await
+                .map_err(map_managed_create_error)?;
+            Ok(PyBox {
+                handle: Arc::new(handle),
+            })
+        })
+    }
     #[new]
     fn new(options: PyOptions) -> PyResult<Self> {
         let core_opts = options.into_core()?;

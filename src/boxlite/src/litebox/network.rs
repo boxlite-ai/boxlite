@@ -393,6 +393,22 @@ pub struct NetworkHandle {
 }
 
 impl NetworkHandle {
+    /// Bind a registered proxy, or pass `None` to unbind using a fresh policy revision.
+    pub async fn set_managed_proxy(
+        &self,
+        proxy: Option<&str>,
+    ) -> BoxliteResult<crate::ProxyMutation> {
+        let proxy = proxy
+            .map(crate::runtime::outbound_proxy::proxy_name)
+            .transpose()?;
+        self.network_backend.set_managed_proxy(proxy).await
+    }
+
+    /// Inspect the Cloud binding and authenticated Runtime readback when available.
+    pub async fn managed_proxy_status(&self) -> BoxliteResult<crate::ManagedProxyStatus> {
+        self.network_backend.managed_proxy_status().await
+    }
+
     pub(crate) fn new(network_backend: Arc<dyn BoxNetworkBackend>) -> Self {
         Self { network_backend }
     }

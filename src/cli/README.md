@@ -296,6 +296,43 @@ Inbound accepts no list; disabled outbound accepts no `--allow-net`. Each comman
 one direction without retaining earlier rules. See [networking](../../docs/guides/networking.md#updating-a-running-box)
 for runtime support, connection lifetime and persistence.
 
+### Managed outbound proxies
+
+Select a BoxLite Cloud context with outbound proxy management enabled. The
+registry belongs to the organization selected by that context. Registry calls
+require an HTTPS API URL, including when the registered proxy itself uses
+HTTP or SOCKS5.
+
+```bash
+boxlite outbound-proxy create build-egress https://proxy.example.com --credential-stdin < proxy-login.json
+boxlite outbound-proxy list
+boxlite create --outbound-proxy build-egress alpine:latest
+boxlite outbound-proxy status BOX_ID
+boxlite outbound-proxy bind BOX_ID build-egress
+boxlite outbound-proxy unbind BOX_ID
+```
+
+The redirected file contains one JSON object with `username` and `password`.
+
+`update NAME --credential-stdin` replaces the login and `update NAME
+--clear-credential` clears it. Omitting both flags keeps the login for an
+unchanged endpoint. Use `update NAME --endpoint URL` to change the endpoint.
+
+A registration with an active Box reference cannot be
+deleted. Registry `list` and `get` show the endpoint, revision, and whether a
+login is configured.
+
+`run --outbound-proxy NAME` selects the proxy at create as well. Checkpoint
+creation inherits its outbound policy. A bind or unbind preserves the current
+mode and allowlist and uses its revision to reject a concurrent edit.
+
+A failed create can report an admitted Box ID. Inspect that Box before issuing
+another create. An unknown mutation outcome calls for a fresh status read.
+
+`accepted, release unconfirmed` includes the Cloud acknowledgement revision
+when available. Compare it with an authenticated Runtime readback to verify
+release.
+
 ### Guest SSH
 
 ```bash

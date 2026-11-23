@@ -78,6 +78,7 @@ pub struct BoxliteRuntime {
     /// Organization domains — `Some` only for REST, like `auth_backend`.
     /// Surfaced via `domains()`.
     domain_backend: Option<Arc<dyn crate::runtime::domains::DomainBackend>>,
+    outbound_proxy_backend: Option<Arc<dyn crate::runtime::outbound_proxy::OutboundProxyBackend>>,
 }
 
 // ============================================================================
@@ -142,6 +143,7 @@ impl BoxliteRuntime {
             auth_backend: None,
             registry_backend: None,
             domain_backend: None,
+            outbound_proxy_backend: None,
         }
     }
 
@@ -172,6 +174,7 @@ impl BoxliteRuntime {
         let domain_backend =
             Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::domains::DomainBackend>;
         let checkpoint_backend = Arc::clone(&rest_runtime) as Arc<dyn CheckpointBackend>;
+        let outbound_proxy_backend = rest_runtime.outbound_proxy_backend();
         Ok(Self {
             backend: rest_runtime,
             checkpoint_backend: Some(checkpoint_backend),
@@ -180,6 +183,7 @@ impl BoxliteRuntime {
             auth_backend: Some(auth_backend),
             registry_backend: Some(registry_backend),
             domain_backend: Some(domain_backend),
+            outbound_proxy_backend: Some(outbound_proxy_backend),
         })
     }
 
@@ -351,6 +355,36 @@ impl BoxliteRuntime {
         options.sanitize_create()?;
         self.backend
             .create_with_outbound_proxy(options, name, proxy)
+            .await
+    }
+
+    /// Open the organization outbound-proxy registry.
+    pub fn outbound_proxies(&self) -> BoxliteResult<crate::OutboundProxyHandle> {
+        self.outbound_proxy_backend
+            .clone()
+            .map(crate::OutboundProxyHandle)
+            .ok_or_else(crate::runtime::outbound_proxy::requires_cloud)
+    }
+
+    /// Create with an explicit registered proxy name or an explicit unbound selection.
+    pub async fn create_with_managed_outbound_proxy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        proxy: Option<&str>,
+    ) -> Result<LiteBox, crate::ManagedCreateError> {
+        options.sanitize_create()?;
+        if matches!(options.rootfs, crate::RootfsSpec::Checkpoint(_)) {
+            return Err(BoxliteError::InvalidArgument(
+                "a checkpoint Box inherits its outbound policy".into(),
+            )
+            .into());
+        }
+        let proxy = proxy
+            .map(crate::runtime::outbound_proxy::proxy_name)
+            .transpose()?;
+        self.backend
+            .create_with_managed_outbound_proxy(options, name, proxy)
             .await
     }
 

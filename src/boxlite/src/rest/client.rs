@@ -39,6 +39,15 @@ fn client_identity_headers() -> reqwest::header::HeaderMap {
     ])
 }
 
+fn managed_client_builder() -> reqwest::ClientBuilder {
+    Client::builder()
+        .default_headers(client_identity_headers())
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+}
+
 /// The proxy states a refused tunnel in one short line (Go's `http.Error`).
 /// The limit is enforced while reading, not after: a peer that answers a
 /// handshake with megabytes is not stating a reason, and buffering it first
@@ -105,6 +114,7 @@ pub(crate) type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake:
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    managed_http: Client,
     tunnel_connector: TunnelConnector,
     base_url: String,
     /// Routing-slot value substituted into the `{prefix}` URL segment
@@ -131,6 +141,9 @@ impl ApiClient {
             .connect_timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
+        let managed_http = managed_client_builder()
+            .build()
+            .map_err(|_| BoxliteError::Config("failed to create managed HTTP client".into()))?;
         let tunnel_connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .map_err(|e| BoxliteError::Config(format!("failed to load TLS roots: {e}")))?
@@ -143,6 +156,7 @@ impl ApiClient {
 
         Ok(Self {
             http,
+            managed_http,
             tunnel_connector,
             base_url,
             path_prefix,
@@ -150,6 +164,14 @@ impl ApiClient {
             cached: Arc::new(RwLock::new(None)),
             config_cache: Arc::new(RwLock::new(None)),
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn trust_managed_test_peer(&mut self, certificate: &[u8]) {
+        self.managed_http = managed_client_builder()
+            .add_root_certificate(reqwest::Certificate::from_der(certificate).unwrap())
+            .build()
+            .unwrap();
     }
 
     /// Build the full URL for a box-scoped path.
@@ -171,6 +193,56 @@ impl ApiClient {
     /// endpoints — `/v1/me`, `/v1/config`).
     fn url_root(&self, path: &str) -> String {
         format!("{}/v1{}", self.base_url, path)
+    }
+
+    pub(super) fn require_registry_https(&self) -> BoxliteResult<()> {
+        if reqwest::Url::parse(&self.base_url).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        }) {
+            return Ok(());
+        }
+        Err(BoxliteError::Config(
+            "proxy registry requests require an HTTPS URL without credentials, query, or fragment"
+                .into(),
+        ))
+    }
+
+    pub(super) async fn managed_request(
+        &self,
+        method: Method,
+        path: &str,
+    ) -> BoxliteResult<RequestBuilder> {
+        self.authorize(self.managed_http.request(method, self.url(path)))
+            .await
+    }
+
+    pub(super) async fn require_managed_proxy(&self) -> BoxliteResult<()> {
+        let response = self
+            .authorize(self.managed_http.get(self.url_root("/config")))
+            .await?
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if !response.status().is_success() {
+            return Err(super::managed_proxy::read_error(response.status()));
+        }
+        let config: ServerConfig = response
+            .json()
+            .await
+            .map_err(|_| BoxliteError::Network("invalid server capability response".into()))?;
+        if config
+            .capabilities
+            .and_then(|caps| caps.outbound_proxy_registry_enabled)
+            != Some(true)
+        {
+            return Err(crate::runtime::outbound_proxy::requires_cloud());
+        }
+        Ok(())
     }
 
     /// Return a usable bearer, re-requesting from the credential when the

@@ -37,6 +37,12 @@ impl RestRuntime {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
     }
+
+    pub(crate) fn outbound_proxy_backend(
+        &self,
+    ) -> Arc<dyn crate::runtime::outbound_proxy::OutboundProxyBackend> {
+        Arc::new(self.client.clone())
+    }
 }
 
 #[async_trait::async_trait]
@@ -455,6 +461,19 @@ impl RestRuntime {
                 .create_from_checkpoint(checkpoint, name.as_deref())
                 .await;
         }
+        let req = self.box_create_request(&options, name, proxy).await?;
+        let resp = self.client.create_box(&req).await?;
+        let info = resp.to_box_info()?;
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        Ok(litebox_from_rest(rest_box))
+    }
+
+    async fn box_create_request(
+        &self,
+        options: &BoxOptions,
+        name: Option<String>,
+        proxy: Option<Option<&str>>,
+    ) -> BoxliteResult<CreateBoxRequest> {
         options.sanitize_remote()?;
         options.validate_secrets()?;
 
@@ -481,15 +500,11 @@ impl RestRuntime {
             self.client.require_privileged_enabled().await?;
         }
 
-        let req = if proxy.is_some() {
-            CreateBoxRequest::from_options_with_proxy(&options, name, proxy)
+        Ok(if proxy.is_some() {
+            CreateBoxRequest::from_options_with_proxy(options, name, proxy)
         } else {
-            CreateBoxRequest::from_options(&options, name)
-        };
-        let resp = self.client.create_box(&req).await?;
-        let info = resp.to_box_info()?;
-        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
-        Ok(litebox_from_rest(rest_box))
+            CreateBoxRequest::from_options(options, name)
+        })
     }
 }
 
@@ -507,6 +522,21 @@ impl RuntimeBackend for RestRuntime {
     ) -> BoxliteResult<LiteBox> {
         self.create_box_with_proxy_option(options, name, Some(proxy))
             .await
+    }
+
+    async fn create_with_managed_outbound_proxy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        proxy: Option<&str>,
+    ) -> Result<LiteBox, crate::ManagedCreateError> {
+        self.client.require_managed_proxy().await?;
+        let request = self.box_create_request(&options, name, Some(proxy)).await?;
+        let info = self.client.create_managed_box(&request).await?;
+        Ok(litebox_from_rest(Arc::new(RestBox::new(
+            self.client.clone(),
+            info,
+        ))))
     }
 
     async fn get_or_create(

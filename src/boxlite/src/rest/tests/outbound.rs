@@ -4,6 +4,236 @@ use crate::rest::{litebox::RestBox, options::BoxliteRestOptions, types::BoxRespo
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+const MANAGED_CAPABILITY: &str = r#"{"capabilities":{"outbound_proxy_registry_enabled":true}}"#;
+const BOUND_POLICY: &str =
+    r#"{"mode":"enabled","allow_net":["packages.example"],"proxy":"build-egress"}"#;
+
+async fn exchange(listener: &tokio::net::TcpListener, response: &str) -> (String, String) {
+    let (stream, _) = listener.accept().await.unwrap();
+    exchange_stream(stream, response).await
+}
+
+async fn exchange_stream(
+    mut stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    response: &str,
+) -> (String, String) {
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        assert!(head.len() < 16 << 10);
+        head.push(stream.read_u8().await.unwrap());
+    }
+    let head = String::from_utf8(head).unwrap();
+    let length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().unwrap())
+        })
+        .unwrap_or(0);
+    assert!(length < 64 << 10);
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).await.unwrap();
+    stream.write_all(response.as_bytes()).await.unwrap();
+    (head, String::from_utf8(body).unwrap())
+}
+
+#[tokio::test]
+async fn managed_proxy_registry_requires_tls_and_does_not_replay_credentials() {
+    use crate::{OutboundProxyHandle, ProxyCredential, ProxyCredentialChange};
+    use rustls::pki_types::PrivatePkcs8KeyDer;
+
+    let rejected = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let plain_client = ApiClient::new(&BoxliteRestOptions::new(format!(
+        "http://{}",
+        rejected.local_addr().unwrap()
+    )))
+    .unwrap();
+    let registry = OutboundProxyHandle(Arc::new(plain_client));
+    let credential = ProxyCredential::new("username-marker", "password-marker").unwrap();
+    let placeholder = format!("{credential:?}");
+    assert!(!placeholder.contains("username-marker") && !placeholder.contains("password-marker"));
+    assert!(
+        registry
+            .create("outbound", "https://proxy.example", Some(&credential))
+            .await
+            .is_err()
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), rejected.accept())
+            .await
+            .is_err()
+    );
+
+    let rcgen::CertifiedKey { cert, key_pair } =
+        rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let server_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            PrivatePkcs8KeyDer::from(key_pair.serialize_der()).into(),
+        )
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("https://{}", listener.local_addr().unwrap());
+    let mut client =
+        ApiClient::new(&BoxliteRestOptions::new(&url).with_path_prefix("default")).unwrap();
+    client.trust_managed_test_peer(cert.der());
+    let registry = OutboundProxyHandle(Arc::new(client));
+    let redirect_to = rejected.local_addr().unwrap();
+    let worker = tokio::spawn(async move {
+        let mut writes = Vec::new();
+        for (verb, status, headers, body) in [
+            (
+                "POST",
+                201,
+                String::new(),
+                r#"{"credential":{"username":"username-marker","password":"password-marker"}}"#,
+            ),
+            ("PATCH", 200, String::new(), "malformed password-marker"),
+            ("PATCH", 409, String::new(), "rejected username-marker"),
+            (
+                "PATCH",
+                307,
+                format!("Location: http://{redirect_to}/outside\r\n"),
+                "",
+            ),
+            ("PATCH", 0, String::new(), ""),
+        ] {
+            for (prefix, status, headers, body) in [
+                (
+                    "GET /v1/config ".to_owned(),
+                    200,
+                    String::new(),
+                    MANAGED_CAPABILITY,
+                ),
+                (
+                    format!(
+                        "{verb} /v1/default/proxies{} ",
+                        if verb == "POST" { "" } else { "/outbound" }
+                    ),
+                    status,
+                    headers,
+                    body,
+                ),
+            ] {
+                let response = if status == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+                        body.len()
+                    )
+                };
+                let (head, body) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let stream = acceptor.accept(stream).await.unwrap();
+                    exchange_stream(stream, &response).await
+                })
+                .await
+                .unwrap();
+                assert!(head.starts_with(&prefix));
+                if verb != "GET" && !body.is_empty() {
+                    writes.push(serde_json::from_str::<serde_json::Value>(&body).unwrap());
+                }
+            }
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+        writes
+    });
+    let results = [
+        registry
+            .create("outbound", "https://proxy.example", Some(&credential))
+            .await
+            .unwrap(),
+        registry
+            .update("outbound", None, ProxyCredentialChange::Keep)
+            .await
+            .unwrap(),
+        registry
+            .update(
+                "outbound",
+                Some("https://changed.example"),
+                ProxyCredentialChange::Keep,
+            )
+            .await
+            .unwrap(),
+        registry
+            .update("outbound", None, ProxyCredentialChange::Clear)
+            .await
+            .unwrap(),
+        registry
+            .update("outbound", None, ProxyCredentialChange::Set(credential))
+            .await
+            .unwrap(),
+    ];
+    assert_eq!(
+        results.each_ref().map(|result| result.state),
+        [
+            ProxyMutationState::Accepted,
+            ProxyMutationState::Accepted,
+            ProxyMutationState::Rejected,
+            ProxyMutationState::Unknown,
+            ProxyMutationState::Unknown
+        ]
+    );
+    assert!(!format!("{results:?}").contains("password-marker"));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), rejected.accept())
+            .await
+            .is_err()
+    );
+    let writes = worker.await.unwrap();
+    assert!(
+        writes[0]["credential"]["username"] == "username-marker"
+            && writes[0]["credential"]["password"] == "password-marker"
+    );
+    assert_eq!(writes[1], serde_json::json!({}));
+    assert_eq!(
+        writes[2],
+        serde_json::json!({"url":"https://changed.example"})
+    );
+    assert_eq!(writes[3], serde_json::json!({"credential":null}));
+    assert!(writes[4]["credential"]["password"] == "password-marker");
+}
+
+async fn scripted_peer(
+    replies: Vec<(u16, &'static str, &'static str)>,
+) -> (String, tokio::task::JoinHandle<Vec<(String, String)>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for (status, headers, body) in replies {
+            let response = format!(
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+                body.len(),
+            );
+            requests.push(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    exchange(&listener, &response),
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "unexpected additional request"
+        );
+        requests
+    });
+    (url, server)
+}
+
 fn network_at(url: String) -> NetworkHandle {
     let client = ApiClient::new(&BoxliteRestOptions::new(url)).unwrap();
     let info: BoxResponse = serde_json::from_value(serde_json::json!({
@@ -28,26 +258,7 @@ async fn peer(
     );
     let server = tokio::spawn(async move {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut head = Vec::new();
-            while !head.ends_with(b"\r\n\r\n") {
-                assert!(head.len() < 16 << 10);
-                head.push(stream.read_u8().await.unwrap());
-            }
-            let head = String::from_utf8(head).unwrap();
-            let length = head
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().unwrap())
-                })
-                .unwrap_or(0);
-            assert!(length < 64 << 10);
-            let mut body = vec![0; length];
-            stream.read_exact(&mut body).await.unwrap();
-            stream.write_all(response.as_bytes()).await.unwrap();
-            (head, String::from_utf8(body).unwrap())
+            exchange(&listener, &response).await
         })
         .await
         .unwrap()
@@ -64,6 +275,227 @@ fn replacement() -> OutboundReplacement {
         },
     )
     .unwrap()
+}
+
+#[tokio::test]
+async fn managed_proxy_retains_the_acknowledged_unbind_revision() {
+    let confirmed = r#"{"persisted":{"revision":"rev-b","policy":{"mode":"enabled","allow_net":["packages.example"]}},"application_state":"confirmed","proxy":{"runtime_readback":"authenticated","installed":{"policy_revision":"rev-b","proxy":null}}}"#;
+    let stale = r#"{"persisted":{"revision":"rev-b","policy":{"mode":"enabled"}},"application_state":"confirmed","proxy":{"runtime_readback":"authenticated","installed":{"policy_revision":"rev-a","proxy":null}}}"#;
+    let missing_proxy = r#"{"persisted":{"revision":"rev-b","policy":{"mode":"enabled"}},"application_state":"confirmed","proxy":{"runtime_readback":"authenticated","installed":{"policy_revision":"rev-b"}}}"#;
+    for (status, body, state) in [
+        (200, confirmed, ProxyMutationState::Accepted),
+        (200, stale, ProxyMutationState::AcceptedReleaseUnconfirmed),
+        (
+            200,
+            missing_proxy,
+            ProxyMutationState::AcceptedReleaseUnconfirmed,
+        ),
+        (503, "{}", ProxyMutationState::AcceptedReleaseUnconfirmed),
+    ] {
+        let (url, server) = scripted_peer(vec![
+            (200, "", MANAGED_CAPABILITY),
+            (200, "ETag: \"rev-a\"\r\n", BOUND_POLICY),
+            (200, "ETag: \"rev-b\"\r\n", "{}"),
+            (status, "", body),
+        ])
+        .await;
+        let result = network_at(url).set_managed_proxy(None).await.unwrap();
+        assert_eq!(result.state, state);
+        assert_eq!(result.revision.unwrap().as_str(), "rev-b");
+        let requests = server.await.unwrap();
+        assert!(requests[0].0.starts_with("GET /v1/config "));
+        assert!(
+            requests[1]
+                .0
+                .starts_with("GET /v1/boxes/policy-box/network/outbound ")
+        );
+        assert!(
+            requests[2]
+                .0
+                .starts_with("PUT /v1/boxes/policy-box/network/outbound ")
+        );
+        assert!(requests[2].0.contains("\r\nif-match: \"rev-a\"\r\n"));
+        assert!(!requests[2].0.contains("x-boxlite-outbound-revision"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[2].1).unwrap(),
+            serde_json::json!({"mode":"enabled", "allow_net":["packages.example"], "proxy":null})
+        );
+        assert!(
+            requests[3]
+                .0
+                .starts_with("GET /v1/boxes/policy-box/network/outbound/status ")
+        );
+    }
+}
+
+#[tokio::test]
+async fn managed_proxy_distinguishes_conflicts_without_replaying() {
+    for (status, body, state) in [
+        (412, "{}", ProxyMutationState::Rejected),
+        (
+            409,
+            r#"{"code":"outbound_update_blocked"}"#,
+            ProxyMutationState::Rejected,
+        ),
+        (
+            409,
+            r#"{"code":"outbound_application_unconfirmed"}"#,
+            ProxyMutationState::Unknown,
+        ),
+        (409, "{}", ProxyMutationState::Unknown),
+    ] {
+        let (url, server) = scripted_peer(vec![
+            (200, "", MANAGED_CAPABILITY),
+            (200, "ETag: \"rev-a\"\r\n", BOUND_POLICY),
+            (status, "", body),
+        ])
+        .await;
+        let result = network_at(url)
+            .set_managed_proxy(Some("replacement"))
+            .await
+            .unwrap();
+        assert_eq!(result.state, state);
+        let requests = server.await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[2].1).unwrap(),
+            serde_json::json!({"mode":"enabled", "allow_net":["packages.example"], "proxy":"replacement"})
+        );
+    }
+}
+
+#[tokio::test]
+async fn managed_proxy_refuses_unknown_policy_and_missing_capability_before_put() {
+    for replies in [
+        vec![(200, "", "{}")],
+        vec![
+            (200, "", MANAGED_CAPABILITY),
+            (200, "ETag: W/\"rev-a\"\r\n", BOUND_POLICY),
+        ],
+        vec![
+            (200, "", MANAGED_CAPABILITY),
+            (
+                200,
+                "ETag: \"rev-a\"\r\n",
+                r#"{"mode":"enabled","deny_net":["blocked.test"]}"#,
+            ),
+        ],
+    ] {
+        let (url, server) = scripted_peer(replies).await;
+        assert!(network_at(url).set_managed_proxy(None).await.is_err());
+        assert!(
+            server
+                .await
+                .unwrap()
+                .iter()
+                .all(|(head, _)| head.starts_with("GET "))
+        );
+    }
+}
+
+#[tokio::test]
+async fn managed_proxy_create_preserves_admission_and_optional_box_id() {
+    use crate::{BoxOptions, BoxliteRuntime, ManagedCreateAdmission};
+    for (proxy, status, body, expected, id) in [
+        (
+            Some("build-egress"),
+            400,
+            r#"{"code":"outbound_create_rejected"}"#,
+            ManagedCreateAdmission::Rejected,
+            None,
+        ),
+        (
+            None,
+            408,
+            r#"{"code":"outbound_create_admitted","boxId":"admitted-box"}"#,
+            ManagedCreateAdmission::Admitted,
+            Some("admitted-box"),
+        ),
+        (
+            None,
+            400,
+            r#"{"code":"outbound_create_admitted","boxId":1}"#,
+            ManagedCreateAdmission::Admitted,
+            None,
+        ),
+        (
+            None,
+            500,
+            r#"{"box_id":"possible-box"}"#,
+            ManagedCreateAdmission::Unknown,
+            Some("possible-box"),
+        ),
+        (
+            Some("build-egress"),
+            201,
+            r#"{"box_id":"created-box","status":["malformed"],"boxId":"alternate-box"}"#,
+            ManagedCreateAdmission::Unknown,
+            Some("created-box"),
+        ),
+        (
+            None,
+            502,
+            r#"{"code":123,"boxId":"recovered-box"}"#,
+            ManagedCreateAdmission::Unknown,
+            Some("recovered-box"),
+        ),
+    ] {
+        let (url, server) =
+            scripted_peer(vec![(200, "", MANAGED_CAPABILITY), (status, "", body)]).await;
+        let runtime =
+            BoxliteRuntime::rest(BoxliteRestOptions::new(url).with_path_prefix("default")).unwrap();
+        let result = runtime
+            .create_with_managed_outbound_proxy(BoxOptions::default(), None, proxy)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(result.admission, expected);
+        assert_eq!(result.http_status, Some(status));
+        assert_eq!(result.box_id.as_ref().map(|id| id.as_str()), id);
+        let requests = server.await.unwrap();
+        assert!(requests[0].0.starts_with("GET /v1/config "));
+        assert!(requests[1].0.starts_with("POST /v1/default/boxes "));
+        let body: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+        assert_eq!(
+            body.pointer("/network/outbound/proxy"),
+            Some(&serde_json::json!(proxy))
+        );
+    }
+}
+
+#[tokio::test]
+async fn managed_proxy_create_returns_box_on_valid_acknowledgement() {
+    use crate::{BoxOptions, BoxliteRuntime};
+    let box_body = r#"{"box_id":"created-box","status":"running","created_at":"","updated_at":"","image":"alpine","cpus":1,"memory_mib":512}"#;
+    let (url, server) =
+        scripted_peer(vec![(200, "", MANAGED_CAPABILITY), (201, "", box_body)]).await;
+    let runtime =
+        BoxliteRuntime::rest(BoxliteRestOptions::new(url).with_path_prefix("default")).unwrap();
+    let box_handle = runtime
+        .create_with_managed_outbound_proxy(BoxOptions::default(), None, Some("build-egress"))
+        .await
+        .unwrap();
+    assert_eq!(box_handle.id().as_str(), "created-box");
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].0.starts_with("POST /v1/default/boxes "));
+}
+
+#[tokio::test]
+async fn outbound_rest_snapshot_accepts_cloud_proxy_selection() {
+    let (handle, server) = peer(
+        200,
+        "ETag: \"rev-a\"\r\n",
+        r#"{"mode":"enabled","allow_net":["packages.example"],"proxy":"build-egress"}"#,
+    )
+    .await;
+
+    let snapshot = handle.outbound_snapshot().await;
+    let (request, _) = server.await.unwrap();
+
+    assert!(request.starts_with("GET /v1/boxes/policy-box/network/outbound "));
+    let snapshot = snapshot.expect("Cloud policy with a proxy must remain readable");
+    assert_eq!(snapshot.revision.as_str(), "rev-a");
+    assert_eq!(snapshot.policy.allow_net, ["packages.example"]);
 }
 
 #[tokio::test]

@@ -16,6 +16,7 @@ __all__ = [
     "InternalError",
     "InvalidArgumentError",
     "InvalidStateError",
+    "ManagedCreateError",
     "MetadataError",
     "NetworkError",
     "NotFoundError",
@@ -32,6 +33,18 @@ __all__ = [
 
 class BoxliteError(Exception):
     """Base exception for all boxlite errors."""
+
+
+class ManagedCreateError(BoxliteError):
+    """A managed create whose Box could not be returned to the caller."""
+
+    def __init__(
+        self, admission: str, http_status: int | None, box_id: str | None, message: str
+    ):
+        self.admission = admission
+        self.http_status = http_status
+        self.box_id = box_id
+        super().__init__(message)
 
 
 class ExecError(BoxliteError):

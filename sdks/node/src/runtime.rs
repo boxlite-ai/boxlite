@@ -10,6 +10,7 @@ use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
 use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
+use crate::outbound_proxy::JsOutboundProxyHandle;
 use crate::util::map_err;
 use crate::volumes::JsVolumeHandle;
 
@@ -25,6 +26,30 @@ pub struct JsBoxlite {
 
 #[napi]
 impl JsBoxlite {
+    #[napi]
+    pub fn outbound_proxies(&self) -> Result<JsOutboundProxyHandle> {
+        self.runtime
+            .outbound_proxies()
+            .map(|handle| JsOutboundProxyHandle { handle })
+            .map_err(map_err)
+    }
+
+    #[napi]
+    pub async fn create_with_outbound_proxy(
+        &self,
+        options: JsBoxOptions,
+        proxy: Option<String>,
+        name: Option<String>,
+    ) -> Result<JsManagedCreateResult> {
+        let options = BoxOptions::try_from(options).map_err(map_err)?;
+        let result = self
+            .runtime
+            .create_with_managed_outbound_proxy(options, name, proxy.as_deref())
+            .await;
+        Ok(JsManagedCreateResult {
+            result: result.map(Arc::new),
+        })
+    }
     /// Create a new runtime with custom options.
     ///
     /// # Arguments
@@ -386,6 +411,42 @@ impl JsBoxlite {
 pub struct JsGetOrCreateResult {
     inner_handle: Arc<boxlite::LiteBox>,
     inner_created: bool,
+}
+
+#[napi(object)]
+pub struct JsManagedCreateFailure {
+    pub admission: String,
+    pub http_status: Option<u32>,
+    pub box_id: Option<String>,
+    pub message: String,
+}
+
+#[napi]
+pub struct JsManagedCreateResult {
+    result: std::result::Result<Arc<boxlite::LiteBox>, boxlite::ManagedCreateError>,
+}
+
+#[napi]
+impl JsManagedCreateResult {
+    #[napi(getter, js_name = "box")]
+    pub fn get_box(&self) -> Option<JsBox> {
+        self.result.as_ref().ok().map(|handle| JsBox {
+            handle: Arc::clone(handle),
+        })
+    }
+
+    #[napi(getter)]
+    pub fn error(&self) -> Option<JsManagedCreateFailure> {
+        self.result
+            .as_ref()
+            .err()
+            .map(|error| JsManagedCreateFailure {
+                admission: error.admission.as_str().into(),
+                http_status: error.http_status.map(u32::from),
+                box_id: error.box_id.as_ref().map(|id| id.as_str().to_owned()),
+                message: error.source.to_string(),
+            })
+    }
 }
 
 #[napi]

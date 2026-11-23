@@ -307,6 +307,23 @@ class SyncBoxlite:
         native_box = self._sync(self._boxlite.create(options, name=name))
         return SyncBox(self, native_box)
 
+    def create_with_outbound_proxy(
+        self, options: "BoxOptions", proxy: str | None, name: str | None = None
+    ) -> "SyncBox":
+        """Create with an explicit Cloud registration name or unbound selection."""
+        self._require_started()
+        from ._box import SyncBox
+
+        box = self._sync(self._boxlite.create_with_outbound_proxy(options, proxy, name))
+        return SyncBox(self, box)
+
+    def outbound_proxies(self):
+        """Open the Cloud organization's outbound proxy registry."""
+        self._require_started()
+        from ._outbound_proxy import SyncOutboundProxyHandle
+
+        return SyncOutboundProxyHandle(self._boxlite.outbound_proxies(), self._sync)
+
     def get_or_create(
         self,
         options: "BoxOptions",

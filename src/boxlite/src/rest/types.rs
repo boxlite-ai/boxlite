@@ -105,6 +105,7 @@ pub(crate) struct ServerCapabilities {
     pub import_enabled: Option<bool>,
     pub private_tunnels_enabled: Option<bool>,
     pub exec_user_enabled: Option<bool>,
+    pub outbound_proxy_registry_enabled: Option<bool>,
 }
 
 // ============================================================================

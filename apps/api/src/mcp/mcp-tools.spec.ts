@@ -117,6 +117,13 @@ describe('McpTools.register', () => {
     expect(ids).not.toContain('listOrganizations')
   })
 
+  it('keeps all proxy registry operations on both aliases out of the catalog', async () => {
+    const { catalog } = await registered()
+    const operations = API_KEY_ONLY.filter((id) => id.includes('OutboundProx'))
+    expect(operations).toHaveLength(10)
+    for (const id of operations) expect(catalog.get(id)).toBeUndefined()
+  })
+
   it('keeps the v1 route when the dashboard reuses an operationId', async () => {
     const { catalog } = await registered()
 
@@ -175,6 +182,16 @@ const API_KEY_ONLY = [
   'listInvites',
   'createInvite',
   'cancelInvite',
+  'listOutboundProxies',
+  'createOutboundProxy',
+  'getOutboundProxy',
+  'updateOutboundProxy',
+  'deleteOutboundProxy',
+  'listOutboundProxiesForOrganization',
+  'createOutboundProxyForOrganization',
+  'getOutboundProxyForOrganization',
+  'updateOutboundProxyForOrganization',
+  'deleteOutboundProxyForOrganization',
 ]
 
 describe('MCP OAuth allowlist', () => {

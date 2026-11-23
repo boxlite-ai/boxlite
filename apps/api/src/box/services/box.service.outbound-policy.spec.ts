@@ -24,6 +24,19 @@ function fixture(runner: unknown = { id: 'runner1', apiUrl: 'http://runner.test'
 describe('BoxService outbound policy replacement', () => {
   afterEach(() => jest.restoreAllMocks())
 
+  it('labels a managed create rejected before Box admission', async () => {
+    const { service } = fixture()
+    Object.assign(service, { organizationService: { isNestedVirtualizationEnabled: async () => false } })
+    await expect(
+      service.create(
+        { outboundEnabled: false, outboundAllowNet: ['example.com'] } as never,
+        { id: 'org1' } as never,
+        {} as never,
+        { outboundProxy: null },
+      ),
+    ).rejects.toMatchObject({ status: 400, response: { code: 'outbound_create_rejected' } })
+  })
+
   it('resolves the name and applies the policy through the box runner', async () => {
     const send = jest.spyOn(RunnerOutboundControl.prototype, 'replace').mockResolvedValue('applied')
     const { service, boxRepository, runnerService } = fixture()

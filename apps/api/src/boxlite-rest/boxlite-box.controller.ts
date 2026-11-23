@@ -24,6 +24,7 @@ import {
   BadRequestException,
   ForbiddenException,
   HttpException,
+  HttpStatus,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
 import { Request, Response } from 'express'
@@ -39,6 +40,8 @@ import { UserContext } from '../common/decorators/user-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { BoxPreparingImageTimeoutError } from '../box/errors/box-preparing-image-timeout.error'
+import type { BoxProgressDto } from '../box/dto/box.dto'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { recordBoxRequested } from '../box/utils/box-business-event.util'
 import { Box } from '../box/entities/box.entity'
@@ -57,6 +60,27 @@ import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const OUTBOUND_CREATE_ADMITTED = 'outbound_create_admitted'
+
+function admittedCreateError(error: unknown, boxId: string): HttpException {
+  if (error instanceof BoxPreparingImageTimeoutError) {
+    const { message, progress } = error.getResponse() as { message: string; progress: BoxProgressDto }
+    return new BoxPreparingImageTimeoutError(message, progress, boxId, OUTBOUND_CREATE_ADMITTED)
+  }
+  if (error instanceof HttpException) {
+    const body = error.getResponse()
+    return new HttpException(
+      { ...(typeof body === 'string' ? { message: body } : body), code: OUTBOUND_CREATE_ADMITTED, boxId },
+      error.getStatus(),
+      { cause: error },
+    )
+  }
+  return new HttpException(
+    { message: 'An unexpected error occurred.', code: OUTBOUND_CREATE_ADMITTED, boxId },
+    HttpStatus.INTERNAL_SERVER_ERROR,
+    { cause: error },
+  )
+}
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -150,14 +174,21 @@ export class BoxliteBoxController {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+    const outboundProxy = dto.network?.outbound?.proxy
 
     let box = await this.boxService.create(createBoxDto, organization, ctx, {
       maxCreatedBoxes,
-      ...(dto.network?.outbound?.proxy !== undefined ? { outboundProxy: dto.network.outbound.proxy } : {}),
+      ...(outboundProxy !== undefined ? { outboundProxy } : {}),
     })
     if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      try {
+        box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      } catch (error) {
+        if (outboundProxy === undefined) throw error
+        if (!(error instanceof HttpException)) this.logger.error(error)
+        throw admittedCreateError(error, box.id)
+      }
     }
     return boxToBoxResponse(box)
   }

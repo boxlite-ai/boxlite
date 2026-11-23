@@ -312,6 +312,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       rollback: null,
       retired_attempt: null,
     }
+    let dropPrepareReply = false
     const agent = jest.fn(async (_epoch: string, command: ManagedCommand) => {
       expect(_epoch).toBe(epoch)
       if (command.operation === 'prepare') {
@@ -319,6 +320,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
         expect(managed.pending).toEqual(command.update)
         expect(managed.claim).toBeUndefined()
         runtime.pending_attempt = command.update.attempt_id
+        if (dropPrepareReply) throw new Error('Controlled Runner acknowledgement loss')
       } else if (command.operation === 'apply') {
         const managed = outboundRecord(await store.read(box.id, org)).managed
         expect(managed.claim).toBeDefined()
@@ -409,6 +411,26 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     expect(outboundRecord(await store.read(box.id, org)).managed.binding).toBeNull()
     expect(outboundRecord(await store.read(box.id, org)).managed.unbindRelease).toBeUndefined()
     await expect(registry.remove(org, name)).resolves.toBeUndefined()
+
+    const committed = persistedOutbound(await store.read(box.id, org)).revision
+    const stalePrecondition = (revision: string) => revision === persistedOutbound(rotated).revision
+    await expect(
+      managedCoordinator.replace(box.id, org, policy, null, protectedControl, stalePrecondition),
+    ).rejects.toMatchObject({ status: 412 })
+
+    dropPrepareReply = true
+    await expect(managedCoordinator.replace(box.id, org, policy, null, protectedControl)).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'outbound_application_unconfirmed' },
+    })
+    const pending = outboundRecord(await store.read(box.id, org)).managed.pending
+    expect(pending.attempt_id).toBe(runtime.pending_attempt)
+    await expect(
+      managedCoordinator.replace(box.id, org, policy, null, protectedControl, stalePrecondition),
+    ).rejects.toMatchObject({ status: 409, response: { code: 'outbound_update_blocked' } })
+    const after = outboundRecord(await store.read(box.id, org))
+    expect(after.revision).toBe(committed)
+    expect(after.managed.pending).toEqual(pending)
   })
 
   it('settles due outbound work when PostgreSQL has only one connection available', async () => {

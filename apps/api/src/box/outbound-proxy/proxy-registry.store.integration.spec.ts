@@ -17,7 +17,10 @@ import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
-import { BoxliteOutboundProxyController } from '../../boxlite-rest/boxlite-outbound-proxy.controller'
+import {
+  BoxliteOutboundProxyController,
+  BoxlitePrefixedOutboundProxyController,
+} from '../../boxlite-rest/boxlite-outbound-proxy.controller'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { getPinoRequestOptions } from '../../common/utils/pino.util'
 import { useApiBodyParsers } from '../../mcp/mcp-body'
@@ -227,7 +230,7 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
     logs.setGlobalLoggerProvider(loggerProvider)
     const context = await Test.createTestingModule({
       imports: [LoggerModule.forRoot({ pinoHttp: [getPinoRequestOptions(true, 'info'), logStream] })],
-      controllers: [BoxliteOutboundProxyController],
+      controllers: [BoxliteOutboundProxyController, BoxlitePrefixedOutboundProxyController],
       providers: [
         { provide: ProxyRegistryStore, useValue: store },
         { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },

@@ -132,6 +132,20 @@ others continue to provide protection.
 | sandbox-exec (Seatbelt) | Kernel-enforced deny-default sandbox profile |
 | rlimits | Limit file descriptors, memory, CPU |
 
+Before sending protected network configuration, the runtime checks that the shim
+owns its process group. A detached launch establishes that group and writes its
+PID record before descriptor cleanup can release the parent from `spawn()`.
+
+```mermaid
+sequenceDiagram
+    participant Parent
+    participant Shim
+    Parent->>Shim: Spawn detached child
+    Shim->>Shim: Establish the process group and write the PID record
+    Shim-->>Parent: Descriptor cleanup lets spawn return
+    Parent->>Parent: Verify the shim owns its process group
+```
+
 **Note**: macOS provides weaker isolation than Linux. Production deployments
 requiring maximum security should use Linux.
 

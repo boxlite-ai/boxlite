@@ -15,6 +15,7 @@ pub mod kill;
 pub mod list;
 pub mod logs;
 pub mod network;
+pub mod outbound_proxy;
 pub mod pull;
 pub mod restart;
 pub mod rm;

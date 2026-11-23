@@ -122,6 +122,9 @@ async fn run_cli(mut cli: Cli) -> i32 {
         cli::Commands::Kill(args) => commands::kill::execute(args, &global).await.map(|_| 0),
         cli::Commands::Signal(args) => commands::signal::execute(args, &global).await.map(|_| 0),
         cli::Commands::Create(args) => commands::create::execute(args, &global).await.map(|_| 0),
+        cli::Commands::OutboundProxy(args) => commands::outbound_proxy::execute(args, &global)
+            .await
+            .map(|_| 0),
         cli::Commands::Checkpoint(args) => commands::checkpoint::execute(args, &global)
             .await
             .map(|_| 0),

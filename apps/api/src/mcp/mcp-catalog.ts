@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { isProxyCredentialWrite } from '../box/outbound-proxy/proxy-registry-body'
-
 /** A JSON Schema object, as OpenAPI 3.x and MCP tool inputs carry it. */
 export type JsonSchema = Record<string, unknown>
 
@@ -57,6 +55,7 @@ export interface McpCatalogSources {
 const METHODS = ['get', 'put', 'post', 'patch', 'delete', 'head']
 /** Headers a tool argument may never set: credentials, routing and framing belong to the endpoint. */
 const RESERVED_HEADERS = /^(authorization|cookie|host|content-(type|length)|x-forwarded-.*|x-boxlite-mcp-delegation)$/i
+const OUTBOUND_PROXY_REGISTRY_ROUTE = /^\/api\/v1(?:\/[^/]+)?\/proxies(?:\/[^/]+)?\/?$/i
 
 /** The REST operations MCP tools reach, built once at startup from the API's OpenAPI documents. */
 export class McpCatalog {
@@ -107,7 +106,7 @@ export class McpCatalog {
           continue
         }
         const route = toRoute(path)
-        if (isProxyCredentialWrite(method, route)) continue
+        if (OUTBOUND_PROXY_REGISTRY_ROUTE.test(route)) continue
         const op = toOperation(operationId, method, route, shared, operation, resolve)
         if (this.sources.served(op)) {
           this.operations.set(operationId, op)
