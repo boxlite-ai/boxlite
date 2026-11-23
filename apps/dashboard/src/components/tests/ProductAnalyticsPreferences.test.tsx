@@ -133,3 +133,52 @@ it('honors an existing grant on the first admitted view and skips failed prefere
   await click('Private project name')
   expect(http.post).toHaveBeenCalledTimes(1)
 })
+
+it('keeps the UI usable and local collection off when withdrawal cannot be confirmed', async () => {
+  allowed = true
+  await mount()
+  const alreadySent = http.post.mock.calls.length
+  http.put.mockRejectedValueOnce(new Error('network unavailable'))
+  await click('Product analytics', 'switch')
+  expect(getByRole(host, 'alert').textContent).toContain('Could not confirm your preference')
+  await click('Private project name')
+  expect(http.post).toHaveBeenCalledTimes(alreadySent)
+  await click('Product analytics', 'switch')
+  expect(getByRole(host, 'switch', { name: 'Product analytics' }).getAttribute('aria-checked')).toBe('false')
+  expect(queryByRole(host, 'alert')).toBeNull()
+})
+
+it('can retry after a failed preference read and keeps a saved refusal off', async () => {
+  allowed = false
+  http.get.mockRejectedValueOnce(new Error('offline'))
+  await mount()
+  expect(getByRole(host, 'alert').textContent).toContain('Could not load your preference')
+  expect(getByRole(host, 'switch', { name: 'Product analytics' }).hasAttribute('disabled')).toBe(true)
+  await click('Refresh')
+  expect(queryByRole(host, 'alert')).toBeNull()
+  expect(queryByRole(host, 'heading', { name: 'Share usage analytics?' })).toBeNull()
+  expect(getByRole(host, 'switch', { name: 'Product analytics' }).getAttribute('aria-checked')).toBe('false')
+  expect(http.post).not.toHaveBeenCalled()
+})
+
+it('drops excess clicks while requests are outstanding and resumes after transport failure', async () => {
+  allowed = true
+  await mount()
+  http.post.mockClear()
+  let finish!: () => void
+  const pending = new Promise<void>((_, reject) => {
+    finish = () => reject(new Error('transport unavailable'))
+  })
+  http.post.mockReturnValue(pending)
+  await click('Private project name')
+  await click('Private project name')
+  await click('Private project name')
+  expect(http.post).toHaveBeenCalledTimes(2)
+  await act(async () => {
+    finish()
+    await pause()
+  })
+  http.post.mockResolvedValue({})
+  await click('Private project name')
+  expect(http.post).toHaveBeenCalledTimes(3)
+})
