@@ -187,10 +187,12 @@ type Agents struct {
 	native *agentNamespace
 }
 
-// Agent handles must not be copied after first use.
+// Agent represents an agent session. Pass the *Agent returned by the SDK.
+// Do not copy the Agent value.
 type Agent struct{ native *agentSession }
 
-// AgentTurn handles must not be copied after first use.
+// AgentTurn represents one submitted task. Pass the *AgentTurn returned by the SDK.
+// Do not copy the AgentTurn value.
 type AgentTurn struct{ native *agentTurnHandle }
 
 // Agents obtains the namespace without starting the Box.

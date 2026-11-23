@@ -10,12 +10,9 @@ fn opaque_agent_numbers_round_trip() {
     )
     .unwrap();
     assert_eq!(records::config(&config)["limits"].to_string(), NUMERIC_DATA);
-    let response = records::parse_response(
-        serde_json::from_str(&format!(
-            r#"{{"type":"answer","text":"yes","data":{NUMERIC_DATA}}}"#
-        ))
-        .unwrap(),
-    )
+    let response = records::parse_response(&format!(
+        r#"{{"type":"answer","text":"yes","data":{NUMERIC_DATA}}}"#
+    ))
     .unwrap();
     let AgentResponse::Answer {
         data: Some(data), ..
@@ -105,7 +102,7 @@ fn go_json_fixture_matches_core_records() {
         status: AgentTurnStatus::Completed,
         outcome: Some(AgentOutcome::Answer),
         text: Some("done".into()),
-        data: Some(data.clone()),
+        data: Some(serde_json::value::to_raw_value(&data).unwrap()),
         artifacts: vec![],
         usage: Some(json!({"tokens": 0})),
         error: None,
@@ -215,15 +212,15 @@ fn go_json_fixture_matches_core_records() {
     let denial = json!({"type": "permission", "approved": false});
     let approval = json!({"type": "permission", "approved": true});
     assert!(matches!(
-        records::parse_response(answer.clone()).unwrap(),
+        records::parse_response(&answer.to_string()).unwrap(),
         AgentResponse::Answer { .. }
     ));
     assert!(matches!(
-        records::parse_response(denial.clone()).unwrap(),
+        records::parse_response(&denial.to_string()).unwrap(),
         AgentResponse::Permission { approved: false }
     ));
     assert!(matches!(
-        records::parse_response(approval.clone()).unwrap(),
+        records::parse_response(&approval.to_string()).unwrap(),
         AgentResponse::Permission { approved: true }
     ));
     let fixture = json!({

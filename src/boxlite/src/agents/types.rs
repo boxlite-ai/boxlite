@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use futures::Stream;
-use serde_json::Value;
+use serde_json::{Value, value::RawValue};
 
 use crate::BoxliteResult;
 
@@ -44,7 +44,7 @@ pub enum AgentSendMode {
 #[derive(Debug, Clone, Default)]
 pub struct AgentSendOptions {
     pub mode: AgentSendMode,
-    pub data: Option<Value>,
+    pub data: Option<Box<RawValue>>,
     pub idempotency_key: Option<String>,
 }
 
@@ -75,7 +75,8 @@ pub enum AgentStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentTurnStatus {
     Queued,
     Running,
@@ -139,8 +140,13 @@ pub enum AgentRequestKind {
 /// Text can answer a question; only the Permission variant can grant authority.
 #[derive(Debug, Clone)]
 pub enum AgentResponse {
-    Answer { text: String, data: Option<Value> },
-    Permission { approved: bool },
+    Answer {
+        text: String,
+        data: Option<Box<RawValue>>,
+    },
+    Permission {
+        approved: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,20 +165,21 @@ pub struct AgentSteeringReceipt {
     pub status: AgentSteeringStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentOutcome {
     Answer,
     Question,
 }
 
 /// Result provenance and optional adapter-reported usage; unavailable usage is not zero.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentResult {
     pub turn_id: String,
     pub status: AgentTurnStatus,
     pub outcome: Option<AgentOutcome>,
     pub text: Option<String>,
-    pub data: Option<Value>,
+    pub data: Option<Box<RawValue>>,
     pub artifacts: Vec<String>,
     pub usage: Option<Value>,
     pub error: Option<String>,

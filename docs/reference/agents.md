@@ -223,6 +223,11 @@ precision during parsing and serialization; Go keeps opaque payloads as
 that type's precision limits. Wait timeouts cross the C ABI as `double` seconds
 and do not promise exact nanosecond representation for large durations.
 
+Send and answer `data` travels as validated JSON through the Go and C bindings,
+the core result, and the turn snapshot. Objects keep their user-defined keys,
+including a literal `$serde_json::private::Number` key. The OpenCode adapter
+reports `Unsupported` for non-null send data.
+
 Go calls and getters use the C SDK and these converters. One runtime drainer
 dispatches asynchronous completions; getters copy their JSON synchronously.
 Both event methods return `Unsupported`; subscriptions are a separate delivery step.

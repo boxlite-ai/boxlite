@@ -198,7 +198,7 @@ unsafe fn deliver<T>(
 }
 
 unsafe fn deliver_json(
-    result: Result<serde_json::Value, BoxliteError>,
+    result: Result<impl std::fmt::Display, BoxliteError>,
     callback: unsafe extern "C" fn(*const c_char, *const CBoxliteError, *mut c_void),
     data: usize,
 ) {
@@ -571,11 +571,7 @@ pub unsafe extern "C" fn boxlite_agent_respond(
             required_string(response_json_arg, "response_json"),
             out_error
         );
-        let value = checked!(
-            serde_json::from_str(&json).map_err(|e| BoxliteError::InvalidArgument(e.to_string())),
-            out_error
-        );
-        let response = checked!(boxlite::agents::records::parse_response(value), out_error);
+        let response = checked!(boxlite::agents::records::parse_response(&json), out_error);
         let options = checked!(control_options(options_arg), out_error);
         let handle = &*agent_arg;
         let core = handle.core.clone();
@@ -983,7 +979,7 @@ unsafe fn agent_getter(
 unsafe fn write_json(
     out: *mut *mut c_char,
     out_error: *mut CBoxliteError,
-    value: Result<serde_json::Value, BoxliteError>,
+    value: Result<impl std::fmt::Display, BoxliteError>,
 ) -> BoxliteErrorCode {
     match value {
         Ok(value) => {

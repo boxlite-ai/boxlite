@@ -116,20 +116,23 @@ func TestAgentCallsAndGettersReachCore(t *testing.T) {
 	}
 	defer runtime.KeepAlive(answer)
 	result, err := answer.Wait(ctx, AgentWaitOptions{})
-	if err != nil || result.Text != "yes" || string(result.Data) != `{"approved":false,"child":null,"items":[],"n":0}` {
+	if err != nil || result.Text != "yes" || string(result.Data) != `{"approved":false,"n":0,"items":[],"child":null}` {
 		t.Fatalf("answer=%+v err=%v", result, err)
 	}
 	denied, err := agent.Respond(ctx, "request-1", AgentPermissionResponse{Approved: false}, AgentControlOptions{})
 	checkAgentError(t, denied, err, ErrInvalidArgument)
 }
 
-func TestAgentNumbersSurviveNativeCalls(t *testing.T) {
+func TestAgentOpaqueDataSurvivesNativeCalls(t *testing.T) {
 	_, namespace := testAgents(t, false)
 	agent := testCreateAgent(t, namespace)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, data := range []string{
 		`9007199254740993`, `-9223372036854775808`, `18446744073709551615`,
+		`{"$serde_json::private::Number":"42"}`,
+		`{"$serde_json::private::Number":"hello"}`,
+		`[{"$serde_json::private::Number":"42"},{"$serde_json::private::Number":"hello"}]`,
 		`0.123456789012345678901`, `[0.123456789012345678901,0.123456789012345678902]`,
 	} {
 		for _, operation := range []string{"send", "respond"} {
@@ -150,7 +153,7 @@ func TestAgentNumbersSurviveNativeCalls(t *testing.T) {
 					t.Fatalf("state: %+v, %v", state, err)
 				}
 				if string(state.Result.Data) != data {
-					t.Fatalf("state numeric data changed: got %s, want %s", state.Result.Data, data)
+					t.Fatalf("state payload changed: got %s, want %s", state.Result.Data, data)
 				}
 				loaded, err := agent.GetTurn(ctx, state.ID)
 				if err != nil {
@@ -162,7 +165,7 @@ func TestAgentNumbersSurviveNativeCalls(t *testing.T) {
 					t.Fatalf("wait: %+v, %v", result, err)
 				}
 				if string(result.Data) != data {
-					t.Fatalf("numeric data changed: got %s, want %s", result.Data, data)
+					t.Fatalf("payload changed: got %s, want %s", result.Data, data)
 				}
 			})
 		}

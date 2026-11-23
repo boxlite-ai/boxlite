@@ -153,7 +153,8 @@ impl PyAgent {
                 ))));
             }
         };
-        let data = json(&data)?;
+        let data = serde_json::from_str(&data)
+            .map_err(|e| map_err(boxlite::BoxliteError::InvalidArgument(e.to_string())))?;
         let agent = self.agent.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let turn = agent
@@ -161,7 +162,7 @@ impl PyAgent {
                     &text,
                     AgentSendOptions {
                         mode,
-                        data: if data.is_null() { None } else { Some(data) },
+                        data,
                         idempotency_key: key,
                     },
                 )
@@ -194,7 +195,7 @@ impl PyAgent {
         response: String,
         key: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let response = records::parse_response(json(&response)?).map_err(map_err)?;
+        let response = records::parse_response(&response).map_err(map_err)?;
         let agent = self.agent.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             Ok(PyAgentTurn {

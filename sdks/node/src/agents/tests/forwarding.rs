@@ -80,6 +80,13 @@ fn agent_bindings_forward_to_core_test_backend() {
             .await
             .unwrap();
         assert_eq!(reply.wait(None).await.unwrap()["text"], "yes");
+        let payload = json!([{"$serde_json::private::Number":"hello"}]);
+        let turn = agent
+            .send("echo".into(), Some(json!({"data": payload})))
+            .await
+            .unwrap();
+        assert_eq!(turn.wait(None).await.unwrap()["data"], payload);
+        assert_eq!(turn.state().unwrap()["result"]["data"], payload);
         assert!(
             agent
                 .send("bad".into(), Some(json!({"mode":"bad"})))

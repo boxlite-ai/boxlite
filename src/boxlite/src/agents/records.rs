@@ -4,12 +4,13 @@
 //! `docs/reference/agents.md`.
 
 use super::{
-    AgentCapabilities, AgentConfig, AgentEvent, AgentOutcome, AgentRequest, AgentRequestKind,
-    AgentResponse, AgentResult, AgentState, AgentStatus, AgentSteeringReceipt, AgentSteeringStatus,
+    AgentCapabilities, AgentConfig, AgentEvent, AgentRequest, AgentRequestKind, AgentResponse,
+    AgentResult, AgentState, AgentStatus, AgentSteeringReceipt, AgentSteeringStatus,
     AgentTurnState, AgentTurnStatus,
 };
 use crate::{BoxliteError, BoxliteResult};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 
 pub fn agent_state(state: &AgentState) -> Value {
@@ -24,32 +25,31 @@ pub fn agent_state(state: &AgentState) -> Value {
     })
 }
 
-pub fn turn_state(state: &AgentTurnState) -> Value {
-    json!({
-        "id": state.id,
-        "agent_id": state.agent_id,
-        "status": turn_status(state.status),
-        "cursor": state.cursor,
-        "result": state.result.as_ref().map(result),
-        "requests": requests(&state.requests),
-        "steering": state.steering.iter().map(receipt).collect::<Vec<_>>(),
+pub fn turn_state(state: &AgentTurnState) -> Box<RawValue> {
+    #[derive(Serialize)]
+    struct Record<'a> {
+        id: &'a str,
+        agent_id: &'a str,
+        status: AgentTurnStatus,
+        cursor: Option<&'a str>,
+        result: Option<&'a AgentResult>,
+        requests: Value,
+        steering: Vec<Value>,
+    }
+    to_raw_value(&Record {
+        id: &state.id,
+        agent_id: &state.agent_id,
+        status: state.status,
+        cursor: state.cursor.as_deref(),
+        result: state.result.as_ref(),
+        requests: requests(&state.requests),
+        steering: state.steering.iter().map(receipt).collect(),
     })
+    .expect("agent turn fields are JSON-serializable")
 }
 
-pub fn result(result: &AgentResult) -> Value {
-    json!({
-        "turn_id": result.turn_id,
-        "status": turn_status(result.status),
-        "outcome": result.outcome.map(|outcome| match outcome {
-            AgentOutcome::Answer => "answer",
-            AgentOutcome::Question => "question",
-        }),
-        "text": result.text,
-        "data": result.data,
-        "artifacts": result.artifacts,
-        "usage": result.usage,
-        "error": result.error,
-    })
+pub fn result(result: &AgentResult) -> Box<RawValue> {
+    to_raw_value(result).expect("agent result fields are JSON-serializable")
 }
 
 pub fn receipt(receipt: &AgentSteeringReceipt) -> Value {
@@ -156,19 +156,47 @@ pub fn parse_config(value: Value) -> BoxliteResult<AgentConfig> {
 }
 
 /// Parse the `respond` argument: an answer or a permission decision.
-pub fn parse_response(value: Value) -> BoxliteResult<AgentResponse> {
+pub fn parse_response(json: &str) -> BoxliteResult<AgentResponse> {
     #[derive(Deserialize)]
-    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-    enum ResponseRecord {
-        Answer { text: String, data: Option<Value> },
-        Permission { approved: bool },
+    #[serde(rename_all = "snake_case")]
+    enum Kind {
+        Answer,
+        Permission,
     }
-    let record: ResponseRecord = serde_json::from_value(value)
-        .map_err(|error| BoxliteError::InvalidArgument(format!("response: {error}")))?;
-    Ok(match record {
-        ResponseRecord::Answer { text, data } => AgentResponse::Answer { text, data },
-        ResponseRecord::Permission { approved } => AgentResponse::Permission { approved },
-    })
+    #[derive(Deserialize)]
+    struct Tag {
+        #[serde(rename = "type")]
+        kind: Kind,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Answer {
+        #[serde(rename = "type")]
+        _kind: Kind,
+        text: String,
+        data: Option<Box<RawValue>>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Permission {
+        #[serde(rename = "type")]
+        _kind: Kind,
+        approved: bool,
+    }
+    let invalid = |e| BoxliteError::InvalidArgument(format!("response: {e}"));
+    // Internally tagged enums buffer the payload before selecting the variant.
+    // Read the tag first so the selected record can borrow its original JSON input.
+    match serde_json::from_str::<Tag>(json).map_err(invalid)?.kind {
+        Kind::Answer => {
+            let Answer { text, data, .. } = serde_json::from_str(json).map_err(invalid)?;
+            Ok(AgentResponse::Answer { text, data })
+        }
+        Kind::Permission => {
+            let Permission { approved, .. } = serde_json::from_str(json).map_err(invalid)?;
+            Ok(AgentResponse::Permission { approved })
+        }
+    }
 }
 
 fn agent_status(status: AgentStatus) -> &'static str {
@@ -178,18 +206,5 @@ fn agent_status(status: AgentStatus) -> &'static str {
         AgentStatus::Closing => "closing",
         AgentStatus::Closed => "closed",
         AgentStatus::Unknown => "unknown",
-    }
-}
-
-fn turn_status(status: AgentTurnStatus) -> &'static str {
-    match status {
-        AgentTurnStatus::Queued => "queued",
-        AgentTurnStatus::Running => "running",
-        AgentTurnStatus::WaitingInput => "waiting_input",
-        AgentTurnStatus::Interrupting => "interrupting",
-        AgentTurnStatus::Completed => "completed",
-        AgentTurnStatus::Cancelled => "cancelled",
-        AgentTurnStatus::Failed => "failed",
-        AgentTurnStatus::Unknown => "unknown",
     }
 }

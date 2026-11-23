@@ -929,7 +929,13 @@ fn prompt_body(turn_id: &str, text: &str, options: &AgentSendOptions) -> Boxlite
         &[
             ("idempotency_key", options.idempotency_key.is_some()),
             ("mode reject", options.mode == AgentSendMode::Reject),
-            ("data", is_present(&options.data)),
+            (
+                "data",
+                options
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data.get() != "null"),
+            ),
         ],
     )?;
     Ok(json!({ "id": turn_id, "text": text, "delivery": "queue" }))

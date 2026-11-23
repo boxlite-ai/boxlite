@@ -245,7 +245,12 @@ impl JsAgent {
             Some("reject") => AgentSendMode::Reject,
             Some(_) => return Err(invalid("unknown send mode")),
         };
-        let data = options.remove("data").filter(|value| !value.is_null());
+        let data = options
+            .remove("data")
+            .filter(|value| !value.is_null())
+            .map(|value| serde_json::value::to_raw_value(&value))
+            .transpose()
+            .map_err(|e| invalid(&e.to_string()))?;
         let idempotency_key = optional_string(options.remove("idempotencyKey"), "idempotencyKey")?;
         no_unknown(options)?;
         let turn = self
@@ -296,7 +301,7 @@ impl JsAgent {
         response: Value,
         options: Option<Value>,
     ) -> Result<JsAgentTurn> {
-        let response = records::parse_response(response).map_err(map_err)?;
+        let response = records::parse_response(&response.to_string()).map_err(map_err)?;
         let turn = self
             .agent
             .respond(&request_id, response, control_options(options)?)
@@ -339,13 +344,14 @@ impl JsAgentTurn {
             _ => return Err(invalid("invalid timeout")),
         };
         no_unknown(options)?;
-        Ok(records::result(
+        let result = records::result(
             &self
                 .turn
                 .wait(AgentWaitOptions { timeout })
                 .await
                 .map_err(map_err)?,
-        ))
+        );
+        native_json_record(&result, 0)
     }
 
     #[napi]
@@ -378,7 +384,39 @@ impl JsAgentTurn {
 
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
-        Ok(records::turn_state(&self.turn.state().map_err(map_err)?))
+        let state = records::turn_state(&self.turn.state().map_err(map_err)?);
+        native_json_record(&state, 0)
+    }
+}
+
+// N-API requires a value tree. Decode JSON objects as literal maps so user keys
+// cannot be mistaken for the arbitrary-precision number marker.
+fn native_json_record(raw: &serde_json::value::RawValue, depth: usize) -> Result<Value> {
+    use serde_json::value::RawValue;
+    if depth > 128 {
+        return Err(invalid("agent record exceeds the N-API JSON depth limit"));
+    }
+    let json = raw.get();
+    let parse_error = |e: serde_json::Error| invalid(&e.to_string());
+    match json.as_bytes()[0] {
+        b'{' => {
+            let fields: std::collections::BTreeMap<String, &RawValue> =
+                serde_json::from_str(json).map_err(parse_error)?;
+            fields
+                .into_iter()
+                .map(|(key, value)| Ok((key, native_json_record(value, depth + 1)?)))
+                .collect::<Result<_>>()
+                .map(Value::Object)
+        }
+        b'[' => {
+            let items: Vec<&RawValue> = serde_json::from_str(json).map_err(parse_error)?;
+            items
+                .into_iter()
+                .map(|item| native_json_record(item, depth + 1))
+                .collect::<Result<_>>()
+                .map(Value::Array)
+        }
+        _ => serde_json::from_str(json).map_err(parse_error),
     }
 }
 

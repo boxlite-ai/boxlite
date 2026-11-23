@@ -10,7 +10,11 @@ pub(super) struct TestBackend {
 }
 
 impl TestBackend {
-    fn complete(&self, text: &str, data: Option<serde_json::Value>) -> AgentTurnState {
+    fn complete(
+        &self,
+        text: &str,
+        data: Option<Box<serde_json::value::RawValue>>,
+    ) -> AgentTurnState {
         let state = AgentTurnState {
             id: "turn-1".into(),
             agent_id: "agent-1".into(),
