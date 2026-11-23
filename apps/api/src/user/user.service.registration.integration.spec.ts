@@ -4,6 +4,12 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { Request } from 'express'
+import { JwtStrategy } from '../auth/jwt.strategy'
+import { LoginEventRecorder } from '../auth/login-event.recorder'
+import { RegistrationService } from '../auth/registration.service'
+import { TurnstileService } from '../auth/turnstile.service'
+import { LegalVersionService } from '../config/legal-version.service'
 import { EventEmitter2, EventEmitterModule } from '@nestjs/event-emitter'
 import { Test, TestingModule } from '@nestjs/testing'
 import { getRepositoryToken } from '@nestjs/typeorm'
@@ -25,6 +31,8 @@ import { RegionService } from '../region/services/region.service'
 import { SystemRole } from './enums/system-role.enum'
 import { UserCreatedEvent } from './events/user-created.event'
 import { User } from './user.entity'
+import { RegistrationConsent } from './registration-consent.entity'
+import { AddRegistrationConsent1795392000000 } from '../migrations/pre-deploy/1795392000000-add-registration-consent-migration'
 import { UserService } from './user.service'
 
 const integration = process.env.DB_HOST ? describe : describe.skip
@@ -34,6 +42,7 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
   (primaryKey) => {
     const schema = `user_registration_${process.pid}_${randomUUID().replaceAll('-', '')}`
     let db: DataSource
+    const versions = { tosVersion: '2026-11-17', privacyVersion: '2026-10-10' }
     let module: TestingModule
     let service: UserService
     let events: EventEmitter2
@@ -51,10 +60,15 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
         entities: [User, Organization, OrganizationUser, OrganizationRole, OrganizationInvitation],
         namingStrategy: new CustomNamingStrategy(),
         synchronize: false,
+        migrations: [AddRegistrationConsent1795392000000],
         extra: { options: `-c search_path=${schema},public -c statement_timeout=10000` },
       }).initialize()
       await db.query(`CREATE SCHEMA "${schema}"`)
       await db.synchronize()
+      await db.runMigrations()
+      db.setOptions({ entities: [...(db.options.entities as Function[]), RegistrationConsent] })
+      await db.destroy()
+      await db.initialize()
       if (primaryKey !== 'user_id_pk') {
         await db.query(`ALTER TABLE "${schema}"."user" RENAME CONSTRAINT "user_id_pk" TO "${primaryKey}"`)
       }
@@ -69,9 +83,7 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
       }
     })
 
-    beforeEach(async () => {
-      await db.getRepository(Organization).deleteAll()
-      await db.getRepository(User).deleteAll()
+    async function startApiServices() {
       module = await Test.createTestingModule({
         imports: [EventEmitterModule.forRoot()],
         providers: [
@@ -91,6 +103,13 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
       events = module.get(EventEmitter2)
       service = module.get(UserService)
       createDefaultOrganization = jest.spyOn(module.get(OrganizationService), 'handleUserCreatedEvent')
+    }
+
+    beforeEach(async () => {
+      await db.getRepository(RegistrationConsent).deleteAll()
+      await db.getRepository(Organization).deleteAll()
+      await db.getRepository(User).deleteAll()
+      await startApiServices()
     })
 
     afterEach(async () => {
@@ -155,6 +174,68 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
         suspended: true,
         suspensionReason: 'Please verify your email address',
       })
+    })
+
+    it('keeps the original consent across authenticated refresh, re-login and API service restart', async () => {
+      const identity = { sub: 'consenting', name: 'Consenting', email: 'new@gmail.com', email_verified: true }
+      const legal = { ...versions, tosUrl: 'https://example.com/terms', privacyUrl: 'https://example.com/privacy' }
+      const config = {
+        get: (key: string) => (key === 'legal' ? legal : undefined),
+        getOrThrow: () => undefined,
+      } as unknown as TypedConfigService
+      const loginEvents = { recordFirstUse: jest.fn() } as unknown as LoginEventRecorder
+      const registration = new RegistrationService(
+        service,
+        new TurnstileService(config),
+        config,
+        loginEvents,
+        new LegalVersionService(config),
+      )
+      const validateSession = (issuedAt: number) =>
+        new JwtStrategy(
+          { issuer: 'https://example.com/', audience: 'api', jwksUri: 'https://example.com/jwks' },
+          service,
+          config,
+          loginEvents,
+        ).validate({ get: () => undefined } as unknown as Request, { ...identity, iat: issuedAt })
+
+      await expect(validateSession(1)).rejects.toMatchObject({ response: { code: 'registration_required' } })
+      const results = await Promise.all([
+        registration.register(identity, { accepted: true, ...versions }),
+        registration.register(identity, { accepted: true, ...versions }),
+      ])
+      expect(results.map(({ created }) => created).sort()).toEqual([false, true])
+      const original = await db.getRepository(RegistrationConsent).findOneByOrFail({ userId: identity.sub })
+      expect(original).toMatchObject({ ...versions, acceptedAt: expect.any(Date) })
+      await expect(registration.register(identity, { accepted: true, ...versions })).resolves.toMatchObject({
+        created: false,
+      })
+      await expect(validateSession(1)).resolves.toMatchObject({ userId: identity.sub })
+      expect(await db.getRepository(RegistrationConsent).find()).toEqual([original])
+      await expect(validateSession(2)).resolves.toMatchObject({ userId: identity.sub })
+      expect(await db.getRepository(RegistrationConsent).find()).toEqual([original])
+
+      await module.close()
+      await db.destroy()
+      await db.initialize()
+      await startApiServices()
+      await expect(validateSession(3)).resolves.toMatchObject({ userId: identity.sub })
+      expect(await db.getRepository(RegistrationConsent).find()).toEqual([original])
+    })
+
+    it('rolls back local registration when consent cannot be inserted', async () => {
+      await db.query(`ALTER TABLE "registration_consent" ADD CONSTRAINT "test_reject_consent" CHECK (false)`)
+      try {
+        await expect(
+          service.create({ id: 'consent-failure', name: 'Failure' }, Context.user(), versions),
+        ).rejects.toMatchObject({ driverError: { constraint: 'test_reject_consent' } })
+        expect(await db.getRepository(User).count()).toBe(0)
+        expect(await db.getRepository(Organization).count()).toBe(0)
+        expect(await db.getRepository(OrganizationUser).count()).toBe(0)
+        expect(await db.getRepository(RegistrationConsent).count()).toBe(0)
+      } finally {
+        await db.query(`ALTER TABLE "registration_consent" DROP CONSTRAINT "test_reject_consent"`)
+      }
     })
 
     it('rolls back the user, organization and owner when organization creation fails', async () => {

@@ -18,6 +18,9 @@
 import type { Announcement } from './announcement';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { LegalConfig } from './legal-config';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { OidcConfig } from './oidc-config';
 // May contain unused imports in some cases
 // @ts-ignore
@@ -31,6 +34,7 @@ import type { TurnstileConfig } from './turnstile-config';
 
 export interface BoxliteConfiguration {
     'turnstile'?: TurnstileConfig;
+    'legal'?: LegalConfig;
     /**
      * BoxLite version
      */

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { legalConfig } from './legal-config'
 import { turnstileConfig } from './turnstile-config'
 import { parseFilestoreInstances } from './filestore-instances'
 import { checkpointConfig } from './checkpoint-config'
@@ -620,6 +621,7 @@ function ciWorkerResources() {
 
 const configuration = {
   turnstile: turnstileConfig(),
+  legal: legalConfig(),
   checkpoint: checkpointConfig(),
   customDomains: customDomainConfig(),
   production: process.env.NODE_ENV === 'production',

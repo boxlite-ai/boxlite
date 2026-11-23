@@ -80,7 +80,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     if (!user) {
-      if (this.configService.get('turnstile')) {
+      if (this.configService.get('turnstile') || this.configService.get('legal')) {
         throw new ForbiddenException({ message: 'Complete registration to continue', code: 'registration_required' })
       }
       if (typeof email !== 'string' || !email.trim()) {

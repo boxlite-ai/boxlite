@@ -16,6 +16,7 @@ import { OrganizationUser } from '../organization/entities/organization-user.ent
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { LinkedIdentityService } from './linked-identity.service'
 import { User } from './user.entity'
+import { RegistrationConsent } from './registration-consent.entity'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `linked_identity_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -41,7 +42,15 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [User, Organization, OrganizationInvitation, OrganizationRole, OrganizationUser, ApiKey],
+      entities: [
+        User,
+        Organization,
+        OrganizationInvitation,
+        OrganizationRole,
+        OrganizationUser,
+        ApiKey,
+        RegistrationConsent,
+      ],
       namingStrategy: new CustomNamingStrategy(),
       synchronize: false,
       extra: { options: `-c search_path=${schemaName},public` },
@@ -61,6 +70,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
   })
 
   beforeEach(async () => {
+    await dataSource.getRepository(RegistrationConsent).deleteAll()
     cache.clear()
     redis.del.mockClear()
     for (const table of ['api_key', 'organization_role_assignment', 'organization_user', 'organization_role']) {
@@ -135,6 +145,29 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     )
     return rows.map((row) => row.roleId)
   }
+
+  it('moves consent to the kept account and preserves its identity and time on retry', async () => {
+    await user(SOCIAL)
+    const records = dataSource.getRepository(RegistrationConsent)
+    await records.insert({ userId: SOCIAL, tosVersion: 'terms', privacyVersion: 'privacy' })
+    const original = await records.findOneByOrFail({ userId: SOCIAL })
+    await service.adopt(PRIMARY, SOCIAL)
+    await service.adopt(PRIMARY, SOCIAL)
+    expect(await records.find()).toEqual([{ ...original, userId: PRIMARY }])
+  })
+
+  it('keeps one destination record when two consenting accounts merge concurrently', async () => {
+    const second = 'github|secondary'
+    await Promise.all([user(PRIMARY), user(SOCIAL), user(second)])
+    const records = dataSource.getRepository(RegistrationConsent)
+    await records.insert([
+      { userId: SOCIAL, tosVersion: 'first', privacyVersion: 'privacy' },
+      { userId: second, tosVersion: 'second', privacyVersion: 'privacy' },
+    ])
+    await Promise.all([service.adopt(PRIMARY, SOCIAL), service.adopt(PRIMARY, second)])
+    expect(await records.countBy({ userId: PRIMARY })).toBe(1)
+    expect(await records.count()).toBe(2)
+  })
 
   it('does nothing for a social identity BoxLite never saw', async () => {
     await user(PRIMARY)

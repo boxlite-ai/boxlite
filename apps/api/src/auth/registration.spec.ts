@@ -22,6 +22,7 @@ import { LoginEventRecorder } from './login-event.recorder'
 import { RegistrationJwtGuard } from './registration-jwt.guard'
 import { RegistrationController } from './registration.controller'
 import { RegistrationService } from './registration.service'
+import { LegalVersionService } from '../config/legal-version.service'
 import { TurnstileService } from './turnstile.service'
 
 const SECRET = 'private-turnstile-secret'
@@ -52,8 +53,17 @@ describe('POST /api/auth/register', () => {
   const users = { findOne: jest.fn(), create: jest.fn() }
   const loginEvents = { recordFirstUse: jest.fn() }
   const settings = { secretKey: SECRET, expectedHostnames: ['console.example.com'], action: 'signup', timeoutMs: 5000 }
+  const legal = {
+    tosVersion: '2026-11-17',
+    privacyVersion: '2026-10-10',
+    tosUrl: 'https://example.com/terms',
+    privacyUrl: 'https://example.com/privacy',
+  }
+  let currentLegal: typeof legal | undefined
+  let turnstileEnabled: boolean
   const config = {
-    get: (key: string) => (key === 'turnstile' ? settings : undefined),
+    get: (key: string) =>
+      key === 'turnstile' && turnstileEnabled ? settings : key === 'legal' ? currentLegal : undefined,
     getOrThrow: jest.fn((key: string) => {
       if (key === 'turnstile') return settings
       if (key === 'defaultRegion.id') return 'platform-default-region'
@@ -84,6 +94,7 @@ describe('POST /api/auth/register', () => {
       controllers: [RegistrationController],
       providers: [
         RegistrationService,
+        LegalVersionService,
         RegistrationJwtGuard,
         TurnstileService,
         { provide: JwtStrategy, useValue: jwt },
@@ -101,6 +112,8 @@ describe('POST /api/auth/register', () => {
   })
 
   beforeEach(() => {
+    currentLegal = undefined
+    turnstileEnabled = true
     identity = { sub: storedUser.id, name: 'Token User', email: '  Token@GMAIL.COM  ', email_verified: true }
     users.findOne.mockReset().mockResolvedValue(null)
     users.create.mockReset().mockImplementation(async (dto) => ({ ...storedUser, ...dto }))
@@ -138,6 +151,29 @@ describe('POST /api/auth/register', () => {
     })
   }
 
+  it.each([true, false])('requires current legal consent with Turnstile enabled=%s', async (enabled) => {
+    currentLegal = legal
+    turnstileEnabled = enabled
+    const challenge = enabled ? { turnstileToken: CHALLENGE } : {}
+    const versions = { tosVersion: legal.tosVersion, privacyVersion: legal.privacyVersion }
+    const missing = await post(challenge)
+    expect(missing).toMatchObject({ status: 400, data: { code: 'consent_required' } })
+    const declined = await post({ ...challenge, ...versions, accepted: false })
+    expect(declined).toMatchObject({ status: 400, data: { code: 'consent_required' } })
+    const stale = await post({ ...challenge, ...versions, accepted: true, privacyVersion: 'stale' })
+    expect(stale).toMatchObject({ status: 409, data: { code: 'legal_version_mismatch' } })
+    expect(users.create).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    expect((await post({ ...challenge, ...versions, accepted: true, acceptedAt: '1999-01-01' })).status).toBe(201)
+    expect(users.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), versions)
+    expect(fetchMock).toHaveBeenCalledTimes(enabled ? 1 : 0)
+
+    users.findOne.mockResolvedValue(storedUser)
+    expect((await post({ ...challenge, ...versions, accepted: true })).status).toBe(200)
+    expect(users.create).toHaveBeenCalledTimes(1)
+  })
+
   it('creates a user from verified JWT claims and returns only UserDto with 201', async () => {
     const response = await post({ turnstileToken: CHALLENGE, id: 'spoofed', email: 'spoofed@gmail.com', role: 'admin' })
 
@@ -158,6 +194,7 @@ describe('POST /api/auth/register', () => {
         defaultOrganizationDefaultRegionId: 'platform-default-region',
       },
       Context.user({ userId: storedUser.id, authMethod: 'jwt' }),
+      undefined,
     )
     expect(verifyJwt).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
       audience: AUDIENCE,
@@ -253,6 +290,7 @@ describe('POST /api/auth/register', () => {
         emailVerified: false,
       }),
       Context.user({ userId: 'okta-user', authMethod: 'jwt' }),
+      undefined,
     )
   })
 
@@ -262,6 +300,7 @@ describe('POST /api/auth/register', () => {
     expect(users.create).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Unknown' }),
       Context.user({ userId: storedUser.id, authMethod: 'jwt' }),
+      undefined,
     )
   })
 

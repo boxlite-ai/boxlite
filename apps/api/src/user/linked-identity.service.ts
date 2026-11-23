@@ -66,6 +66,7 @@ export class LinkedIdentityService {
       }
 
       await this.ensurePrimaryUser(em, primaryUserId, secondary)
+      await this.moveRegistrationConsent(em, primaryUserId, secondaryUserId)
       const moved = await this.moveMemberships(em, primaryUserId, secondaryUserId)
       const keyHashes = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
       await em.query(`UPDATE "organization" SET "createdBy" = $1 WHERE "createdBy" = $2`, [
@@ -121,6 +122,20 @@ export class LinkedIdentityService {
       publicKeys: secondary.publicKeys,
       role: secondary.role,
     })
+  }
+
+  private async moveRegistrationConsent(
+    em: EntityManager,
+    primaryUserId: string,
+    secondaryUserId: string,
+  ): Promise<void> {
+    // The secondary lock cannot serialize two different accounts merging into the same primary.
+    await em.findOneOrFail(User, { where: { id: primaryUserId }, lock: { mode: 'pessimistic_write' } })
+    await em.query(
+      `UPDATE "registration_consent" SET "user_id" = $1
+       WHERE "user_id" = $2 AND NOT EXISTS (SELECT 1 FROM "registration_consent" WHERE "user_id" = $1)`,
+      [primaryUserId, secondaryUserId],
+    )
   }
 
   private async moveMemberships(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<number> {

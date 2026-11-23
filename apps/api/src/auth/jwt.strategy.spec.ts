@@ -11,7 +11,7 @@ import { UserService } from '../user/user.service'
 import { LoginEventRecorder } from './login-event.recorder'
 import { Context } from '../common/context/context'
 
-function buildStrategy(protectedRegistration = true) {
+function buildStrategy(protectedRegistration = true, legalEnabled = false) {
   const createdUser = { id: 'user-1', role: 'user', email: 'new@boxlite.dev' }
 
   const userService = {
@@ -25,7 +25,13 @@ function buildStrategy(protectedRegistration = true) {
   const strategy = new JwtStrategy(
     { jwksUri: 'https://example.com/.well-known/jwks.json', audience: 'aud', issuer: 'iss' },
     userService,
-    { get: () => (protectedRegistration ? { sitekey: 'configured' } : undefined), getOrThrow: () => 'us' } as never,
+    {
+      get: (key: string) => {
+        if (key === 'turnstile' && protectedRegistration) return { sitekey: 'configured' }
+        if (key === 'legal' && legalEnabled) return { tosVersion: 'current', privacyVersion: 'current' }
+      },
+      getOrThrow: () => 'us',
+    } as never,
     loginEvents,
   )
 
@@ -47,6 +53,27 @@ describe('JwtStrategy.validate — local account access', () => {
       expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
     },
   )
+
+  it('blocks automatic user creation when the last instance enables legal without Turnstile', async () => {
+    const request = { get: jest.fn() } as unknown as Request
+    const existing = buildStrategy(false, true)
+    const lastDisabled = buildStrategy(false, false)
+    const fresh = { sub: 'github|new-user', email: 'new@gmail.com' }
+
+    await expect(existing.strategy.validate(request, fresh)).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'registration_required' },
+    })
+    await expect(lastDisabled.strategy.validate(request, fresh)).resolves.toBeDefined()
+
+    const lastEnabled = buildStrategy(false, true)
+    await expect(lastEnabled.strategy.validate(request, fresh)).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'registration_required' },
+    })
+    expect(existing.userService.create).not.toHaveBeenCalled()
+    expect(lastEnabled.userService.create).not.toHaveBeenCalled()
+  })
 
   it('records the first login after automatic registration when protection is disabled', async () => {
     const { strategy, userService, loginEvents } = buildStrategy(false)

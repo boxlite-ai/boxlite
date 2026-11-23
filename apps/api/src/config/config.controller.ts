@@ -8,6 +8,7 @@ import { Controller, Get } from '@nestjs/common'
 import { TypedConfigService } from './typed-config.service'
 import { ApiOperation, ApiTags, ApiResponse } from '@nestjs/swagger'
 import { ConfigurationDto } from './dto/configuration.dto'
+import { LegalVersionService } from './legal-version.service'
 import { OidcMetadataService } from './oidc-metadata.service'
 
 @ApiTags('config')
@@ -16,6 +17,7 @@ export class ConfigController {
   constructor(
     private readonly configService: TypedConfigService,
     private readonly oidcMetadataService: OidcMetadataService,
+    private readonly legalVersions: LegalVersionService,
   ) {}
 
   @Get()
@@ -27,6 +29,6 @@ export class ConfigController {
   })
   async getConfig() {
     const endSessionState = await this.oidcMetadataService.getEndSessionState()
-    return new ConfigurationDto(this.configService, { endSessionState })
+    return new ConfigurationDto(this.configService, { endSessionState, legal: this.legalVersions.getCurrent() })
   }
 }

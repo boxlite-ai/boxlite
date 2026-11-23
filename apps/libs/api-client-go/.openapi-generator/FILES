@@ -99,6 +99,7 @@ model_inbound_network_spec.go
 model_job.go
 model_job_status.go
 model_job_type.go
+model_legal_config.go
 model_memory_incident_list_dto.go
 model_network_info.go
 model_network_mode.go

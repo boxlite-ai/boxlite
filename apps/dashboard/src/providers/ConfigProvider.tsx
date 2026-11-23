@@ -44,7 +44,7 @@ export function ConfigProvider(props: Props) {
       return res.json() as Promise<BoxliteConfiguration>
     },
     // App config (OIDC issuer, feature flags, domains) is fixed for a deploy.
-    // Never refetch it on navigation — it gates AuthProvider construction.
+    // Keep it fresh for ordinary navigation; registration explicitly refreshes it.
     staleTime: Infinity,
     gcTime: Infinity,
   })

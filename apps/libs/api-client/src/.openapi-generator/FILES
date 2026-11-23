@@ -110,6 +110,7 @@ docs/Job.md
 docs/JobStatus.md
 docs/JobType.md
 docs/JobsApi.md
+docs/LegalConfig.md
 docs/MemoryIncidentListDto.md
 docs/NetworkInfo.md
 docs/NetworkMode.md
@@ -261,6 +262,7 @@ models/index.ts
 models/job-status.ts
 models/job-type.ts
 models/job.ts
+models/legal-config.ts
 models/memory-incident-list-dto.ts
 models/network-info.ts
 models/network-mode.ts

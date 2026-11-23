@@ -22,6 +22,7 @@ var _ MappedNullable = &BoxliteConfiguration{}
 // BoxliteConfiguration struct for BoxliteConfiguration
 type BoxliteConfiguration struct {
 	Turnstile *TurnstileConfig `json:"turnstile,omitempty"`
+	Legal *LegalConfig `json:"legal,omitempty"`
 	// BoxLite version
 	Version string `json:"version"`
 	// PostHog configuration
@@ -108,6 +109,38 @@ func (o *BoxliteConfiguration) HasTurnstile() bool {
 // SetTurnstile gets a reference to the given TurnstileConfig and assigns it to the Turnstile field.
 func (o *BoxliteConfiguration) SetTurnstile(v TurnstileConfig) {
 	o.Turnstile = &v
+}
+
+// GetLegal returns the Legal field value if set, zero value otherwise.
+func (o *BoxliteConfiguration) GetLegal() LegalConfig {
+	if o == nil || IsNil(o.Legal) {
+		var ret LegalConfig
+		return ret
+	}
+	return *o.Legal
+}
+
+// GetLegalOk returns a tuple with the Legal field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *BoxliteConfiguration) GetLegalOk() (*LegalConfig, bool) {
+	if o == nil || IsNil(o.Legal) {
+		return nil, false
+	}
+	return o.Legal, true
+}
+
+// HasLegal returns a boolean if a field has been set.
+func (o *BoxliteConfiguration) HasLegal() bool {
+	if o != nil && !IsNil(o.Legal) {
+		return true
+	}
+
+	return false
+}
+
+// SetLegal gets a reference to the given LegalConfig and assigns it to the Legal field.
+func (o *BoxliteConfiguration) SetLegal(v LegalConfig) {
+	o.Legal = &v
 }
 
 // GetVersion returns the Version field value
@@ -475,6 +508,9 @@ func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Turnstile) {
 		toSerialize["turnstile"] = o.Turnstile
 	}
+	if !IsNil(o.Legal) {
+		toSerialize["legal"] = o.Legal
+	}
 	toSerialize["version"] = o.Version
 	if !IsNil(o.Posthog) {
 		toSerialize["posthog"] = o.Posthog
@@ -549,6 +585,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "turnstile")
+		delete(additionalProperties, "legal")
 		delete(additionalProperties, "version")
 		delete(additionalProperties, "posthog")
 		delete(additionalProperties, "oidc")

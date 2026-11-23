@@ -224,6 +224,11 @@ export function buildApi(input: ApiInputs) {
             }
           : {}),
 
+        LEGAL_TOS_VERSION: envOr('LEGAL_TOS_VERSION', ''),
+        LEGAL_PRIVACY_VERSION: envOr('LEGAL_PRIVACY_VERSION', ''),
+        LEGAL_TOS_URL: envOr('LEGAL_TOS_URL', ''),
+        LEGAL_PRIVACY_URL: envOr('LEGAL_PRIVACY_URL', ''),
+
         // Encryption
         ENCRYPTION_KEY: envOr('ENCRYPTION_KEY', encryptionKey.result),
         ENCRYPTION_SALT: envOr('ENCRYPTION_SALT', encryptionSalt.result),

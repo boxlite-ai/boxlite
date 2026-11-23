@@ -32,18 +32,24 @@ reference sent to the API.
 Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
 Their existing defaults, validation and submission behavior are unchanged.
 
-## New-account email policy
+## New-account registration
 
-First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without
-public `turnstile` settings, the console loads business providers directly and the
-API keeps automatic local registration.
+When the API publishes `legal` in `/api/config`, the console shows the Terms of
+Service and Privacy Policy links before starting sign-in. After OIDC sign-in,
+the console checks `GET /users/me` before loading organization features.
+A `registration_required` response refreshes the API configuration and opens
+the registration form at the current URL, including in a tab opened before
+the API enabled the requirement.
 
-With verification enabled, the console checks `GET /users/me` after OIDC sign-in,
-before loading organizations or connecting notifications. A `registration_required`
-response opens the first-account verification screen at the current URL. Turnstile
-produces a single-use challenge;
-`POST /auth/register` validates it on the server before creating the local account.
-Existing accounts enter the console without a challenge. Email ownership verification
+New users must tick the checkbox before submitting. The console sends the
+versions shown on the form, and a version mismatch refreshes the links and
+requires the user to tick again. Cancel uses the existing sign-out flow
+without submitting registration. Existing accounts enter without a checkbox.
+The welcome page only asks for organization information.
+
+Turnstile is a separate check enabled by `TURNSTILE_SITEKEY`. The console
+includes a single-use challenge when configured. With neither requirement,
+new OIDC users still register automatically. Email ownership verification
 remains in the Auth0 login Action.
 
 The console reads the public widget sitekey and `signup` action from `/config`.

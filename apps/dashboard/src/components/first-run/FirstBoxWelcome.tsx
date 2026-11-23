@@ -90,7 +90,6 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
   const [step, setStep] = useState<'organization' | 'intent' | 'credits'>(
     billingEnabled && welcome.useCase ? 'credits' : welcome.organizationName ? 'intent' : 'organization',
   )
-  const [termsAccepted, setTermsAccepted] = useState(false)
   const [name, setName] = useState(welcome.organizationName)
   const [useCase, setUseCase] = useState<FirstRunUseCase | null>(welcome.useCase)
   const [note, setNote] = useState(welcome.note)
@@ -140,7 +139,6 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
             className="welcome-journey-form"
             onSubmit={(event) => {
               event.preventDefault()
-              if (!termsAccepted) return
               action.mutate({ type: 'organization', name }, { onSuccess: () => setStep('intent') })
             }}
           >
@@ -163,48 +161,11 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
               className="h-12 w-full border border-border bg-card px-4 text-body outline-none focus:border-foreground/50"
             />
             <p className="mt-2 font-sans text-meta text-muted-foreground">You can change this later.</p>
-            <div className="mt-6 flex items-start gap-2.5 text-body leading-6 text-muted-foreground">
-              <input
-                id="welcome-terms"
-                type="checkbox"
-                checked={termsAccepted}
-                onChange={(event) => setTermsAccepted(event.target.checked)}
-                disabled={action.isPending}
-                aria-labelledby="welcome-terms-label"
-                className="mt-1 size-4 shrink-0 cursor-pointer accent-foreground"
-              />
-              <span id="welcome-terms-label">
-                <label htmlFor="welcome-terms" className="cursor-pointer">
-                  I agree to the{' '}
-                </label>
-                <a
-                  href="https://boxlite.ai/legal/terms"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-foreground underline underline-offset-4"
-                >
-                  Terms of Service
-                </a>
-                <label htmlFor="welcome-terms" className="cursor-pointer">
-                  {' '}
-                  and acknowledge the{' '}
-                </label>
-                <a
-                  href="https://boxlite.ai/legal/privacy"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-foreground underline underline-offset-4"
-                >
-                  Privacy Policy
-                </a>
-                .
-              </span>
-            </div>
             <AsciiButton
               type="submit"
               variant="primary"
               className="mt-8 h-11 w-full font-display"
-              disabled={!name.trim() || !termsAccepted || action.isPending}
+              disabled={!name.trim() || action.isPending}
             >
               {action.isPending ? 'Saving…' : 'Continue'}
             </AsciiButton>

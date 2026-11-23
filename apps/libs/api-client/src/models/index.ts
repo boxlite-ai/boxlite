@@ -76,6 +76,7 @@ export * from './inbound-network-spec';
 export * from './job';
 export * from './job-status';
 export * from './job-type';
+export * from './legal-config';
 export * from './memory-incident-list-dto';
 export * from './network-info';
 export * from './network-mode';

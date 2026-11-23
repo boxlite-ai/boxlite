@@ -216,6 +216,18 @@ describe('ApiClient registration deadline', () => {
 })
 
 describe('ApiClient registration', () => {
+  it('sends the displayed legal versions without a Turnstile token when the widget is absent', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 201, { id: 'registered' }, requests)
+    const consent = { accepted: true as const, tosVersion: '2026-11-17', privacyVersion: '2026-10-10' }
+
+    await api.register(undefined, consent)
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ method: 'post', url: '/auth/register' })
+    expect(JSON.parse(requests[0].data)).toEqual(consent)
+  })
+
   it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {
     const user = { id: 'auth0|new-user', name: 'User' }
     const requests: any[] = []

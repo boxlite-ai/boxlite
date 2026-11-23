@@ -120,8 +120,8 @@ deadline on both cached and database reads. A null deadline keeps a suspension i
 ## Registration configuration
 
 Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
-blank to create local users automatically after OIDC authentication, without a
-widget or Cloudflare credentials. A nonempty sitekey enables protection and then
+blank to run without the widget or Cloudflare credentials. New OIDC identities
+create local users automatically only when both Turnstile and legal consent are disabled. A nonempty sitekey enables protection and then
 requires `TURNSTILE_SECRET_KEY` and `TURNSTILE_EXPECTED_HOSTNAMES`. Hostnames are a
 comma-separated list without schemes, ports or paths. `TURNSTILE_TIMEOUT_MS`
 defaults to 5000 and must be a positive integer when enabled. Invalid enabled
@@ -134,6 +134,30 @@ publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
 The secret, allowed hostnames and verification timeout remain server-side. Restart
 the API to change a widget configuration; the dashboard reads it at runtime.
 The generated TypeScript and Go configuration models accept an absent `turnstile`.
+
+### Registration consent
+
+Set all four API environment variables to enable legal consent:
+`LEGAL_TOS_VERSION`, `LEGAL_PRIVACY_VERSION`, `LEGAL_TOS_URL`, and
+`LEGAL_PRIVACY_URL`. The URLs must be absolute HTTP(S) URLs without credentials.
+Leave all four unset for deployments that do not require consent. When enabled,
+`GET /api/config` publishes the versions and URLs in its optional `legal` field.
+
+New OIDC users then submit `accepted: true`, `tosVersion`, and `privacyVersion`
+to `POST /api/auth/register`. A missing or false acceptance returns
+`400 consent_required`. A missing or stale version returns
+`409 legal_version_mismatch`. Include `turnstileToken` when Turnstile is enabled.
+The API creates the user, default organization and consent record in one
+transaction and assigns the timestamp in PostgreSQL. Existing users do not
+accept again. Account linking moves the original record if the kept account
+has none.
+
+Apply the additive migration and deploy the API and consent-capable console
+before setting these variables. Enforcement starts per instance when it
+restarts. During that first rollout window, an instance still using the old
+configuration can create a user without consent. After the rollout, check for
+users created during the window with no record. To roll back enforcement, unset
+all four settings and restart the API. Existing records remain in the database.
 
 ## Hosted Box inventory
 
@@ -180,7 +204,8 @@ credential-policy enforcement or deployed infrastructure behavior.
 ## Registration email policy
 
 With protection enabled, new OIDC identities register through `POST /api/auth/register`,
-using an API-audience Access Token and a `turnstileToken` string of 1–2048 characters.
+using an API-audience Access Token. When Turnstile is enabled, include a
+`turnstileToken` string of 1–2048 characters.
 Ordinary JWT-authenticated requests then return `403 registration_required` until that
 account exists. Database-account email verification remains an Auth0 Action responsibility.
 The API's registration email policy requires an email address for a new local user.

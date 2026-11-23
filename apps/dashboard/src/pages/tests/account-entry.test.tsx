@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import LandingPage from '../LandingPage'
 import { markJustLoggedOut } from '@/lib/auth-session'
 
+const config = vi.hoisted(() => ({ legal: undefined as { tosUrl: string; privacyUrl: string } | undefined }))
+vi.mock('@/hooks/useConfig', () => ({ useConfig: () => config }))
+
 const auth = vi.hoisted(() => ({
   signinRedirect: vi.fn(),
   removeUser: vi.fn(),
@@ -23,6 +26,7 @@ let root: Root
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   sessionStorage.clear()
+  config.legal = undefined
   auth.activeNavigator = undefined
   auth.user = undefined
   auth.isLoading = false
@@ -49,6 +53,19 @@ const mount = async (strict = false, path = '/') => {
 const click = async () => {
   await act(async () => container.querySelector('button')!.click())
 }
+
+it('shows the hosted legal notice before starting sign-in', async () => {
+  config.legal = { tosUrl: 'https://example.com/terms', privacyUrl: 'https://example.com/privacy' }
+  await mount(true)
+  expect(auth.signinRedirect).not.toHaveBeenCalled()
+  expect(container.querySelector('button')?.textContent).toBe('Continue to BoxLite')
+  expect([...container.querySelectorAll('a')].map((link) => link.href)).toEqual([
+    config.legal.tosUrl,
+    config.legal.privacyUrl,
+  ])
+  await click()
+  expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
+})
 
 describe('account entry regression', () => {
   it('keeps explicit logout manual through StrictMode and a fresh mount', async () => {

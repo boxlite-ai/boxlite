@@ -6,6 +6,7 @@
 
 import { ApiExtraModels, ApiProperty, ApiPropertyOptional, ApiSchema, getSchemaPath } from '@nestjs/swagger'
 import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
+import { LegalVersionService } from '../legal-version.service'
 import { TypedConfigService } from '../typed-config.service'
 import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
 
@@ -16,6 +17,21 @@ export class TurnstileConfig {
 
   @ApiProperty({ description: 'Turnstile challenge action', enum: ['signup'] })
   action: 'signup'
+}
+
+@ApiSchema({ name: 'LegalConfig' })
+export class LegalConfig {
+  @ApiProperty()
+  tosVersion: string
+
+  @ApiProperty()
+  privacyVersion: string
+
+  @ApiProperty()
+  tosUrl: string
+
+  @ApiProperty()
+  privacyUrl: string
 }
 
 @ApiSchema({ name: 'Announcement' })
@@ -142,6 +158,9 @@ export class ConfigurationDto {
   @ApiPropertyOptional({ type: TurnstileConfig })
   turnstile?: TurnstileConfig
 
+  @ApiPropertyOptional({ type: LegalConfig })
+  legal?: LegalConfig
+
   @ApiProperty({
     description: 'BoxLite version',
     example: '0.0.1',
@@ -235,7 +254,11 @@ export class ConfigurationDto {
   @IsOptional()
   rateLimit?: RateLimitConfig
 
-  constructor(configService: TypedConfigService, options: { endSessionState: EndSessionState }) {
+  constructor(
+    configService: TypedConfigService,
+    options: { endSessionState: EndSessionState; legal?: ReturnType<LegalVersionService['getCurrent']> },
+  ) {
+    if (options.legal) this.legal = options.legal
     const turnstile = configService.get('turnstile')
     if (turnstile) {
       this.turnstile = { sitekey: turnstile.sitekey, action: turnstile.action }

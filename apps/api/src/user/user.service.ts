@@ -19,6 +19,7 @@ import { recordOutcomes } from '../common/utils/business-event.util'
 import { Organization } from '../organization/entities/organization.entity'
 import { Context } from '../common/context/context'
 import { normalizeRegistrationEmail } from './registration-email'
+import { AcceptedLegalVersions, RegistrationConsent } from './registration-consent.entity'
 import { UserAlreadyExistsException } from './user-already-exists.exception'
 
 @Injectable()
@@ -31,7 +32,7 @@ export class UserService {
   ) {}
 
   /** Records the user.registration events of the new user, started by ctx. */
-  async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
+  async create(createUserDto: CreateUserDto, ctx: Context, consent?: AcceptedLegalVersions): Promise<User> {
     const email = createUserDto.email ? normalizeRegistrationEmail(createUserDto.email) : undefined
 
     const defaultOrganizationDefaultRegionId =
@@ -74,6 +75,9 @@ export class UserService {
             UserEvents.CREATED,
             new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
           )
+          if (consent) {
+            await em.insert(RegistrationConsent, { userId: user.id, ...consent })
+          }
           return created.find((value): value is Organization => value instanceof Organization)
         }),
       (error) => (error instanceof UserAlreadyExistsException ? 'user_conflict' : 'internal'),

@@ -3,6 +3,8 @@
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
+import { LegalDocumentLinks } from '@/components/LegalDocumentLinks'
+import { useConfig } from '@/hooks/useConfig'
 import LoadingFallback from '@/components/LoadingFallback'
 import { AccountEntryLayout } from '@/components/SetupLayout'
 import { AsciiButton } from '@/components/ascii'
@@ -14,6 +16,7 @@ import { Navigate, useLocation } from 'react-router-dom'
 const LandingPage: React.FC = () => {
   const { signinRedirect, removeUser, user, isAuthenticated, isLoading, error, activeNavigator } = useAuth()
   const location = useLocation()
+  const { legal } = useConfig()
   const redirecting = useRef(false)
   const [intent] = useState(getSignInIntent)
   const [opening, setOpening] = useState(false)
@@ -49,7 +52,8 @@ const LandingPage: React.FC = () => {
     [signinRedirect, removeUser, user, returnTo],
   )
 
-  const automaticSignIn = !isLoading && !isAuthenticated && !error && !activeNavigator && !getSignInIntent() && !failure
+  const automaticSignIn =
+    !legal && !isLoading && !isAuthenticated && !error && !activeNavigator && !getSignInIntent() && !failure
   useEffect(() => {
     if (automaticSignIn) void signIn(false)
   }, [automaticSignIn, signIn])
@@ -75,11 +79,16 @@ const LandingPage: React.FC = () => {
       description={intent?.signedOut ? 'You’re signed out.' : 'Sign in to manage your Boxes and organizations.'}
     >
       <AsciiButton variant="primary" onClick={() => void signIn(false)} className="h-10 w-full justify-center px-4">
-        Sign in
+        {legal ? 'Continue to BoxLite' : 'Sign in'}
       </AsciiButton>
       <AsciiButton variant="quiet" onClick={() => void signIn(true)} className="mt-2 h-10 w-full justify-center px-4">
         Use another account
       </AsciiButton>
+      {legal && (
+        <p className="mt-4 text-body text-muted-foreground">
+          Review the <LegalDocumentLinks legal={legal} /> before continuing.
+        </p>
+      )}
       {(failure || (error && !cancelled)) && (
         <p role="alert" className="mt-4 text-body text-destructive">
           {errorCode === 'mock_auth_unavailable'
