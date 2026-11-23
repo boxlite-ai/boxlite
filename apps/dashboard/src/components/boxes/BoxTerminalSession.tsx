@@ -31,7 +31,7 @@ export function BoxTerminalSession({
   if (!running) {
     const waitingForStart = starting || box.state === BoxState.STARTING
     return (
-      <Empty className="flex-none border-0 bg-transparent py-12" aria-busy={waitingForStart}>
+      <Empty className="flex-none border border-solid border-border/60 bg-background py-12" aria-busy={waitingForStart}>
         <EmptyHeader>
           <EmptyMedia>
             {waitingForStart ? (

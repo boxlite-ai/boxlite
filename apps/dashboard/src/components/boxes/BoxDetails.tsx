@@ -216,7 +216,6 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
     <div
       className={cn(
         'page-container flex min-w-0 flex-col gap-3 pb-6 pt-4 font-sans text-body',
-        page === 'overview' && 'mx-auto max-w-[1232px]',
         page === 'terminal' && box && isStoppable(box)
           ? 'h-[var(--app-content-height,calc(100svh_-_60px))] min-h-[640px]'
           : 'min-h-[var(--app-content-height,calc(100svh_-_60px))]',

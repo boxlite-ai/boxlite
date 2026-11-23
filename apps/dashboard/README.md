@@ -1545,12 +1545,14 @@ The choice step also offers “Explore console — no card required”, completi
 
 ### Box detail workspace sizing
 
-Overview centers a bounded reading column on wide desktops. Terminal uses the
-available workspace width; only a running Box reserves a viewport-height shell.
+Overview and Terminal share the available workspace width and page gutters, so
+the return link, title, actions and tabs stay anchored when switching views.
+Overview uses a responsive two-column grid with adjacent field labels and values.
+Only a running Box reserves a viewport-height terminal shell.
 The existing terminal ResizeObserver refits rows and columns without replacing
 the session, including when navigation is expanded or the viewport changes.
 
-A stopped Box shows compact terminal guidance with Start Box beside it, replacing
+A stopped Box shows a compact bordered panel with guidance and Start Box, replacing
 the header Start in this view. The action uses the existing permission check and
 start mutation. Pending requests disable it, starting waits for the Box state, and
 a failed start retains a local notice alongside the existing API error notification.
