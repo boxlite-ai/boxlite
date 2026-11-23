@@ -10,6 +10,7 @@ describe('checkpoint capability discovery', () => {
   ])('advertises checkpoint admission only after rollout: %j', ({ archivePrefix, enabled, expected }) => {
     const controller = new BoxliteConfigController(new ConfigService({ checkpoint: { archivePrefix, enabled } }))
     expect(controller.getConfig().capabilities.checkpoints_enabled).toBe(expected)
+    expect(controller.getConfig().capabilities.memory_checkpoints_enabled).toBe(false)
     expect(controller.getConfig().capabilities.import_enabled).toBe(false)
   })
 })

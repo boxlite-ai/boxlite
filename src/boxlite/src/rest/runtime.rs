@@ -47,35 +47,45 @@ impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
         name: Option<String>,
         options: CheckpointOptions,
     ) -> BoxliteResult<crate::CheckpointInfo> {
-        match options.kind {
-            None | Some(CheckpointKind::Disk) => {}
+        let kind = match options.kind {
+            None | Some(CheckpointKind::Disk) => None,
             Some(CheckpointKind::Full) => {
-                return Err(BoxliteError::Unsupported(
-                    "full checkpoints are unsupported on REST runtimes".into(),
-                ));
+                self.client.require_memory_checkpoints_enabled().await?;
+                Some(CheckpointKind::Full)
             }
             Some(CheckpointKind::Unknown) => {
                 return Err(BoxliteError::InvalidArgument(
                     "unknown checkpoint kind".into(),
                 ));
             }
-        }
+        };
 
         #[derive(serde::Serialize)]
         struct Capture<'a> {
             source_box_id: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
             name: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            kind: Option<CheckpointKind>,
         }
-        self.client
+        let info: crate::CheckpointInfo = self
+            .client
             .post(
                 "/checkpoints",
                 &Capture {
                     source_box_id: source,
                     name,
+                    kind,
                 },
             )
-            .await
+            .await?;
+        if kind == Some(CheckpointKind::Full) && info.kind != CheckpointKind::Full {
+            return Err(BoxliteError::Unsupported(format!(
+                "Remote server returned checkpoint {} without confirming full capture",
+                info.id
+            )));
+        }
+        Ok(info)
     }
 
     async fn list(&self) -> BoxliteResult<Vec<crate::CheckpointInfo>> {
@@ -1036,6 +1046,14 @@ mod tests {
     }
 
     const CHECKPOINT_RESPONSE: &str = r#"{"id":"disk","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512}"#;
+    const FULL_CHECKPOINT_CREATING: &str = r#"{"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":0,"state":"creating","kind":"full"}"#;
+    const MEMORY_CHECKPOINTS_ENABLED: &str =
+        r#"{"capabilities":{"memory_checkpoints_enabled":true}}"#;
+    const MEMORY_CHECKPOINTS_DISABLED: &str =
+        r#"{"capabilities":{"checkpoints_enabled":true,"memory_checkpoints_enabled":false}}"#;
+    const FULL_CHECKPOINT_OPTIONS: CheckpointOptions = CheckpointOptions {
+        kind: Some(CheckpointKind::Full),
+    };
 
     #[tokio::test]
     async fn checkpoint_disk_create_uses_legacy_json() {
@@ -1083,26 +1101,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn checkpoint_full_and_unknown_create_fail_before_transport() {
+    async fn checkpoint_unknown_create_fails_before_transport() {
         use crate::runtime::checkpoints::CheckpointBackend;
 
         let options = BoxliteRestOptions::new("http://127.0.0.1:1");
-        let runtime = crate::BoxliteRuntime::rest(options.clone()).unwrap();
-        let full = runtime
-            .checkpoints()
-            .create_with_options(
-                "source",
-                None,
-                CheckpointOptions {
-                    kind: Some(CheckpointKind::Full),
-                },
-            )
-            .await;
-        assert!(
-            matches!(full, Err(BoxliteError::Unsupported(_))),
-            "{full:?}"
-        );
-
         let backend = RestRuntime::new(&options).unwrap();
         let unknown = CheckpointBackend::create(
             &backend,
@@ -1120,19 +1122,172 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn checkpoint_full_requires_advertised_capability() {
+        for config in [
+            "{}",
+            r#"{"capabilities":{"checkpoints_enabled":true}}"#,
+            MEMORY_CHECKPOINTS_DISABLED,
+        ] {
+            let (port, server) = json_server(vec![config, CHECKPOINT_RESPONSE]).await;
+            let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+                "http://127.0.0.1:{port}"
+            )))
+            .unwrap();
+            let checkpoints = runtime.checkpoints();
+            let result = checkpoints
+                .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+                .await;
+            assert!(
+                matches!(result, Err(BoxliteError::Unsupported(_))),
+                "{result:?}"
+            );
+
+            // A final read keeps the listener open to detect any unexpected request.
+            checkpoints.get("disk").await.unwrap();
+            assert_eq!(
+                server.await.unwrap(),
+                [
+                    "GET /v1/config HTTP/1.1",
+                    "GET /v1/checkpoints/disk HTTP/1.1"
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_full_sends_kind_and_accepts_creating_response() {
+        for (name, expected_body) in [
+            (
+                None,
+                serde_json::json!({"source_box_id": "source", "kind": "full"}),
+            ),
+            (
+                Some("backup".to_owned()),
+                serde_json::json!({"source_box_id": "source", "name": "backup", "kind": "full"}),
+            ),
+        ] {
+            let (port, server) = exchange_server(vec![
+                (200, MEMORY_CHECKPOINTS_ENABLED),
+                (201, FULL_CHECKPOINT_CREATING),
+            ])
+            .await;
+            let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+                "http://127.0.0.1:{port}"
+            )))
+            .unwrap();
+            let info = runtime
+                .checkpoints()
+                .create_with_options("source", name, FULL_CHECKPOINT_OPTIONS)
+                .await
+                .unwrap();
+            assert_eq!(info.kind, CheckpointKind::Full);
+            assert_eq!(info.state, crate::CheckpointState::Creating);
+            assert_eq!(info.memory_size_bytes, None);
+
+            let requests = server.await.unwrap();
+            assert_eq!(
+                requests[0],
+                ("GET /v1/config HTTP/1.1".into(), String::new())
+            );
+            assert_eq!(requests[1].0, "POST /v1/checkpoints HTTP/1.1");
+            assert_eq!(json_body(&requests[1].1), expected_body);
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_full_rechecks_capability_for_each_create() {
+        let (port, server) = http_server(vec![
+            (200, MEMORY_CHECKPOINTS_ENABLED),
+            (201, FULL_CHECKPOINT_CREATING),
+            (200, MEMORY_CHECKPOINTS_DISABLED),
+            (200, CHECKPOINT_RESPONSE),
+        ])
+        .await;
+        let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+            "http://127.0.0.1:{port}"
+        )))
+        .unwrap();
+        let checkpoints = runtime.checkpoints();
+        checkpoints
+            .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+            .await
+            .unwrap();
+        let result = checkpoints
+            .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+            .await;
+        assert!(
+            matches!(result, Err(BoxliteError::Unsupported(_))),
+            "{result:?}"
+        );
+        checkpoints.get("disk").await.unwrap();
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/config HTTP/1.1",
+                "POST /v1/checkpoints HTTP/1.1",
+                "GET /v1/config HTTP/1.1",
+                "GET /v1/checkpoints/disk HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_full_rejects_unconfirmed_kind_without_cleanup_or_retry() {
+        const LEGACY: &str = r#"{"id":"legacy-id","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512}"#;
+        const DISK: &str = r#"{"id":"disk-id","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"disk"}"#;
+        const FUTURE: &str = r#"{"id":"future-id","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"future"}"#;
+        for (body, id) in [
+            (LEGACY, "legacy-id"),
+            (DISK, "disk-id"),
+            (FUTURE, "future-id"),
+        ] {
+            let (port, server) = http_server(vec![
+                (200, MEMORY_CHECKPOINTS_ENABLED),
+                (201, body),
+                (200, body),
+            ])
+            .await;
+            let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+                "http://127.0.0.1:{port}"
+            )))
+            .unwrap();
+            let checkpoints = runtime.checkpoints();
+            let error = checkpoints
+                .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, BoxliteError::Unsupported(message) if message.contains(id)),
+                "{error:?}"
+            );
+
+            assert_eq!(checkpoints.get(id).await.unwrap().id, id);
+            assert_eq!(
+                server.await.unwrap(),
+                [
+                    "GET /v1/config HTTP/1.1".to_string(),
+                    "POST /v1/checkpoints HTTP/1.1".to_string(),
+                    format!("GET /v1/checkpoints/{id} HTTP/1.1"),
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn checkpoint_get_and_list_decode_archive_metadata() {
         use crate::BoxliteRuntime;
 
-        const FULL: &str = r#"{"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"full","memory_size_bytes":0}"#;
+        const FULL: &str = r#"{"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"full","memory_size_bytes":256}"#;
+        const DISK: &str = r#"{"id":"disk","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"disk"}"#;
         const FUTURE: &str = r#"{"id":"future","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"future_mode"}"#;
-        let (port, server) = json_server(vec![FULL, CHECKPOINT_RESPONSE, FUTURE]).await;
+        let (port, server) = json_server(vec![FULL, DISK, FUTURE]).await;
         let runtime =
             BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
                 .unwrap();
         let checkpoints = runtime.checkpoints();
         let mut expected = Vec::new();
         for (id, kind, size) in [
-            ("full", CheckpointKind::Full, Some(0)),
+            ("full", CheckpointKind::Full, Some(256)),
             ("disk", CheckpointKind::Disk, None),
             ("future", CheckpointKind::Unknown, None),
         ] {
@@ -1152,8 +1307,8 @@ mod tests {
         );
 
         const LIST: &str = r#"{"checkpoints":[
-            {"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"full","memory_size_bytes":0},
-            {"id":"disk","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512},
+            {"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"full","memory_size_bytes":256},
+            {"id":"disk","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"disk"},
             {"id":"future","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"future_mode"}
         ]}"#;
         let (port, server) = json_server(vec![LIST]).await;

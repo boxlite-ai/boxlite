@@ -229,9 +229,14 @@ registries.remove(&login.id).await?;
 ### CheckpointHandle
 
 Use `runtime.checkpoints()` to manage checkpoint archives. On a local runtime,
-operations with valid arguments return `Unsupported`. A REST runtime supports
-`Disk` creation from a stopped box and returns `Unsupported` for `Full` before
-sending a request.
+operations with valid arguments return `Unsupported`. A REST runtime sends the
+same capture request for default and explicit `Disk` options. `Disk` requires a
+stopped source box. `Full` requires a running source box and checks
+`memory_checkpoints_enabled` with a live `GET /v1/config` before each
+`POST /checkpoints`. If the capability is missing or disabled, the client returns
+`Unsupported` before the POST. The client verifies that the HTTP 201 response
+echoes `kind: "full"`, even while the checkpoint is creating. If the response
+does not confirm full capture, `Unsupported` includes the returned checkpoint ID.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|

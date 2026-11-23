@@ -86,8 +86,15 @@ service does not currently register, including clone, binary archive import/expo
 and runtime-wide metrics. `GET /v1/config` reports those archive capabilities as
 disabled. Checkpoint capture and box creation from a checkpoint are a separate capability:
 `checkpoints_enabled` requires both `CHECKPOINTS_ENABLED=true` and a configured
-checkpoint archive prefix. Private tunnels are enabled; clients check that
-capability before every private prepare.
+checkpoint archive prefix.
+
+Hosted `GET /v1/config` reports `memory_checkpoints_enabled: false`. Hosted
+`POST /v1/checkpoints` recognizes `kind: "disk"` and `kind: "full"`. Disk
+responses include `kind: "disk"`. A full request returns HTTP 400 with code
+`unsupported` before checkpoint admission.
+
+Private tunnels are enabled. Clients check that capability before every private
+prepare.
 
 ## Services at a glance
 

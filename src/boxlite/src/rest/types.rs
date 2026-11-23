@@ -100,6 +100,8 @@ pub(crate) struct ServerCapabilities {
     pub privileged_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
+    pub checkpoints_enabled: Option<bool>,
+    pub memory_checkpoints_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,
