@@ -363,13 +363,6 @@ mod tests {
                 thawed_count: 0,
             }))
         }
-
-        async fn sync_clock(
-            &self,
-            _: tonic::Request<boxlite_shared::SyncClockRequest>,
-        ) -> Result<tonic::Response<boxlite_shared::SyncClockResponse>, tonic::Status> {
-            Err(tonic::Status::unimplemented("test fake"))
-        }
     }
 
     #[tonic::async_trait]
