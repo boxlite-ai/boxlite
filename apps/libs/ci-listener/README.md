@@ -507,6 +507,8 @@ A confirmed assignment remains available during a failed message poll. A planner
 
 While disconnected, the listener credits each committed reservation against that observation, including across partial passes. A reservation that the execution queue could not dispatch keeps its original identity and target until its Box creation intent is durable. New GitHub statistics, including zero, supersede the old target.
 
+If the host proves that a reserved Box was never created, the journal returns its quota and the current observation regains one assignment credit. After creation backoff, the planner can replace that reservation during the same polling outage. An uncertain create keeps its credit for recovery of the original Box. A delayed rejection cannot reopen an observation superseded by new GitHub statistics. Credits live in the listener process. After a restart the next session supplies fresh statistics and the journal supplies the existing reservations.
+
 For a failed poll, inspect `reason` first. An HTTP response supplies `httpStatus`; a rejected message also identifies its failing field and the observed value type. A connection failure can supply a recognized `transportCode`. GitHub's validated request ID, numeric `retryAfterSeconds`, quota headers and recognized error message are recorded when present. The listener's `retryAt` includes its own backoff, so that timestamp alone cannot establish provider throttling.
 
 ## Independent repository compensation

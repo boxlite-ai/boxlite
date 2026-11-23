@@ -19,7 +19,7 @@ import { SqliteStateDatabase } from './state/sqlite'
 import { StateCorrupt } from './state/database'
 import { ExecutionLease, ListenerState, StateCheck } from './state/store'
 import { ListenerInbox, verifyWebhook } from './webhook'
-import { ConfirmedWorkerAbsent, WorkerExecutor, WorkerState } from './worker'
+import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected, WorkerExecutor, WorkerState } from './worker'
 
 /** Public wire shapes. No external runner or installation is needed by this fixture. */
 class ActionsFixture {
@@ -250,6 +250,8 @@ const scenarios = [
   'continues assigning workers when the event observer throws',
   'traces a failed poll with its scale set and HTTP status',
   'starts confirmed jobs when the planner first reads after the poll fails',
+  'retries a confirmed create rejection after the offline target has left planning',
+  'honors a newer zero before a delayed create rejection',
   'cancels disconnected reservations when GitHub confirms zero before dispatch',
   'backs off failed Box startup',
   'backs off a Box exit without a status code',
@@ -679,6 +681,56 @@ for (const storage of ['sqlite', 'postgres'])
               ['boxlite'],
             )
             await scans.finish(claim, { success: true, intervalMs: 60_000 })
+          }
+          if (
+            scenario === 'retries a confirmed create rejection after the offline target has left planning' ||
+            scenario === 'honors a newer zero before a delayed create rejection'
+          ) {
+            const cancel = scenario === 'honors a newer zero before a delayed create rejection'
+            fixture.target = 1
+            let pollFailed = false
+            let idle = false
+            let sawZero = false
+            const targets = ScaleSetController.prototype.targets
+            const reads = jest.spyOn(ScaleSetController.prototype, 'targets').mockImplementation(function (
+              this: ScaleSetController,
+            ) {
+              const result = targets.call(this)
+              if (pollFailed && result.length === 0) idle = true
+              if (fixture.sessions.length > 1 && result.some((target) => target.assigned === 0)) sawZero = true
+              return result
+            })
+            fetch.mockImplementation(async (input, opts = {}) => {
+              if (new URL(String(input)).pathname === '/messages' && !pollFailed) {
+                pollFailed = true
+                return cancel
+                  ? new Response(null, { status: 503 })
+                  : new Response(null, { status: 429, headers: { 'retry-after': '60' } })
+              }
+              return fixture.fetch(input, opts)
+            })
+            jest.mocked(workers.create).mockImplementationOnce(async ({ name }) => {
+              const row = await journal.allocation(policyOwner!, 'worker/' + name.slice(7))
+              fixture.target = 0
+              await until(() => (cancel ? sawZero : idle))
+              throw new ConfirmedWorkerCreationRejected(row!.value.effect!.id, 'before-persistence', 503)
+            })
+            try {
+              stop = start()
+              await until(() => observe.mock.calls.some(([event]) => event.event === 'ci-worker-create-rejected'))
+              if (cancel) {
+                await delay(1150)
+                expect(workers.create).toHaveBeenCalledTimes(1)
+                expect(await journal.used(scope.organization)).toBe(0)
+              } else {
+                await until(() => delivered.size === 1)
+                expect(workers.create).toHaveBeenCalledTimes(2)
+                expect(fixture.sessions).toHaveLength(1)
+              }
+            } finally {
+              reads.mockRestore()
+            }
+            return
           }
           fixture.rejectNextPoll = scenario === 'traces a failed poll with its scale set and HTTP status'
           if (

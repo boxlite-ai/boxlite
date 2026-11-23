@@ -205,6 +205,35 @@ describe('CI shared worker lifecycle', () => {
     await reconcile()
     await reconcile()
   }
+  it.each(['new', 'existing'])('retries a rejected %s reservation during poll backoff', async (origin) => {
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      held: 0,
+      assigned: 1,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: true },
+    }
+    if (origin === 'existing')
+      await journal.reserve(lease, key, null, limits, { labels: target.labels, scaleSet: target.id })
+    jest.mocked(backend.workers.create).mockImplementationOnce(async ({ name }) => {
+      const row = await byName(name)
+      throw new ConfirmedWorkerCreationRejected(row.value.effect!.id, 'before-persistence', 503)
+    })
+    const balance = () => pool.balanceScaleSets(lease, [target], limits, new AbortController().signal)
+    await balance()
+    expect(await journal.used(definition.organization)).toBe(0)
+    expect(pool.creationReady('boxlite')).toBe(false)
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000)
+    try {
+      await balance()
+      expect(backend.workers.create).toHaveBeenCalledTimes(2)
+      expect(boxes.size).toBe(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
   it('uses each disconnected assignment once when quota frees during backoff', async () => {
     const [check] = await state.read(['journal/format'], lease)
     const target = {

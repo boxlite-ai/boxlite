@@ -35,7 +35,7 @@ export interface ScaleTarget {
   assigned: number
   held: number
   check: StateCheck
-  delivery: { covered: number; waitingForDispatch: boolean; offline: boolean }
+  delivery: { covered: number; waitingForDispatch: boolean; offline: boolean; pendingCreations?: Set<string> }
 }
 interface Lane {
   label: string
@@ -134,11 +134,15 @@ export class ScaleSetController {
   }
   targets(): ScaleTarget[] {
     if (this.signal.aborted) return []
+    const active: ScaleTarget[] = []
     for (const [label, target] of this.confirmed) {
-      const { offline, covered, waitingForDispatch } = target.delivery
-      if (offline && covered >= target.assigned && !waitingForDispatch) this.confirmed.delete(label)
+      const { offline, covered, waitingForDispatch, pendingCreations } = target.delivery
+      if (offline && covered >= target.assigned && !waitingForDispatch) {
+        // A rejected create can reopen this observation without another poll or planning pass.
+        if (!pendingCreations?.size) this.confirmed.delete(label)
+      } else active.push(target)
     }
-    return [...this.confirmed.values()]
+    return active
   }
   async restore(): Promise<void> {
     const occupied: string[] = [],
