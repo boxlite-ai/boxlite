@@ -3,6 +3,7 @@
 //! Thin VM-aware wrapper that handles quiescing, locking, and state checks,
 //! then delegates disk + DB operations to `SnapshotManager`.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -43,30 +44,60 @@ impl LocalSnapshotBackend {
                     )));
                 }
 
-                // Write crash-recovery marker before moving disks (point of no return).
-                let box_home = &self.inner.config.box_home;
-                let disks_dir = box_home.join("disks");
-                let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
-                let pending_marker = box_home.join(".snapshot_pending");
-                let snapshot_dir = box_home.join("snapshots").join(name);
-                let marker_data = serde_json::json!({
-                    "snapshot_dir": snapshot_dir.to_string_lossy(),
-                    "container_disk": container_disk.to_string_lossy(),
-                });
-                std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
-                    BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
-                })?;
-
-                // Quiesce VM for point-in-time snapshot consistency.
-                let result = self
+                let info = self
                     .inner
-                    .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
-                    .await;
-
-                // Remove marker on success.
-                let _ = std::fs::remove_file(&pending_marker);
-
-                let info = result?;
+                    .with_quiesce_async(async {
+                        let box_home = &self.inner.config.box_home;
+                        let container_disk =
+                            box_home.join("disks").join(disk_filenames::CONTAINER_DISK);
+                        let pending_marker = box_home.join(".snapshot_pending");
+                        let snapshot_dir = box_home.join("snapshots").join(name);
+                        let marker_data = serde_json::json!({
+                            "snapshot_dir": snapshot_dir.to_string_lossy(),
+                            "container_disk": container_disk.to_string_lossy(),
+                        });
+                        let mut marker = std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&pending_marker)
+                            .map_err(|e| {
+                                BoxliteError::Storage(format!(
+                                    "Failed to create snapshot marker: {e}"
+                                ))
+                            })?;
+                        let write_result = marker.write_all(marker_data.to_string().as_bytes());
+                        drop(marker);
+                        let result = match write_result {
+                            Ok(()) => {
+                                let snap_disk = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
+                                let had_container_disk = container_disk.exists();
+                                let result = snap_mgr.create(box_home, name, box_id);
+                                // Keep the marker if this fork moved the disk before child creation failed.
+                                if result.is_err()
+                                    && had_container_disk
+                                    && !container_disk.exists()
+                                    && snap_disk.exists()
+                                {
+                                    return result;
+                                }
+                                result
+                            }
+                            Err(e) => Err(BoxliteError::Storage(format!(
+                                "Failed to write snapshot marker: {e}"
+                            ))),
+                        };
+                        if let Err(error) = std::fs::remove_file(&pending_marker)
+                            && error.kind() != std::io::ErrorKind::NotFound
+                        {
+                            tracing::warn!(
+                                marker = %pending_marker.display(),
+                                %error,
+                                "Failed to remove snapshot marker"
+                            );
+                        }
+                        result
+                    })
+                    .await?;
 
                 tracing::info!(
                     box_id = %self.inner.id(),

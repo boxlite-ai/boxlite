@@ -947,7 +947,8 @@ impl RuntimeImpl {
             }
             if state.status.is_active()
                 || state.pid.is_some()
-                || (config.options.removes_on_stop() && state.status == BoxStatus::Stopped)
+                || (config.options.removes_on_stop()
+                    && matches!(state.status, BoxStatus::Stopped | BoxStatus::Unknown))
             {
                 return true;
             }
@@ -1787,27 +1788,6 @@ impl RuntimeImpl {
             );
         }
 
-        // Phase 1.5: Recover any pending snapshots that were interrupted by a crash.
-        {
-            let boxes_dir = self.layout.boxes_dir();
-            if boxes_dir.exists()
-                && let Ok(entries) = std::fs::read_dir(&boxes_dir)
-            {
-                for entry in entries.flatten() {
-                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                        if entry
-                            .file_name()
-                            .to_str()
-                            .is_some_and(|name| deferred_ephemeral.contains(name))
-                        {
-                            continue;
-                        }
-                        crate::litebox::local_snapshot::recover_pending_snapshot(&entry.path());
-                    }
-                }
-            }
-        }
-
         // Phase 2: Recover remaining valid boxes
         let persisted = self.box_manager.all_boxes(true)?;
 
@@ -1863,11 +1843,15 @@ impl RuntimeImpl {
             // A live shim takes precedence over the exit file, which may
             // describe a prior lifecycle.
             let pid_reader = PidFileReader::at(&pid_path);
-            let stale_shim = match pid_reader.probe_presence_with(
-                state.pid,
-                rebooted,
-                &process_start_time,
-            ) {
+            let presence = pid_reader.probe_presence_with(state.pid, rebooted, &process_start_time);
+            // Replaying a journal can move the container disk, so require confirmed absence.
+            if matches!(presence, ShimPresence::Absent { .. })
+                && std::fs::symlink_metadata(box_layout.root())
+                    .is_ok_and(|metadata| metadata.file_type().is_dir())
+            {
+                crate::litebox::local_snapshot::recover_pending_snapshot(box_layout.root());
+            }
+            let stale_shim = match presence {
                 ShimPresence::Verified(shim) => {
                     let pid = shim.identity().pid;
                     state.adopt_recovered_shim(pid);
@@ -3260,6 +3244,40 @@ mod tests {
             "{result:?}"
         );
         assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_keeps_unknown_ephemeral_pending_after_shim_exit() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&config.box_home).unwrap();
+        std::fs::write(config.box_home.join("shim.pid"), pid.to_string()).unwrap();
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+        let state = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!((state.status, state.pid), (BoxStatus::Unknown, None));
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+
+        let result = runtime.shutdown(None).await;
+        let pending = runtime.sync_cleanup_pending.load(Ordering::Acquire);
+        assert!(
+            matches!(result, Err(BoxliteError::Internal(_))) && pending,
+            "expected synchronous cleanup to remain pending, got {result:?}, pending={pending}"
+        );
+
+        runtime.shutdown_sync();
+        assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
+        assert!(!config.box_home.exists());
+        assert!(!runtime.sync_cleanup_pending.load(Ordering::Acquire));
+        runtime.shutdown(None).await.unwrap();
     }
 
     #[tokio::test]
@@ -5152,6 +5170,307 @@ mod tests {
         assert!(!regular_config.box_home.join(".snapshot_pending").exists());
         assert!(!regular_snap_dir.exists());
         assert_eq!(std::fs::read(&regular_container).unwrap(), b"regular-disk");
+    }
+
+    fn write_pending_snapshot(
+        box_home: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        use crate::disk::constants::filenames::CONTAINER_DISK;
+
+        let snapshot_dir = box_home.join("snapshots/snap-1");
+        let container_disk = box_home.join("disks").join(CONTAINER_DISK);
+        std::fs::create_dir_all(container_disk.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        let snapshot_disk = snapshot_dir.join(CONTAINER_DISK);
+        std::fs::write(&snapshot_disk, b"snapshot-disk").unwrap();
+        let marker = box_home.join(".snapshot_pending");
+        let contents = serde_json::json!({
+            "snapshot_dir": snapshot_dir,
+            "container_disk": container_disk,
+        })
+        .to_string();
+        std::fs::write(&marker, &contents).unwrap();
+        (marker, snapshot_disk, contents)
+    }
+
+    #[test]
+    fn test_recovery_skips_pending_snapshot_for_symlinked_box_home() {
+        use crate::disk::constants::filenames::CONTAINER_DISK;
+
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(false, &runtime);
+        let external = TempDir::new_in("/tmp").unwrap();
+        let (marker, snapshot_disk, contents) = write_pending_snapshot(external.path());
+        std::os::unix::fs::symlink(external.path(), &config.box_home).unwrap();
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(marker).ok().as_deref(),
+            Some(contents.as_str()),
+            "recovery changed the pending marker outside the runtime layout"
+        );
+        assert_eq!(std::fs::read(snapshot_disk).unwrap(), b"snapshot-disk");
+        assert!(!external.path().join("disks").join(CONTAINER_DISK).exists());
+    }
+
+    #[test]
+    fn test_recovery_defers_pending_snapshot_for_persistent_paused_box() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let config = test_box_config_in_layout(false, &runtime);
+        let (marker, snapshot_disk, contents) = write_pending_snapshot(&config.box_home);
+        std::fs::write(config.box_home.join("shim.pid"), pid.to_string()).unwrap();
+        let mut state = running_state(pid);
+        state.set_status(BoxStatus::Paused);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(recovered.status, BoxStatus::Unknown);
+        assert!(child.0.try_wait().unwrap().is_none());
+        assert_eq!(
+            std::fs::read_to_string(&marker).ok().as_deref(),
+            Some(contents.as_str()),
+            "recovery replayed the pending snapshot while the legacy shim was alive"
+        );
+        assert_eq!(std::fs::read(&snapshot_disk).unwrap(), b"snapshot-disk");
+    }
+
+    #[test]
+    fn test_recovery_replays_paused_snapshot_from_runtime_layout_after_shim_exit() {
+        use crate::disk::constants::filenames::CONTAINER_DISK;
+
+        let (runtime, _dir) = create_test_runtime();
+        let external = TempDir::new_in("/tmp").unwrap();
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let mut config = test_running_box_config(false, &runtime, pid);
+        let runtime_box_home = config.box_home.clone();
+        let (marker, snapshot_disk, _) = write_pending_snapshot(&runtime_box_home);
+        config.box_home = external.path().to_path_buf();
+        let (external_marker, external_disk, external_contents) =
+            write_pending_snapshot(&config.box_home);
+        let mut state = running_state(pid);
+        state.set_status(BoxStatus::Paused);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(
+            (recovered.status, recovered.pid),
+            (BoxStatus::Stopped, None)
+        );
+        let container_disk = runtime_box_home.join("disks").join(CONTAINER_DISK);
+        assert_eq!(
+            std::fs::read(container_disk).expect("recovery should restore the runtime disk"),
+            b"snapshot-disk"
+        );
+        assert!(!marker.exists());
+        assert!(!snapshot_disk.exists());
+        assert_eq!(
+            std::fs::read_to_string(external_marker).unwrap(),
+            external_contents
+        );
+        assert_eq!(std::fs::read(external_disk).unwrap(), b"snapshot-disk");
+        assert!(!config.box_home.join("disks").join(CONTAINER_DISK).exists());
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_create_preserves_existing_pending_snapshot() {
+        use crate::disk::{Qcow2Helper, constants::filenames::CONTAINER_DISK};
+
+        let (runtime, _dir) = create_test_runtime();
+        let mut deferred = test_box_config_in_layout(false, &runtime);
+        deferred.options.auto_delete = Some(1);
+        let (deferred_marker, deferred_disk, deferred_contents) =
+            write_pending_snapshot(&deferred.box_home);
+        std::fs::write(deferred.box_home.join("shim.pid"), b"invalid PID").unwrap();
+        runtime
+            .box_manager
+            .add_box(&deferred, &BoxState::new())
+            .unwrap();
+
+        let stopped = test_box_config_in_layout(false, &runtime);
+        let mut stopped_state = BoxState::new();
+        stopped_state.mark_stop();
+        runtime
+            .box_manager
+            .add_box(&stopped, &stopped_state)
+            .unwrap();
+        runtime.recover_boxes().unwrap();
+        let deferred_state = runtime.box_manager.update_box(&deferred.id).unwrap();
+        assert_eq!(deferred_state.status, BoxStatus::Unknown);
+
+        let (stopped_marker, stopped_disk, stopped_contents) =
+            write_pending_snapshot(&stopped.box_home);
+        let container_disk = stopped.box_home.join("disks").join(CONTAINER_DISK);
+        Qcow2Helper::create_disk(&container_disk, true)
+            .unwrap()
+            .leak();
+        let deferred_box = runtime.get(deferred.id.as_str()).await.unwrap().unwrap();
+        let stopped_box = runtime.get(stopped.id.as_str()).await.unwrap().unwrap();
+        let deferred_result = deferred_box
+            .snapshots()
+            .create(Default::default(), "snap-2")
+            .await;
+        let stopped_result = stopped_box
+            .snapshots()
+            .create(Default::default(), "snap-2")
+            .await;
+
+        let deferred_actual = std::fs::read_to_string(&deferred_marker).ok();
+        let stopped_actual = std::fs::read_to_string(&stopped_marker).ok();
+        assert!(
+            matches!(deferred_result, Err(BoxliteError::InvalidState(_)))
+                && deferred_actual.as_deref() == Some(&deferred_contents)
+                && matches!(stopped_result, Err(BoxliteError::Storage(_)))
+                && stopped_actual.as_deref() == Some(&stopped_contents),
+            "expected both journals to survive; deferred={deferred_result:?}, journal={deferred_actual:?}; stopped={stopped_result:?}, journal={stopped_actual:?}"
+        );
+        assert_eq!(std::fs::read(&deferred_disk).unwrap(), b"snapshot-disk");
+        assert_eq!(std::fs::read(&stopped_disk).unwrap(), b"snapshot-disk");
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_create_clears_marker_when_snapshot_disk_already_exists() {
+        use crate::disk::constants::filenames::CONTAINER_DISK;
+
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(false, &runtime);
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+        runtime.recover_boxes().unwrap();
+        let snapshot_dir = config.box_home.join("snapshots/snap-1");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        let snapshot_disk = snapshot_dir.join(CONTAINER_DISK);
+        std::fs::write(&snapshot_disk, b"previous-snapshot").unwrap();
+        let box_handle = runtime.get(config.id.as_str()).await.unwrap().unwrap();
+
+        let error = box_handle
+            .snapshots()
+            .create(Default::default(), "snap-1")
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("Container disk not found"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(snapshot_disk).unwrap(), b"previous-snapshot");
+        assert!(!config.box_home.join(".snapshot_pending").exists());
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_create_keeps_marker_when_child_creation_fails_after_overwrite() {
+        use crate::disk::{Qcow2Helper, constants::filenames::CONTAINER_DISK};
+        use std::os::unix::fs::symlink;
+
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(false, &runtime);
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+        runtime.recover_boxes().unwrap();
+        let disks_dir = config.box_home.join("disks");
+        std::fs::create_dir_all(&disks_dir).unwrap();
+        let container_disk = disks_dir.join(CONTAINER_DISK);
+        Qcow2Helper::create_disk(&container_disk, true)
+            .unwrap()
+            .leak();
+        let original_disk = std::fs::read(&container_disk).unwrap();
+
+        // The short aliases allow rename and stat, but the expanded backing
+        // path exceeds PATH_MAX when the COW writer canonicalizes it.
+        let mut backing_dir = config.box_home.join("snapshots");
+        std::fs::create_dir_all(&backing_dir).unwrap();
+        let snapshot_dir = backing_dir.join("snap-1");
+        let component = "a".repeat(240);
+        for _ in 0..=(libc::PATH_MAX as usize / component.len()) {
+            std::fs::create_dir(backing_dir.join(&component)).unwrap();
+            symlink(&component, backing_dir.join("nested")).unwrap();
+            backing_dir.push("nested");
+        }
+        symlink(backing_dir, &snapshot_dir).unwrap();
+        let snapshot_disk = snapshot_dir.join(CONTAINER_DISK);
+        std::fs::write(&snapshot_disk, b"previous-snapshot").unwrap();
+        let box_handle = runtime.get(config.id.as_str()).await.unwrap().unwrap();
+
+        let error = box_handle
+            .snapshots()
+            .create(Default::default(), "snap-1")
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to canonicalize backing path"),
+            "{error}"
+        );
+        assert!(!container_disk.exists());
+        assert!(std::fs::read(snapshot_disk).unwrap() == original_disk);
+        assert!(
+            config.box_home.join(".snapshot_pending").is_file(),
+            "snapshot creation removed the marker after moving the container disk"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_create_clears_marker_when_snapshot_save_fails() {
+        use crate::disk::{Qcow2Helper, constants::filenames::CONTAINER_DISK};
+
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(false, &runtime);
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+        runtime.recover_boxes().unwrap();
+        let disks_dir = config.box_home.join("disks");
+        std::fs::create_dir_all(&disks_dir).unwrap();
+        let container_disk = disks_dir.join(CONTAINER_DISK);
+        let snapshot_disk = config
+            .box_home
+            .join("snapshots/snap-1")
+            .join(CONTAINER_DISK);
+        Qcow2Helper::create_disk(&container_disk, true)
+            .unwrap()
+            .leak();
+        let db = Database::open(&runtime.layout.db_dir().join("boxlite.db")).unwrap();
+        db.conn()
+            .execute_batch(
+                "CREATE TRIGGER reject_snapshot_save BEFORE INSERT ON snapshot
+                 BEGIN SELECT RAISE(ABORT, 'snapshot save rejected'); END;",
+            )
+            .unwrap();
+        let box_handle = runtime.get(config.id.as_str()).await.unwrap().unwrap();
+
+        let error = box_handle
+            .snapshots()
+            .create(Default::default(), "snap-1")
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("snapshot save rejected"),
+            "{error}"
+        );
+        assert!(container_disk.exists());
+        assert!(snapshot_disk.exists());
+        assert!(!config.box_home.join(".snapshot_pending").exists());
     }
 
     #[test]

@@ -551,38 +551,33 @@ async fn disk_lock_serializes_snapshot_markers_across_handles() {
     a.stop().await.unwrap();
     let b = runtime.get(a.id().as_str()).await.unwrap().unwrap();
     assert!(!Arc::ptr_eq(&a.box_backend, &b.box_backend));
-    let bx = Arc::clone(&a.box_backend)
-        .as_any_arc()
-        .downcast::<BoxImpl>()
-        .ok()
-        .unwrap();
-    std::fs::create_dir_all(&bx.config.box_home).unwrap();
+    let bx = disk_test_backend(&a);
+    create_disk_for_test(&bx);
     let locker = runtime
         .lock_manager
         .retrieve(bx.state.read().lock_id.unwrap())
         .unwrap();
     let lifecycle = LockGuard::new(locker.as_ref());
+    let disk = disk_test_backend(&b).disk_locker().unwrap();
     let snapshots_a = a.snapshots();
     let snapshots_b = b.snapshots();
     let mut first = Box::pin(snapshots_a.create(Default::default(), "first"));
     let mut second = Box::pin(snapshots_b.create(Default::default(), "second"));
-    assert!(futures::poll!(&mut first).is_pending());
     let marker_path = bx.config.box_home.join(".snapshot_pending");
-    let read_marker = || -> serde_json::Value {
-        serde_json::from_slice(&std::fs::read(&marker_path).unwrap()).unwrap()
-    };
-    let expected = bx.config.box_home.join("snapshots/first");
-    assert_eq!(
-        read_marker()["snapshot_dir"],
-        expected.to_string_lossy().as_ref()
-    );
+
+    assert!(futures::poll!(&mut first).is_pending());
+    assert!(LockGuard::try_new(disk.as_ref()).is_none());
     assert!(futures::poll!(&mut second).is_pending());
-    let marker = read_marker();
-    // Cancel both waiters before releasing lifecycle admission, even on failure.
+    assert!(!marker_path.exists());
+
     drop(first);
-    drop(second);
+    assert!(futures::poll!(&mut second).is_pending());
+    assert!(LockGuard::try_new(disk.as_ref()).is_none());
+    assert!(!marker_path.exists());
     drop(lifecycle);
-    assert_eq!(marker["snapshot_dir"], expected.to_string_lossy().as_ref());
+    assert_eq!(second.await.unwrap().name, "second");
+    assert!(snapshots_a.get("first").await.unwrap().is_none());
+    assert!(!marker_path.exists());
 }
 
 fn disk_test_backend(handle: &crate::LiteBox) -> Arc<BoxImpl> {
