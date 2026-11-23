@@ -89,11 +89,11 @@ coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DI
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Go's reports include every package, including packages with no tests.
-coverage\:go: export GO_CARGO_FEATURES = --features test-support
-coverage\:go: dev\:go
+coverage\:go:
+	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
 	@mkdir -p target/coverage
 	@rc=0; \
-	(cd sdks/go && go test -tags boxlite_dev,boxlite_agent_test -covermode=atomic -coverpkg=./... \
+	(cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-sdk.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd src/deps/libgvproxy-sys/gvproxy-bridge && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/gvproxy.out" $(GOTEST_FILTER) ./...) || rc=$$?; \

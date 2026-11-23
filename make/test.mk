@@ -692,7 +692,7 @@ test\:all\:c:
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
 	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
-	@cd sdks/go && go test -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
+	@cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.
