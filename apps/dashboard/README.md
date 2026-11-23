@@ -39,8 +39,8 @@ subscription included usage. The published **PAYG estimate** stays primary for a
 users, including subscribers. A muted supplementary line expresses the percentage
 lower effective hourly cost within included usage (75% for a fourfold quota ratio).
 The summary says "with a subscription", without implying the benefit is exclusive
-to Starter. The applicable plan, allowance conditions and effective dollar estimate
-remain available in Price breakdown.
+to Starter. Price breakdown keeps a concise allowance assumption and PAYG overage explanation,
+without repeating plan-specific monthly pricing or an effective dollar estimate.
 The ratio is the catalog monthly price divided by included usage value, shared with
 Billing Plans; it never uses the wallet purchase multiplier.
 

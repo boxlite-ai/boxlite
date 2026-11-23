@@ -6,7 +6,6 @@ import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { boxSubscriptionValue, subscriptionValue } from '@/lib/subscription-value'
 import { formatPriceCents, type BoxHourlyPrice, type BoxSpec } from '@/lib/box-price'
-import { PLAN_PRESENTATION, planTierIndex } from '@/components/billing/planBenefits'
 import { RoutePath } from '@/enums/RoutePath'
 
 export function BoxPriceSummary({
@@ -33,11 +32,8 @@ export function BoxPriceSummary({
     !subscription.isError
   const comparison = ready ? boxSubscriptionValue(catalog.data, subscription.data, spec, quote) : undefined
   const value = subscriptionValue(comparison?.plan)
-  const effective = value ? quote.totalCents * value.costRatio : undefined
-  const active = comparison?.active && effective != null
+  const active = comparison?.active && value != null
   const savingsPercent = value ? Math.floor((1 - value.costRatio) * 10000) / 100 : undefined
-  const name =
-    comparison?.plan && (PLAN_PRESENTATION[planTierIndex(comparison.plan.name)]?.name ?? comparison.plan.name)
   const price = (cents: number) => formatPriceCents(cents, 8)
   return (
     <div className="min-w-0 space-y-1">
@@ -77,30 +73,15 @@ export function BoxPriceSummary({
               <span>PAYG / quota consumption</span>
               <span className="font-mono">{price(quote.totalCents)} / hr</span>
             </div>
-            {value && comparison?.plan && (
-              <div className="mt-3 space-y-2 border-t border-border pt-3 text-body">
-                <div className="flex flex-wrap justify-between gap-2">
-                  <span>{name} effective estimate</span>
-                  <span className="font-mono">{price(effective!)} / hr</span>
-                </div>
-                <p className="text-muted-foreground">
-                  {formatPriceCents(comparison.plan.priceMonthlyCents!)} / month includes{' '}
-                  {formatPriceCents(comparison.plan.includedQuotaCents!)} of usage at PAYG rates.
-                </p>
-                <p className="text-muted-foreground">
-                  Assumes the full monthly allowance is used, at current catalog prices. Unused allowance expires;
-                  actual savings depend on usage.
-                </p>
-              </div>
+            {value && (
+              <p className="mt-3 text-meta text-muted-foreground">
+                Savings assume full use of the monthly included allowance. Additional usage is charged at PAYG rates.
+              </p>
             )}
-            <p className="mt-3 text-body text-muted-foreground">
-              CPU, memory and disk consume included usage at the published rates above. After included usage runs out,
-              the same rates apply to your wallet.
-            </p>
           </PopoverContent>
         </Popover>
       </div>
-      {value && effective != null && (
+      {value && (
         <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-meta text-muted-foreground">
           <span>{savingsPercent}% lower effective hourly cost with a subscription</span>
           {!active && (

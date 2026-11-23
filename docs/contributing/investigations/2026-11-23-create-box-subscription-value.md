@@ -18,7 +18,7 @@ Keep one primary create action and the existing price breakdown popover.
 For PAYG, retain the full resource estimate and add one muted catalog comparison for configurations within verified published plan limits: `75% lower effective hourly cost with a subscription · View plans ↗` for the documented $5/$20 example and a $0.0666/h configuration.
 The Plan API does not expose per-plan resource limits. Do not select the cheapest plan and imply it supports an arbitrary custom Box; omit its hourly offer when eligibility is unverified.
 For every user, keep the PAYG estimate primary. A matching active paid plan with sufficient quota gets the same secondary percentage-saving explanation.
-Show the percentage reduction in the muted summary line; calculate it from the catalog ratio. Keep the effective dollar estimate in Price breakdown.
+Show the percentage reduction in the muted summary line; calculate it from the catalog ratio. Keep only a concise full-allowance assumption and PAYG overage explanation in Price breakdown; omit plan-specific monthly pricing and effective dollar estimates.
 State that quota is consumed at the published rate, then ordinary wallet funds pay for usage at that same rate.
 
 Use a real link opening Billing Plans in a new tab, explicitly identified as such, so the mounted creation draft survives unchanged.
