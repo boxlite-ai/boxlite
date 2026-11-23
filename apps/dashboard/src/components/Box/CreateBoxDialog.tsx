@@ -1273,6 +1273,7 @@ export const CreateBoxDialog = ({
             variant="primary"
             className="h-11 sm:h-9"
             type="button"
+            data-console-action="create_box"
             onClick={handleCreate}
             disabled={
               submitting ||

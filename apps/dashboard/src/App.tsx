@@ -19,6 +19,7 @@ import { RegistrationGate } from './components/RegistrationGate'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
+import { useConsoleAnalytics } from './hooks/useConsoleAnalytics'
 import Dashboard from './pages/Dashboard'
 import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
@@ -85,6 +86,11 @@ const SlackRedirect = () => {
 // belongs in deployment headers. The terminal Paste action also refuses to
 // read clipboard when the dashboard itself is framed.
 
+function AdmittedDashboard() {
+  useConsoleAnalytics()
+  return <Dashboard />
+}
+
 function App() {
   const config = useConfig()
   const location = useLocation()
@@ -94,10 +100,7 @@ function App() {
 
   useEffect(() => {
     if (isAuthenticated && user && posthog?.get_distinct_id() !== user.profile.sub) {
-      posthog?.identify(user.profile.sub, {
-        email: user.profile.email,
-        name: user.profile.name,
-      })
+      posthog?.identify(user.profile.sub)
     }
     if (import.meta.env.PROD && config.pylonAppId && isAuthenticated && user) {
       initPylon(config.pylonAppId, {
@@ -111,15 +114,6 @@ function App() {
       })
     }
   }, [isAuthenticated, user, posthog, config.pylonAppId])
-
-  // Hack for tracking PostHog pageviews in SPAs
-  useEffect(() => {
-    if (import.meta.env.PROD) {
-      posthog?.capture('$pageview', {
-        $current_url: window.location.href,
-      })
-    }
-  }, [location, posthog])
 
   if (authError && location.pathname !== RoutePath.LOGOUT) return <LandingPage />
 
@@ -151,13 +145,13 @@ function App() {
           <Suspense fallback={<LoadingFallback />}>
             <ApiProvider>
               <RegistrationGate key={user?.profile.sub}>
-                <OrganizationsProvider>
+                <OrganizationsProvider attributeRegistration={!config.turnstile?.sitekey}>
                   <OrganizationGate>
                     <SelectedOrganizationProvider>
                       <RegionsProvider>
                         <NotificationSocketProvider>
                           <BannerProvider>
-                            <Dashboard />
+                            <AdmittedDashboard />
                           </BannerProvider>
                         </NotificationSocketProvider>
                       </RegionsProvider>

@@ -87,14 +87,19 @@ describe('account entry refinement', () => {
     markJustLoggedOut()
     await mount()
     await click()
-    expect(auth.signinRedirect).toHaveBeenCalledWith({ state: { returnTo: '/dashboard' } })
+    expect(auth.signinRedirect).toHaveBeenCalledWith({
+      state: { returnTo: '/dashboard', visit: expect.objectContaining({ visit_id: expect.any(String) }) },
+    })
   })
   it('requests account selection only through explicit account switching', async () => {
     markJustLoggedOut()
     await mount()
     const button = [...container.querySelectorAll('button')].find((item) => item.textContent === 'Use another account')!
     await act(async () => button.click())
-    expect(auth.signinRedirect).toHaveBeenCalledWith({ prompt: 'login', state: { returnTo: '/dashboard' } })
+    expect(auth.signinRedirect).toHaveBeenCalledWith({
+      prompt: 'login',
+      state: { returnTo: '/dashboard', visit: expect.objectContaining({ visit_id: expect.any(String) }) },
+    })
   })
   it('returns silently to manual entry after cancellation', async () => {
     markJustLoggedOut()
@@ -113,7 +118,9 @@ describe('account entry recovery coverage', () => {
     await mount(false, destination)
     expect(auth.signinRedirect).not.toHaveBeenCalled()
     await click()
-    expect(auth.signinRedirect).toHaveBeenCalledWith({ state: { returnTo: destination } })
+    expect(auth.signinRedirect).toHaveBeenCalledWith({
+      state: { returnTo: destination, visit: expect.objectContaining({ visit_id: expect.any(String) }) },
+    })
   })
   it('recovers when the redirect rejects and permits a retry', async () => {
     markJustLoggedOut()

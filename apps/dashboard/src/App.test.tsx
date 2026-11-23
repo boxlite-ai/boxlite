@@ -11,20 +11,22 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 vi.mock('@/components/OrganizationExperience', () => ({
-  OrganizationGate: ({ children }: { children: React.ReactNode }) => children,
+  OrganizationGate: ({ children }: { children: React.ReactNode }) =>
+    admission.organizationRequired ? <p>Select organization</p> : children,
 }))
 
 // The route table is what is under test, so everything it mounts around a page
 // is a pass-through and every page is a marker naming itself.
 vi.mock('react-oidc-context', () => ({
-  useAuth: () => ({ error: undefined, isAuthenticated: false, user: undefined, removeUser: vi.fn() }),
+  useAuth: () => ({ isAuthenticated: true, user: { profile: { sub: 'member' } } }),
 }))
 vi.mock('posthog-js/react', () => ({ usePostHog: () => undefined }))
-vi.mock('./hooks/useConfig', () => ({ useConfig: () => ({}) }))
+vi.mock('./hooks/useConfig', () => ({ useConfig: () => ({ posthog: admission.posthog }) }))
 
-const { passThrough, registration, organizationMount, notificationMount } = vi.hoisted(() => ({
+const { passThrough, registration, organizationMount, notificationMount, admission } = vi.hoisted(() => ({
   passThrough: ({ children }: { children?: React.ReactNode }) => children,
   registration: { required: false },
+  admission: { organizationRequired: false, posthog: undefined as { host: string; apiKey: string } | undefined },
   organizationMount: vi.fn(),
   notificationMount: vi.fn(),
 }))
@@ -64,6 +66,7 @@ vi.mock('./pages/ImagesPage', () => ({
     return <p>images page, {tab} tab</p>
   },
 }))
+vi.mock('./pages/Volumes', () => ({ default: () => <p>Volumes page</p> }))
 vi.mock('./pages/Domains', () => ({ default: () => <p>domains page</p> }))
 vi.mock('./pages/ImageDetails', () => ({
   default: function ImageDetailsMarker() {
@@ -89,6 +92,9 @@ describe('App routes', () => {
     root = null
     document.body.innerHTML = ''
     registration.required = false
+    admission.organizationRequired = false
+    admission.posthog = undefined
+    vi.unstubAllGlobals()
     organizationMount.mockClear()
     notificationMount.mockClear()
   })
@@ -125,6 +131,41 @@ describe('App routes', () => {
     expect(await renderAt('/dashboard/boxes?template=python')).toBe('Registration required')
     expect(organizationMount).not.toHaveBeenCalled()
     expect(notificationMount).not.toHaveBeenCalled()
+  })
+
+  it('records the Volumes pageview once after registration and organization admission', async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(new Response())
+    vi.stubGlobal('fetch', send)
+    admission.posthog = { host: 'https://events.example', apiKey: 'test' }
+    registration.required = true
+    admission.organizationRequired = true
+    const path = '/dashboard/volumes'
+    expect(await renderAt(path)).toBe('Registration required')
+    expect(send).not.toHaveBeenCalled()
+
+    const rerender = () =>
+      act(async () => {
+        root!.render(
+          <MemoryRouter initialEntries={[path]}>
+            <App />
+          </MemoryRouter>,
+        )
+      })
+    registration.required = false
+    await rerender()
+    expect(document.body.textContent).toBe('Select organization')
+    expect(send).not.toHaveBeenCalled()
+
+    admission.organizationRequired = false
+    await rerender()
+    await vi.waitFor(() => expect(document.body.textContent).toBe('Volumes page'))
+    await rerender()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(String(send.mock.calls[0][1]?.body))).toMatchObject({
+      event: '$pageview',
+      distinct_id: 'member',
+      properties: { $pathname: path },
+    })
   })
 
   it('opens Domains as a peer dashboard page', async () => {

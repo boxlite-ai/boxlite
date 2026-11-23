@@ -216,6 +216,20 @@ describe('ApiClient registration deadline', () => {
 })
 
 describe('ApiClient registration', () => {
+  it('attaches the source to explicit registration and omits it from unrelated requests', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    const { restoreVisit, incomingVisit } = await import('@/lib/console-visit')
+    restoreVisit(incomingVisit('https://github.com/private', 'https://app.boxlite.ai/?utm_medium=docs'))
+    const source = '{"referring_domain":"github.com","utm_medium":"docs"}'
+    await api.getCheckpointCapabilities()
+    await api.userApi.getAuthenticatedUser()
+    await api.register('challenge')
+    expect(requests[0].headers.has('X-BoxLite-Registration-Source')).toBe(false)
+    expect(requests[2].headers.get('X-BoxLite-Registration-Source')).toBe(source)
+    expect(requests[1].headers.has('X-BoxLite-Registration-Source')).toBe(false)
+  })
+
   it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {
     const user = { id: 'auth0|new-user', name: 'User' }
     const requests: any[] = []

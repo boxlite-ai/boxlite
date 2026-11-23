@@ -3,6 +3,18 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Console analytics
+
+Console analytics starts after registration and organization selection admit the user.
+PostHog receives a `$pageview` for each console route visit and a `console_control_click` for supported control activations.
+Filter by account and `visit_id` to see the pages visited and their sequence.
+
+Events include the direct referring hostname, available campaign tags and a route template.
+Named actions such as `create_volume` count attempts, including keyboard submission.
+Billing events include the displayed tab when billing is available.
+
+Domains records one named action when a keyboard or mouse selection changes the active tab.
+
 ## Create Box sizing
 
 New Box presents six named presets from 0.125 to 4 vCPU, retaining the existing
@@ -31,6 +43,22 @@ reference sent to the API.
 
 Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
 Their existing defaults, validation and submission behavior are unchanged.
+
+## Registration attribution
+
+Filter PostHog's `user.registration` events to `event.outcome = success` and break
+them down by `referring_domain`, `utm_source`, `utm_medium`, or `utm_campaign`.
+
+These properties describe the console visit that created the account. Later logins
+leave that event unchanged. An empty browser referrer appears as `direct/unknown`;
+requests without attribution omit the properties.
+
+Explicit signup sends the source on `POST /auth/register`. With automatic signup, the
+console attaches it to the initial `GET /organizations` in the dashboard. If another
+client creates the account first, the registration event can lack a source.
+
+The API queues this event after the account transaction commits. PostHog delivery
+is best effort, so a delivery failure can leave a signup out of the report.
 
 ## New-account email policy
 

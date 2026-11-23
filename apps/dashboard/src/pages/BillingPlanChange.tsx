@@ -171,6 +171,7 @@ function BillingPlanChange() {
             <AsciiButton
               variant="primary"
               disabled={pending}
+              data-console-action="confirm_plan_change"
               onClick={handleConfirm}
               className="inline-flex items-center gap-2"
             >

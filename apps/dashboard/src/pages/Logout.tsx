@@ -8,6 +8,7 @@ import { AccountEntryLayout } from '@/components/SetupLayout'
 import { RoutePath } from '@/enums/RoutePath'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { markJustLoggedOut, prepareSignIn, safeReturnTo } from '@/lib/auth-session'
+import { restoreVisit } from '@/lib/console-visit'
 import { useQueryClient } from '@tanstack/react-query'
 import { usePostHog } from 'posthog-js/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -34,6 +35,7 @@ const Logout = () => {
     setFailure(false)
     try {
       stopSilentRenew()
+      restoreVisit()
       prepareSignIn(request.returnTo)
       await removeUser()
       markJustLoggedOut(request.returnTo)

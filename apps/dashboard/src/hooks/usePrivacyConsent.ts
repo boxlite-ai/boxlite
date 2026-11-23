@@ -12,7 +12,6 @@ import { getLocalStorageItem } from '@/lib/local-storage'
 
 const ConsentPreferencesSchema = z.object({
   necessary: z.boolean(),
-  analytics: z.boolean(),
   preferences: z.boolean(),
   marketing: z.boolean(),
 })
@@ -23,7 +22,6 @@ const CONSENT_KEY_PREFIX = 'privacy_consent_'
 
 const DEFAULT_PREFERENCES: ConsentPreferences = {
   necessary: true,
-  analytics: false,
   preferences: false,
   marketing: false,
 }
@@ -42,7 +40,6 @@ const usePrivacyConsentStore = create<PrivacyConsentState>()((set, get) => ({
   preferences: DEFAULT_PREFERENCES,
 
   init: (userSub: string) => {
-    if (get().currentUserSub === userSub) return
     set({ currentUserSub: userSub })
 
     const consentKey = `${CONSENT_KEY_PREFIX}${userSub}`
@@ -85,7 +82,13 @@ export function usePrivacyConsent() {
 
   useEffect(() => {
     if (user?.profile?.sub) {
-      init(user.profile.sub)
+      const sub = user.profile.sub
+      init(sub)
+      const refresh = (event: StorageEvent) => {
+        if (event.key === null || event.key === CONSENT_KEY_PREFIX + sub) init(sub)
+      }
+      window.addEventListener('storage', refresh)
+      return () => window.removeEventListener('storage', refresh)
     }
   }, [user?.profile?.sub, init])
 

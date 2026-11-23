@@ -32,7 +32,7 @@ const AccountSettings: React.FC<{ linkedAccountsEnabled: boolean }> = ({ linkedA
                 <div className="text-body">
                   <div className="text-muted-foreground">
                     <p className="font-semibold text-foreground">Privacy Preferences</p>
-                    Manage which tracking technologies are used for analytics and marketing.
+                    Manage your saved preferences and marketing settings.
                   </div>
                 </div>
                 <Button variant="outline" onClick={() => setShowPrivacyDialog(true)}>

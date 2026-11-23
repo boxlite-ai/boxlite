@@ -59,21 +59,6 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
 
             <div className="flex items-start justify-between space-x-2 p-3">
               <div className="space-y-1">
-                <p className="font-medium text-body">Analytics</p>
-                <p className="text-meta text-muted-foreground">
-                  Collects anonymous usage data to help us understand how the product is used and improve it.
-                </p>
-              </div>
-              <Switch
-                checked={tempPreferences.analytics}
-                onCheckedChange={(checked) => setTempPreferences((prev) => ({ ...prev, analytics: checked }))}
-              />
-            </div>
-
-            <Separator />
-
-            <div className="flex items-start justify-between space-x-2 p-3">
-              <div className="space-y-1">
                 <p className="font-medium text-body">Preferences</p>
                 <p className="text-meta text-muted-foreground">
                   Remembers your settings like theme and layout across sessions.

@@ -71,7 +71,7 @@ export function mutationFailureType(error: unknown): string {
  * OTLP through nestjs-pino and PinoInstrumentation (see tracing.ts), where
  * alerts query them by name.
  */
-export function recordBusinessEvent(event: BusinessEvent): void {
+export function recordBusinessEvent(event: BusinessEvent, analyticsProperties?: Record<string, string>): void {
   const message = `${event.name} ${event.outcome}`
   const attributes = toLogAttributes(event)
 
@@ -82,7 +82,7 @@ export function recordBusinessEvent(event: BusinessEvent): void {
   }
   for (const listener of subscribers) {
     try {
-      listener(attributes)
+      listener(analyticsProperties ? { ...analyticsProperties, ...attributes } : attributes)
     } catch {
       logger.warn('Business event analytics capture failed')
     }
@@ -100,6 +100,7 @@ export async function recordOutcomes<T>(
   op: () => Promise<T>,
   classifyError: (error: unknown) => string,
   organizationOf?: (result: T) => string | undefined,
+  successAnalyticsProperties?: Record<string, string>,
 ): Promise<T> {
   recordBusinessEvent({ ...event, outcome: 'requested' })
   let result: T
@@ -110,7 +111,10 @@ export async function recordOutcomes<T>(
     throw error
   }
   const organizationId = organizationOf?.(result) ?? event.organizationId
-  recordBusinessEvent({ ...event, outcome: 'success', ...(organizationId ? { organizationId } : {}) })
+  recordBusinessEvent(
+    { ...event, outcome: 'success', ...(organizationId ? { organizationId } : {}) },
+    successAnalyticsProperties,
+  )
   return result
 }
 

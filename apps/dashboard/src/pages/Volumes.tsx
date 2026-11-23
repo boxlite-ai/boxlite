@@ -202,7 +202,13 @@ const Volumes: React.FC = () => {
         />
         <div className="flex-1" />
         {canWrite && (
-          <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setCreateOpen(true)}>
+          <AsciiButton
+            variant="primary"
+            className="h-11 sm:h-9"
+            type="button"
+            data-console-action="new_volume"
+            onClick={() => setCreateOpen(true)}
+          >
             <Plus className="size-3.5" strokeWidth={2.4} />
             New Volume
           </AsciiButton>
@@ -281,6 +287,7 @@ const Volumes: React.FC = () => {
                       type="button"
                       // The id, not the name — see the mount-row comment in
                       // CreateBoxDialog.
+                      data-console-action="new_box"
                       onClick={() => setBoxVolumeId(volume.id)}
                       title={`Create a box with ${volume.name} mounted`}
                     >
@@ -329,41 +336,54 @@ const Volumes: React.FC = () => {
           <DialogHeader>
             <DialogTitle>New Volume</DialogTitle>
           </DialogHeader>
-          <FormDialogBody>
-            {/* Nothing else here says what a volume is — the payload is just a
+          <form
+            className="flex min-h-0 flex-col"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleCreate()
+            }}
+          >
+            <FormDialogBody>
+              {/* Nothing else here says what a volume is — the payload is just a
                 name — and this dialog is where someone meets the concept. */}
-            <p className="mb-[5px] font-sans text-meta leading-relaxed text-muted-foreground">
-              Storage that outlives a box. Mount it into a box to read and write; the data stays once that box is gone,
-              and another box can mount it later.
-            </p>
-            <div className="form-field-label">Name</div>
-            <input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-              placeholder="subtitle-models"
-              aria-label="Volume name"
-              aria-invalid={!nameValid}
-              className="form-field-input font-mono"
-            />
-            {/* Name is the entire create payload — the API accepts nothing else
+              <p className="mb-[5px] font-sans text-meta leading-relaxed text-muted-foreground">
+                Storage that outlives a box. Mount it into a box to read and write; the data stays once that box is
+                gone, and another box can mount it later.
+              </p>
+              <div className="form-field-label">Name</div>
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && (!newName.trim() || !nameValid)) {
+                    event.preventDefault()
+                    void handleCreate()
+                  }
+                }}
+                placeholder="subtitle-models"
+                aria-label="Volume name"
+                aria-invalid={!nameValid}
+                className="form-field-input font-mono"
+              />
+              {/* Name is the entire create payload — the API accepts nothing else
                 — and a mount takes a name in place of an id, so this is the
                 handle the user will type later. */}
-            <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>
-          </FormDialogBody>
-          <DialogFooter>
-            <AsciiButton type="button" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </AsciiButton>
-            <AsciiButton
-              variant="primary"
-              type="button"
-              onClick={handleCreate}
-              disabled={createVolume.isPending || !newName.trim() || !nameValid}
-            >
-              {createVolume.isPending ? 'Creating…' : 'Create'}
-            </AsciiButton>
-          </DialogFooter>
+              <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>
+            </FormDialogBody>
+            <DialogFooter>
+              <AsciiButton type="button" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </AsciiButton>
+              <AsciiButton
+                variant="primary"
+                type="submit"
+                data-console-action="create_volume"
+                disabled={createVolume.isPending || !newName.trim() || !nameValid}
+              >
+                {createVolume.isPending ? 'Creating…' : 'Create'}
+              </AsciiButton>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

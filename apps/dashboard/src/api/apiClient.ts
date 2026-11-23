@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { registrationSourceHeaders } from '@/lib/console-visit'
 import type { FirstRunUseCase } from '@/lib/first-run'
 import type {
   CiSettings,
@@ -124,8 +125,9 @@ export class ApiClient {
   }
 
   public async register(turnstileToken: string): Promise<User> {
-    return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
-      .data
+    const config = this.v1Config()
+    Object.assign(config.headers, registrationSourceHeaders())
+    return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...config, timeout: 30_000 })).data
   }
   public async getCiRepositories(
     organization: string,

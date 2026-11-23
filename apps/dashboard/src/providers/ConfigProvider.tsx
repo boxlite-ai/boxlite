@@ -5,6 +5,7 @@
  */
 
 import { completeSignIn, safeReturnTo } from '@/lib/auth-session'
+import { type ConsoleVisit, restoreVisit } from '@/lib/console-visit'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { BoxliteConfiguration } from '@boxlite-ai/api-client'
 import { useSuspenseQuery } from '@tanstack/react-query'
@@ -70,7 +71,8 @@ export function ConfigProvider(props: Props) {
       userStore: new WebStorageStateStore({ store: window.sessionStorage }),
       onSigninCallback: (user) => {
         if (!user) return
-        const state = user.state as { returnTo?: string } | undefined
+        const state = user.state as { returnTo?: string; visit?: ConsoleVisit } | undefined
+        restoreVisit(state?.visit)
         const targetUrl = safeReturnTo(state?.returnTo)
         completeSignIn()
         window.history.replaceState({}, '', targetUrl)

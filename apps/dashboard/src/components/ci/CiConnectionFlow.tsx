@@ -240,6 +240,7 @@ export function CiConnectionFlow({
           <AsciiButton
             variant="primary"
             disabled={starting || !configuration?.web_connect_available}
+            data-console-action="connect_github"
             onClick={() => void start()}
           >
             {starting && <Loader2 className="size-4 animate-spin" />}Connect GitHub

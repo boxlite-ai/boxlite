@@ -13,6 +13,7 @@ import { UserService } from '../user/user.service'
 import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
+import { REGISTRATION_SOURCE_HEADER } from '../user/registration-source'
 import { LoginEventRecorder } from './login-event.recorder'
 import { TypedConfigService } from '../config/typed-config.service'
 import { Context } from '../common/context/context'
@@ -96,6 +97,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
           },
           Context.user({ userId, authMethod: 'jwt' }),
+          request.get(REGISTRATION_SOURCE_HEADER),
         )
       } catch (error) {
         if (!(error instanceof UserAlreadyExistsException)) throw error

@@ -124,7 +124,12 @@ export function CiAccountPicker({
                   Connecting…
                 </span>
               ) : (
-                <AsciiButton size="sm" disabled={busy !== undefined} onClick={() => void choose(account.account_id)}>
+                <AsciiButton
+                  data-console-action="connect_github_account"
+                  size="sm"
+                  disabled={busy !== undefined}
+                  onClick={() => void choose(account.account_id)}
+                >
                   {account.installed ? (
                     'Connect'
                   ) : (

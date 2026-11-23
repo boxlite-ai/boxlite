@@ -9,6 +9,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Volumes from './Volumes'
+import userEvent from '@testing-library/user-event'
 import { toast } from 'sonner'
 
 const READY_VOLUME = {
@@ -140,6 +141,26 @@ describe('Volumes row action "New Box"', () => {
       root.render(<Volumes />)
     })
   }
+
+  it('records the Volume create action once when Enter submits the name', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    const button = rowAction('Create')!
+    expect(button.getAttribute('data-console-action')).toBe('create_volume')
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Volume name"]')!
+    await act(async () => {
+      input.focus()
+      await user.keyboard('{Enter}')
+    })
+    expect(toast.error).toHaveBeenCalledWith('Volume name is required')
+    const clicks = vi.fn()
+    button.addEventListener('click', clicks)
+    await act(async () => user.type(input, 'sample'))
+    await act(async () => user.keyboard('{Enter}'))
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(clicks).toHaveBeenCalledTimes(1)
+  })
 
   it.each(['pending_delete', 'deleting', 'error', 'future_state'])(
     'keeps %s volume status and action safety visible',
