@@ -32,6 +32,31 @@ reference sent to the API.
 Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
 Their existing defaults, validation and submission behavior are unchanged.
 
+## Subscription value when creating a Box
+
+The price footer compares the selected CPU, memory and disk configuration with
+subscription included usage. The published **PAYG estimate** stays primary for all
+users, including subscribers. A muted supplementary line expresses the percentage
+lower effective hourly cost within included usage (75% for a fourfold quota ratio).
+The summary says "with a subscription", without implying the benefit is exclusive
+to Starter. Price breakdown keeps a concise allowance assumption and PAYG overage explanation,
+without repeating plan-specific monthly pricing or an effective dollar estimate.
+The ratio is the catalog monthly price divided by included usage value, shared with
+Billing Plans; it never uses the wallet purchase multiplier.
+
+The price breakdown retains published per-resource consumption and explains that
+the estimate assumes the full monthly allowance is used. It is not an invoice or
+historical paid-price calculation. Remaining quota is consumed at published rates;
+ordinary wallet funding uses those same rates after quota is exhausted.
+Trials, expired cycles, unmatched/custom plans, quota mismatches and read errors do
+not produce a paid-benefit claim. Converted trials and scheduled cancellations
+retain paid benefits while otherwise eligible. Organization placeholder data is ignored.
+
+PAYG recommendations use the same documented numeric Box limits as the Billing
+benefits table. Unknown tiers or configurations beyond those limits do not get a
+plan-specific quote. View plans opens a separate tab, preserving the mounted create
+draft without storing environment variables or triggering payment or creation.
+
 ## New-account email policy
 
 First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without
@@ -296,6 +321,22 @@ refetch this list.
 Billing separates account status in Overview from the grouped Plans comparison.
 See [subscription plans](docs/subscription-cards/README.md) for source facts,
 frontend presentation, catalogue-price checks and the local mock preview.
+
+When an owner confirms an upgrade without a saved card, returning to Billing in
+the same tab continues the selected subscription automatically. The confirmation
+lasts 30 minutes and belongs to the signed-in owner and organization. Billing
+reads the wallet again on return. If the card is still missing, Billing checks
+twice more at one-second intervals, then ends the attempt. Once the card is
+visible, Billing checks the current plan before submitting. The bank may still ask
+the owner to authenticate the payment. **Add payment method** saves a card
+independently.
+
+Card status is organization-wide. A card added concurrently by another owner
+can satisfy the check. Closing the tab ends the handoff.
+
+The [before](docs/subscription-cards/upgrade-return-before.png) and
+[after](docs/subscription-cards/upgrade-return-after.png) views show Billing
+after the same simulated card setup.
 
 ## Commands
 
@@ -1526,3 +1567,24 @@ Run the mock Dashboard and open `/dashboard/welcome?preview=trial-onboarding`. T
 This entry requires development mode and `VITE_ENABLE_MOCKING=true`; the prototype module is excluded from production builds. It never invokes payment APIs or writes simulated subscription results to the Billing cache. Prices and plan concurrency reuse the current presentation source; no trial quota is inferred from bonus credits. Shipping this flow needs a server-confirmed eligibility/price quote and a mutation that rejects eligibility changes instead of silently charging. Registration/authentication and default Welcome remain unchanged.
 
 The choice step also offers “Explore console — no card required”, completing Welcome without verifying a card or activating a plan. “Have a coupon? Redeem code” expands an independent form: use `ACME50` for simulated success, an empty code for required-field feedback, or another code for invalid/expired feedback. Successful trial confirmation and coupon redemption complete Welcome immediately and enter Quickstart, without a separate success screen or another click. Coupon balances are not persisted to the shared mock wallet. Both alternative paths use existing Welcome completion and lead to Quickstart.
+
+### Box detail workspace sizing
+
+Overview and Terminal share the available workspace width and page gutters, so
+the return link, title, actions and tabs stay anchored when switching views.
+Overview uses a responsive two-column grid with adjacent field labels and values.
+Only a running Box reserves a viewport-height terminal shell.
+The existing terminal ResizeObserver refits rows and columns without replacing
+the session, including when navigation is expanded or the viewport changes.
+
+A stopped Box shows a compact bordered panel with guidance and Start Box, replacing
+the header Start in this view. The action uses the existing permission check and
+start mutation. The action stays disabled through the post-start detail refresh; starting waits for the Box state, and
+a failed start retains a local notice alongside the existing API error notification.
+Startup progress uses a polite status region; failures use a separate alert.
+Read-only members receive permission guidance. Overview keeps its header Start.
+
+For mock layout review, open `/dashboard/boxes/mock-box-stopped` and its
+`/terminal` route. Compare desktop, ultrawide, narrow and zoom-equivalent CSS
+viewports with expanded and collapsed navigation. Mock fixtures verify layout
+and action wiring, not guest connectivity.
