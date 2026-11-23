@@ -167,12 +167,25 @@ async function makeClient(
       headers,
       config: cfg,
     }
-    if (status >= 200 && status < 300) return response
+    if (!cfg.validateStatus || cfg.validateStatus(status)) return response
     throw new axios.AxiosError(`Request failed with status code ${status}`, undefined, cfg, undefined, response)
   }
   const { ApiClient } = await import('./apiClient')
   return new ApiClient(config, 'tok', onUnauthorized)
 }
+
+it('uses the renewed token for billing requests', async () => {
+  const requests: import('axios').InternalAxiosRequestConfig[] = []
+  const api = await makeClient(vi.fn(), 200, [], requests)
+  api.setAccessToken('renewed-token')
+  await api.billingApi.listPlans()
+  expect(requests[0].headers.Authorization).toBe('Bearer renewed-token')
+})
+
+it.each([204, 401, 403, 503])('preserves HTTP %i when eligibility has no decision', async (status) => {
+  const api = await makeClient(vi.fn(), status)
+  await expect(api.billingApi.getPlanTrialEligibility('org')).rejects.toMatchObject({ cause: { response: { status } } })
+})
 
 describe('ApiClient registration deadline', () => {
   let api: import('./apiClient').ApiClient

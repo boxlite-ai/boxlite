@@ -694,6 +694,7 @@ export class ApiClient {
 
   public setAccessToken(accessToken: string) {
     this.config.accessToken = accessToken
+    this._billingApi.setAccessToken(accessToken)
   }
 
   public get boxApi() {
