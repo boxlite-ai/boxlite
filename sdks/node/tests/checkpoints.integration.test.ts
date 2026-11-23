@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expect, test } from "vitest";
-import { BoxliteRestOptions, JsBoxlite } from "../lib/index.js";
+import { BoxliteRestOptions, errorCode, JsBoxlite } from "../lib/index.js";
 
 test("checkpoint native methods reject an unwrapped receiver", async () => {
   const runtime = JsBoxlite.rest(
@@ -16,6 +16,7 @@ test("checkpoint native methods reject an unwrapped receiver", async () => {
 test("checkpoint native REST calls preserve configuration inheritance and result identity", async () => {
   const requests: Array<{ method?: string; path?: string; body?: unknown }> =
     [];
+  let memoryCheckpointsEnabled = true;
   const checkpoint = {
     id: "checkpoint-1",
     name: "base",
@@ -28,14 +29,37 @@ test("checkpoint native REST calls preserve configuration inheritance and result
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const bytes = Buffer.concat(chunks).toString();
+    const capture = bytes
+      ? (JSON.parse(bytes) as { kind?: string; name?: string })
+      : undefined;
     requests.push({
       method: request.method,
       path: request.url,
-      body: bytes ? JSON.parse(bytes) : undefined,
+      body: capture,
     });
     response.setHeader("Content-Type", "application/json");
     if (request.method === "DELETE") {
       response.writeHead(204).end();
+      return;
+    }
+    if (request.url === "/v1/config") {
+      response.end(
+        JSON.stringify({
+          capabilities: {
+            memory_checkpoints_enabled: memoryCheckpointsEnabled,
+          },
+        }),
+      );
+      return;
+    }
+    if (request.method === "POST" && capture?.kind === "full") {
+      response.end(
+        JSON.stringify({
+          ...checkpoint,
+          kind: "full",
+          memory_size_bytes: capture.name === "full-zero" ? 0 : undefined,
+        }),
+      );
       return;
     }
     const body = request.url?.startsWith("/v1/boxes")
@@ -50,7 +74,7 @@ test("checkpoint native REST calls preserve configuration inheritance and result
           updated_at: checkpoint.created_at,
         }
       : request.method === "GET" && request.url === "/v1/checkpoints"
-        ? { checkpoints: [checkpoint] }
+        ? { checkpoints: [{ ...checkpoint, kind: "future" }] }
         : checkpoint;
     response.end(
       JSON.stringify(
@@ -58,6 +82,7 @@ test("checkpoint native REST calls preserve configuration inheritance and result
           request.url === "/v1/checkpoints/checkpoint-1"
           ? {
               ...checkpoint,
+              kind: "future",
               state: "failed",
               error_reason: "archive upload failed",
             }
@@ -69,16 +94,27 @@ test("checkpoint native REST calls preserve configuration inheritance and result
   try {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url }));
+    await expect(async () =>
+      runtime.checkpoints.create("source-1", null, { kind: "bogus" as never }),
+    ).rejects.toSatisfy(
+      (err: unknown) => errorCode(err) === "invalid_argument",
+    );
+    expect(requests).toEqual([]);
     const captured = await runtime.checkpoints.create("source-1", "base");
     expect(captured).toMatchObject({
       id: "checkpoint-1",
       sourceBoxId: "source-1",
       sizeBytes: 4096,
+      kind: "disk",
       state: "ready",
     });
-    expect((await runtime.checkpoints.list())[0].id).toBe("checkpoint-1");
+    expect((await runtime.checkpoints.list())[0]).toMatchObject({
+      id: "checkpoint-1",
+      kind: "unknown",
+    });
     expect(await runtime.checkpoints.get("checkpoint-1")).toMatchObject({
       name: "base",
+      kind: "unknown",
       state: "failed",
       errorReason: "archive upload failed",
     });
@@ -91,7 +127,15 @@ test("checkpoint native REST calls preserve configuration inheritance and result
     await runtime.checkpoints.remove("checkpoint-1", true);
     await runtime.checkpoints.remove("checkpoint-1");
     await runtime.checkpoints.remove("checkpoint-1", false);
-    await runtime.checkpoints.create("source-1");
+    for (const options of [
+      undefined,
+      null,
+      {},
+      { kind: null },
+      { kind: "disk" },
+    ] as const) {
+      await runtime.checkpoints.create("source-1", undefined, options);
+    }
     await runtime.create({ checkpoint: "checkpoint-1" });
     for (const overridden of [
       { checkpoint: "checkpoint-1", cpus: 2 },
@@ -128,16 +172,46 @@ test("checkpoint native REST calls preserve configuration inheritance and result
         path: "/v1/checkpoints/checkpoint-1",
         body: undefined,
       },
-      {
+      ...Array.from({ length: 5 }, () => ({
         method: "POST",
         path: "/v1/checkpoints",
         body: { source_box_id: "source-1" },
-      },
+      })),
       {
         method: "POST",
         path: "/v1/boxes",
         body: { checkpoint_id: "checkpoint-1" },
       },
+    ]);
+
+    requests.length = 0;
+    for (const [name, memorySizeBytes] of [
+      ["full-zero", 0],
+      ["full-pending", undefined],
+    ] as const) {
+      const info = await runtime.checkpoints.create("source-1", name, {
+        kind: "full",
+      });
+      expect(info.kind).toBe("full");
+      expect(info.memorySizeBytes).toBe(memorySizeBytes);
+    }
+    expect(requests).toEqual(
+      ["full-zero", "full-pending"].flatMap((name) => [
+        { method: "GET", path: "/v1/config", body: undefined },
+        {
+          method: "POST",
+          path: "/v1/checkpoints",
+          body: { source_box_id: "source-1", name, kind: "full" },
+        },
+      ]),
+    );
+    requests.length = 0;
+    memoryCheckpointsEnabled = false;
+    await expect(
+      runtime.checkpoints.create("source-1", null, { kind: "full" }),
+    ).rejects.toSatisfy((err: unknown) => errorCode(err) === "unsupported");
+    expect(requests).toEqual([
+      { method: "GET", path: "/v1/config", body: undefined },
     ]);
   } finally {
     server.closeAllConnections();
