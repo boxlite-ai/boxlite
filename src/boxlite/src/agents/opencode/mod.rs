@@ -21,7 +21,7 @@
 
 mod http;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, PoisonError, Weak};

@@ -199,7 +199,7 @@ async fn agent_exchange(
     content_type: &str,
     status: &str,
     body: &str,
-) {
+) -> String {
     let (mut socket, _) = listener.accept().await.unwrap();
     let mut header = Vec::new();
     while !header.ends_with(b"\r\n\r\n") {
@@ -231,6 +231,7 @@ async fn agent_exchange(
         body.len()
     );
     socket.write_all(reply.as_bytes()).await.unwrap();
+    header
 }
 
 #[tokio::test]
@@ -461,4 +462,49 @@ async fn wait_requires_matching_terminal_status() {
         );
         server.await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn remote_create_forwards_config_cwd_and_retry_key() {
+    use crate::agents::{AgentConfig, AgentCreateOptions};
+    use serde_json::json;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let sandbox = Arc::new(rest_box_for(listener.local_addr().unwrap().port(), "box"));
+    let server = tokio::spawn(async move {
+        let header = agent_exchange(
+            &listener,
+            "POST /v1/boxes/box/agents",
+            Some(json!({
+                "agent":"opencode","options":{"cwd":"/workspace","config":{
+                    "permissions":{"edit":"deny"},"limits":{"max_steps":3},"tools":[],"mcp":[]
+                }}
+            })),
+            "application/json",
+            "201 Created",
+            RESOURCE,
+        )
+        .await;
+        let keys: Vec<_> = header
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("Idempotency-Key"))
+            .map(|(_, value)| value.trim())
+            .collect();
+        assert_eq!(keys, ["create-42"]);
+    });
+    let options = AgentCreateOptions {
+        cwd: Some("/workspace".into()),
+        config: AgentConfig {
+            permissions: Some(json!({"edit":"deny"})),
+            limits: Some(json!({"max_steps":3})),
+            ..Default::default()
+        },
+        idempotency_key: Some("create-42".into()),
+    };
+    let agent = crate::Agents::new(sandbox.clone(), sandbox)
+        .create("opencode", options)
+        .await
+        .unwrap();
+    assert_eq!(agent.id(), "ses_test");
+    server.await.unwrap();
 }

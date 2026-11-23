@@ -201,6 +201,9 @@ to an existing server. Response config accepts additional fields and validates
 known types; request config rejects unknown fields. Close and interrupt require
 HTTP 204. The remote `requests()` method is unsupported. The Rust client opens agent and turn SSE streams before returning, ignores
 comment heartbeats, validates parent IDs, and bounds event size and buffering.
+On an OpenCode agent subscription, a subagent event carries the subscribed
+agent's ID in the outer `agent_id` field. Its native payload identifies the
+child session, and its outer `turn_id` is null.
 After 30 seconds without stream data (two heartbeat intervals), the client reports
 a network error and closes the subscription. Dropping the stream releases the
 connection without cancelling the turn. Agent writes return redirects as errors

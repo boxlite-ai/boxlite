@@ -253,3 +253,56 @@ async fn heartbeats_keep_an_idle_subscription_open() {
         .unwrap();
     assert_eq!(event.kind, "message");
 }
+
+#[tokio::test]
+async fn agent_subscription_delivers_opencode_child_then_parent_events() {
+    use crate::agents::{opencode::tests::scripted_events, records};
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut native = scripted_events(&[
+        json!({"type":"session.created","data":{"parentID":"ses_test","sessionID":"ses_child"}}),
+        json!({"type":"session.inbox.enqueued","data":{"sessionID":"ses_child","inboxID":"msg_child"}}),
+        json!({"type":"session.inbox.enqueued","data":{"sessionID":"ses_test","inboxID":"msg_parent"}}),
+    ]).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(socket.read_u8().await.unwrap());
+        }
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        while let Some(Ok(event)) = native.next().await {
+            let frame = format!("event: agent\ndata: {}\n\n", records::event(&event));
+            socket.write_all(frame.as_bytes()).await.unwrap();
+        }
+    });
+    let client = ApiClient::new(&crate::BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+    let mut stream = open(
+        &client,
+        "/boxes/box/agents/ses_test",
+        "ses_test",
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        stream.next().await.unwrap().unwrap().kind,
+        "session.created"
+    );
+    let child = stream.next().await.unwrap().unwrap();
+    assert_eq!(child.agent_id, "ses_test");
+    assert_eq!(child.data["data"]["sessionID"], "ses_child");
+    assert_eq!(child.turn_id, None);
+    let parent = stream.next().await.unwrap().unwrap();
+    assert_eq!(parent.agent_id, "ses_test");
+    assert_eq!(parent.turn_id.as_deref(), Some("msg_parent"));
+    server.await.unwrap();
+}
