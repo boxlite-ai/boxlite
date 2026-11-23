@@ -241,8 +241,9 @@ describe('BoxTerminal page', () => {
   it('starts a stopped box through the existing mutation', async () => {
     mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
     await renderPage()
-    const start = buttonNamed('Start')
+    const start = buttonNamed('Start Box')
     await act(async () => start.click())
+    expect(start.closest('[data-slot="empty"]')).not.toBeNull()
     expect(mocks.start).toHaveBeenCalledWith({ boxId: 'box-1', detailRef: 'box-1' })
     expect(mocks.terminalMounts).not.toHaveBeenCalled()
   })
@@ -251,10 +252,36 @@ describe('BoxTerminal page', () => {
     mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
     mocks.pending = true
     await renderPage()
-    const start = buttonNamed('Start')
+    const start = buttonNamed('Start Box')
     expect(start.disabled).toBe(true)
     await act(async () => start.click())
     expect(mocks.start).not.toHaveBeenCalled()
+  })
+
+  it('keeps a failed start actionable and connects only after the Box is running', async () => {
+    mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
+    mocks.start.mockRejectedValueOnce(new Error('Unavailable'))
+    await renderPage()
+    await act(async () => buttonNamed('Start Box').click())
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not start')
+    expect(mocks.terminalMounts).not.toHaveBeenCalled()
+    await act(async () => buttonNamed('Start Box').click())
+    expect(mocks.start).toHaveBeenCalledTimes(2)
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    mocks.box = { ...mocks.box, state: BoxState.STARTING } as Box
+    await renderPage()
+    expect(document.body.textContent).toContain('Starting Box…')
+    expect(mocks.terminalMounts).not.toHaveBeenCalled()
+    mocks.box = { ...mocks.box, state: BoxState.STARTED } as Box
+    await renderPage()
+    expect(mocks.terminalMounts).toHaveBeenCalledOnce()
+  })
+
+  it('retains the Overview start action', async () => {
+    mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
+    await renderPage('overview')
+    await act(async () => buttonNamed('Start').click())
+    expect(mocks.start).toHaveBeenCalledWith({ boxId: 'box-1', detailRef: 'box-1' })
   })
 
   it.each(['read-only', 'starting', 'loading', 'missing'] as const)(
@@ -272,9 +299,11 @@ describe('BoxTerminal page', () => {
       }
       await renderPage()
       expect(mocks.terminalMounts).not.toHaveBeenCalled()
-      expect([...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Start')).toBe(
-        false,
-      )
+      expect(
+        [...document.querySelectorAll('button')].some((button) =>
+          ['Start', 'Start Box'].includes(button.textContent?.trim() ?? ''),
+        ),
+      ).toBe(false)
       if (state === 'loading' || state === 'missing') {
         expect(document.querySelector('nav[aria-label="Box pages"]')).toBeNull()
       } else {
