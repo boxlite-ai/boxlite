@@ -14,6 +14,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OrganizationScope } from './OrganizationScope'
+import { setAppHostingIntroSeen } from '@/lib/apps/intro'
 import { RecentlyDeleted } from './RecentlyDeleted'
 
 const state = vi.hoisted(() => ({
@@ -93,8 +94,7 @@ describe('Recently deleted Apps permanent deletion', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     vi.clearAllMocks()
-    vi.stubEnv('VITE_ENABLE_MOCKING', 'true')
-    sessionStorage.setItem('mock-app-hosting-access', 'enabled')
+    setAppHostingIntroSeen(true)
     state.organization = { id: 'org-a' }
     state.canDelete = true
     requests = []
@@ -118,8 +118,7 @@ describe('Recently deleted Apps permanent deletion', () => {
   afterEach(() => {
     act(() => root.unmount())
     cache.clear()
-    vi.unstubAllEnvs()
-    sessionStorage.removeItem('mock-app-hosting-access')
+    sessionStorage.clear()
     axios.defaults.adapter = adapter
     document.body.innerHTML = ''
   })

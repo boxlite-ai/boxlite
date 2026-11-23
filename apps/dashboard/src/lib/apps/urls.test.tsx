@@ -3,14 +3,14 @@
 
 import { ApiClient } from '@/api/apiClient'
 import AppDetailsPage from '@/components/apps/AppDetails'
-import { AppCards } from '@/components/apps/AppCards'
 import { LiveCard } from '@/components/apps/OverviewHero'
-import { useAppsQuery } from '@/hooks/queries/useAppsQuery'
+import AppsPage from '@/pages/Apps'
+import { setAppHostingIntroSeen } from './intro'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import axios, { type AxiosResponse, type InternalAxiosRequestConfig } from 'axios'
 import { act, type ComponentProps, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppDetail, EnvironmentSummary } from './types'
 
@@ -98,20 +98,6 @@ describe('cloud App URL availability', () => {
   let requests: InternalAxiosRequestConfig[]
   const adapter = axios.defaults.adapter
 
-  function List() {
-    const { data = [], isLoading, error } = useAppsQuery()
-    const navigate = useNavigate()
-    return (
-      <AppCards
-        apps={data}
-        loading={isLoading}
-        error={error?.message ?? null}
-        onRetry={() => undefined}
-        onRowClick={(selected) => navigate(`/dashboard/apps/${selected.id}`)}
-      />
-    )
-  }
-
   function render(path = '/dashboard/apps', children?: ReactNode) {
     act(() =>
       root.render(
@@ -119,7 +105,7 @@ describe('cloud App URL availability', () => {
           <MemoryRouter initialEntries={[path]}>
             {children ?? (
               <Routes>
-                <Route path="/dashboard/apps" element={<List />} />
+                <Route path="/dashboard/apps" element={<AppsPage />} />
                 <Route path="/dashboard/apps/:appId" element={<AppDetailsPage />} />
               </Routes>
             )}
@@ -138,8 +124,7 @@ describe('cloud App URL availability', () => {
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
-    vi.stubEnv('VITE_ENABLE_MOCKING', 'true')
-    sessionStorage.setItem('mock-app-hosting-access', 'enabled')
+    setAppHostingIntroSeen(true)
     vi.stubGlobal(
       'ResizeObserver',
       class {
@@ -154,6 +139,7 @@ describe('cloud App URL availability', () => {
       requests.push(request)
       let data: unknown
       if (request.url === '/v1/org-a/apps') data = [{ ...app, environments: 1 }]
+      else if (request.url === '/v1/org-a/apps/deleted') data = []
       else if (request.url?.endsWith('/view')) data = app
       else if (request.url?.endsWith('/environments'))
         data = [
@@ -177,34 +163,52 @@ describe('cloud App URL availability', () => {
     document.body.innerHTML = ''
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
-    sessionStorage.removeItem('mock-app-hosting-access')
+    sessionStorage.clear()
   })
 
-  it.each([null, APP_URL])(
-    'keeps management reachable from the list with URL %s using only read requests',
-    async (url) => {
-      app = detail(url)
-      render()
-      await settled()
-      const link = host.querySelector<HTMLAnchorElement>('a[aria-label="Open demo"]')!
-      expect(link.getAttribute('href')).toBe('/dashboard/apps/demo')
-      expect(host.querySelector('[aria-label="Open demo in a new tab"]') !== null).toBe(!!url)
-      expect(link.closest('article')?.textContent).toContain(url ? 'demo.apps.example.test' : 'URL unavailable')
-      await act(async () => link.click())
-      await settled()
-      expect(host.querySelector('h1')?.textContent).toBe('demo')
-      expect(host.textContent).toContain('Keep building with your agent')
-      expect(host.querySelector('button[title="Copy URL"]') !== null).toBe(!!url)
-      expect([...host.querySelectorAll('button')].some((button) => button.textContent?.includes('Open app'))).toBe(
-        !!url,
-      )
-      expect(requests.map(({ method, url: path }) => [method, path])).toEqual([
-        ['get', '/v1/org-a/apps'],
-        ['get', '/v1/org-a/apps/demo/view'],
-        ['get', '/v1/org-a/apps/demo/environments'],
-      ])
-    },
-  )
+  it.each([
+    { mocking: 'false', url: null },
+    { mocking: 'true', url: APP_URL },
+  ])('opens early access and follows an App card with mocking=$mocking and URL $url', async ({ mocking, url }) => {
+    vi.stubEnv('VITE_ENABLE_MOCKING', mocking)
+    sessionStorage.clear()
+    app = detail(url)
+    render()
+    const button = host.querySelector('button')!
+    expect(button.textContent).toBe('Get early access')
+    expect(requests).toHaveLength(0)
+    act(() => button.click())
+    await settled()
+    expect(host.textContent).toContain('New app')
+    const link = host.querySelector<HTMLAnchorElement>('a[aria-label="Open demo"]')!
+    expect(link.getAttribute('href')).toBe('/dashboard/apps/demo')
+    expect(host.querySelector('[aria-label="Open demo in a new tab"]') !== null).toBe(!!url)
+    expect(link.closest('article')?.textContent).toContain(url ? 'demo.apps.example.test' : 'URL unavailable')
+    await act(async () => link.click())
+    await settled()
+    expect(host.querySelector('h1')?.textContent).toBe('demo')
+    expect(host.textContent).toContain('Keep building with your agent')
+    expect(host.querySelector('button[title="Copy URL"]') !== null).toBe(!!url)
+    expect([...host.querySelectorAll('button')].some((button) => button.textContent?.includes('Open app'))).toBe(!!url)
+    expect(requests.map(({ method, url }) => `${method} ${url}`).sort()).toEqual([
+      'get /v1/org-a/apps',
+      'get /v1/org-a/apps/deleted',
+      'get /v1/org-a/apps/demo/environments',
+      'get /v1/org-a/apps/demo/view',
+    ])
+  })
+
+  it('opens early access directly at the linked App and environment', async () => {
+    vi.stubEnv('VITE_ENABLE_MOCKING', 'false')
+    sessionStorage.clear()
+    render('/dashboard/apps/demo?env=staging')
+    const button = host.querySelector('button')!
+    expect(button.textContent).toBe('Get early access')
+    act(() => button.click())
+    await settled()
+    expect(host.querySelector('h1')?.textContent).toBe('demo')
+    expect(requests.find((request) => request.url === '/v1/org-a/apps/demo/view')?.params).toEqual({ env: 'staging' })
+  })
 
   it('keeps Domains management available without a primary URL or copy/open controls', async () => {
     render('/dashboard/apps/demo?tab=domains')

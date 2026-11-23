@@ -4,6 +4,7 @@
 import { AgentHandoffPanel } from '@/components/apps/AgentHandoffPanel'
 import { OrganizationScope } from '@/components/apps/OrganizationScope'
 import { DomainsTab } from '@/components/apps/tabs/DomainsTab'
+import { setAppHostingIntroSeen } from './intro'
 import type { AppDetail } from './types'
 import { ApiClient } from '@/api/apiClient'
 import { useCreateApp } from '@/hooks/mutations/useAppMutations'
@@ -66,8 +67,7 @@ describe('cloud App organization isolation', () => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     state.organization = { id: 'org-a' }
     state.permitted = true
-    vi.stubEnv('VITE_ENABLE_MOCKING', 'true')
-    sessionStorage.setItem('mock-app-hosting-access', 'enabled')
+    setAppHostingIntroSeen(true)
     requests = []
     respond = async (request) => response(request, [{ id: 'one', name: 'current-app' }])
     axios.defaults.adapter = async (request) => {
@@ -309,11 +309,10 @@ describe('cloud App organization isolation', () => {
     expect(host.textContent).toBe('/dashboard/apps')
   })
 
-  it.each(['/dashboard/apps', '/dashboard/apps/app-a'])('withholds management at %s by default', (path) => {
-    sessionStorage.removeItem('mock-app-hosting-access')
-    const mounted = vi.fn()
+  it('checks App read permission when continuing from early access', () => {
+    setAppHostingIntroSeen(false)
+    state.permitted = false
     function Management() {
-      mounted()
       useAppsQuery()
       return <button>New app</button>
     }
@@ -321,22 +320,18 @@ describe('cloud App organization isolation', () => {
       <OrganizationScope>
         <Management />
       </OrganizationScope>,
-      path,
     )
-    expect(host.textContent).toContain('App hosting is in early access')
-    expect(host.textContent).not.toContain('New app')
-    expect(mounted).not.toHaveBeenCalled()
     const button = host.querySelector('button')!
     expect(button.textContent).toBe('Get early access')
     act(() => button.click())
-    expect(mounted).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('read permission')
+    expect(host.textContent).not.toContain('New app')
     expect(requests).toEqual([])
-    expect(sessionStorage.getItem('mock-app-hosting-access')).toBeNull()
-    expect(host.textContent).not.toContain('submitted')
   })
 
-  it('cannot admit a non-mock build through the stored fixture or URL', () => {
+  it('shows the introduction for a mock fixture URL in a non-mock build', () => {
     vi.stubEnv('VITE_ENABLE_MOCKING', 'false')
+    sessionStorage.clear()
     render(
       <OrganizationScope>
         <button>New app</button>
@@ -347,14 +342,16 @@ describe('cloud App organization isolation', () => {
     expect(host.textContent).not.toContain('New app')
   })
 
-  it('retains read permission checks in the admitted fixture', () => {
-    state.permitted = false
-    render(
-      <OrganizationScope>
-        <button>New app</button>
-      </OrganizationScope>,
-    )
-    expect(host.textContent).toContain('read permission')
-    expect(host.textContent).not.toContain('New app')
+  it('remembers the introduction across App mounts when browser storage is unavailable', () => {
+    sessionStorage.clear()
+    const save = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('Storage unavailable', 'QuotaExceededError')
+    })
+    render(<OrganizationScope>App list</OrganizationScope>)
+    act(() => host.querySelector('button')!.click())
+    expect(host.textContent).toBe('App list')
+    render(<OrganizationScope key="detail">App details</OrganizationScope>)
+    expect(host.textContent).toBe('App details')
+    save.mockRestore()
   })
 })
