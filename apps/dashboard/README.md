@@ -40,17 +40,14 @@ Their existing defaults, validation and submission behavior are unchanged.
 
 See the [UI walkthrough and screenshots](app-hosting-ui.md) for the current mock experience.
 
-**Applications → App hosting** defaults to an early-access introduction. The
-**Get early access** button is a UI placeholder: it sends no application and does
-not report approval. List and detail entry points withhold management content.
-This frontend presentation is not server-side authorization; the Apps API and
-CLI retain their existing permissions. A server eligibility contract is required
-before this becomes an enforceable allowlist or admits production organizations.
+Open **Applications → App hosting** and select **Get early access** to see the
+selected organization's Apps. If you followed a link to an App, the button
+opens that App's details. The Dashboard remembers the choice for the browser
+tab, including on refresh. Viewing Apps requires the organization's App read
+permission.
 
-In mock mode, open `/dashboard/apps?appHosting=enabled` to exercise the admitted
-flow, or `?appHosting=restricted` to restore the default entry. The fixture lasts
-for that browser tab, including detail navigation, and has no effect outside a
-mock build. No query parameter grants production access.
+In mock mode, `/dashboard/apps?appHosting=enabled` opens the sample Apps list
+directly. Use `?appHosting=restricted` to show the introduction again.
 
 App hosting uses the Console's shared resource headings, buttons and type scale.
 UI text uses Inter; code, URLs, paths and technical values use Commit Mono.
@@ -818,7 +815,8 @@ Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
 The **Managed domain** tab lists platform hostnames and the organization's allowance.
-The default allowance is 20 names shared by generated App environment URLs and names acquired with **Request domain**.
+New organizations can hold one platform hostname by default. Generated App environment URLs and names acquired with **Request domain** count toward the same allowance.
+Organizations retain their stored allowances and existing names on upgrade.
 **Custom domain** includes draft and replaced configurations.
 Its separate one-domain allowance excludes replaced configurations.
 

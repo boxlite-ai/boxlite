@@ -4,17 +4,7 @@ import { Button } from '@/components/ui/button'
 import { AgentLogos } from './AgentLogos'
 import { AppHostingIllustration } from './AppHostingIllustration'
 
-/** Presentation fixture only. Server-side eligibility is a separate API contract. */
-export function hasMockAppHostingAccess(): boolean {
-  if (import.meta.env.VITE_ENABLE_MOCKING !== 'true') return false
-  try {
-    return sessionStorage.getItem('mock-app-hosting-access') === 'enabled'
-  } catch {
-    return false
-  }
-}
-
-export function AppHostingAccess() {
+export function AppHostingAccess({ onContinue }: { onContinue: () => void }) {
   return (
     <main className="resource-page flex-1">
       <header className="space-y-2">
@@ -35,8 +25,9 @@ export function AppHostingAccess() {
         </div>
         <div className="flex flex-col items-center gap-4">
           <p className="text-meta text-muted-foreground">App hosting is in early access.</p>
-          {/* UI only: application submission is intentionally not connected. */}
-          <Button type="button">Get early access</Button>
+          <Button type="button" onClick={onContinue}>
+            Get early access
+          </Button>
         </div>
       </section>
     </main>

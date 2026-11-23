@@ -159,7 +159,7 @@ export class Organization {
   // A requested name still counts after it is unbound.
   @Column({
     type: 'int',
-    default: 20,
+    default: 1,
     name: 'domain_count_limit',
   })
   domainCountLimit: number

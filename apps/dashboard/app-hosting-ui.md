@@ -6,15 +6,15 @@ See [App hosting](README.md#app-hosting) for access boundaries and fixture switc
 
 ## Early access
 
-The default entry explains the idea-to-cloud-app workflow, with a short decorative
-animation and coding-agent logos. **Get early access** is a UI placeholder; no
-application is submitted. Server-side eligibility is not implemented by this UI.
+Select **Get early access** to open the current organization's Apps. The same
+button on a direct App link opens that App's details. The introduction appears
+once per browser tab.
 
 ![Early-access introduction](review-assets/app-hosting/early-access.png)
 
 ## Application cards
 
-Admitted mock users see responsive application cards. Undeployed apps use an
+The mock Apps list shows responsive application cards. Undeployed apps use an
 unassembled outline Box; deployed apps without screenshots use the cloud-app
 illustration. Illustrations leave a generous margin. Actual screenshots fill the
 preview region. Card links open details; open-app and menu actions are independent.
