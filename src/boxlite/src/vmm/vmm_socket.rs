@@ -110,14 +110,18 @@ pub(crate) fn serve(
     }
     let listener = UnixListener::bind(path)?;
     restrict_to_owner(path)?;
+    // SAFETY: `geteuid` has no preconditions.
+    let owner = unsafe { libc::geteuid() };
     std::thread::Builder::new()
         .name("vmm-control".into())
-        .spawn(move || serve_connections(listener.incoming(), handle, std::thread::sleep))?;
+        .spawn(move || serve_connections(listener.incoming(), owner, handle, std::thread::sleep))?;
     Ok(())
 }
 
+/// `owner` is the uid whose mount control requests this shim accepts.
 fn serve_connections(
     incoming: impl Iterator<Item = io::Result<UnixStream>>,
+    owner: libc::uid_t,
     mut handle: impl FnMut(ControlOp, Option<File>) -> ControlResponse,
     mut sleep: impl FnMut(Duration),
 ) {
@@ -149,7 +153,7 @@ fn serve_connections(
                 continue;
             }
         };
-        if let Err(error) = answer(stream, &mut handle) {
+        if let Err(error) = answer(stream, owner, &mut handle) {
             tracing::debug!(%error, "control connection ended");
         }
     }
@@ -157,8 +161,12 @@ fn serve_connections(
 
 fn answer(
     stream: UnixStream,
+    owner: libc::uid_t,
     handle: &mut impl FnMut(ControlOp, Option<File>) -> ControlResponse,
 ) -> io::Result<()> {
+    // The resize path of other platforms has no peer check.
+    #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
+    let _ = owner;
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     let (frame, file) = transport::receive_frame(&stream, Instant::now() + IO_TIMEOUT)?;
     #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
@@ -172,7 +180,7 @@ fn answer(
     let response = match serde_json::from_slice::<ControlRequest>(&frame) {
         Ok(request) if request.version == VERSION => {
             #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-            let checked = check_request(&stream, &request.op, file.is_some());
+            let checked = check_request(&stream, owner, &request.op, file.is_some());
             #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
             let checked = Ok(());
             checked.and_then(|()| handle(request.op, file))
@@ -191,13 +199,18 @@ fn answer(
 }
 
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-fn check_request(stream: &UnixStream, op: &ControlOp, has_fd: bool) -> Result<(), ControlError> {
+fn check_request(
+    stream: &UnixStream,
+    owner: libc::uid_t,
+    op: &ControlOp,
+    has_fd: bool,
+) -> Result<(), ControlError> {
     let register = matches!(op, ControlOp::RegisterMount { .. });
     if has_fd != register {
         return Err(ControlError::Mount(libc::EINVAL));
     }
     if !matches!(op, ControlOp::ResizeDisk { .. })
-        && !transport::same_user(stream)
+        && !transport::same_user(stream, owner)
             .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap_or(libc::EIO)))?
     {
         return Err(ControlError::Mount(libc::EPERM));

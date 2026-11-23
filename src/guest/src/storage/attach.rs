@@ -270,9 +270,9 @@ impl Attacher {
         }
         self.reap_straggler()?;
         let tree = clone_detached(source, read_only)?;
-        // Check kernel support before publication. The child reports this
-        // same tree's identity again after move_mount succeeds.
-        mount_identity(tree.as_raw_fd()).map_err(|code| {
+        // A mount keeps its ID when it moves, so the installed mount is identified
+        // before anything is published in the container.
+        let id = mount_identity(tree.as_raw_fd()).map_err(|code| {
             BoxliteError::Storage(format!(
                 "statx detached tree: {}",
                 io::Error::from_raw_os_error(code)
@@ -301,7 +301,6 @@ impl Attacher {
                 )));
             }
         };
-        let id = report.mount_id;
         report.into_result(target.pid, destination)?;
         Ok(MountedTree { _fd: tree, id })
     }
@@ -395,7 +394,7 @@ fn clone_detached(source: &Path, read_only: bool) -> BoxliteResult<OwnedFd> {
     Ok(tree)
 }
 
-/// Descriptor-based identity; also callable in the post-clone child.
+/// Descriptor-based identity: of a detached clone in the agent, or of a mount point in the child.
 /// STATX_MNT_ID is reusable only after the last mount reference is released.
 fn mount_identity(fd: RawFd) -> Result<u64, i32> {
     use rustix::fs::{statx, AtFlags, StatxFlags};
@@ -696,14 +695,7 @@ fn attach_in_child(
                     c"",
                     sys::MOVE_MOUNT_F_EMPTY_PATH | sys::MOVE_MOUNT_T_EMPTY_PATH,
                 ) {
-                    Ok(()) => match mount_identity(fds.tree) {
-                        Ok(id) => Report {
-                            stage: Some(Stage::Attached),
-                            errno: 0,
-                            mount_id: id,
-                        },
-                        Err(code) => Report::new(Stage::Identity, code),
-                    },
+                    Ok(()) => Report::new(Stage::Attached, 0),
                     Err(error) => Report::new(Stage::Attach, error.raw_os_error().unwrap_or(0)),
                 },
             ),
@@ -813,7 +805,6 @@ const STAGES: [Stage; 15] = [
 struct Report {
     stage: Option<Stage>,
     errno: i32,
-    mount_id: u64,
 }
 
 impl Report {
@@ -821,7 +812,6 @@ impl Report {
         Self {
             stage: Some(stage),
             errno,
-            mount_id: 0,
         }
     }
 
@@ -829,29 +819,25 @@ impl Report {
         Self {
             stage: None,
             errno: 0,
-            mount_id: 0,
         }
     }
 
     /// Write the report to `pipe`. System calls only.
     fn send(&self, pipe: RawFd) {
         let [a, b, c, d] = self.errno.to_le_bytes();
-        let mut bytes = [0u8; 13];
-        bytes[..5].copy_from_slice(&[self.stage.map_or(u8::MAX, |stage| stage as u8), a, b, c, d]);
-        bytes[5..].copy_from_slice(&self.mount_id.to_le_bytes());
+        let bytes = [self.stage.map_or(u8::MAX, |stage| stage as u8), a, b, c, d];
         // SAFETY: a plain write of a stack buffer to an owned pipe.
         unsafe { libc::write(pipe, bytes.as_ptr().cast(), bytes.len()) };
     }
 
     fn read(pipe: &OwnedFd) -> Self {
-        let mut bytes = [0u8; 13];
-        let complete = matches!(nix::unistd::read(pipe.as_raw_fd(), &mut bytes), Ok(13));
+        let mut bytes = [0u8; 5];
+        let complete = matches!(nix::unistd::read(pipe.as_raw_fd(), &mut bytes), Ok(5));
         Self {
             stage: STAGES
                 .into_iter()
                 .find(|stage| complete && *stage as u8 == bytes[0]),
             errno: i32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]),
-            mount_id: u64::from_le_bytes(bytes[5..].try_into().expect("fixed mount ID width")),
         }
     }
 
@@ -869,11 +855,9 @@ impl Report {
             Some(Stage::Detach) => Err(BoxliteError::Storage(format!(
                 "detach {place} in {target} failed at umount2: {errno}"
             ))),
-            Some(Stage::OpenMountPoint) | Some(Stage::ListMountPoint) => {
-                Err(BoxliteError::Storage(format!(
-                    "detach could not open {place} in {target}: {errno}"
-                )))
-            }
+            Some(Stage::OpenMountPoint) | Some(Stage::ListMountPoint) => Err(
+                BoxliteError::Storage(format!("could not open {place} in {target}: {errno}")),
+            ),
             Some(Stage::HasEntries) => Err(BoxliteError::InvalidState(format!(
                 "{place} already has entries in the container; mounting there would hide them"
             ))),

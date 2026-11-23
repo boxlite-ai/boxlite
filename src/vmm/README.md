@@ -12,7 +12,7 @@ lifecycle API, memory layout, buses, interrupts, and threads.
 and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
-`Vm::new(config, console, control)` adds COM1, the CMOS RTC, the i8042 and virtio-balloon; COM1
+`Vm::new(config, console)` adds COM1, the CMOS RTC, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
 

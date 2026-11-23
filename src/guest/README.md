@@ -43,10 +43,10 @@ mode, destination, and actual mounted tree.
 
 The incarnation record retains the original cloned-tree descriptor. This pins
 the mounted tree rather than the directory underneath it, preventing mount-ID
-reuse while the record is attached. The child reports that tree's checked
-`statx(STATX_MNT_ID)` identity after `move_mount`. Before retry success or detach,
-another child opens the destination without following links and compares its
-mount ID with the retained tree. An ancestor rename followed by a replacement
+reuse while the record is attached. The agent reads that tree's checked
+`statx(STATX_MNT_ID)` identity before publishing it, because a mount keeps its ID
+when it moves. Before retry success or detach, another child opens the destination
+without following links and compares its mount ID with the retained tree. An
 mount therefore fails without removing the replacement or forgetting the
 original record. This ownership follows Linux's
 [`open_detached_copy`, `do_move_mount`, and `dissolve_on_fput`](https://github.com/torvalds/linux/blob/v6.12/fs/namespace.c):
@@ -58,6 +58,8 @@ references remain usable. Runtime and OCI descendants must be detached first.
 Removing a runtime overmount removes only its last bookkeeping entry, preserving
 the underlying OCI entry. Repeated detach succeeds without another unmount;
 detach of an unseen incarnation records a tombstone that rejects delayed Mount.
+Detached records and tombstones stay for the agent's lifetime, so their count follows
+the Detach requests the host has issued; each holds a key, a path, and two flags.
 Mount and Detach hold the same per-container write lock through syscall execution
 and bookkeeping, in an owned task that survives RPC caller cancellation.
 

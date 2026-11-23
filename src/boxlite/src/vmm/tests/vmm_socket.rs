@@ -72,6 +72,8 @@ fn accept_recovers_from_temporary_errors_with_bounded_backoff() {
     let mut waits = Vec::new();
     serve_connections(
         incoming,
+        // SAFETY: `geteuid` has no preconditions.
+        unsafe { libc::geteuid() },
         |op, _| match op {
             ControlOp::ResizeDisk { bytes, .. } => Ok(ControlReply::DiskSize(bytes)),
             #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
@@ -345,5 +347,60 @@ mod mounts {
         drop(queued);
         drop(listener);
         assert_eq!(result.unwrap().unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn another_uid_is_refused_mount_control() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vmm.sock");
+        let tag = dir.path().to_str().unwrap().to_owned();
+        let fs = Arc::new(AggregateFs::new(vec![]).unwrap());
+        boxlite_vmm::insert_aggregate(&tag, fs.clone());
+        let mut registry = Registry::default();
+        let listener = UnixListener::bind(&path).unwrap();
+        // This shim belongs to another uid, so the test process is a foreign peer.
+        // SAFETY: `geteuid` has no preconditions.
+        let owner = unsafe { libc::geteuid() } + 1;
+        let handled = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&handled);
+        std::thread::spawn(move || {
+            serve_connections(
+                listener.incoming(),
+                owner,
+                move |op, directory| {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    registry
+                        .request(&tag, op, directory)
+                        .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap()))
+                },
+                std::thread::sleep,
+            )
+        });
+        for (op, directory) in [
+            (ControlOp::ListMounts, None),
+            (registration("/data"), Some(File::open(dir.path()).unwrap())),
+        ] {
+            assert_eq!(
+                exchange(&path, op, directory.as_ref(), TIMEOUT).unwrap(),
+                Err(ControlError::Mount(libc::EPERM))
+            );
+        }
+        assert_eq!(
+            handled.load(Ordering::SeqCst),
+            0,
+            "a refused request must not reach the registry"
+        );
+    }
+
+    #[test]
+    fn a_kernel_socket_timeout_reports_the_deadline() {
+        let (stream, _silent_peer) = UnixStream::pair().unwrap();
+        let end = Instant::now() + Duration::from_millis(100);
+        assert_eq!(
+            transport::receive_frame(&stream, end).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
     }
 }

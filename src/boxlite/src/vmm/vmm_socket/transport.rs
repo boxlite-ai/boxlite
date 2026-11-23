@@ -14,6 +14,16 @@ fn remaining(end: Instant) -> io::Result<Duration> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "VMM control deadline"))
 }
 
+/// A kernel socket timeout is the deadline, whichever loop the kernel interrupted.
+fn timed_out(error: io::Error) -> io::Error {
+    match error.kind() {
+        io::ErrorKind::WouldBlock => {
+            io::Error::new(io::ErrorKind::TimedOut, "VMM control deadline")
+        }
+        _ => error,
+    }
+}
+
 pub(super) fn connect(path: &Path, end: Instant) -> io::Result<UnixStream> {
     let bytes = path.as_os_str().as_bytes();
     // SAFETY: a zeroed address has a NUL-terminated pathname buffer.
@@ -41,15 +51,7 @@ pub(super) fn connect(path: &Path, end: Instant) -> io::Result<UnixStream> {
     stream.set_write_timeout(Some(remaining(end)?))?;
     // SAFETY: the initialized address covers `length` bytes, including the trailing NUL.
     if unsafe { libc::connect(fd, (&address as *const libc::sockaddr_un).cast(), length) } < 0 {
-        let error = io::Error::last_os_error();
-        return if error.kind() == io::ErrorKind::WouldBlock {
-            Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "VMM control connect deadline",
-            ))
-        } else {
-            Err(error)
-        };
+        return Err(timed_out(io::Error::last_os_error()));
     }
     Ok(stream)
 }
@@ -129,7 +131,7 @@ pub(super) fn send_parts(
             if error.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            return Err(error);
+            return Err(timed_out(error));
         }
         if sent == 0 {
             return Err(io::Error::new(io::ErrorKind::WriteZero, "VMM control send"));
@@ -170,7 +172,7 @@ pub(super) fn receive_exact(
             if error.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            return Err(error);
+            return Err(timed_out(error));
         }
         let mut invalid = false;
         unsafe {
@@ -238,7 +240,8 @@ pub(super) fn receive_frame(
     Ok((payload, file))
 }
 
-pub(super) fn same_user(stream: &UnixStream) -> io::Result<bool> {
+/// Whether the peer connected as `owner`, the uid this shim serves.
+pub(super) fn same_user(stream: &UnixStream, owner: libc::uid_t) -> io::Result<bool> {
     // SAFETY: ucred is initialized before getsockopt writes to it.
     let mut credentials: libc::ucred = unsafe { zeroed() };
     let mut length = size_of::<libc::ucred>() as libc::socklen_t;
@@ -255,8 +258,5 @@ pub(super) fn same_user(stream: &UnixStream) -> io::Result<bool> {
     if result < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(
-        length as usize == size_of::<libc::ucred>()
-            && credentials.uid == unsafe { libc::geteuid() },
-    )
+    Ok(length as usize == size_of::<libc::ucred>() && credentials.uid == owner)
 }
