@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::io;
+use std::sync::Arc;
 
 use super::{AggregateFs, Share, descriptor::request_buffers, server::Server};
 use crate::memory::GuestMemoryMmap;
@@ -23,7 +24,7 @@ const SPEC: DeviceSpec = DeviceSpec {
     snapshot: SnapshotSupport::Unsupported,
 };
 
-/// One immutable share registry and one FUSE session, independent of transport.
+/// One dynamic share registry and one FUSE session, independent of transport.
 ///
 /// Reset releases the session's file handles and lookup references before the
 /// transport can replace guest RAM. It retains the export configuration.
@@ -32,6 +33,7 @@ pub(crate) struct Fs {
     features: u64,
     server: Server<AggregateFs>,
     activation: Option<ActivationContext>,
+    closed: bool,
 }
 
 impl Fs {
@@ -50,7 +52,35 @@ impl Fs {
             features: 0,
             server: Server::new(AggregateFs::new(shares)?),
             activation: None,
+            closed: false,
         })
+    }
+
+    /// The aggregate filesystem this device serves, shared with the
+    /// process-wide mount registry for the control socket.
+    pub(crate) fn filesystem(&self) -> Arc<AggregateFs> {
+        self.server.filesystem()
+    }
+
+    fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        // Unpublish only this device's registration, then close its session
+        // even when a control operation still holds a filesystem reference.
+        let bytes = &self.config[..TAG_LEN];
+        let len = bytes.iter().position(|byte| *byte == 0).unwrap_or(TAG_LEN);
+        if let Ok(tag) = std::str::from_utf8(&bytes[..len]) {
+            super::remove_aggregate(tag, &self.server.filesystem());
+        }
+        self.server.reset();
+        self.closed = true;
+    }
+}
+
+impl Drop for Fs {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -106,6 +136,11 @@ impl VirtioDevice for Fs {
         self.server.reset();
         self.activation = None;
         self.features = 0;
+        Ok(())
+    }
+
+    fn quiesce(&mut self) -> Result<(), DeviceError> {
+        self.close();
         Ok(())
     }
 
