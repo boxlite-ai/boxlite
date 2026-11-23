@@ -26,6 +26,8 @@ checks database connectivity. Startup also performs an encryption round trip.
 
 Startup applies migrations and verifies the durable encrypted canary before the
 server listens. A failed migration or key check prevents startup and readiness.
+If token validator initialization fails, startup closes the database pool and
+returns an error before opening the listener.
 
 Request logging and OpenTelemetry integration remain open under [#2570](https://github.com/boxlite-ai/boxlite/issues/2570);
 the current service emits only startup and recovery logs. Configuration uses explicit

@@ -25,12 +25,36 @@ type Server struct {
 	http   *http.Server
 }
 
+type startupDependencies struct {
+	newCipher    func(encryption.KeyProvider) (*encryption.Cipher, error)
+	encrypt      func(*encryption.Cipher, context.Context, encryption.SecretContext, []byte) (encryption.Envelope, error)
+	decrypt      func(*encryption.Cipher, context.Context, encryption.SecretContext, encryption.Envelope) ([]byte, error)
+	newPool      func(context.Context, *pgxpool.Config) (*pgxpool.Pool, error)
+	newValidator func(context.Context) (*idtoken.Validator, error)
+}
+
 func New(ctx context.Context, c Config) (*Server, error) {
+	return newServer(ctx, c, defaultStartupDependencies())
+}
+
+func defaultStartupDependencies() startupDependencies {
+	return startupDependencies{
+		newCipher: encryption.NewCipher,
+		encrypt:   (*encryption.Cipher).Encrypt,
+		decrypt:   (*encryption.Cipher).Decrypt,
+		newPool:   pgxpool.NewWithConfig,
+		newValidator: func(ctx context.Context) (*idtoken.Validator, error) {
+			return idtoken.NewValidator(ctx, option.WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+		},
+	}
+}
+
+func newServer(ctx context.Context, c Config, deps startupDependencies) (*Server, error) {
 	provider, err := encryption.NewEnvKeyProvider(c.KeyID, c.Key)
 	if err != nil {
 		return nil, errors.New("invalid SECRET_MASTER_KEY_ID or SECRET_MASTER_KEY_BASE64")
 	}
-	cipher, err := encryption.NewCipher(provider)
+	cipher, err := deps.newCipher(provider)
 	if err != nil {
 		return nil, err
 	}
@@ -38,11 +62,11 @@ func New(ctx context.Context, c Config) (*Server, error) {
 	rand.Read(value)
 	defer clear(value)
 	identity := encryption.SecretContext{OrganizationID: "00000000-0000-4000-8000-000000000001", SecretID: "00000000-0000-4000-8000-000000000002", Version: 1, Hosts: []string{"self-test.invalid"}, Headers: map[string]string{"Authorization": "Bearer {value}"}}
-	envelope, err := cipher.Encrypt(ctx, identity, value)
+	envelope, err := deps.encrypt(cipher, ctx, identity, value)
 	if err != nil {
 		return nil, fmt.Errorf("encryption self-test: %w", err)
 	}
-	plaintext, err := cipher.Decrypt(ctx, identity, envelope)
+	plaintext, err := deps.decrypt(cipher, ctx, identity, envelope)
 	if err != nil {
 		return nil, fmt.Errorf("decryption self-test: %w", err)
 	}
@@ -55,7 +79,7 @@ func New(ctx context.Context, c Config) (*Server, error) {
 		return nil, errors.New("invalid DATABASE_URL")
 	}
 	dbConfig.MaxConns = 10
-	db, err := pgxpool.NewWithConfig(ctx, dbConfig)
+	db, err := deps.newPool(ctx, dbConfig)
 	if err != nil {
 		return nil, databaseError(err)
 	}
@@ -67,7 +91,7 @@ func New(ctx context.Context, c Config) (*Server, error) {
 		db.Close()
 		return nil, errors.New("database initialization failed")
 	}
-	validator, err := idtoken.NewValidator(ctx, option.WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	validator, err := deps.newValidator(ctx)
 	if err != nil {
 		db.Close()
 		return nil, errors.New("token validator initialization failed")

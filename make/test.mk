@@ -786,7 +786,7 @@ run\:apps\:secret-server:
 
 PHONY_TARGETS += test\:apps\:secret-server\:integration
 test\:apps\:secret-server\:integration:
-	@cd apps/secret-server && GOWORK=off go test -race -count=1 ./internal/database ./internal/server ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort)$$'
+	@cd apps/secret-server && GOWORK=off go test -race -count=1 ./internal/database ./internal/server ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort|StartupClosesPoolWhenValidatorConstructionFails)$$'
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
