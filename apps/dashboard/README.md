@@ -297,6 +297,22 @@ Billing separates account status in Overview from the grouped Plans comparison.
 See [subscription plans](docs/subscription-cards/README.md) for source facts,
 frontend presentation, catalogue-price checks and the local mock preview.
 
+When an owner confirms an upgrade without a saved card, returning to Billing in
+the same tab continues the selected subscription automatically. The confirmation
+lasts 30 minutes and belongs to the signed-in owner and organization. Billing
+reads the wallet again on return. If the card is still missing, Billing checks
+twice more at one-second intervals, then ends the attempt. Once the card is
+visible, Billing checks the current plan before submitting. The bank may still ask
+the owner to authenticate the payment. **Add payment method** saves a card
+independently.
+
+Card status is organization-wide. A card added concurrently by another owner
+can satisfy the check. Closing the tab ends the handoff.
+
+The [before](docs/subscription-cards/upgrade-return-before.png) and
+[after](docs/subscription-cards/upgrade-return-after.png) views show Billing
+after the same simulated card setup.
+
 ## Commands
 
 Run these from `apps/`:
