@@ -411,3 +411,50 @@ async fn remote_handles_reject_responses_for_other_resources() {
     }
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn wait_requires_matching_terminal_status() {
+    for status in ["running", "failed"] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let sandbox = Arc::new(rest_box_for(listener.local_addr().unwrap().port(), "box"));
+        let server = tokio::spawn(async move {
+            agent_exchange(
+                &listener,
+                "GET /v1/boxes/box/agents/ses_test",
+                None,
+                "application/json",
+                "200 OK",
+                RESOURCE,
+            )
+            .await;
+            let path = "GET /v1/boxes/box/agents/ses_test/turns/msg_test";
+            agent_exchange(&listener, path, None, "application/json", "200 OK", TURN).await;
+            let mut snapshot: serde_json::Value = serde_json::from_str(TURN).unwrap();
+            snapshot["status"] = serde_json::json!(status);
+            snapshot["result"] =
+                serde_json::json!({"turn_id":"msg_test","status":"completed","artifacts":[]});
+            agent_exchange(
+                &listener,
+                path,
+                None,
+                "application/json",
+                "200 OK",
+                &snapshot.to_string(),
+            )
+            .await;
+        });
+        let agent = crate::Agents::new(sandbox.clone(), sandbox)
+            .get("ses_test")
+            .await
+            .unwrap();
+        let turn = agent.get_turn("msg_test").await.unwrap();
+        assert!(
+            matches!(
+                turn.wait(Default::default()).await,
+                Err(BoxliteError::InvalidState(_))
+            ),
+            "accepted result for {status} snapshot"
+        );
+        server.await.unwrap();
+    }
+}

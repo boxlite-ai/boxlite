@@ -13,6 +13,8 @@ use crate::{BoxliteError, BoxliteResult};
 
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
 const EVENT_BUFFER: usize = 64;
+// Allow two missed 15-second server heartbeats before reporting a stalled stream.
+const READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Deserialize)]
 struct WireEvent {
@@ -111,6 +113,12 @@ pub(super) async fn open(
             let next = tokio::select! {
                 _ = sender.closed() => return,
                 next = stream.next() => next,
+                _ = tokio::time::sleep(READ_IDLE_TIMEOUT) => {
+                    let _ = sender.send(Err(BoxliteError::Network(
+                        "agent event stream idle for 30 seconds".into(),
+                    ))).await;
+                    return;
+                }
             };
             let chunk = match next {
                 Some(Ok(chunk)) => chunk,

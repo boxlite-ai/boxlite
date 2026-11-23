@@ -145,3 +145,50 @@ async fn agent_client_rejects_oversized_and_malformed_json() {
     assert!(matches!(malformed, Err(BoxliteError::Internal(_))));
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn agent_writes_stop_at_first_redirect() {
+    for (code, control) in [(307, false), (308, true)] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = ApiClient::new(&BoxliteRestOptions::new(format!(
+            "http://{}",
+            listener.local_addr().unwrap()
+        )))
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            let mut body = [0; 2];
+            socket.read_exact(&mut body).await.unwrap();
+            socket.write_all(format!("HTTP/1.1 {code} Redirect\r\nLocation: /unexpected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            drop(socket);
+            if let Ok(Ok((mut extra, _))) =
+                tokio::time::timeout(std::time::Duration::from_secs(1), listener.accept()).await
+            {
+                let _ = extra
+                    .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+                return true;
+            }
+            false
+        });
+        if control {
+            client
+                .post_agent_no_content("/agents/a/close", None)
+                .await
+                .unwrap_err();
+        } else {
+            client
+                .post_agent::<serde_json::Value>("/agents", &serde_json::json!({}), None)
+                .await
+                .unwrap_err();
+        }
+        assert!(
+            !server.await.unwrap(),
+            "agent write followed a {code} redirect"
+        );
+    }
+}

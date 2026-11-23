@@ -181,3 +181,34 @@ async fn malformed_event_streams_report_one_terminal_error() {
     }
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn idle_stream_yields_one_network_error() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(socket.read_u8().await.unwrap());
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+            .await
+            .unwrap();
+        let _ = socket.read_u8().await;
+    });
+    let client = ApiClient::new(&crate::BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+    let mut stream = open(&client, "/agents/a", "a", None, &Default::default())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    let event = tokio::time::timeout(Duration::from_secs(60), stream.next())
+        .await
+        .expect("silent SSE connection never timed out");
+    assert!(matches!(event, Some(Err(BoxliteError::Network(_)))));
+    assert!(stream.next().await.is_none());
+    server.await.unwrap();
+}

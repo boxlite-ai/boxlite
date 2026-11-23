@@ -201,7 +201,11 @@ to an existing server. Response config accepts additional fields and validates
 known types; request config rejects unknown fields. Close and interrupt require
 HTTP 204. The remote `requests()` method is unsupported. The Rust client opens agent and turn SSE streams before returning, ignores
 comment heartbeats, validates parent IDs, and bounds event size and buffering.
-Dropping the stream releases the connection without cancelling the turn.
+After 30 seconds without stream data (two heartbeat intervals), the client reports
+a network error and closes the subscription. Dropping the stream releases the
+connection without cancelling the turn. Agent writes return redirects as errors
+and make one attempt. A turn result is valid for `wait()` only when its status
+matches the terminal turn snapshot.
 Server handlers are unavailable.
 
 ### Go JSON mapping

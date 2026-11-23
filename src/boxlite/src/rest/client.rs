@@ -119,6 +119,7 @@ pub(crate) type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake:
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    agent_writes: Client,
     stream_http: Client,
     tunnel_connector: TunnelConnector,
     base_url: String,
@@ -140,12 +141,23 @@ pub(crate) struct ApiClient {
 impl ApiClient {
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let http = Client::builder()
-            .default_headers(client_identity_headers())
-            .timeout(std::time::Duration::from_secs(300))
-            .connect_timeout(std::time::Duration::from_secs(300))
+        let request_client = || {
+            Client::builder()
+                .default_headers(client_identity_headers())
+                .timeout(std::time::Duration::from_secs(300))
+                .connect_timeout(std::time::Duration::from_secs(300))
+        };
+        let http = request_client()
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
+        // A write may already have taken effect at the first destination.
+        let agent_writes = request_client()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()
+            .map_err(|e| {
+                BoxliteError::Config(format!("failed to create agent write client: {e}"))
+            })?;
         let stream_http = Client::builder()
             .default_headers(client_identity_headers())
             .connect_timeout(std::time::Duration::from_secs(30))
@@ -165,6 +177,7 @@ impl ApiClient {
 
         Ok(Self {
             http,
+            agent_writes,
             stream_http,
             tunnel_connector,
             base_url,
@@ -343,7 +356,7 @@ impl ApiClient {
         body: &serde_json::Value,
         key: Option<&str>,
     ) -> BoxliteResult<T> {
-        let mut builder = self.http.post(self.url(path)).json(body);
+        let mut builder = self.agent_writes.post(self.url(path)).json(body);
         if let Some(key) = key {
             builder = builder.header("Idempotency-Key", key);
         }
@@ -374,7 +387,10 @@ impl ApiClient {
         path: &str,
         key: Option<&str>,
     ) -> BoxliteResult<()> {
-        let mut builder = self.http.post(self.url(path)).json(&serde_json::json!({}));
+        let mut builder = self
+            .agent_writes
+            .post(self.url(path))
+            .json(&serde_json::json!({}));
         if let Some(key) = key {
             builder = builder.header("Idempotency-Key", key);
         }
