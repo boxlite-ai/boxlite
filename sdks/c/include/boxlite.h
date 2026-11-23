@@ -292,6 +292,12 @@ typedef struct CCheckpointInfo {
   char *state;
   // Null unless the server reports a failure reason.
   char *error_reason;
+  // Archived guest memory size, or zero when absent.
+  uint64_t memory_size_bytes;
+  // One when memory_size_bytes is present, including a reported zero.
+  int has_memory_size_bytes;
+  // Lowercase disk, full, or unknown.
+  char *kind;
 } CCheckpointInfo;
 
 // Entries belong to this list; release once with boxlite_free_checkpoint_list.
@@ -1160,6 +1166,17 @@ enum BoxliteErrorCode boxlite_checkpoint_create(CBoxliteRuntime *runtime,
                                                 CCheckpointInfoCb cb,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
+
+// Queue capture with an optional kind. Null or "disk" selects a disk checkpoint.
+// "full" includes guest memory and VM state.
+// Invalid kinds return InvalidArgument synchronously without invoking the callback.
+enum BoxliteErrorCode boxlite_checkpoint_create_with_options(CBoxliteRuntime *runtime,
+                                                             const char *source,
+                                                             const char *name,
+                                                             const char *kind,
+                                                             CCheckpointInfoCb cb,
+                                                             void *user_data,
+                                                             CBoxliteError *out_error);
 
 // Queue metadata lookup by ID or name. All inputs except out_error are required.
 enum BoxliteErrorCode boxlite_checkpoint_get(CBoxliteRuntime *runtime,

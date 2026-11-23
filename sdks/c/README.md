@@ -27,11 +27,15 @@ create call. The checkpoint handle only manages checkpoints. Archive import is a
 separate operation for local `.boxlite` files and is unchanged. The CLI form is
 `boxlite create --checkpoint ID [--name NAME]`.
 
-The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
-Checkpoint creation rejects other states and never stops the source automatically.
+`boxlite_checkpoint_create` captures a disk checkpoint from a stopped box.
+`boxlite_checkpoint_create_with_options` accepts `NULL` or `"disk"` for the same
+capture. Pass `"full"` to capture disk, guest memory, and VM state from a running
+box. Full capture checks that the REST server advertises
+`capabilities.memory_checkpoints_enabled` through `GET /v1/config` before
+submitting the capture. Disk capture skips that request.
 
-`boxlite_checkpoint_create`, `list`, `get` and `remove` require a
-REST runtime and use its existing post-and-drain event queue. Local runtimes
+Checkpoint creation, listing, lookup, and removal require a REST runtime and
+use its post-and-drain event queue. Local runtimes
 deliver an unsupported-operation error through the same callback queue.
 To create a Box from a checkpoint, call `boxlite_options_set_checkpoint` on the
 options and pass them to `boxlite_create_box`. Only the name may accompany it.
@@ -39,6 +43,11 @@ Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
 or `CCheckpointList`; release them with `boxlite_free_checkpoint_info` or
 `boxlite_free_checkpoint_list`. List entries belong to the list. Error
 pointers are borrowed during callback dispatch.
+
+`CCheckpointInfo.kind` is `"disk"`, `"full"`, or `"unknown"` for an
+unrecognized server kind. Read `memory_size_bytes` when
+`has_memory_size_bytes` is 1, including when the reported size is zero.
+When the flag is 0, the size is absent and the numeric field is zero.
 
 Cloud capture may initially report `creating`; wait for `ready` before use.
 A Box created from a checkpoint inherits all saved execution settings; any other

@@ -7,7 +7,9 @@ use std::future::Future;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 
-use boxlite::{BoxliteError, BoxliteResult, BoxliteRuntime, CheckpointInfo};
+use boxlite::{
+    BoxliteError, BoxliteResult, BoxliteRuntime, CheckpointInfo, CheckpointKind, CheckpointOptions,
+};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::archive::TokioRuntimeDropGuard;
@@ -31,6 +33,12 @@ pub struct CCheckpointInfo {
     pub state: *mut c_char,
     /// Null unless the server reports a failure reason.
     pub error_reason: *mut c_char,
+    /// Archived guest memory size, or zero when absent.
+    pub memory_size_bytes: u64,
+    /// One when memory_size_bytes is present, including a reported zero.
+    pub has_memory_size_bytes: c_int,
+    /// Lowercase disk, full, or unknown.
+    pub kind: *mut c_char,
 }
 
 impl CCheckpointInfo {
@@ -48,6 +56,7 @@ impl CCheckpointInfo {
             info.source_box_id,
             info.created_at.to_rfc3339(),
             format!("{:?}", info.state).to_lowercase(),
+            info.kind.as_str().to_owned(),
         ];
         // Validate every string before transferring any allocation to raw C ownership.
         let mut strings = values
@@ -67,6 +76,9 @@ impl CCheckpointInfo {
             size_bytes: info.size_bytes,
             state: strings.next().unwrap().into_raw(),
             error_reason: reason.map_or(std::ptr::null_mut(), CString::into_raw),
+            memory_size_bytes: info.memory_size_bytes.unwrap_or_default(),
+            has_memory_size_bytes: c_int::from(info.memory_size_bytes.is_some()),
+            kind: strings.next().unwrap().into_raw(),
         })
     }
 }
@@ -80,6 +92,7 @@ impl Drop for CCheckpointInfo {
             self.created_at,
             self.state,
             self.error_reason,
+            self.kind,
         ] {
             if !value.is_null() {
                 unsafe {
@@ -164,15 +177,52 @@ pub unsafe extern "C" fn boxlite_checkpoint_create(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
+    unsafe {
+        boxlite_checkpoint_create_with_options(
+            runtime,
+            source,
+            name,
+            std::ptr::null(),
+            cb,
+            user_data,
+            out_error,
+        )
+    }
+}
+
+/// Queue capture with an optional kind. Null or "disk" selects a disk checkpoint.
+/// "full" includes guest memory and VM state.
+/// Invalid kinds return InvalidArgument synchronously without invoking the callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_checkpoint_create_with_options(
+    runtime: *mut CBoxliteRuntime,
+    source: *const c_char,
+    name: *const c_char,
+    kind: *const c_char,
+    cb: CCheckpointInfoCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
     let cb = crate::unwrap_cb_or_return!(cb, out_error);
     let source = input_or_return!(unsafe { required(source) }, out_error);
     let name = input_or_return!(unsafe { optional(name) }, out_error);
+    let kind = input_or_return!(
+        unsafe { optional(kind) }.and_then(|kind| match kind.as_deref() {
+            None => Ok(None),
+            Some("disk") => Ok(Some(CheckpointKind::Disk)),
+            Some("full") => Ok(Some(CheckpointKind::Full)),
+            Some(_) => Err(BoxliteError::InvalidArgument(
+                "checkpoint kind must be disk or full".into(),
+            )),
+        }),
+        out_error
+    );
     let user_data = user_data as usize;
     unsafe {
         submit(runtime, out_error, move |runtime, _, _| async move {
             let result = runtime
                 .checkpoints()
-                .create(&source, name)
+                .create_with_options(&source, name, CheckpointOptions { kind })
                 .await
                 .and_then(CCheckpointInfo::new)
                 .map(|info| OwnedFfiPtr::new(Box::new(info)));
@@ -308,6 +358,35 @@ mod tests {
     use std::ptr;
     use std::sync::mpsc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn checkpoint_c_metadata_preserves_kind_and_optional_memory_size() {
+        for (kind, memory, expected_kind, expected_flag) in [
+            (CheckpointKind::Disk, None, c"disk", 0),
+            (CheckpointKind::Full, Some(0), c"full", 1),
+            (CheckpointKind::Full, Some(4096), c"full", 1),
+            (CheckpointKind::Unknown, None, c"unknown", 0),
+        ] {
+            let info = CCheckpointInfo::new(CheckpointInfo {
+                id: "checkpoint-1".into(),
+                name: "backup".into(),
+                source_box_id: "source-1".into(),
+                created_at: "2026-11-06T00:00:00Z".parse().unwrap(),
+                size_bytes: 8192,
+                state: Default::default(),
+                error_reason: None,
+                kind,
+                memory_size_bytes: memory,
+            })
+            .unwrap();
+            assert_eq!(info.memory_size_bytes, memory.unwrap_or_default());
+            assert_eq!(info.has_memory_size_bytes, expected_flag);
+            unsafe {
+                assert_eq!(std::ffi::CStr::from_ptr(info.kind), expected_kind);
+                boxlite_free_checkpoint_info(Box::into_raw(Box::new(info)));
+            }
+        }
+    }
 
     extern "C" fn list_received(
         list: *mut CCheckpointList,
@@ -457,6 +536,29 @@ mod tests {
                 crate::boxlite_error_free(&mut error);
             }
         }
+        for kind in [
+            c"".as_ptr(),
+            c"unknown".as_ptr(),
+            c"bogus".as_ptr(),
+            invalid.as_ptr().cast(),
+        ] {
+            unsafe {
+                assert_eq!(
+                    boxlite_checkpoint_create_with_options(
+                        &mut runtime,
+                        c"source-1".as_ptr(),
+                        ptr::null(),
+                        kind,
+                        Some(metadata_received),
+                        data,
+                        &mut error,
+                    ),
+                    BoxliteErrorCode::InvalidArgument
+                );
+                assert_eq!(error.code, BoxliteErrorCode::InvalidArgument);
+                crate::boxlite_error_free(&mut error);
+            }
+        }
         unsafe {
             assert_eq!(crate::boxlite_runtime_drain(&mut runtime, 0, &mut error), 0);
         }
@@ -564,7 +666,7 @@ mod tests {
         std::thread::scope(|scope| {
             let server = scope.spawn(move || {
                 let mut requests = Vec::new();
-                while requests.len() < 7 {
+                while requests.len() < 11 {
                     let deadline = Instant::now() + Duration::from_secs(5);
                     let (mut stream, _) = loop {
                         match listener.accept() {
@@ -599,11 +701,16 @@ mod tests {
                     let method = request.next().unwrap().to_owned();
                     let path = request.next().unwrap().to_owned();
                     let body = if body.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&body).unwrap() };
-                    let info = serde_json::json!({"id":"checkpoint-1","name":"base","source_box_id":"source-1","created_at":"2026-11-06T00:00:00Z","size_bytes":4096,"state":"ready"});
+                    let mut info = serde_json::json!({"id":"checkpoint-1","name":"base","source_box_id":"source-1","created_at":"2026-11-06T00:00:00Z","size_bytes":4096,"state":"ready"});
+                    if body["kind"] == "full" {
+                        info["kind"] = "full".into();
+                    }
                     let (status, response) = if path.ends_with("/missing") {
                         (404, serde_json::json!({"message":"Checkpoint not found"}))
                     } else if path == "/v1/boxes" {
                         (200, serde_json::json!({"box_id":"target-1","name":"worker","status":"stopped","created_at":"2026-11-06T00:00:00Z","updated_at":"2026-11-06T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}))
+                    } else if path == "/v1/config" {
+                        (200, serde_json::json!({"capabilities":{"memory_checkpoints_enabled":true}}))
                     } else if method == "GET" && path == "/v1/checkpoints" {
                         (200, serde_json::json!({"checkpoints":[info]}))
                     } else if method == "GET" {
@@ -740,6 +847,24 @@ mod tests {
                     drain(&mut runtime),
                     (BoxliteErrorCode::NotFound, String::new())
                 );
+                for kind in [ptr::null(), c"disk".as_ptr(), c"full".as_ptr()] {
+                    assert_eq!(
+                        boxlite_checkpoint_create_with_options(
+                            &mut runtime,
+                            source.as_ptr(),
+                            ptr::null(),
+                            kind,
+                            Some(checkpoint_metadata_reply),
+                            data,
+                            ptr::null_mut(),
+                        ),
+                        BoxliteErrorCode::Ok
+                    );
+                    assert_eq!(
+                        drain(&mut runtime),
+                        (BoxliteErrorCode::Ok, "checkpoint-1:ready:".into())
+                    );
+                }
             }
             let requests = server.join().unwrap();
             assert_eq!(
@@ -756,6 +881,19 @@ mod tests {
                 serde_json::json!({"checkpoint_id":"checkpoint-1","name":"worker"})
             );
             assert_eq!(requests[5].1, "/v1/checkpoints/checkpoint-1?force=true");
+            for request in &requests[7..9] {
+                assert_eq!(request.0, "POST");
+                assert_eq!(request.1, "/v1/checkpoints");
+                assert_eq!(request.2, requests[1].2);
+            }
+            assert_eq!(requests[9].0, "GET");
+            assert_eq!(requests[9].1, "/v1/config");
+            assert_eq!(requests[10].0, "POST");
+            assert_eq!(requests[10].1, "/v1/checkpoints");
+            assert_eq!(
+                requests[10].2,
+                serde_json::json!({"source_box_id":"source-1","kind":"full"})
+            );
         });
     }
 }
