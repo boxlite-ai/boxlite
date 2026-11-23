@@ -3,6 +3,35 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Create Box sizing
+
+New Box presents six named presets from 0.125 to 4 vCPU, retaining the existing
+1 vCPU / 1 GiB / 10 GiB default. Sub-core presets pair CPU and memory at 1:2 (0.125/0.25, 0.25/0.5, 0.5/1), with 10 GiB disk;
+the names identify configurations, not guaranteed workload suitability.
+Each card shows its effective organization-capped configuration and complete hourly
+estimate from the existing usage-price query. Adjusted cards are labelled before
+selection; unavailable rates are never presented as a free quote.
+
+**Larger or custom box** opens the inline resource editor, scrolls it into view,
+and focuses CPU. It retains three-decimal CPU input. Its +/- controls move between 0.125, 0.25,
+0.5, 1, 2, 4, 8 and 16 vCPU, respecting a lower organization ceiling. CPU, memory
+and disk show separate estimated contributions, with the total beside Create Box.
+The fixed total includes a **Price breakdown** button that opens the CPU, memory
+and disk calculation above the footer, without scrolling through the form. The
+panel follows the current configuration and supports Escape to return to its trigger.
+A valid Custom draft survives preset comparisons within the open dialog and is
+clamped to current limits when restored. Closing or changing organization clears
+that saved draft. Creation still uses the existing REST mutation and server validation.
+
+**Browse images** is the visible catalog action beside the editable image reference.
+The Image suggestions menu tracks the entire input's width, including after dialog
+resizing. Long references wrap within the menu; an overflowing selected reference is
+also shown in full below the editable input. Neither presentation changes the image
+reference sent to the API.
+
+Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
+Their existing defaults, validation and submission behavior are unchanged.
+
 ## New-account email policy
 
 First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without
@@ -344,11 +373,32 @@ Wallet and Welcome use the same card setup operation: open a tab, request the
 organization's Checkout URL, and navigate to Stripe. Returning to Welcome or
 choosing Check card status refreshes the wallet and saved payment methods.
 A connected card allows the user to continue without waiting for reward delivery.
-Both entry points tell the user that connecting or updating a card places a
-temporary $0.50 hold that is released automatically: Welcome below
-**Verify card**, Wallet below the Payment Method panel.
+Both entry points tell the user that adding a card places a temporary $0.50
+verification hold: Welcome below **Verify card**, Wallet in the last row of the
+Payment Method panel, next to **Add payment method**.
 
-Both pages redeem coupons through `useRedeemCouponMutation`. Success invalidates
+### Managing saved cards
+
+The Wallet's Payment Method panel lists every saved card. The default card is
+listed first with a **Default** badge and has no actions; the other cards keep
+the API's order. Each other card has a `⋯` menu with **Set as default** and
+**Remove**; removal asks for confirmation first. The last row of the panel holds
+**Add payment method**, which runs the card setup flow above. A newly added
+card becomes the default.
+
+Renewals and top-ups always need a default card, so the panel offers no way to
+remove it; the billing API itself would accept the removal. With one saved
+card, that card is the default, so it cannot be removed either.
+
+Both actions go through `useSetDefaultPaymentMethodMutation` and
+`useRemovePaymentMethodMutation`. Success refreshes the payment methods, wallet
+and plan queries, and the list itself shows the result, so there is no success
+toast. Failure shows an error toast and leaves the list as it was. Both
+endpoints are idempotent, so the menu does not lock while a request runs.
+The mock preview keeps its saved cards in memory, so both actions work there
+until the page reloads.
+
+Codes entered independently on either page redeem through `useRedeemCouponMutation`. Success invalidates
 wallet, transactions, invoices, plan, and usage so the next view reflects the
 server's result. Welcome shows the returned message and offers Quickstart;
 Explore with BoxLite is available without a card or coupon.
@@ -359,19 +409,24 @@ Share `https://<console>/redeem?code=CODE` to hand out a coupon. The `/redeem`
 route opens `/dashboard/billing?tab=wallet&code=CODE`. Signed-out visitors sign
 in first, and the sign-in return path keeps the query.
 
-Wallet opens the coupon form with the code filled in and names the organization
-that receives the credits. When the user owns their only organization, the code
-redeems once on landing, with no click. With several organizations, or without
-the owner role, nothing is redeemed until the user clicks Redeem.
+Wallet submits a reward claim when the signed-in user has a verified email and
+owns their only organization. An owner with multiple organizations can switch
+organizations from Wallet and confirm the claim there. The link keeps its coupon
+code across the switch. If Wallet cannot verify membership, use **Retry verification**.
+Codes entered under **Have a coupon code?** redeem independently.
 
-The result also appears as a toast, since the inline note sits low in the panel.
-A successful redeem removes `code` from the URL. A rejected code is tried once
-and stays in the form for another try. With an unverified email, Wallet asks the
-user to verify it first and redeems nothing.
+When Commerce accepts the claim, Wallet clears `code` from the URL and prompts
+the user to add a card. An organization with a card on file can proceed directly
+to processing. Reopening Wallet in the same tab checks pending claims for the
+active account and organization using their original event IDs. Coupon codes
+with different capitalization or surrounding spaces share an event ID.
 
-Coupon limits such as one use per organization, a total cap, and expiry are set
-on the coupon itself. The link carries only the code. In the mock preview
-(`npm run start:mock`), `ACME50` redeems and any other code is rejected.
+An unconfirmed claim can be retried. A rejection at submission keeps the code
+available for another attempt. Once Commerce records a failed or skipped outcome,
+Wallet closes the claim form and shows the failure. For example, a coupon can
+expire or reach its redemption limit while the organization waits to add a card.
+In the mock preview, `ACME50` returns a pending claim and an unknown code returns
+`coupon_not_found`.
 
 ## A choice says what it does, and shows which one is picked
 
@@ -543,7 +598,7 @@ includes alias deletion; using an image does not automatically require catalog a
 
 Users can explicitly select **No expiration**, 90 days or one year. Existing keys
 and Quickstart defaults are unchanged. A successful creation displays the returned
-permissions and expiration with a one-time secret. Copy is explicit and does not
+permissions and expiration with a one-time secret. Absolute expiration dates use English formatting while retaining the browser’s local timezone. The secret is a selectable, horizontally scrollable single line with a fixed copy icon on its right; copy success is announced and failure preserves manual selection and retry. Copy is explicit and does not
 close the result. Closing the dialog or switching organization discards the secret
 and ignores late responses. Unavailable selected permissions remain visible until
 removed; permission changes invalidate in-flight results. Background membership refreshes
@@ -561,6 +616,8 @@ assigned member-read permission, but the Console does not offer member-write.
 The mock preview uses synthetic, organization-scoped keys held only in memory.
 Create, list, duplicate-name refusal and revoke are supported; reload resets them.
 Mock results do not verify live authorization or expiration enforcement.
+
+Creation-result layout: [light](../../docs/contributing/investigations/assets/api-key-result/light.png), [dark](../../docs/contributing/investigations/assets/api-key-result/dark.png), [390px viewport](../../docs/contributing/investigations/assets/api-key-result/narrow.png). These captures contain synthetic MSW keys only.
 
 Visual review: [before](../../docs/contributing/investigations/assets/api-key-access/before.png),
 [default form](../../docs/contributing/investigations/assets/api-key-access/after.png), and
@@ -809,6 +866,13 @@ Management is a primary disclosure after Applications, with Billing and Organiza
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
 Organization switching is in the header; theme and logout are in the account menu.
+The account avatar keeps a fixed 23px box and displays name/email initials while
+its image loads or after loading fails. Missing names and emails use the shared
+account icon. Images appear only after `load`; `error` removes the image without
+automatic retries. The avatar is keyed by OIDC issuer, subject and image URL, so
+identity or URL changes start fresh and late image events cannot affect another
+account. Avatar content is decorative; the profile-menu trigger retains its
+accessible name and keyboard behavior.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
@@ -824,7 +888,7 @@ to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcemen
 height consistently. Preserve `min-w-0` on the content region when adding routes.
 
 Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
-section label. Applications contains CI → Runners / Connects, including compact-rail expansion, hover preview, active-child highlighting and mobile menu destinations. Management remains a separate primary entry. Compact navigation
+section label. Applications contains one CI destination, active on both the runner inventory and GitHub connections routes. The CI page exposes persistent Runners and GitHub connections tabs on desktop and mobile, backed by the existing routes. Both routes retain multi-resource inventories within the selected organization. Management remains a separate primary entry. Compact navigation
 keeps the group accessible name without squeezing in a visual label.
 
 Expanded navigation highlights only the current child, using the same full row
@@ -972,13 +1036,12 @@ A new verified connection can reconnect later. Switching BoxLite organizations
 does not redirect an in-flight delete. Legacy Organization `?tab=ci` links and
 successful browser authorization lead to Connects. `start:mock` includes synthetic
 JIT Boxes and deletable connections for local presentation checks.
-Neither tab has a manual Refresh control. Connects fetches on entry and after
+Neither CI page has a manual Refresh control. Connects fetches on entry and after
 successful additions/updates/deletions; it does not poll the connection list.
 
-**Run workflows on BoxLite** on Connects and **How to run a job** on Runners follow the page description as an underlined button that opens
+**How to run a job** follows the stable CI page description as an underlined button that opens
 the guide sheet; it wraps below the description on narrow screens. Each Runners empty state
-uses a single title, concise explanation and at most one primary action. Workflow
-steps live in the guide rather than being repeated below a second empty-state heading. Successful browser
+uses a single title, concise explanation and at most one primary action. The empty inventory exposes the minimal workflow diff inline; the guide retains the complete test workflow and troubleshooting. Successful browser
 connection offers the same guide for the current BoxLite organization. The success
 entry survives removal of the authorization route parameter and clears when a new
 attempt starts, the organization changes, or a connection is successfully deleted.
@@ -1002,7 +1065,7 @@ In `start:mock`, open the workflow guide next to the CI page description. Use Co
 to inspect the installed repositories and private repository policy.
 The empty Runners page checks owner-visible connection settings before choosing
 its next step. No connections leads to **Set up GitHub**, which opens Connects in a new tab and preserves the current guide; existing
-connections lead to **Set up a job**, with repository checks still required.
+connections keep **No active runners** and show a collapsible **Configure a workflow** section, with repository checks still required. The empty inventory embeds the same copyable runner diff as the side sheet. No-connection owners see the existing new-tab Connects entry beside that diff. Loading, error, member and unavailable states retain their existing feedback. See [inline setup](docs/ci-inline-setup/README.md).
 Loading, permission uncertainty, members without owner access, failed reads
 (including failed refreshes of cached empty data), and disabled CI have distinct
 messages. They never imply that GitHub is connected or disconnected.
@@ -1455,3 +1518,11 @@ A failed detail refresh retains the last known values with a retry message;
 initial failures continue to offer Retry. The mock preview's `web-api` demonstrates
 15-minute auto-stop and a 75-minute auto-delete threshold; `batch-worker` has all
 three options disabled, and other existing fixtures exercise missing fields.
+
+## Local trial discovery preview
+
+Run the mock Dashboard and open `/dashboard/welcome?preview=trial-onboarding`. The entry starts at organization naming, continues through the existing use-case selection, then offers Starter/Team selection, simulated card verification, explicit activation confirmation and immediate navigation to the existing Quickstart. Add `&step=plans` to inspect the third step directly. Returning from plan choice preserves the use-case selection. Use `&scenario=ineligible` or `&scenario=unavailable` to review alternative fixtures; the default is eligible. Product UI contains no preview tooling or simulation labels. Refresh resets the prototype.
+
+This entry requires development mode and `VITE_ENABLE_MOCKING=true`; the prototype module is excluded from production builds. It never invokes payment APIs or writes simulated subscription results to the Billing cache. Prices and plan concurrency reuse the current presentation source; no trial quota is inferred from bonus credits. Shipping this flow needs a server-confirmed eligibility/price quote and a mutation that rejects eligibility changes instead of silently charging. Registration/authentication and default Welcome remain unchanged.
+
+The choice step also offers “Explore console — no card required”, completing Welcome without verifying a card or activating a plan. “Have a coupon? Redeem code” expands an independent form: use `ACME50` for simulated success, an empty code for required-field feedback, or another code for invalid/expired feedback. Successful trial confirmation and coupon redemption complete Welcome immediately and enter Quickstart, without a separate success screen or another click. Coupon balances are not persisted to the shared mock wallet. Both alternative paths use existing Welcome completion and lead to Quickstart.

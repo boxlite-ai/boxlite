@@ -11,6 +11,7 @@ pub mod block_device;
 mod copy;
 pub mod fsfreeze;
 pub mod idmap;
+pub(crate) mod resolved_mount;
 mod virtiofs;
 mod volume;
 

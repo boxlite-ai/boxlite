@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Literal, NoReturn, TypedDict
-
-from .errors import UnsupportedError
+from typing import Literal, TypedDict
 
 JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 AgentStatus = Literal["ready", "busy", "closing", "closed", "unknown"]
@@ -151,44 +151,141 @@ class AgentEventsOptions:
     after: str | None = None
 
 
-def _not_implemented(operation: str) -> NoReturn:
-    raise UnsupportedError(f"{operation} is not implemented")
+class AgentEventStream(AsyncIterator[AgentEvent]):
+    """A live event stream whose pending read survives caller cancellation."""
+
+    def __init__(self, opening):
+        self._opening = asyncio.ensure_future(opening)
+        self._pending = None
+        self._reading = False
+        self._closed = False
+        self._stream = None
+        self._close_task = None
+
+    async def opened(self) -> None:
+        self._stream = await asyncio.shield(self._opening)
+
+    def __aiter__(self) -> AgentEventStream:
+        return self
+
+    async def __anext__(self) -> AgentEvent:
+        if self._closed:
+            raise StopAsyncIteration
+        if self._reading:
+            raise RuntimeError("concurrent event reads are not supported")
+        self._reading = True
+        try:
+            if self._pending is None:
+                try:
+                    await self.opened()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._closed = True
+                    raise
+                if self._closed:
+                    raise StopAsyncIteration
+                self._pending = asyncio.ensure_future(self._stream.next())
+            try:
+                value = await asyncio.shield(self._pending)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._pending = None
+                self._closed = True
+                raise
+            self._pending = None
+            if value is None:
+                self._closed = True
+                raise StopAsyncIteration
+            return json.loads(value)
+        finally:
+            self._reading = False
+
+    async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close())
+        await asyncio.shield(self._close_task)
+
+    async def _close(self) -> None:
+        self._closed = True
+        for future in (self._opening, self._pending):
+            if future is not None and not future.done():
+                future.cancel()
+        await asyncio.gather(
+            *(f for f in (self._opening, self._pending) if f is not None),
+            return_exceptions=True,
+        )
+        if (
+            self._stream is None
+            and self._opening.done()
+            and not self._opening.cancelled()
+        ):
+            if self._opening.exception() is not None:
+                return
+            self._stream = self._opening.result()
+        if self._stream is not None:
+            await self._stream.close()
 
 
 class Agents:
     """Box-owned agent namespace."""
 
+    def __init__(self, native=None, resolve=None):
+        if native is None and resolve is None:
+            raise TypeError("an agent namespace requires a box")
+        self._native = native
+        self._resolve = resolve
+
+    def _handle(self):
+        if self._resolve is not None:
+            return self._resolve()._native
+        return self._native
+
     async def create(
         self, agent: str, options: AgentCreateOptions | None = None
     ) -> Agent:
-        _not_implemented("agents.create")
+        options = options or AgentCreateOptions()
+        native = await self._handle().create(
+            agent,
+            options.cwd,
+            json.dumps(options.config or {}),
+            options.idempotency_key,
+        )
+        return Agent(native)
 
     async def get(self, agent_id: str) -> Agent:
-        _not_implemented("agents.get")
+        return Agent(await self._handle().get(agent_id))
 
 
 class Agent:
     """An agent conversation."""
 
+    def __init__(self, native):
+        self._native = native
+
     async def close(self, options: AgentControlOptions | None = None) -> None:
-        _not_implemented("agent.close")
+        await self._native.close(options.idempotency_key if options else None)
 
     async def send(
         self, text: str, options: AgentSendOptions | None = None
     ) -> AgentTurn:
-        _not_implemented("agent.send")
+        options = options or AgentSendOptions()
+        return AgentTurn(
+            await self._native.send(
+                text, options.mode, json.dumps(options.data), options.idempotency_key
+            )
+        )
 
     async def get_turn(self, turn_id: str) -> AgentTurn:
-        _not_implemented("agent.get_turn")
+        return AgentTurn(await self._native.get_turn(turn_id))
 
-    def events(
-        self, options: AgentEventsOptions | None = None
-    ) -> AsyncIterator[AgentEvent]:
+    def events(self, options: AgentEventsOptions | None = None) -> AgentEventStream:
         """Open the agent's events, after an opaque cursor where the adapter supports it."""
-        _not_implemented("agent.events")
+        return AgentEventStream(self._native.events(options.after if options else None))
 
     async def requests(self) -> list[AgentRequest]:
-        _not_implemented("agent.requests")
+        return json.loads(await self._native.requests())
 
     async def respond(
         self,
@@ -196,40 +293,49 @@ class Agent:
         response: AgentResponse,
         options: AgentControlOptions | None = None,
     ) -> AgentTurn:
-        _not_implemented("agent.respond")
+        return AgentTurn(
+            await self._native.respond(
+                request_id,
+                json.dumps(response),
+                options.idempotency_key if options else None,
+            )
+        )
 
     @property
     def state(self) -> AgentState:
-        _not_implemented("agent.state")
+        return json.loads(self._native.state)
 
     @property
     def config(self) -> AgentConfig:
-        _not_implemented("agent.config")
+        return json.loads(self._native.config)
 
     @property
     def capabilities(self) -> AgentCapabilities:
-        _not_implemented("agent.capabilities")
+        return json.loads(self._native.capabilities)
 
 
 class AgentTurn:
     """A submitted task. Steering retains this turn's identity."""
 
-    async def wait(self, options: AgentWaitOptions | None = None) -> AgentResult:
-        _not_implemented("turn.wait")
+    def __init__(self, native):
+        self._native = native
 
-    def events(
-        self, options: AgentEventsOptions | None = None
-    ) -> AsyncIterator[AgentEvent]:
-        _not_implemented("turn.events")
+    async def wait(self, options: AgentWaitOptions | None = None) -> AgentResult:
+        return json.loads(await self._native.wait(options.timeout if options else None))
+
+    def events(self, options: AgentEventsOptions | None = None) -> AgentEventStream:
+        return AgentEventStream(self._native.events(options.after if options else None))
 
     async def steer(
         self, text: str, options: AgentControlOptions | None = None
     ) -> AgentSteeringReceipt:
-        _not_implemented("turn.steer")
+        return json.loads(
+            await self._native.steer(text, options.idempotency_key if options else None)
+        )
 
     async def interrupt(self, options: AgentControlOptions | None = None) -> None:
-        _not_implemented("turn.interrupt")
+        await self._native.interrupt(options.idempotency_key if options else None)
 
     @property
     def state(self) -> AgentTurnState:
-        _not_implemented("turn.state")
+        return json.loads(self._native.state)

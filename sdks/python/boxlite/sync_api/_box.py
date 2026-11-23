@@ -45,7 +45,7 @@ class SyncBox:
     @property
     def agents(self) -> SyncAgents:
         """Get the agent namespace without starting the Box."""
-        return SyncAgents()
+        return SyncAgents(lambda: self)
 
     def __init__(
         self,

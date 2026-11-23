@@ -59,3 +59,8 @@ recording cloud-resource doubles and real Pulumi secret Outputs. They verify opt
 settings, timeout defaults and enabled stage-secret delivery without contacting cloud providers.
 For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.
+
+For local OAuth preparation, `make test:apps:infra:auth0` runs the tooling typecheck and Auth0 bootstrap,
+login-policy, email-provider, MCP configuration, and configure-login command tests.
+It requires no live tenant or management credentials.
+These fixtures verify configuration behavior and rollback; they cannot prove the production Action, clients, or grants are deployed.

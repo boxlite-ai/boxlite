@@ -154,6 +154,8 @@ tags:
     description: Credential validation and identity lookup
   - name: Boxes
     description: Box lifecycle management
+  - name: Agents
+    description: Agent conversations and tasks
   - name: Execution
     description: Command execution and streaming
   - name: Files
@@ -1442,6 +1444,276 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /{prefix}/boxes/{box_id}/agents:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: createAgent
+      tags: [Agents]
+      summary: Create an agent
+      description: |
+        Forward creation to the adapter. An empty prefix, as in boxlite serve,
+        removes that segment: /v1/boxes/{box_id}/agents.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentCreateRequest"
+            example: {agent: opencode, options: {cwd: /workspace, config: {model: provider/model}}}
+      responses:
+        "201":
+          description: Agent created
+          headers:
+            Location:
+              description: URL of the created agent
+              schema: {type: string}
+              example: /v1/boxes/box_1/agents/ses_01
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentResource"}
+              example: &agentExample
+                id: ses_01
+                agent: opencode
+                state: null
+                config: {tools: [], mcp: [], model: provider/model}
+                capabilities: {operations: [agents.create, agents.get], input_kinds: [text], max_queued_turns: null, max_pending_steering: null, idempotency_retention_seconds: null}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    get:
+      operationId: getAgent
+      tags: [Agents]
+      summary: Get an agent
+      description: A missing agent or an agent belonging to another Box returns 404.
+      responses:
+        "200":
+          description: Agent snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentResource"}
+              example: *agentExample
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/close:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    post:
+      operationId: closeAgent
+      tags: [Agents]
+      summary: Close an agent
+      description: Success means the adapter confirmed the agent loop stopped.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentEmptyRequest"}
+            example: {}
+      responses:
+        "204":
+          description: Agent closed
+        "400": {$ref: "#/components/responses/AgentCloseBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    post:
+      operationId: sendAgentTurn
+      tags: [Agents]
+      summary: Send text to an agent
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentSendRequest"}
+            example: {text: Review the change, options: {mode: queue}}
+      responses:
+        "201":
+          description: Turn accepted
+          headers:
+            Location:
+              description: URL of the created turn
+              schema: {type: string}
+              example: /v1/boxes/box_1/agents/ses_01/turns/msg_01
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: &turnExample {id: msg_01, agent_id: ses_01, status: queued, cursor: null, result: null, requests: [], steering: []}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "429": {$ref: "#/components/responses/AgentExhausted"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    get:
+      operationId: getAgentEvents
+      tags: [Agents]
+      summary: Stream agent events
+      description: |
+        Send 200 headers only after the adapter stream connects. Last-Event-ID
+        takes precedence over after. Adapters without cursor or turn event
+        support reject those options with 400. Emit an SSE id only for a
+        non-null cursor. After opening, stream errors as an error event and close.
+      parameters:
+        - {name: turn_id, in: query, schema: {type: string}, example: msg_01}
+        - {name: after, in: query, schema: {type: string}, example: cursor_1}
+        - {name: Last-Event-ID, in: header, schema: {type: string}, example: cursor_1}
+      responses:
+        "200":
+          description: Connected event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+              example: "event: agent\ndata: {\"cursor\":null,\"agent_id\":\"ses_01\",\"turn_id\":\"msg_01\",\"kind\":\"session.status\",\"data\":{\"status\":\"busy\"}}\n\n"
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/requests/{request_id}/respond:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - {name: request_id, in: path, required: true, schema: {type: string, minLength: 1}, example: req_01}
+    post:
+      operationId: respondAgentRequest
+      tags: [Agents]
+      summary: Respond to an agent request
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentRespondRequest"}
+            example: {response: {type: permission, approved: false}}
+      responses:
+        "200":
+          description: Resulting turn snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: *turnExample
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/steer:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    post:
+      operationId: steerAgentTurn
+      tags: [Agents]
+      summary: Steer a running turn
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentSteerRequest"}
+            example: {text: Focus on correctness}
+      responses:
+        "200":
+          description: Steering receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentSteeringReceipt"}
+              example: {id: steer_01, turn_id: msg_01, status: accepted}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "429": {$ref: "#/components/responses/AgentExhausted"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/interrupt:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    post:
+      operationId: interruptAgentTurn
+      tags: [Agents]
+      summary: Interrupt a turn
+      description: Success means the adapter confirmed the stop.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentEmptyRequest"}
+            example: {}
+      responses:
+        "204":
+          description: Turn interrupted
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    get:
+      operationId: getAgentTurn
+      tags: [Agents]
+      summary: Get an agent turn
+      description: A turn outside the specified agent or Box returns 404.
+      responses:
+        "200":
+          description: Turn snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: {id: msg_01, agent_id: ses_01, status: queued, cursor: null, result: null, requests: [], steering: []}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+
   /{prefix}/domains:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2130,6 +2402,32 @@ components:
       schema:
         type: string
 
+    agentId:
+      name: agent_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+      example: ses_01
+
+    agentTurnId:
+      name: turn_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+      example: msg_01
+
+    agentIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        Opaque visible ASCII key forwarded verbatim to the adapter. BoxLite
+        stores nothing and returns no 422 for conflicting keys. Deduplication
+        and retention are adapter-defined; retention is advertised in
+        capabilities.idempotency_retention_seconds, not GET /v1/config.
+        An adapter that cannot deduplicate rejects the key as unsupported.
+      schema: {type: string, minLength: 1, maxLength: 256, pattern: '^[!-~]+$', not: {pattern: '[^!-~]'}}
+      example: retry-create-1
+
     idempotencyKey:
       name: Idempotency-Key
       in: header
@@ -2155,6 +2453,63 @@ components:
   # Responses (Error Templates)
   # -------------------------------------------------------------------------
   responses:
+    AgentCloseBadRequest:
+      description: Invalid argument or unsupported close operation
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          examples:
+            unsupported:
+              value: {error: {message: "agent.close is not supported", type: UnsupportedError, code: unsupported, request_id: req_1}}
+
+    AgentBadRequest:
+      description: Invalid argument or unsupported operation
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          examples:
+            invalid:
+              value: {error: {message: "invalid agent options", type: InvalidArgumentError, code: invalid_argument, request_id: req_1}}
+
+    AgentUnauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "invalid credentials", type: AuthError, code: unauthenticated, request_id: req_1}}
+
+    AgentNotFound:
+      description: Box, agent, turn, or request is missing or belongs to another parent
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "agent not found", type: NotFoundError, code: not_found, request_id: req_1}}
+
+    AgentConflict:
+      description: Agent or turn state does not permit the operation, or request is resolved
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "invalid agent state", type: InvalidStateError, code: invalid_state, request_id: req_1}}
+
+    AgentExhausted:
+      description: Native queue or steering capacity exhausted
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "queue full", type: ResourceExhaustedError, code: resource_exhausted, request_id: req_1}}
+
+    AgentUnavailable:
+      description: Agent unreachable or stop unconfirmed
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          examples:
+            network:
+              value: {error: {message: "agent unreachable", type: NetworkError, code: network_unavailable, request_id: req_1}}
+            upstream:
+              value: {error: {message: "agent unavailable", type: UpstreamUnavailableError, code: upstream_unavailable, request_id: req_1}}
+
     BadRequestError:
       description: Invalid request parameters or body
       content:
@@ -2259,6 +2614,199 @@ components:
   # Schemas
   # -------------------------------------------------------------------------
   schemas:
+    AgentEmptyRequest:
+      type: object
+      additionalProperties: false
+
+    AgentSendRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: {type: string}
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            mode: {type: string, enum: [queue, reject]}
+            data: {}
+
+    AgentSteerRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: {type: string}
+
+    AgentRespondRequest:
+      type: object
+      additionalProperties: false
+      required: [response]
+      properties:
+        response:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [type, text]
+              properties:
+                type: {const: answer}
+                text: {type: string}
+                data: {}
+            - type: object
+              additionalProperties: false
+              required: [type, approved]
+              properties:
+                type: {const: permission}
+                approved: {type: boolean}
+
+    AgentCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [agent]
+      properties:
+        agent: {type: string}
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            cwd: {type: string}
+            config:
+              $ref: "#/components/schemas/AgentConfigInput"
+
+    AgentConfigInput:
+      type: object
+      additionalProperties: false
+      description: Optional null config fields are treated as omitted.
+      properties:
+        model: {type: [string, 'null']}
+        reasoning: {type: [string, 'null']}
+        instructions: {type: [string, 'null']}
+        tools: {type: array, items: {type: string}}
+        mcp: {type: array, items: {type: string}}
+        permissions: {}
+        limits: {}
+        output_schema: {}
+
+    AgentResource:
+      type: object
+      required: [id, agent, state, config, capabilities]
+      properties:
+        id: {type: string}
+        agent: {type: string}
+        state:
+          oneOf:
+            - $ref: "#/components/schemas/AgentState"
+            - {type: 'null'}
+        config: {$ref: "#/components/schemas/AgentConfig"}
+        capabilities: {$ref: "#/components/schemas/AgentCapabilities"}
+
+    AgentState:
+      type: object
+      required: [id, status, cursor, active_turn_id, queued_turn_ids, requests, steering]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [ready, busy, closing, closed, unknown]}
+        cursor: {type: [string, 'null']}
+        active_turn_id: {type: [string, 'null']}
+        queued_turn_ids: {type: array, items: {type: string}}
+        requests: {type: array, items: {$ref: "#/components/schemas/AgentRequest"}}
+        steering: {type: array, items: {$ref: "#/components/schemas/AgentSteeringReceipt"}}
+
+    AgentTurnState:
+      type: object
+      required: [id, agent_id, status, cursor, result, requests, steering]
+      properties:
+        id: {type: string}
+        agent_id: {type: string}
+        status: {$ref: "#/components/schemas/AgentTurnStatus"}
+        cursor: {type: [string, 'null']}
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/AgentResult"
+            - {type: 'null'}
+        requests: {type: array, items: {$ref: "#/components/schemas/AgentRequest"}}
+        steering: {type: array, items: {$ref: "#/components/schemas/AgentSteeringReceipt"}}
+
+    AgentTurnStatus:
+      type: string
+      enum: [queued, running, waiting_input, interrupting, completed, cancelled, failed, unknown]
+
+    AgentResult:
+      type: object
+      required: [turn_id, status, outcome, text, data, artifacts, usage, error]
+      properties:
+        turn_id: {type: string}
+        status: {$ref: "#/components/schemas/AgentTurnStatus"}
+        outcome: {type: [string, 'null'], enum: [answer, question, null]}
+        text: {type: [string, 'null']}
+        data: {}
+        artifacts: {type: array, items: {type: string}}
+        usage: {}
+        error: {type: [string, 'null']}
+
+    AgentConfig:
+      type: object
+      required: [tools, mcp]
+      description: Absent optional fields are omitted from snapshots.
+      properties:
+        tools: {type: array, items: {type: string}}
+        mcp: {type: array, items: {type: string}}
+        model: {type: string}
+        reasoning: {type: string}
+        instructions: {type: string}
+        permissions: {not: {type: 'null'}}
+        limits: {not: {type: 'null'}}
+        output_schema: {not: {type: 'null'}}
+
+    AgentCapabilities:
+      type: object
+      required: [operations, input_kinds, max_queued_turns, max_pending_steering, idempotency_retention_seconds]
+      properties:
+        operations: {type: array, items: {type: string}}
+        input_kinds: {type: array, items: {type: string}}
+        max_queued_turns: {type: [integer, 'null'], minimum: 0}
+        max_pending_steering: {type: [integer, 'null'], minimum: 0}
+        idempotency_retention_seconds: {type: [number, 'null'], minimum: 0}
+
+    AgentRequest:
+      type: object
+      required: [id, turn_id, kind]
+      properties:
+        id: {type: string}
+        turn_id: {type: string}
+        kind:
+          oneOf:
+            - type: object
+              required: [type, text, schema]
+              properties:
+                type: {const: question}
+                text: {type: string}
+                schema: {}
+            - type: object
+              required: [type, tool, arguments]
+              properties:
+                type: {const: permission}
+                tool: {type: string}
+                arguments: {}
+
+    AgentSteeringReceipt:
+      type: object
+      required: [id, turn_id, status]
+      properties:
+        id: {type: string}
+        turn_id: {type: string}
+        status: {type: string, enum: [accepted, applied, unused, unknown]}
+
+    AgentEvent:
+      type: object
+      required: [cursor, agent_id, turn_id, kind, data]
+      properties:
+        cursor: {type: [string, 'null']}
+        agent_id: {type: string}
+        turn_id: {type: [string, 'null']}
+        kind: {type: string}
+        data: {}
+
 
     # =======================================================================
     # Configuration

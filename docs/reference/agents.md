@@ -32,8 +32,8 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Rust, the CLI and C calls on a local runtime run the operations listed in
-[OpenCode on a local runtime](#opencode-on-a-local-runtime). Other SDKs and remote
+Rust, Python, Node.js, the CLI and C calls on a local runtime run the operations listed in
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Go and remote
 runtimes return unsupported errors before agent execution.
 
 | SDK | Error behavior |
@@ -45,22 +45,23 @@ runtimes return unsupported errors before agent execution.
 | C | Invalid arguments return `InvalidArgument` synchronously without a callback; accepted async calls return `Ok` and deliver core errors through the drain callback; getters return core errors synchronously |
 | CLI | `boxlite agent …` reports the error on stderr and exits with code 1 |
 
-An unsupported event opening returns an error. Python/Node fail when `events()`
-is called; Rust fails when its future is awaited; Go returns a nil stream with
-an error. C delivers an open failure through `on_open` with a null handle.
+An unsupported event opening returns an error. Python and Node.js report it from
+`opened()` and the first read. Rust fails when its
+future is awaited; Go returns a nil stream with an error. C delivers an open
+failure through `on_open` with a null handle.
 
 Unsupported calls do not return an agent or turn. C getters clear output pointers
 on failure.
 
 ### OpenCode on a local runtime
 
-Rust, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
+Rust, Python, Node.js, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
 answers, or with `Execution` when it lacks the `opencode service` commands. Remote
-runtimes and the other SDKs return `Unsupported`. `agent.id()` returns the `ses_…`
+runtimes and Go return `Unsupported`. `agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
 
 ```text
@@ -74,6 +75,26 @@ agent.send(text)          ──tunnel─► POST …/prompt, delivery queue  �
 turn.wait()               ──tunnel─► inbox, history, pending requests
 agent.events()            ──tunnel─► GET /api/event, live only
 ```
+
+Python opens events before submitting work, so the live stream can receive the
+turn's first event:
+
+```python
+agent = await box.agents.create("opencode")
+events = agent.events()
+await events.opened()
+turn = await agent.send("Summarize this project")
+result = await turn.wait()
+await events.aclose()
+```
+
+Cancelling a Python event read preserves the pending event for the next read.
+Close the stream to release it without stopping the agent or the turn. OpenCode
+does not support turn event streams and rejects non-null `data` on send.
+
+In Node.js, `agent.events()` also exposes `opened()` and `return()`. Use
+`read({ signal })` to cancel one pending read without losing its event; the next
+read receives it. Plain `next()` has no per-read cancellation.
 
 | Operation | Behavior |
 |---|---|
@@ -174,7 +195,30 @@ These records define SDK data types. The
 [REST design](../contributing/investigations/2026-10-28-agent-rest-api-design.md)
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
-headers. Agent HTTP routes and REST client support are unavailable.
+headers. The OpenAPI contract specifies nine agent HTTP operations, retry-key forwarding,
+SSE events, and HTTP 204 close/interrupt responses. Runtime routes and the REST
+client are unavailable. The OpenAPI components
+define strict request objects and additive response records, including fractional
+retention durations; implementations must validate known response fields while
+accepting additional server fields.
+
+### Go JSON mapping
+
+Go's internal agent converters use the core's snake_case JSON fields. Nullable
+strings become empty strings, a null turn result becomes nil, and null capability
+limits remain nil while a reported zero remains a pointer to zero.
+
+Empty record arrays remain non-nil empty slices. Optional `json.RawMessage` data
+normalizes absent or top-level null to nil; false, zero, empty collections and
+nested nulls retain their JSON values.
+
+Required event data and permission arguments preserve literal JSON null.
+Answers and explicit permission responses
+use different tagged records, so an answer cannot grant permission.
+
+Retention is read from `idempotency_retention_seconds` using checked decimal
+conversion to `time.Duration`, without a float64 intermediate. Sub-nanosecond
+fractions are truncated; negative or out-of-range values return an error.
 
 ### Example: handle operation errors
 

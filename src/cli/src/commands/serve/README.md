@@ -125,6 +125,53 @@ permissive (accepts any/no bearer) — the zero-config local-dev default. A
 permissive server only binds to loopback: `serve` refuses to start on any
 other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 
+**Browser guard.** Before auth, every route, WebSocket upgrades included,
+passes `BrowserGuard` (`browser_guard.rs`), which answers `403` to:
+
+| Request | Refused when | Attack it stops |
+|---------|--------------|-----------------|
+| `Host` header | The server is bound to loopback and the name is not `localhost`, `127.0.0.1`, `[::1]` or an `--allowed-host` value | DNS rebinding: a web page re-resolves its own domain to 127.0.0.1 |
+| `Origin` header | Present and its `host:port` differs from `Host` | Cross-site POSTs and WebSocket upgrades, which browsers send without a CORS preflight |
+
+SDK, CLI and curl requests send a loopback `Host` and no `Origin`, so they
+pass. A reverse proxy that forwards its own name to a loopback-bound server
+needs `--allowed-host <name>`.
+
+### Web Console
+
+`GET /` serves a browser console over the same `/v1` routes the SDKs call
+(`web_console.rs`). Its files live in `src/cli/web/` and are compiled into the
+binary with `include_bytes!`, so the console needs no build step or network.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/`, `/ui/{file}` | The page, script, styles, logo and vendored xterm.js; public, with a same-origin `Content-Security-Policy` |
+| GET | `/ui/session` | `{key_required, signed_in}`, so the page knows whether to show sign-in |
+| POST | `/ui/session` | `{"token": "<api key>"}` returns `Set-Cookie: boxlite_session=…; HttpOnly; SameSite=Strict` |
+| DELETE | `/ui/session` | Sign out |
+
+A browser cannot attach a Bearer header to a WebSocket upgrade or a file
+download. So with `--api-key` it signs in once, and the auth middleware
+accepts the session cookie in place of the header.
+
+Sessions live in memory, so restarting `serve` signs every browser out.
+Without a key the console opens directly, like the API itself.
+
+| Page | Routes it calls |
+|------|-----------------|
+| Boxes | `GET /v1/boxes`, `POST …/start`, `POST …/stop` |
+| New box | `GET /v1/images`, `POST /v1/boxes`, then `POST …/start` |
+| Box overview | `GET /v1/boxes/{id}`, `GET …/metrics` |
+| Box logs | WebSocket `…/attach?stdin=0`, opened only while the box runs |
+| Box shell | `POST …/exec` with `tty`, WebSocket `…/executions/{id}/attach`, `DELETE …/executions/{id}` on leave |
+| Box files | `GET …/files?path=` (tar download), `PUT …/files?path=` (one-file tar upload) |
+| Box snapshots | `GET`/`POST …/snapshots`, `POST …/snapshots/{name}/restore`, `DELETE …/snapshots/{name}` |
+| Box network | `PUT …/network/outbound`, `PUT …/network/inbound` |
+| Box actions | `POST …/clone`, `DELETE /v1/boxes/{id}` |
+| Images | `GET /v1/images`, `DELETE /v1/images/{name}`; boxes per image are counted from `GET /v1/boxes` |
+| Volumes | `GET`/`POST /v1/volumes`, `DELETE /v1/volumes/{id}` |
+| Access | `GET /ui/session`, `DELETE /ui/session` |
+
 ### Box CRUD & Lifecycle
 
 | Method | Path                                  | Handler             | Description                    |
@@ -464,6 +511,7 @@ sets `reaping_kill` under one lock acquisition.
 |----------|-----------|--------------------------|
 | `--port` | `8100`    | TCP port to listen on    |
 | `--host` | `127.0.0.1` | Address to bind; non-loopback requires `--api-key` |
+| `--allowed-host` | none | Extra `Host` name accepted on a loopback bind (repeatable); see the browser guard |
 
 ### Internal Constants
 

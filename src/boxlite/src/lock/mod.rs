@@ -288,6 +288,31 @@ impl Drop for LockGuard<'_> {
     }
 }
 
+/// An exclusive guard whose owned locker can move into background persistence.
+pub struct OwnedLockGuard {
+    lock: Arc<dyn Locker>,
+    _gate: Option<OwnedRwLockWriteGuard<()>>,
+}
+
+impl OwnedLockGuard {
+    pub async fn new_async(lock: Arc<dyn Locker>) -> Self {
+        let gate = match lock.gate() {
+            Some(gate) => Some(gate.clone().write_owned().await),
+            None => None,
+        };
+        while !lock.try_lock() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        Self { lock, _gate: gate }
+    }
+}
+
+impl Drop for OwnedLockGuard {
+    fn drop(&mut self) {
+        self.lock.unlock();
+    }
+}
+
 /// RAII guard holding a shared read lock.
 pub struct ReadLockGuard<'a> {
     lock: &'a dyn Locker,

@@ -134,7 +134,8 @@ and regenerate the lockfile before rerunning the audit.
 The CLI is [`bin/mbuild.ts`](bin/mbuild.ts). Addressing lives in [`src/address.ts`](src/address.ts),
 configuration in [`src/config.ts`](src/config.ts), and publication in [`src/publish.ts`](src/publish.ts).
 [mdeploy-all](../../../.github/workflows/mdeploy-all.yml) invokes the [shared image action](../../../.github/actions/mbuild/action.yml)
-inside its approved planning/build job; the reusable [mbuild workflow](../../../.github/workflows/mbuild.yml) wraps the same steps.
+inside its approved image preparation leg, parallel to Runner preparation;
+the reusable [mbuild workflow](../../../.github/workflows/mbuild.yml) wraps the same steps.
 Release publication uses
 [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 

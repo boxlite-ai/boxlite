@@ -193,7 +193,17 @@ export type ProgramInput = {
  * the stack.
  */
 export const gcpProgram =
-  ({ app, stage, region, project, zone = null, environment, cwd, loadModules: load = loadModules, deployStackWith }: ProgramInput) =>
+  ({
+    app,
+    stage,
+    region,
+    project,
+    zone = null,
+    environment,
+    cwd,
+    loadModules: load = loadModules,
+    deployStackWith,
+  }: ProgramInput) =>
   async (): Promise<ProgramOutputs> => {
     const modules = await load()
     installGlobals({ modules, app, stage })
@@ -282,6 +292,7 @@ export const gcpProgram =
         userDomain: stackEnvironment.userDomain,
         runnerBinary,
         runnerFleet: stackEnvironment.runnerFleet,
+        filestoreProjects: stackEnvironment.filestoreProjects,
         apiEnvironment: stackEnvironment.apiEnvironment,
         apiSecrets: stackEnvironment.apiSecrets,
         proxyEnvironment: stackEnvironment.proxyEnvironment,

@@ -35,6 +35,8 @@ export interface WorkerState {
   box_id: string
   status: string
   exit_code?: number | null
+  /** The trusted host can reconcile an interrupted JIT operation on this Box. */
+  recoverableJit?: boolean
 }
 
 /** Host adapters use this marker only for a known original Box ID under verified original authority. */
@@ -65,4 +67,5 @@ export interface WorkerExecutor {
   stop(name: string): Promise<void>
   remove(name: string): Promise<void>
   deliverJit(name: string, configuration: string, signal?: AbortSignal): Promise<void>
+  recoverJit?(name: string, effect: string, signal?: AbortSignal): Promise<'replace' | 'delivered' | 'unknown'>
 }

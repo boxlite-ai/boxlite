@@ -4,6 +4,8 @@
 //! The devices behind the buses, and the platform code that adds them.
 
 pub(crate) mod balloon;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod cmos;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
@@ -38,17 +40,17 @@ use crate::{
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
     chipset: &mut ChipsetBuilder,
-    ctx: DeviceContext<'_>,
+    mut ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
 ) -> Result<()> {
-    add_legacy_devices(chipset, console.clone())?;
+    add_legacy_devices(chipset, console.clone(), Box::new(cmos::host_clock))?;
 
     let mut slots = Slots::new();
     let mut used = Vec::new();
     for (index, disk) in config.disks.iter().enumerate() {
         add_slot_device(&mut slots, &mut used, |slot| {
-            blk::add_disk(chipset, &ctx, disk, index, slot)
+            blk::add_disk(chipset, &mut ctx, disk, index, slot)
         })?;
     }
     // The balloon follows the disks so it never renumbers them: the guest

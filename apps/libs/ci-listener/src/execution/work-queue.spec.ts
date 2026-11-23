@@ -11,6 +11,26 @@ const deferred = () => {
 }
 
 describe('CI keyed execution queue', () => {
+  it('retains a newer pending revision when the active revision conflicts', async () => {
+    const entered = deferred(),
+      release = deferred()
+    const queue = new WorkQueue(1, () => {})
+    const newer = jest.fn(async () => {})
+    queue.enqueue('allocation', 'old-proof', async () => {
+      entered.resolve()
+      await release.promise
+      throw new StateConflict()
+    })
+    await entered.promise
+    queue.enqueue('allocation', 'new-proof', newer)
+    release.resolve()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    try {
+      expect(newer).toHaveBeenCalledTimes(1)
+    } finally {
+      await queue.close()
+    }
+  })
   it('coalesces pending work and requeues a running key once with its latest revision', async () => {
     const entered = deferred(),
       release = deferred(),

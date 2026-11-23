@@ -12,7 +12,7 @@ describe('resolveEnvironment', () => {
   it('uses the OIDC issuer before the browser hostname', () => {
     expect(resolveEnvironment('localhost', 'https://auth.dev.boxlite.ai')).toBe('development')
     expect(resolveEnvironment('localhost', 'https://auth.boxlite.ai')).toBe('production')
-    expect(resolveEnvironment('localhost', 'http://localhost:25556/dex')).toBe('local')
+    expect(resolveEnvironment('localhost', 'http://localhost:25556/auth/v1')).toBe('local')
   })
 
   it('defaults unrecognised hosts to production', () => {

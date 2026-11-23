@@ -5,9 +5,12 @@
 //! the host APIC ID and CPU count in leaf 1, a zeroed 0xB and 0x1F subleaf 0,
 //! a zero 0x8000_001E and host core counts in 0x8000_0008.
 
+use std::{error::Error as _, io};
+
 use boxlite_hypervisor::X86CpuidEntry;
 
-use super::vcpu_cpuid;
+use super::{X86MemoryCaps, preflight_x86, vcpu_cpuid};
+use crate::{error::Error, x86_boot_layout::PageSize};
 
 fn entry(leaf: u32, [eax, ebx, ecx, edx]: [u32; 4]) -> X86CpuidEntry {
     X86CpuidEntry {
@@ -108,13 +111,27 @@ fn places_each_vcpu_by_apic_id_in_one_package_of_cores() {
 
 #[test]
 fn amd_reports_the_apic_id_in_its_extended_topology_leaves() {
-    let cpuid = vcpu_cpuid(&amd(), 3, 5);
+    let mut supported = amd();
+    let features = supported
+        .iter_mut()
+        .find(|entry| entry.leaf == 0x8000_0001)
+        .unwrap();
+    features.edx |= 1 << 26;
+    let cpuid = vcpu_cpuid(&supported, 3, 5);
 
     let [sizes] = subleaves(&cpuid, 0x8000_0008)[..] else {
         panic!("one 0x8000_0008")
     };
     // ApicIdSize 6 and four more cores; PerfTscSize in bit 16 kept.
     assert_eq!(sizes.ecx, 0x1_6004);
+    assert_eq!(
+        sizes.eax, 0x3030,
+        "keep address sizes when setting AMD topology"
+    );
+    assert_eq!(
+        subleaves(&cpuid, 0x8000_0001),
+        subleaves(&supported, 0x8000_0001)
+    );
     let [extended] = subleaves(&cpuid, 0x8000_001e)[..] else {
         panic!("one 0x8000_001e")
     };
@@ -139,4 +156,136 @@ fn a_single_vcpu_is_one_core_without_htt() {
     assert_eq!(leaf_1.ebx, 0x0001_0805);
     assert_eq!(leaf_1.edx & (1 << 28), 0);
     assert_eq!(subleaves(&cpuid, 0xb), topology(0xb, 0, 1));
+}
+
+fn address_sizes(physical: u32, virtual_bits: u32, guest: u32) -> X86CpuidEntry {
+    entry(
+        0x8000_0008,
+        [physical | (virtual_bits << 8) | (guest << 16), 0, 0, 0],
+    )
+}
+
+#[test]
+fn decodes_kvm_address_widths() {
+    for (physical_bits, guest_bits) in [(48, 36), (36, 0), (36, 48)] {
+        let entries = [
+            X86CpuidEntry {
+                subleaf: 1,
+                ..address_sizes(32, 48, 32)
+            },
+            entry(0x8000_0009, [52, 0, 0, 0]),
+            address_sizes(physical_bits, 57, guest_bits),
+            entry(1, [31, 0, 0, 0]),
+        ];
+        let caps = X86MemoryCaps::from_cpuid(&entries).unwrap();
+        assert_eq!(caps.physical_end, 1 << 36);
+        assert!(!caps.pdpe1gb);
+        assert!(preflight_x86(64512, &entries, PageSize::Mib).is_ok());
+        let error = preflight_x86(64513, &entries, PageSize::Mib).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::GuestMemoryAddressLimit {
+                memory_mib: 64513,
+                end: 0x10_0010_0000,
+                limit_end: 0x10_0000_0000,
+                limit: "KVM GPA",
+            }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "guest RAM request of 64513 MiB ends at GPA 0x1000100000, beyond KVM GPA exclusive limit 0x1000000000"
+        );
+    }
+}
+
+fn assert_unsupported(error: Error, reason: &str) {
+    assert!(matches!(error, Error::HostMemoryCapability(_)), "{error:?}");
+    let cause = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+    assert_eq!(cause.kind(), io::ErrorKind::Unsupported);
+    assert_eq!(cause.to_string(), reason);
+    assert_eq!(
+        error.to_string(),
+        format!("guest memory capability check failed: {reason}")
+    );
+}
+
+#[test]
+fn rejects_missing_or_invalid_width() {
+    let missing = "missing CPUID address sizes leaf 0x80000008";
+    let bad_physical = "CPUID physical address width must be in 32..=52";
+    let bad_guest = "CPUID guest physical address width must be in 32..=52";
+    for (entries, reason) in [
+        (vec![entry(0x8000_0001, [0; 4])], missing),
+        (
+            vec![X86CpuidEntry {
+                subleaf: 1,
+                ..address_sizes(48, 57, 36)
+            }],
+            missing,
+        ),
+        (vec![address_sizes(0, 57, 36)], bad_physical),
+        (vec![address_sizes(31, 57, 0)], bad_physical),
+        (vec![address_sizes(53, 57, 36)], bad_physical),
+        (vec![address_sizes(48, 57, 31)], bad_guest),
+        (vec![address_sizes(48, 57, 53)], bad_guest),
+    ] {
+        assert_unsupported(
+            preflight_x86(1, &entries, PageSize::Mib).unwrap_err(),
+            reason,
+        );
+    }
+}
+
+#[test]
+fn gib_request_requires_extended_edx_bit_26() {
+    let sizes = address_sizes(48, 57, 0);
+    let gib_edx = entry(0x8000_0001, [0, 0, 0, 1 << 26]);
+    for unsupported in [
+        vec![sizes],
+        vec![entry(1, [0, 0, 0, 1 << 26]), sizes],
+        vec![
+            X86CpuidEntry {
+                subleaf: 1,
+                ..gib_edx
+            },
+            sizes,
+        ],
+        vec![entry(0x8000_0001, [0, 0, 1 << 26, 0]), sizes],
+        vec![entry(0x8000_0001, [0, 0, 0, 1 << 25 | 1 << 27]), sizes],
+    ] {
+        assert_unsupported(
+            preflight_x86(1, &unsupported, PageSize::Gib).unwrap_err(),
+            "1 GiB boot pages require CPUID pdpe1gb",
+        );
+        for leaf in [PageSize::Mib, PageSize::Kib] {
+            assert_eq!(
+                preflight_x86(1, &unsupported, leaf).unwrap().page_size(),
+                leaf
+            );
+        }
+    }
+    assert_eq!(
+        preflight_x86(1, &[gib_edx, sizes], PageSize::Gib)
+            .unwrap()
+            .page_size(),
+        PageSize::Gib
+    );
+}
+
+#[test]
+fn preflight_checks_identity_end_before_allocation() {
+    let entries = [address_sizes(52, 57, 0)];
+    assert!(preflight_x86(134216704, &entries, PageSize::Mib).is_ok());
+    for (entries, expected) in [
+        (entries, "four-level identity map"),
+        ([address_sizes(47, 57, 0)], "KVM GPA"),
+    ] {
+        let error = preflight_x86(134216705, &entries, PageSize::Mib).unwrap_err();
+        assert!(
+            matches!(error, Error::GuestMemoryAddressLimit {
+            memory_mib: 134216705, end: 0x8000_0010_0000, limit_end: 0x8000_0000_0000, limit,
+        } if limit == expected),
+            "{error:?}"
+        );
+    }
 }

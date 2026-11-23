@@ -2,7 +2,7 @@
 import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
-import { DataSource } from 'typeorm'
+import { DataSource, QueryFailedError } from 'typeorm'
 import { Logger } from '@nestjs/common'
 import {
   WorkerPool,
@@ -678,6 +678,36 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     const result = await discover(() => reported.mock.calls.length > 0)
     expect(result.scopes).toEqual([])
     expect(requests).toHaveLength(0)
+  })
+  it('reports the SQLSTATE of a failed Listener renewal without SQL or parameters', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    try {
+      await expect(
+        db.query('SELECT 1 / $1::integer', [0]).catch((error) => {
+          host.report(error, 'listener-renewal')
+          throw error
+        }),
+      ).rejects.toThrow('division by zero')
+      expect(warn).toHaveBeenCalledWith({ operation: 'listener-renewal', error: 'QueryFailedError', sqlState: '22012' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+  it('omits private error details when renewal has no valid SQLSTATE', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    try {
+      const error = new Error('private error details')
+      for (const cause of [error, Object.assign(new Error(), { code: 'private-driver-message' })]) {
+        host.report(new QueryFailedError('private query', [], cause), 'listener-renewal')
+        expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'QueryFailedError' })
+      }
+      host.report(error, 'listener-renewal')
+      expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'Error' })
+      host.report('private rejection', 'listener-renewal')
+      expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'Unknown' })
+    } finally {
+      warn.mockRestore()
+    }
   })
   it.each([0, 137])('writes a real pool exit %s to the API logger with original CI identity', async (exit_code) => {
     const scope = (await discover()).scopes.find(

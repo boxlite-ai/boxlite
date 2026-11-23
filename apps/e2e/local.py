@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -33,7 +34,6 @@ if _raw_python and "/" in _raw_python and not PYTHON.is_absolute():
 COMPOSE = E2E / "compose.yaml"
 DEPENDENCIES = json.loads((E2E / "dependencies.json").read_text())
 sys.path.insert(0, str(E2E))
-from minio import image_ref as minio_image_ref  # noqa: E402
 from python_env import interpreter  # noqa: E402
 
 if _raw_python and "/" not in _raw_python:
@@ -43,7 +43,11 @@ if _raw_python and "/" not in _raw_python:
         raise SystemExit(str(error)) from error
 
 PORTS = dict(API=3300, RUNNER=38080, PROXY=34000, REGISTRY_PROXY=34100,
-             POSTGRES=35432, REDIS=36379, REGISTRY=35000, DEX=35556, MINIO=39000)
+             POSTGRES=35432, REDIS=36379, REGISTRY=35000, RAUTHY=35556, RUSTFS=39000)
+# Rauthy builds its issuer from PUB_URL, so the API and browser use this host.
+ISSUER = f"http://localhost:{PORTS['RAUTHY']}/auth/v1"
+CREDENTIALS = ("ADMIN_KEY", "RUNNER_KEY", "PROXY_KEY", "POSTGRES_PASSWORD",
+               "RUSTFS_PASSWORD", "RAUTHY_SECRET", "ENCRYPTION_KEY", "ENCRYPTION_SALT")
 GUEST_IMAGE = DEPENDENCIES["guest"]["image"]
 INSTANCE_ID = hashlib.sha256(f"{ROOT}:{STATE}".encode()).hexdigest()[:12]
 RUNTIME_HOME = Path(f"/tmp/ble2e-{os.getuid()}-{INSTANCE_ID}/r")
@@ -112,13 +116,15 @@ def base_env():
         "DB_PASSWORD": credentials["POSTGRES_PASSWORD"], "DB_DATABASE": "boxlite_e2e",
         "PGHOST": "127.0.0.1", "PGPORT": str(PORTS["POSTGRES"]), "PGUSER": "boxlite",
         "PGPASSWORD": credentials["POSTGRES_PASSWORD"], "PGDATABASE": "boxlite_e2e",
-        "POSTGRES_PASSWORD": credentials["POSTGRES_PASSWORD"], "MINIO_PASSWORD": credentials["MINIO_PASSWORD"],
+        "POSTGRES_PASSWORD": credentials["POSTGRES_PASSWORD"], "RUSTFS_PASSWORD": credentials["RUSTFS_PASSWORD"],
+        "RAUTHY_SECRET": credentials["RAUTHY_SECRET"],
+        "RAUTHY_ENC_KEYS": "local/" + base64.b64encode(bytes.fromhex(credentials["RAUTHY_SECRET"])).decode(),
         "REDIS_HOST": "127.0.0.1", "REDIS_PORT": str(PORTS["REDIS"]),
         "REDIS_PASSWORD": "", "REDIS_TLS": "false", "DB_TLS_ENABLED": "false",
         "ADMIN_API_KEY": credentials["ADMIN_KEY"],
         "ENCRYPTION_KEY": credentials["ENCRYPTION_KEY"], "ENCRYPTION_SALT": credentials["ENCRYPTION_SALT"],
         "OIDC_CLIENT_ID": "boxlite", "OIDC_AUDIENCE": "boxlite",
-        "OIDC_ISSUER_BASE_URL": endpoint("DEX"), "OIDC_DOMAIN": endpoint("DEX"),
+        "OIDC_ISSUER_BASE_URL": ISSUER, "OIDC_DOMAIN": ISSUER,
         "DEFAULT_REGION_ENFORCE_QUOTAS": "false", "DEFAULT_RUNNER_NAME": "boxlite-e2e",
         "DEFAULT_RUNNER_API_KEY": credentials["RUNNER_KEY"], "DEFAULT_RUNNER_DOMAIN": "127.0.0.1",
         "DEFAULT_RUNNER_API_VERSION": "2", "DEFAULT_RUNNER_API_URL": endpoint("RUNNER"),
@@ -138,11 +144,11 @@ def base_env():
         "REGISTRY_SECRET_STORE": "file", "REGISTRY_SECRET_DIR": str(STATE / "registry-secrets"),
         "INTERNAL_REGISTRY_URL": endpoint("REGISTRY"), "TRANSIENT_REGISTRY_URL": endpoint("REGISTRY"),
         "INSECURE_REGISTRIES": f"127.0.0.1:{PORTS['REGISTRY']},127.0.0.1:{PORTS['REGISTRY_PROXY']}",
-        "S3_ENDPOINT": endpoint("MINIO"), "S3_STS_ENDPOINT": endpoint("MINIO") + "/minio/v1/assume-role",
-        "S3_REGION": "us-east-1", "S3_ACCESS_KEY": "e2eadmin", "S3_SECRET_KEY": credentials["MINIO_PASSWORD"],
-        "S3_DEFAULT_BUCKET": "boxlite", "AWS_ENDPOINT_URL": endpoint("MINIO"),
+        "S3_ENDPOINT": endpoint("RUSTFS"),
+        "S3_REGION": "us-east-1", "S3_ACCESS_KEY": "e2eadmin", "S3_SECRET_KEY": credentials["RUSTFS_PASSWORD"],
+        "S3_DEFAULT_BUCKET": "boxlite", "AWS_ENDPOINT_URL": endpoint("RUSTFS"),
         "AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "e2eadmin",
-        "AWS_SECRET_ACCESS_KEY": credentials["MINIO_PASSWORD"], "AWS_DEFAULT_BUCKET": "boxlite",
+        "AWS_SECRET_ACCESS_KEY": credentials["RUSTFS_PASSWORD"], "AWS_DEFAULT_BUCKET": "boxlite",
         "VOLUME_STORAGE_BACKEND": "s3",
         "BOXLITE_E2E_API_URL": api, "BOXLITE_E2E_ADMIN_KEY": credentials["ADMIN_KEY"],
         "BOXLITE_E2E_API_KEY": credentials["ADMIN_KEY"],
@@ -185,16 +191,15 @@ def atomic_json(path, value):
 def load_credentials():
     """Keep environment-specific credentials stable across restarts."""
     path = STATE / "credentials.json"
-    if not path.exists():
-        values = {name: secrets.token_hex(32) for name in (
-            "ADMIN_KEY", "RUNNER_KEY", "PROXY_KEY", "POSTGRES_PASSWORD",
-            "MINIO_PASSWORD", "ENCRYPTION_KEY", "ENCRYPTION_SALT")}
+    values = json.loads(path.read_text()) if path.exists() else {}
+    missing = [name for name in CREDENTIALS if name not in values]
+    for name in missing:
         # Overrides are consumed only at creation; existing data keeps its keys.
-        for name in ("POSTGRES_PASSWORD", "MINIO_PASSWORD"):
-            if os.environ.get(name):
-                values[name] = os.environ[name]
+        override = os.environ.get(name) if name.endswith("_PASSWORD") else None
+        values[name] = override or secrets.token_hex(32)
+    if missing:
         atomic_json(path, values)
-    return json.loads(path.read_text())
+    return values
 
 
 def state_dirs():
@@ -231,18 +236,14 @@ def checked_directory(path, *, private=False, create=False, repair=False):
 
 def write_files():
     state_dirs()
-    dex = (ROOT / "apps/dex/config.yaml").read_text()
-    dex = dex.replace("${DEX_ISSUER}", endpoint("DEX")).replace("${REDIRECT_URI}", endpoint("API"))
-    dex = dex.replace("    redirectURIs:\n", "    redirectURIs:\n      - '/device/callback'\n")
-    (STATE / "dex.yaml").write_text(dex)
     env_file = {
         "COMPOSE_PROJECT_NAME": PROJECT,
         "POSTGRES_IMAGE": DEPENDENCIES["images"]["postgres"],
         "REDIS_IMAGE": DEPENDENCIES["images"]["redis"],
         "REGISTRY_IMAGE": DEPENDENCIES["images"]["registry"],
-        "DEX_IMAGE": DEPENDENCIES["images"]["dex"],
-        "MINIO_IMAGE": minio_image_ref(),
-        "DEX_CONFIG": str(STATE / "dex.yaml"),
+        "RAUTHY_IMAGE": DEPENDENCIES["images"]["rauthy"],
+        "RUSTFS_IMAGE": DEPENDENCIES["images"]["rustfs"],
+        "RAUTHY_CONFIG_DIR": str(ROOT / "apps/rauthy"),
         **{f"{name}_PORT": str(port) for name, port in PORTS.items()},
     }
     path = STATE / ".env"
@@ -331,7 +332,6 @@ def build(env):
     make("cli", env, SETUP_DONE=1)
     make("test:e2e:build:runner", env, E2E_STATE_DIR=STATE)
     make("test:e2e:build:proxies", env, E2E_STATE_DIR=STATE)
-    make("test:e2e:build:minio", env, E2E_STATE_DIR=STATE)
 
 
 def wait_http(address, timeout, process=None):
@@ -628,8 +628,8 @@ def wait_dependencies(env):
                   "-U", "boxlite", "-d", "boxlite_e2e", "-c", "select 1"], env)
     wait_command(["redis-cli", "-h", "127.0.0.1", "-p", str(PORTS["REDIS"]), "ping"], env)
     for address in (endpoint("REGISTRY") + "/v2/",
-                    endpoint("DEX") + "/.well-known/openid-configuration",
-                    endpoint("MINIO") + "/minio/health/live"):
+                    ISSUER + "/.well-known/openid-configuration",
+                    endpoint("RUSTFS") + "/health"):
         wait_http(address, 60)
 
 
@@ -727,7 +727,8 @@ def up(env):
             pass
     host_starting = False
     try:
-        compose(["up", "-d"], env)
+        # --remove-orphans drops services no longer in compose.yaml (dex, minio).
+        compose(["up", "-d", "--remove-orphans"], env)
         wait_dependencies(env)
         create_bucket(env)
         host_starting = True
@@ -748,9 +749,9 @@ def up(env):
                 if leftover:
                     print("[e2e] leftover box processes; run down to retry cleanup", file=sys.stderr)
             if not existing:
-                compose(["down"], env)
+                compose(["down", "--remove-orphans"], env)
             else:
-                created = [name for name in ("postgres", "redis", "registry", "dex", "minio")
+                created = [name for name in ("postgres", "redis", "registry", "rauthy", "rustfs")
                            if name not in existing]
                 if created:
                     compose(["rm", "-s", "-f", *created], env)
@@ -769,7 +770,7 @@ def down(env):
     write_files()
     stop_host()
     stop_orphaned_boxes()
-    compose(["down"], env)
+    compose(["down", "--remove-orphans"], env)
     leftover = stop_orphaned_boxes()
     if leftover:
         raise Failure("leftover box processes after teardown: "

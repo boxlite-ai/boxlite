@@ -4,10 +4,11 @@
 //! Tests for the library-backed ELF adapter and guest visibility.
 
 use std::io::{self, Cursor};
+use vm_memory::GuestAddressSpace as _;
 
 use vm_memory::{Bytes, GuestAddress};
 
-use super::load_elf;
+use super::{LoadedKernel, load_elf};
 use crate::memory::{GuestMemoryMmap, GuestRam};
 
 /// Physical start, file offset, file size, memory size and flags of each
@@ -78,17 +79,24 @@ fn read(ram: &GuestMemoryMmap, address: u64, len: usize) -> Vec<u8> {
 }
 
 /// Loads an in-memory image through the reader a kernel file also goes through.
-fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<u64> {
+fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<LoadedKernel> {
     load_elf(ram, &mut Cursor::new(image))
 }
 
 #[test]
 fn loads_physical_bytes_and_returns_the_kernel_entry() {
     let ram = ram(RAM_SIZE);
-    let memory = ram.memory().as_ref();
+    let memory = ram.memory().memory();
+    let memory = &*memory;
     let image = fixture();
 
-    assert_eq!(load(memory, &image).unwrap(), ENTRY);
+    let kernel = load(memory, &image).unwrap();
+    assert_eq!(kernel.entry, ENTRY);
+    assert_eq!(kernel.start, 0x10_0000);
+    assert_eq!(
+        kernel.end, 0x10_3080,
+        "the kernel end must include pure BSS"
+    );
     for (paddr, offset, filesz, memsz, _) in SEGMENTS {
         let loaded = read(memory, paddr, memsz as usize);
         assert_eq!(
@@ -103,20 +111,75 @@ fn loads_physical_bytes_and_returns_the_kernel_entry() {
 }
 
 #[test]
-fn preserves_the_library_error_for_invalid_or_truncated_images() {
-    let valid = fixture();
-    for image in [&[][..], &[0u8; 64][..], &valid[..valid.len() - 1]] {
-        let ram = ram(RAM_SIZE);
-        let error = load(ram.memory().as_ref(), image).expect_err("invalid ELF");
-        assert_eq!(error.kind(), io::ErrorKind::Other);
-        assert!(
-            error
-                .get_ref()
-                .and_then(|source| source.downcast_ref::<linux_loader::loader::Error>())
-                .is_some(),
-            "the library error must remain available: {error}"
-        );
+fn reports_the_lowest_loadable_physical_address_not_the_entry() {
+    let ram = ram(RAM_SIZE);
+    let mut image = fixture();
+    let lowest_paddr = 0xf_f000;
+    put64(&mut image, header(1) + 24, lowest_paddr);
+
+    let kernel = load(ram.boot_memory().as_ref(), &image).unwrap();
+    assert_eq!(kernel.entry, ENTRY);
+    assert_eq!(kernel.start, lowest_paddr);
+}
+
+#[test]
+fn zero_memsz_load_segments_do_not_widen_kernel_bounds() {
+    let ram = ram(RAM_SIZE);
+    let mut image = fixture();
+    let phoff = image.len();
+    let existing = image[64..64 + SEGMENTS.len() * 56].to_vec();
+    image.extend_from_slice(&existing);
+    for paddr in [0x1_0000u64, 0x18_0000] {
+        let base = image.len();
+        image.resize(base + 56, 0);
+        put32(&mut image, base, 1);
+        put32(&mut image, base + 4, 4);
+        put64(&mut image, base + 16, paddr + 0xffff_8000_0000_0000);
+        put64(&mut image, base + 24, paddr);
+        put64(&mut image, base + 48, 1);
     }
+    put64(&mut image, 32, phoff as u64);
+    put16(&mut image, 56, (SEGMENTS.len() + 2) as u16);
+
+    let kernel = load(ram.boot_memory().as_ref(), &image).unwrap();
+    assert_eq!(kernel.entry, ENTRY);
+    assert_eq!(kernel.start, 0x10_0000);
+    assert_eq!(kernel.end, 0x10_3080);
+}
+
+#[test]
+fn rejects_invalid_elf64_headers_and_overflowing_segments() {
+    let ram = ram(RAM_SIZE);
+    for (offset, value) in [(0, 0), (4, 1)] {
+        let mut image = fixture();
+        image[offset] = value;
+        let error = load(ram.boot_memory().as_ref(), &image).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+    let mut image = fixture();
+    put64(&mut image, header(2) + 24, u64::MAX);
+    let error = load(ram.boot_memory().as_ref(), &image).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(error.to_string(), "ELF64 segment end overflows");
+}
+
+#[test]
+fn reports_truncated_headers_and_preserves_the_library_error_for_truncated_payloads() {
+    let valid = fixture();
+    let ram = ram(RAM_SIZE);
+    for image in [&[][..], &valid[..header(2)]] {
+        let error = load(ram.boot_memory().as_ref(), image).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+    let error = load(ram.boot_memory().as_ref(), &valid[..valid.len() - 1]).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert!(
+        error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<linux_loader::loader::Error>())
+            .is_some(),
+        "the library error must remain available: {error}"
+    );
 }
 
 /// Loads the kernel named by `VMM_KERNEL`, checks every segment against
@@ -180,9 +243,12 @@ fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
 
     // RAM is declared before the VM and vCPU so it outlives them during unwinding.
     let ram = ram(RAM_SIZE);
-    let memory = ram.memory().as_ref();
+    let memory = ram.memory().memory();
+    let memory = &*memory;
     let mut kernel = std::fs::File::open(&path).expect("open VMM_KERNEL");
-    assert_eq!(load_elf(memory, &mut kernel).unwrap(), expected_entry);
+    let kernel = load_elf(memory, &mut kernel).unwrap();
+    assert_eq!(kernel.entry, expected_entry);
+    assert_eq!(kernel.end, end);
     let mut checksum = 0u32;
     for &(offset, paddr, filesz, memsz) in &oracle {
         let loaded = read(memory, paddr, memsz);

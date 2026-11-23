@@ -42,6 +42,7 @@ flags:
     carryforward: true
 
 ignore:
+  - "apps/secret-server/internal/testdb/**" # Integration test fixtures
   - "src/deps/**/vendor/**" # Third-party sources, not BoxLite's networking bridge
   # Test sources themselves. A changed test file that matches none of these is one
   # Codecov calls testable, which makes it reject the empty upload test.yml sends

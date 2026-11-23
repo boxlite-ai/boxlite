@@ -1,14 +1,12 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { useQuery } from '@tanstack/react-query'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
-import { Link } from 'react-router-dom'
 import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { Container, Github } from '@/components/ui/icon'
 import { Button } from '@/components/ui/button'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { RoutePath } from '@/enums/RoutePath'
-import { CiJobSetup } from './CiJobSetup'
+import { CiInlineSetup } from './CiInlineSetup'
 
 /** Runner absence and connection readiness are independent facts. */
 export function CiRunnerEmptyState() {
@@ -64,28 +62,5 @@ export function CiRunnerEmptyState() {
       />
     )
   }
-  if (!settings.data.connections.length) {
-    return (
-      <ResourceEmptyState
-        icon={<Github />}
-        title="Connect GitHub to get started"
-        description="Authorize your repositories to run GitHub Actions jobs on BoxLite."
-      >
-        <Button asChild>
-          <Link to={RoutePath.CI_CONNECTS} target="_blank" rel="noopener noreferrer">
-            Set up GitHub
-          </Link>
-        </Button>
-      </ResourceEmptyState>
-    )
-  }
-  return (
-    <ResourceEmptyState
-      icon={<Container />}
-      title="No active runners"
-      description="Runners appear when eligible GitHub Actions jobs start. Open the guide to configure a workflow."
-    >
-      <CiJobSetup label="Set up a job" primary />
-    </ResourceEmptyState>
-  )
+  return <CiInlineSetup connected={settings.data.connections.length > 0} />
 }

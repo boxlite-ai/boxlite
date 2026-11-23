@@ -30,6 +30,9 @@ const parse = (overrides: Record<string, unknown> = {}) =>
 
 test('runner configuration accepts an optional data disk while preserving required fields and bounds', () => {
   assert.deepEqual(parse().runners, valid.runners)
+  const runners = { ...valid.runners, size: '2xlarge', machineTypes: { medium: 'n4-standard-8', '2xlarge': 'n4d-standard-64' } }
+  assert.deepEqual(parse({ runners }).runners, runners)
+  assert.throws(() => parse({ runners: { ...runners, machineTypes: { tiny: 'n4-standard-4' } } }), /does not take tiny/)
   for (const dataDiskGb of [20, 2048, 4000]) {
     const runners = { ...valid.runners, dataDiskGb }
     assert.deepEqual(parse({ runners }).runners, runners)

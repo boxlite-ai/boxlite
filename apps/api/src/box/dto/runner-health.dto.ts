@@ -170,6 +170,17 @@ export class RunnerHealthcheckDto {
   supportsPrivileged?: boolean
 
   @ApiPropertyOptional({
+    description:
+      'Capabilities the runner binary supports (e.g. "filestore"). Absent from runners predating capability reporting, which the API treats as supporting none of them',
+    type: [String],
+    example: ['filestore'],
+  })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsArray()
+  @IsString({ each: true })
+  capabilities?: string[]
+
+  @ApiPropertyOptional({
     description: 'Runner metrics',
     type: RunnerHealthMetricsDto,
   })

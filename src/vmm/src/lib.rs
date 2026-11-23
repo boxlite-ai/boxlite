@@ -27,6 +27,7 @@ mod bus;
 )]
 mod chipset;
 mod config;
+mod control;
 #[cfg(target_arch = "x86_64")]
 mod cpu_features;
 #[cfg_attr(
@@ -47,8 +48,13 @@ mod events;
     not(test),
     expect(
         dead_code,
-        reason = "Only tests use part of this API, and only Linux x86_64 adds devices yet."
+        reason = "The virtio-mem device that drives hotplug memory comes next."
     )
+)]
+mod hotplug;
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 adds devices yet.")
 )]
 mod irq;
 mod memory;
@@ -70,11 +76,17 @@ mod virtio;
     )
 )]
 mod vm;
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 boots guests yet.")
+)]
+mod x86_boot_layout;
 
 pub use chipset::{BusKind, Conflict};
 pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };
+pub use control::VmControl;
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
 pub use vm::{StopHandle, Vm, VmExit};

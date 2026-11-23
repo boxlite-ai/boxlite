@@ -26,6 +26,11 @@ pub mod krun;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub mod native;
 pub mod registry;
+#[cfg(any(
+    test,
+    all(feature = "native", target_os = "linux", target_arch = "x86_64")
+))]
+pub(crate) mod vmm_socket;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
 use crate::jailer::SecurityOptions;
@@ -229,6 +234,9 @@ pub struct InstanceSpec {
     pub kernel: Option<PreparedKernel>,
     /// Filesystem shares from host to guest
     pub fs_shares: FsShares,
+    /// Managed-volume paths granted to the host-side jailer before spawn.
+    #[serde(skip)]
+    pub volume_access: Vec<crate::jailer::PathAccess>,
     /// Block device attachments via virtio-blk
     pub block_devices: BlockDevices,
     /// Guest agent entrypoint (e.g., /boxlite/bin/boxlite-guest)

@@ -4,6 +4,7 @@
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { BoxService } from './box.service'
+import { SecretServerClient } from './secret-server-client'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { Box } from '../entities/box.entity'
 import { BoxDto } from '../dto/box.dto'
@@ -29,6 +30,7 @@ describe('Cloud MiB allocation regression', () => {
     insert.mockClear()
     service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service, {
+      secretServerClient: new SecretServerClient({ get: () => false } as any),
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'us' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
       organizationService: {
