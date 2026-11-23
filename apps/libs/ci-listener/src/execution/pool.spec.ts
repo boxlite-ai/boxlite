@@ -344,6 +344,42 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect(await journal.used(definition.organization)).toBe(1)
   })
+  it.each(['replace', 'unknown'] as const)(
+    'accounts for the hosted JIT recovery verdict %s during an outage',
+    async (verdict) => {
+      const [check] = await state.read(['journal/format'], lease)
+      const target = {
+        id: 9,
+        labels: ['boxlite'],
+        assigned: 1,
+        held: 0,
+        check,
+        delivery: { covered: 0, waitingForDispatch: true, offline: true },
+      }
+      const balance = () => pool.balanceScaleSets(lease, [target], limits, new AbortController().signal)
+      loseDelivery = true
+      await expect(balance()).rejects.toThrow('lost upload acknowledgement')
+      const row = await allocation()
+      boxes.get(row.value.name)!.recoverableJit = true
+      backend.workers.recoverJit = jest.fn(async () => verdict)
+      const now = Date.now()
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+      try {
+        await reconcile()
+        expect(backend.workers.recoverJit).toHaveBeenCalledTimes(1)
+        await finishBox()
+        expect(await journal.used(definition.organization)).toBe(0)
+        loseDelivery = false
+        await balance()
+        expect(backend.workers.create).toHaveBeenCalledTimes(1)
+        clock.mockReturnValue(now + 3000)
+        await balance()
+        expect(backend.workers.create).toHaveBeenCalledTimes(verdict === 'replace' ? 2 : 1)
+      } finally {
+        clock.mockRestore()
+      }
+    },
+  )
   it('uses each disconnected assignment once when quota frees during backoff', async () => {
     const [check] = await state.read(['journal/format'], lease)
     const target = {

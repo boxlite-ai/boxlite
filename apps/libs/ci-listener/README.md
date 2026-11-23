@@ -511,7 +511,7 @@ During a polling outage, the listener counts candidates together for each Scale 
 
 After creation backoff the planner replaces only the shortfall. For one assignment and two candidates, a rejection and a completed job need zero replacements. A JIT delivery with an unknown result keeps its credit because the runner may have accepted work.
 
-A held slot stays undispatched once completed workers cover the last confirmed assignment.
+If the host confirms it abandoned JIT delivery before the runner could start, the listener applies the same per-label backoff. Returning quota makes the uncovered assignment eligible once that delay expires. A held slot stays undispatched once completed workers cover the last confirmed assignment.
 
 Credits live in the listener process. A new GitHub assignment count, including zero, supersedes the previous observation. After a restart the new session supplies fresh statistics and the journal supplies existing reservations.
 

@@ -152,6 +152,7 @@ export class WorkerPool {
   private readonly settings: PoolSettings
   private readonly setCharges = new Map<number, number>()
   private readonly jit = new Map<string, JitRegistration>()
+  private readonly abandonedJit = new Set<string>()
   private readonly sessions = new Set<RunnerSession>()
   private readonly pendingDeliveries = new Map<number, ScaleTarget>()
   // The scope planner is serialized; execution can release a row after its journal page was read.
@@ -204,6 +205,7 @@ export class WorkerPool {
   releaseSupply(row: AllocationRow): void {
     const set = row.value.supply?.scaleSet
     if (!set) return
+    const abandoned = this.abandonedJit.delete(row.record.key)
     this.releasedSinceScan ??= new Set()
     this.releasedSinceScan.add(row.record.key)
     const target = this.pendingDeliveries.get(set)
@@ -211,7 +213,8 @@ export class WorkerPool {
     const delivery = target.delivery
     if (!delivery.candidates?.delete(row.record.key)) return
     // A JIT delivery with a lost reply may already have served an assignment.
-    if (row.value.delivery !== 'none' || row.value.runner.worked) delivery.spent = (delivery.spent ?? 0) + 1
+    if (row.value.runner.worked || (row.value.delivery !== 'none' && !abandoned))
+      delivery.spent = (delivery.spent ?? 0) + 1
     delivery.covered = Math.min(target.assigned, (delivery.spent ?? 0) + delivery.candidates.size)
     if (!delivery.candidates.size || delivery.spent === target.assigned) {
       this.pendingDeliveries.delete(set)
@@ -683,7 +686,14 @@ export class WorkerPool {
           if (row.value.runner.worked) await update({ delivery: 'done' })
           else {
             const result = await backend.workers.recoverJit(row.value.name, row.value.effect.id, signal)
-            if (result === 'replace') await update({ closing: true })
+            if (result === 'replace') {
+              // The host sealed this delivery before the runner could start. Count the shortfall when quota returns.
+              if (row.value.supply?.scaleSet && !this.abandonedJit.has(row.record.key)) {
+                this.abandonedJit.add(row.record.key)
+                this.creationRejected(select().label)
+              }
+              await update({ closing: true })
+            }
             if (result === 'delivered') await update({ delivery: 'done' })
           }
         }
