@@ -443,15 +443,15 @@ export class ScaleSetSession {
   private path() {
     return sets + '/' + this.set + '/sessions/' + this.data.id
   }
-  private async withToken<T>(call: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  async withToken<T>(call: (refreshed: boolean) => Promise<T>, signal?: AbortSignal): Promise<T> {
     try {
-      return await call()
+      return await call(false)
     } catch (error) {
       if (!(error instanceof GitHubRequestError) || error.status !== 401) throw error
       const fresh = sessionData(await this.client.service(this.path(), { method: 'PATCH', signal }), this.set)
       if (fresh.id !== this.data.id) return invalid()
       this.data = fresh
-      return call()
+      return call(true)
     }
   }
   async poll(capacity: number, last?: number, signal?: AbortSignal): Promise<SetMessage | null> {
@@ -472,15 +472,11 @@ export class ScaleSetSession {
   async acquire(ids: RequestId[], signal?: AbortSignal): Promise<RequestId[]> {
     const unique = new Set(ids.map(requestIdText))
     if (!unique.size) return []
-    const response = await this.withToken(
-      () =>
-        this.client.service(
-          sets + '/' + this.set + '/acquirejobs',
-          { method: 'POST', body: '[' + [...unique].join(',') + ']', acquisition: true, signal },
-          undefined,
-          this.data.token,
-        ),
-      signal,
+    const response = await this.client.service(
+      sets + '/' + this.set + '/acquirejobs',
+      { method: 'POST', body: '[' + [...unique].join(',') + ']', acquisition: true, signal },
+      undefined,
+      this.data.token,
     )
     const result = list(response).map(readRequestId)
     if (!result.every((id) => unique.delete(String(id)))) return invalid()

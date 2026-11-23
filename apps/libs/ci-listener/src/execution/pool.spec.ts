@@ -53,7 +53,7 @@ describe('CI shared worker lifecycle', () => {
     materializeBox: boolean,
     materializeRunner: boolean,
     loseDelivery: boolean,
-    busyRunner: boolean,
+    removalError: Error | undefined,
     closeFailures: number
   let events: unknown[], observe: jest.Mock
   const rows = async () => inspectJournal(state, lease)
@@ -77,7 +77,7 @@ describe('CI shared worker lifecycle', () => {
     materializeBox = true
     materializeRunner = true
     loseDelivery = false
-    busyRunner = false
+    removalError = undefined
     closeFailures = 0
     events = []
     observe = jest.fn((event: unknown) => events.push(event))
@@ -135,7 +135,7 @@ describe('CI shared worker lifecycle', () => {
           remove: jest.fn(async (identity) => {
             await guard({ kind: 'remove', ...identity })
             expect((await byName(identity.name)).value.effect?.kind).toBe('runner-remove')
-            if (busyRunner) throw new Error('GitHub runner is busy')
+            if (removalError) throw removalError
             runners.delete(identity.name)
           }),
         },
@@ -374,6 +374,63 @@ describe('CI shared worker lifecycle', () => {
         expect(backend.workers.create).toHaveBeenCalledTimes(1)
         clock.mockReturnValue(now + 3000)
         await balance()
+        expect(backend.workers.create).toHaveBeenCalledTimes(verdict === 'replace' ? 2 : 1)
+      } finally {
+        clock.mockRestore()
+      }
+    },
+  )
+  it.each([
+    ['replace', 'observed'],
+    ['unknown', 'observed'],
+    ['replace', 'lost'],
+  ] as const)(
+    'accounts for %s JIT while runner removal is unavailable and the quota commit reply is %s',
+    async (verdict, reply) => {
+      const [check] = await state.read(['journal/format'], lease)
+      const target = {
+        id: 9,
+        labels: ['boxlite'],
+        assigned: 1,
+        held: 0,
+        check,
+        delivery: { covered: 0, waitingForDispatch: true, offline: true },
+      }
+      const balance = () => pool.balanceScaleSets(lease, [target], limits, new AbortController().signal)
+      loseDelivery = true
+      await expect(balance()).rejects.toThrow('lost upload acknowledgement')
+      const old = await allocation()
+      boxes.get(old.value.name)!.recoverableJit = true
+      backend.workers.recoverJit = jest.fn(async () => verdict)
+      await reconcile()
+      boxes.get(old.value.name)!.status = 'stopped'
+      await reconcile()
+      if (reply === 'lost') {
+        const advance = journal.advance.bind(journal)
+        const write = jest.spyOn(journal, 'advance').mockImplementation(async (...args) => {
+          const saved = await advance(...args)
+          if (args[3].box?.phase === 'absent') throw Error('Lost Box quota commit reply')
+          return saved
+        })
+        try {
+          await expect(reconcile()).rejects.toThrow('Lost Box quota commit reply')
+        } finally {
+          write.mockRestore()
+        }
+      }
+      removalError = new GitHubRequestError(503, false)
+      await expect(reconcile()).rejects.toMatchObject({ status: 503 })
+      expect(await journal.used(definition.organization)).toBe(0)
+      expect((await byName(old.value.name)).value.box.phase).toBe('absent')
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3000)
+      try {
+        loseDelivery = false
+        await expect(balance()).rejects.toMatchObject({ status: 503 })
+        expect(backend.workers.create).toHaveBeenCalledTimes(verdict === 'replace' ? 2 : 1)
+        expect(runners.has(old.value.name)).toBe(true)
+        removalError = undefined
+        await balance()
+        expect(runners.has(old.value.name)).toBe(false)
         expect(backend.workers.create).toHaveBeenCalledTimes(verdict === 'replace' ? 2 : 1)
       } finally {
         clock.mockRestore()

@@ -433,7 +433,7 @@ A completed long poll can carry an older capacity estimate. The listener recheck
 
 Ten assigned jobs with ten reserved slots and no workers in flight dispatch ten Box creates in one pass. Each worker commits its create intent before calling the Box service. The next pass counts those starts toward the target. The same transaction advances the scope activity version using its locked, current membership count.
 
-A retry checks the current policy and the scope’s allocation version in the transaction that records the retry intent. If a Box starts, begins closing, or becomes absent after the worker count was read, the listener rechecks capacity before retrying the request.
+A redelivered offer and a retry after a session-token refresh both recheck the held slots and current quota policy. The retry intent records the scope’s observed allocation version in the same transaction. If a Box starts, begins closing, or becomes absent after the worker count was read, the listener rechecks capacity before retrying the request.
 
 If a scope drain released those reservations, the set must obtain new quota. Held reservations start a Box only when GitHub confirms assigned demand.
 
@@ -511,7 +511,9 @@ During a polling outage, the listener counts candidates together for each Scale 
 
 After creation backoff the planner replaces only the shortfall. For one assignment and two candidates, a rejection and a completed job need zero replacements. A JIT delivery with an unknown result keeps its credit because the runner may have accepted work.
 
-If the host confirms it abandoned JIT delivery before the runner could start, the listener applies the same per-label backoff. Returning quota makes the uncovered assignment eligible once that delay expires. A held slot stays undispatched once completed workers cover the last confirmed assignment.
+If the host confirms it abandoned JIT delivery before the runner could start, the listener applies the same per-label backoff. When the journal confirms Box absence and returns its quota, uncovered demand becomes eligible after backoff. The old runner’s record stays available for cleanup even if GitHub returns HTTP 503 during removal.
+
+A held slot stays undispatched once completed workers cover the last confirmed assignment.
 
 Credits live in the listener process. A new GitHub assignment count, including zero, supersedes the previous observation. After a restart the new session supplies fresh statistics and the journal supplies existing reservations.
 

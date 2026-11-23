@@ -301,8 +301,8 @@ export class ScaleSetController {
         },
         [check],
       )
-      await this.journal.release(this.lease, candidate.key, absent.record.version)
       this.host.releaseSupply(absent)
+      await this.journal.release(this.lease, candidate.key, absent.record.version)
     }
   }
   private async retrySlots(id: number, assigned: number, held: number) {
@@ -641,6 +641,26 @@ export class ScaleSetController {
             )
             if (!eligible.length) log.emit({ event: 'ci-scale-set-offers-skipped', reason: 'no-match' })
             const offers = [...new Map(eligible.map((job) => [String(job.id), job.id])).values()]
+            const permitChargedRetry = async (charged: number, activity: StateRecord) => {
+              const policy = await this.host.policy(signal)
+              if (!(await this.journal.permitsChargedRetry(this.lease, scopeKey(this.scope), policy))) return false
+              const prior = readRecord(row)
+              await save(assigned, prior.message, prior.session, charged, policy.checks ?? [], activity)
+              return true
+            }
+            const acquire = (ids: typeof offers, charged: number) =>
+              log.during('acquire', () =>
+                start.session.withToken(async (refreshed) => {
+                  if (refreshed) {
+                    if (!this.host.creationReady(lane.label)) return []
+                    const slots = await this.retrySlots(start.id, assigned, charged)
+                    if (slots.available < charged || !(await permitChargedRetry(charged, slots.activity))) return []
+                  }
+                  const accepted = await start.session.acquire(ids, signal)
+                  log.emit({ event: 'ci-scale-set-acquired', attempted: ids.length, accepted: accepted.length })
+                  return accepted
+                }, signal),
+              )
             const existing = new Set(pendingRequests.keys())
             const unresolved = offers.filter(
               (id) => existing.has(String(id)) && pendingRequests.get(String(id)) !== 'accepted',
@@ -653,20 +673,14 @@ export class ScaleSetController {
               const slots = await this.retrySlots(start.id, assigned, held)
               held = Math.min(held, slots.available)
               covered = held === existing.size
-              if (covered) {
-                const policy = await this.host.policy(signal)
-                if (await this.journal.permitsChargedRetry(this.lease, scopeKey(this.scope), policy)) {
-                  const prior = readRecord(row)
-                  await save(assigned, prior.message, prior.session, held, policy.checks ?? [], slots.activity)
-                  const accepted = await log.during('acquire', () => start.session.acquire(unresolved, signal))
-                  log.emit({ event: 'ci-scale-set-acquired', attempted: unresolved.length, accepted: accepted.length })
-                  for (const id of unresolved) pendingRequests.set(String(id), 'verify')
-                  for (const id of accepted) pendingRequests.set(String(id), 'accepted')
-                  if (accepted.length !== unresolved.length) {
-                    const next = await verifyAcquisitions(assigned, held)
-                    assigned = next.assigned
-                    held = next.held
-                  }
+              if (covered && (await permitChargedRetry(held, slots.activity))) {
+                const accepted = await acquire(unresolved, held)
+                for (const id of unresolved) pendingRequests.set(String(id), 'verify')
+                for (const id of accepted) pendingRequests.set(String(id), 'accepted')
+                if (accepted.length !== unresolved.length) {
+                  const next = await verifyAcquisitions(assigned, held)
+                  assigned = next.assigned
+                  held = next.held
                 }
               }
             }
@@ -705,8 +719,7 @@ export class ScaleSetController {
                 const offered = ids.slice(0, reserved)
                 for (const id of offered) pendingRequests.set(String(id), 'requested')
                 await save(assigned, prior.message, prior.session, held + reserved)
-                const accepted = await log.during('acquire', () => start.session.acquire(offered, signal))
-                log.emit({ event: 'ci-scale-set-acquired', attempted: offered.length, accepted: accepted.length })
+                const accepted = await acquire(offered, held + reserved)
                 let reconcile = false
                 const confirmed = new Set(accepted.map(String))
                 for (const request of offered) {

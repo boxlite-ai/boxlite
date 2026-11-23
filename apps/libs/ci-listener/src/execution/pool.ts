@@ -201,7 +201,7 @@ export class WorkerPool {
     delivery.candidates.add(key)
     delivery.covered = Math.min(target.assigned, (delivery.spent ?? 0) + delivery.candidates.size)
   }
-  /** Update this observation only after the matching journal reservation has been released. */
+  /** Update coverage after the journal returns Box quota, even if runner cleanup is still pending. */
   releaseSupply(row: AllocationRow): void {
     const set = row.value.supply?.scaleSet
     if (!set) return
@@ -705,6 +705,9 @@ export class WorkerPool {
         } else throw error
       }
     }
+    if (row.value.closing && row.value.box.phase === 'none') await update({ box: { phase: 'absent', id: null } })
+    // A committed absence also proves quota was returned if the original write acknowledgement was lost.
+    if (row.value.box.phase === 'absent') this.releaseSupply(row)
     if (row.value.runner.phase === 'requested') {
       const found = await registry((client) => client.lookup({ name: row.value.name }, signal))
       if (found) {
@@ -805,7 +808,6 @@ export class WorkerPool {
     }
     if (!row.value.closing) return
     this.jit.delete(row.record.key)
-    if (row.value.box.phase === 'none') await update({ box: { phase: 'absent', id: null } })
     if (row.value.box.phase === 'known') {
       if (status === 'running' || status === 'starting' || status === 'created') {
         await intent('box-stop')
@@ -827,7 +829,6 @@ export class WorkerPool {
     }
     if (row.value.runner.phase === 'absent') {
       await this.journal.release(lease, row.record.key, row.record.version)
-      this.releaseSupply(row)
       this.idleRetryAt.delete(row.record.key)
       if (row.value.supply?.scaleSet !== undefined) this.forgetDecline(row.value.supply.scaleSet, row.record.key)
       this.event(scope, row, 'ci-worker-released', 'info')

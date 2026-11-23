@@ -289,6 +289,9 @@ const scenarios = [
   'releases remaining ambiguous holds after a second reconnect reports zero',
   'releases an accepted hold after a missed lifecycle event on the same session',
   'honors a quota pause before retrying an unknown acquisition',
+  'refreshes the acquire token with quota open',
+  'refreshes the acquire token with quota paused',
+  'refreshes the acquire token on redelivery with quota paused',
   'recovers idle retirement after a lost DELETE reply',
   'replaces the retired runner when demand returns after a lost DELETE reply',
   'rejects a charged retry against a stale quota record',
@@ -1133,6 +1136,49 @@ for (const storage of ['sqlite', 'postgres'])
             fixture.idle()
             await until(async () => (await journal.used('tenant')) === 0)
             expect(fixture.sessions).toHaveLength(1)
+            return
+          }
+          if (scenario.startsWith('refreshes the acquire token')) {
+            maximum = 1
+            await until(() => fixture.requests.includes('GET /messages'))
+            const [open] = await state.commit(policyOwner!, [
+              { key: 'test/acquire-policy', expected: null, payload: { maximum } },
+            ])
+            policyChecks = [open]
+            if (scenario.includes('redelivery')) {
+              fixture.loseBeforeAcquire = true
+              fixture.publish(1, 0, [123])
+              await until(() => fixture.sessions.length === 2)
+            }
+            const paused = scenario.endsWith('paused')
+            let attempts = 0,
+              refreshes = 0
+            fetch.mockImplementation(async (input, options = {}) => {
+              const path = new URL(String(input)).pathname
+              if (path.endsWith('/acquirejobs') && ++attempts === 1) return new Response(null, { status: 401 })
+              if (options.method === 'PATCH' && path.includes('/9/sessions/')) {
+                refreshes++
+                if (paused) {
+                  maximum = 0
+                  policyChecks = await state.commit(policyOwner!, [
+                    { key: open.key, expected: open.version, payload: { maximum } },
+                  ])
+                }
+                return Response.json({
+                  sessionId: fixture.sessions.at(-1),
+                  messageQueueUrl: fixture.queue,
+                  messageQueueAccessToken: 'refreshed',
+                })
+              }
+              return fixture.fetch(input, options)
+            })
+            fixture.publish(1, 0, [123])
+            await until(() => fixture.acknowledged.includes(1))
+            expect(refreshes).toBe(1)
+            expect(fixture.acquired).toEqual(paused ? [] : [[123]])
+            expect(attempts).toBe(paused ? 1 : 2)
+            const acquired = observe.mock.calls.filter(([entry]) => entry.event === 'ci-scale-set-acquired')
+            expect(acquired).toHaveLength(paused ? 0 : 1)
             return
           }
           if (scenario === 'honors a quota pause before retrying an unknown acquisition') {
