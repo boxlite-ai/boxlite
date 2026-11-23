@@ -56,6 +56,12 @@ class ActionsFixture {
     this.waiter?.()
   }
   private waiter?: () => void
+  async completeIdlePoll(until: (condition: () => boolean) => Promise<void>) {
+    const waiting = () => this.waiter !== undefined
+    await until(waiting)
+    this.idle()
+    await until(waiting)
+  }
   publish(id: number, assigned: number | undefined, offers: number[] = [], extra: object[] = []) {
     const events = [
       ...extra,
@@ -518,11 +524,7 @@ for (const storage of ['sqlite', 'postgres'])
             let elapsed = 0
             const clock = jest.spyOn(Date, 'now').mockImplementation(() => now() + elapsed)
             const calls = (path: string) => fixture.requests.filter((value) => value === 'GET ' + path).length
-            const poll = async () => {
-              const before = calls('/messages')
-              fixture.idle()
-              await until(() => calls('/messages') > before)
-            }
+            const poll = () => fixture.completeIdlePoll(until)
             try {
               if (scenario.startsWith('distinguishes registration backoff')) {
                 const rest = scenario.endsWith('REST secondary limit')
@@ -1105,13 +1107,8 @@ for (const storage of ['sqlite', 'postgres'])
             fixture.publish(2, 1, [], [{ messageType: 'JobAssigned', runnerRequestId: 11 }])
             await until(() => fixture.acknowledged.includes(2) && delivered.size === 1)
             const polls = () => fixture.requests.filter((request) => request === 'GET /messages').length
-            const idlePoll = async () => {
-              const before = polls()
-              fixture.idle()
-              await until(() => polls() > before)
-            }
             fixture.acquiredCount = 2
-            await idlePoll()
+            await fixture.completeIdlePoll(until)
             expect(await journal.used('tenant')).toBe(2)
             fixture.acquiredCount = 1
             if (scenario === 'subtracts assigned jobs from acquired holds on reconnect') {
@@ -1120,7 +1117,7 @@ for (const storage of ['sqlite', 'postgres'])
               fixture.initialAcquired = 1
               stop = start()
               await until(() => polls() > before)
-            } else await idlePoll()
+            } else await fixture.completeIdlePoll(until)
             expect(await journal.used('tenant')).toBe(1)
             expect(fixture.acquired).toEqual([[11, 12]])
             expect(delivered.size).toBe(1)
