@@ -1542,3 +1542,7 @@ Run the mock Dashboard and open `/dashboard/welcome?preview=trial-onboarding`. T
 This entry requires development mode and `VITE_ENABLE_MOCKING=true`; the prototype module is excluded from production builds. It never invokes payment APIs or writes simulated subscription results to the Billing cache. Prices and plan concurrency reuse the current presentation source; no trial quota is inferred from bonus credits. Shipping this flow needs a server-confirmed eligibility/price quote and a mutation that rejects eligibility changes instead of silently charging. Registration/authentication and default Welcome remain unchanged.
 
 The choice step also offers “Explore console — no card required”, completing Welcome without verifying a card or activating a plan. “Have a coupon? Redeem code” expands an independent form: use `ACME50` for simulated success, an empty code for required-field feedback, or another code for invalid/expired feedback. Successful trial confirmation and coupon redemption complete Welcome immediately and enter Quickstart, without a separate success screen or another click. Coupon balances are not persisted to the shared mock wallet. Both alternative paths use existing Welcome completion and lead to Quickstart.
+
+## Subscription cancellation
+
+Owners can cancel from Billing Overview or the Plans current-plan card using one shared dialog with optional feedback. See [subscription cancellation](docs/subscription-cancellation.md) for the request contract, retry behavior, release dependency and local mock review instructions.

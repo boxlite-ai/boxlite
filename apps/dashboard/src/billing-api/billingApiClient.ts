@@ -44,6 +44,17 @@ function settlementDefaults(invoice: LegacyInvoice): Invoice {
   }
 }
 
+/** A server rejection can be reconfirmed; network/5xx outcomes still need receipt reconciliation. */
+export function isRejectedBillingRequest(error: unknown): boolean {
+  const original = error instanceof BoxliteError ? error.cause : error
+  return (
+    axios.isAxiosError(original) &&
+    original.response != null &&
+    original.response.status >= 400 &&
+    original.response.status < 500
+  )
+}
+
 export class BillingApiClient {
   private axiosInstance: AxiosInstance
 
@@ -62,7 +73,7 @@ export class BillingApiClient {
       (error) => {
         const errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
 
-        throw BoxliteError.fromString(String(errorMessage))
+        throw BoxliteError.fromString(String(errorMessage), { cause: error instanceof Error ? error : undefined })
       },
     )
   }
@@ -141,6 +152,45 @@ export class BillingApiClient {
 
   public async downgradePlan(organizationId: string, planId: string | null): Promise<void> {
     await this.axiosInstance.post(`/organization/${organizationId}/plan/downgrade`, { planId })
+  }
+
+  public async cancelSubscription(
+    organizationId: string,
+    input: {
+      operationId: string
+      subscriptionId: string
+      cycleTo: string
+      trialConversionState: string | null
+      feedbackExpected: boolean
+    },
+  ): Promise<{ operationId: string; endsAt: string; feedbackState: string }> {
+    const response = await this.axiosInstance.post(`/organization/${organizationId}/plan/cancellations`, input)
+    return response.data
+  }
+
+  public async getCancellation(
+    organizationId: string,
+    operationId: string,
+  ): Promise<{ operationId: string; endsAt: string; feedbackState: string }> {
+    const response = await this.axiosInstance.get(`/organization/${organizationId}/plan/cancellations/${operationId}`)
+    return response.data
+  }
+
+  public async saveCancellationFeedback(
+    organizationId: string,
+    operationId: string,
+    feedback: {
+      version: 1
+      reasons: string[]
+      intent: string | null
+      note: string
+    },
+  ): Promise<{ saved: boolean; savedAt: string }> {
+    const response = await this.axiosInstance.post(
+      `/organization/${organizationId}/plan/cancellations/${operationId}/feedback`,
+      feedback,
+    )
+    return response.data
   }
 
   public async withdrawPendingPlan(organizationId: string): Promise<void> {

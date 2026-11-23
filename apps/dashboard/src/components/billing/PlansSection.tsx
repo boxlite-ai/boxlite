@@ -7,6 +7,8 @@ import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 
+import { SubscriptionCancellationAction } from './SubscriptionCancellation'
+
 export function PlansSection() {
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
   const catalog = usePlansQuery()
@@ -46,6 +48,15 @@ export function PlansSection() {
           plans={catalog.data?.filter((plan) => plan.selfServe) ?? []}
           organizationPlan={subscription.data}
           canManage={canManage}
+          subscriptionAction={
+            canManage && subscription.data && selectedOrganization ? (
+              <SubscriptionCancellationAction
+                plan={subscription.data}
+                organizationId={selectedOrganization.id}
+                compact
+              />
+            ) : undefined
+          }
         />
       )}
     </section>

@@ -1,3 +1,4 @@
+import { subscriptionCancellationHandlers } from './subscription-cancellation-handlers'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -115,6 +116,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...subscriptionCancellationHandlers(API_URL, BILLING_API_URL),
   ...resourceStateHandlers(API_URL),
   ...ciHandlers(newUserPreview),
   ...sshHandlers,

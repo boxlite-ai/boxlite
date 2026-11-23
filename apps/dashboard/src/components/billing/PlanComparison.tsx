@@ -47,10 +47,12 @@ export function PlanComparison({
   plans,
   organizationPlan,
   canManage = true,
+  subscriptionAction,
 }: {
   plans: Plan[]
   organizationPlan?: OrganizationPlan | null
   canManage?: boolean
+  subscriptionAction?: ReactNode
 }) {
   const navigate = useNavigate()
   // No live subscription is wallet-funded PAYG, as in the account Overview.
@@ -151,6 +153,7 @@ export function PlanComparison({
                           {canManage ? cta.label : 'Owner managed'}
                         </AsciiButton>
                       )}
+                      {canManage && plan.id === currentId && subscriptionAction}
                     </div>
                   </th>
                 )
