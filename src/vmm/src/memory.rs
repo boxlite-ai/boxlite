@@ -13,6 +13,8 @@
 use std::{io, ptr::NonNull, sync::Arc};
 
 use boxlite_hypervisor::{MemoryRegion, Vm};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use vm_memory::Bytes;
 use vm_memory::{GuestAddress, GuestMemoryBackend, GuestMemoryRegion, VolatileSlice};
 
 use crate::error::{Error, Result};
@@ -324,6 +326,23 @@ impl GuestRam {
         self.boot_memory()
             .iter()
             .map(|region| (region.start_addr(), region.len() as usize))
+    }
+
+    /// Fills fresh RAM in ascending GPA order from the packed image.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn read_image(&self, source: &mut impl io::Read) -> Result<()> {
+        const CHUNK: usize = MIB as usize;
+        let mut buffer = vec![0; CHUNK];
+        for (start, size) in self.ranges() {
+            for offset in (0..size).step_by(CHUNK) {
+                let chunk = &mut buffer[..CHUNK.min(size - offset)];
+                source.read_exact(chunk).map_err(Error::Snapshot)?;
+                self.boot_memory()
+                    .write_slice(chunk, GuestAddress(start.0 + offset as u64))
+                    .map_err(|error| Error::Snapshot(io::Error::other(error)))?;
+            }
+        }
+        Ok(())
     }
 
     /// Each RAM range as the hypervisor registers it, in ascending guest order.

@@ -4,12 +4,14 @@
 //! The VM facade: configuration, host VM creation, RAM registration, boot
 //! loading, and running the vCPUs until the VM ends.
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use boxlite_hypervisor::Vm as HostVm;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-use crate::snapshot::export;
+use crate::snapshot::{export, restore, state::MachineState};
 use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
@@ -72,6 +74,8 @@ pub struct Vm<H: HostVm> {
     events: Mutex<EventLoop>,
     sender: EventSender,
     boot_regs: BootRegisters,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    restore: Option<Box<MachineState>>,
     vcpu_count: u8,
     lifecycle: Arc<Lifecycle>,
     fresh_vm: bool,
@@ -91,6 +95,13 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
+    /// Imports the state and RAM files of a device-less snapshot into a VM in `Created`.
+    /// Call [`Self::run`] to install saved CPU and platform state and execute it.
+    /// Reserve a pause through [`Self::control`] before running to hold guest entry.
+    pub fn from_state(state_path: impl AsRef<Path>, memory_path: impl AsRef<Path>) -> Result<Self> {
+        restore::from_paths(state_path.as_ref(), memory_path.as_ref())
+    }
+
     /// Builds a KVM VM with an empty chipset and no console worker.
     /// Rejects userspace device configuration before opening KVM.
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
@@ -211,11 +222,55 @@ impl<H: HostVm> Vm<H> {
     {
         let mut config = config;
         config.validate()?;
+        let ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
+        let mut vm = Self::with_ram(
+            ram,
+            config.vcpu_count,
+            host_vm,
+            fresh_vm,
+            create_workers,
+            |chipset, ctx, host_vm| devices(chipset, ctx, &mut config, host_vm),
+        )?;
+        vm.boot_regs = boot(&vm.ram, &config)?;
+        Ok(vm)
+    }
+
+    /// Builds a device-less VM around a validated image and a fresh host VM.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn with_restored_ram(
+        ram: GuestRam,
+        machine: MachineState,
+        create: impl FnOnce() -> boxlite_hypervisor::Result<H>,
+    ) -> Result<Self>
+    where
+        H: 'static,
+    {
+        let mut vm = Self::with_ram(
+            ram,
+            machine.vcpus.len() as u8,
+            create,
+            true,
+            VirtioWorkers::new,
+            |_, _, _| Ok(()),
+        )?;
+        vm.restore = Some(Box::new(machine));
+        Ok(vm)
+    }
+
+    /// Builds the chipset and registers the supplied RAM before the first run.
+    fn with_ram(
+        mut ram: GuestRam,
+        vcpu_count: u8,
+        host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
+        fresh_vm: bool,
+        create_workers: impl FnOnce(EventSender) -> std::io::Result<VirtioWorkers>,
+        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &Arc<H>) -> Result<()>,
+    ) -> Result<Self>
+    where
+        H: 'static,
+    {
         let events = EventLoop::new().map_err(Error::EventLoop)?;
         let sender = events.sender();
-        // Allocating first keeps the drop order safe on every early return:
-        // locals drop in reverse order, so the host VM goes before the RAM.
-        let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
         let host_vm = Arc::new(host_vm()?);
         // No worker thread starts before a virtio device activates, so an
         // early return leaves nothing running.
@@ -229,7 +284,6 @@ impl<H: HostVm> Vm<H> {
                 workers: &workers,
                 controls: &mut controls,
             },
-            &mut config,
             &host_vm,
         )?;
         let chipset = chipset.build()?;
@@ -251,7 +305,7 @@ impl<H: HostVm> Vm<H> {
         }
 
         let lifecycle = Arc::new(Lifecycle::new(sender.clone(), device_less));
-        let mut vm = Self {
+        Ok(Self {
             chipset: Some(chipset),
             workers: Some(workers),
             console: Mutex::new(None),
@@ -260,13 +314,13 @@ impl<H: HostVm> Vm<H> {
             lifecycle,
             sender,
             boot_regs: BootRegisters::default(),
-            vcpu_count: config.vcpu_count,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            restore: None,
+            vcpu_count,
             fresh_vm,
             host_vm: Some(host_vm),
             ram,
-        };
-        vm.boot_regs = boot(&vm.ram, &config)?;
-        Ok(vm)
+        })
     }
 
     /// A handle that stops this VM from another thread, even before
@@ -301,7 +355,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         use crate::{
             events::{Event, RECHECK},
             lifecycle::VmStatus,
-            vcpu::{StartGate, Workers},
+            vcpu::{StartGate, Startup, Workers},
         };
 
         const KICK_RETRY: Duration = Duration::from_millis(10);
@@ -311,13 +365,22 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 if matches!(source.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted))
         }
 
+        let host_vm = self.host_vm.as_deref().expect("live VM has a host VM");
+        let startup = Startup::Boot(&self.boot_regs);
+        #[cfg(target_os = "linux")]
+        let startup = self.restore.as_deref().map_or(startup, Startup::Restore);
+        #[cfg(target_os = "linux")]
+        if let Startup::Restore(machine) = startup {
+            install_platform(|| host_vm.restore_before_vcpus(&machine.platform))?;
+        }
+
         self.fresh_vm = false;
         let gate = StartGate::default();
         let kicks = Mutex::new(Vec::new());
         let vcpus = Workers {
-            host_vm: self.host_vm.as_deref().expect("live VM has a host VM"),
+            host_vm,
             vcpu_count: self.vcpu_count,
-            boot_regs: &self.boot_regs,
+            startup,
             chipset: self.chipset.as_ref().expect("live VM has a chipset"),
             sender: &self.sender,
             lifecycle: &self.lifecycle,
@@ -338,8 +401,8 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
 
             impl<H: VcpuHandle> Drop for StopVcpus<'_, H> {
                 fn drop(&mut self) {
-                    self.lifecycle.mark_stopping();
                     self.gate.abort();
+                    self.lifecycle.mark_stopping();
                     // Late registrations cannot enter the guest after the stop latch.
                     let mut pending = std::mem::take(
                         &mut *self.kicks.lock().unwrap_or_else(PoisonError::into_inner),
@@ -380,6 +443,13 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     break;
                 }
             }
+            if gate.wait_ready(vcpus.vcpu_count) && !vcpus.sender.is_stopping() {
+                #[cfg(target_os = "linux")]
+                if let Startup::Restore(machine) = vcpus.startup {
+                    install_platform(|| host_vm.restore_after_vcpus(&machine.platform))?;
+                }
+                gate.release();
+            }
             let mut pending_kicks = 0u64;
             loop {
                 let wait = if pending_kicks != 0 {
@@ -389,7 +459,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 };
                 match events.wait(Some(wait)) {
                     Ok(Some(event)) => break Ok(event),
-                    Err(error) => break Err(error),
+                    Err(error) => break Err(Error::EventLoop(error)),
                     Ok(None) => {}
                 }
                 let kick_all = self.lifecycle.drive(self.vcpu_count);
@@ -420,13 +490,12 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 #[cfg(target_os = "linux")]
                 export::drive(vcpus.lifecycle, vcpus.host_vm, &self.ram, self.vcpu_count);
             }
-        });
+        })?;
         match event {
-            Ok(Event::StopRequested) => Ok(VmExit::StopRequested),
-            Ok(Event::GuestShutdown) => Ok(VmExit::GuestShutdown),
-            Ok(Event::GuestReset) => Ok(VmExit::GuestReset),
-            Ok(Event::VcpuFailed(error) | Event::DeviceFailed(error)) => Err(error),
-            Err(error) => Err(Error::EventLoop(error)),
+            Event::StopRequested => Ok(VmExit::StopRequested),
+            Event::GuestShutdown => Ok(VmExit::GuestShutdown),
+            Event::GuestReset => Ok(VmExit::GuestReset),
+            Event::VcpuFailed(error) | Event::DeviceFailed(error) => Err(error),
         }
     }
 
@@ -474,6 +543,13 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             }
         }
     }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn install_platform(restore: impl FnOnce() -> boxlite_hypervisor::Result<()>) -> Result<()> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(restore))
+        .map_err(|_| Error::Snapshot(std::io::Error::other("platform restore panicked")))??;
+    Ok(())
 }
 
 impl<H: HostVm> Drop for Vm<H> {

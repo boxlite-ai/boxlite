@@ -71,13 +71,12 @@ coverage\:report:
 # Codecov enforces patch coverage against the PR base; total coverage is reported.
 codecov: coverage\:lcov
 
-# Add real KVM execution to the unit profiles before the CI upload. The CI
-# profile bounds each test; disabling retries preserves the first failure. Every
-# passing test is listed by name, so the CI log shows which hardware tests ran.
+# Add real KVM execution before the CI upload. The vm profile allows time for
+# the 3073 MiB split-RAM round trip. List each passing test and disable retries.
 coverage\:vmm\:kvm: _ensure-kvm
-	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
 		-p boxlite-hypervisor -p boxlite-vmm --lib --run-ignored only --test-threads=1 \
-		-E '(package(boxlite-hypervisor) & test(/^kvm::/)) | (package(boxlite-vmm) & (test(/^vm::tests::/) | test(tests::kvm::) | test(snapshot::execution_tests::kvm_)))'
+		-E '(package(boxlite-hypervisor) & test(/^kvm::/)) | (package(boxlite-vmm) & ((test(/^vm::tests::/) | test(tests::kvm::) $(foreach test,$(VMM_KVM_SNAPSHOT_TESTS),| test($(test)))) - test($(VMM_LINUX_SNAPSHOT_TESTS))))'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
@@ -85,7 +84,7 @@ coverage\:vmm\:kvm: _ensure-kvm
 coverage\:vmm\:boot: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
 coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) $(VMM_HOTPLUG_INIT) vmm\:guest-mount-init
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
-		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
+		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::) | test($(VMM_LINUX_SNAPSHOT_TESTS))'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Go's reports include every package, including packages with no tests.

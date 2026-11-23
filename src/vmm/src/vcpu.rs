@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! vCPU workers. Each runs on its own thread: it creates and configures its
-//! vCPU, waits until every vCPU is configured, then runs the guest and
+//! vCPU, waits for the VM driver to open the start gate, then runs the guest and
 //! dispatches its exits until the VM ends. Every way a worker ends sends one
 //! event, except a stop it observed, which some other sender already caused.
 
@@ -17,7 +17,7 @@ use boxlite_hypervisor::{IoCompletion, Vcpu, VcpuExit};
 use boxlite_hypervisor::{X86BootRegisters, X86Vcpu, X86Vm};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-use crate::snapshot::state::VcpuRecord;
+use crate::snapshot::state::{MachineState, VcpuRecord};
 use crate::{
     chipset::Chipset,
     error::{Error, Result},
@@ -30,34 +30,63 @@ use crate::{
     lifecycle::Lifecycle,
 };
 
-/// Holds the workers until every vCPU is configured, so no vCPU runs before
-/// all exist. Unlike `std::sync::Barrier`, [`abort`](Self::abort) releases
-/// them when a worker thread fails to start.
+/// Holds configured vCPUs until the driver allows guest entry.
 #[derive(Default)]
 #[cfg(target_arch = "x86_64")]
 pub(crate) struct StartGate {
-    /// Workers that arrived, and whether the gate was aborted.
-    state: Mutex<(u8, bool)>,
+    state: Mutex<StartState>,
     changed: Condvar,
+}
+
+#[derive(Default)]
+#[cfg(target_arch = "x86_64")]
+struct StartState {
+    ready: u8,
+    go: bool,
+    aborted: bool,
 }
 
 #[cfg(target_arch = "x86_64")]
 impl StartGate {
-    fn arrive_and_wait(&self, count: u8) {
+    fn arrive_and_wait(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.0 += 1;
+        state.ready += 1;
         self.changed.notify_all();
-        drop(
-            self.changed
-                .wait_while(state, |(arrived, aborted)| *arrived < count && !*aborted)
-                .unwrap_or_else(PoisonError::into_inner),
-        );
+        let state = self
+            .changed
+            .wait_while(state, |state| !state.go && !state.aborted)
+            .unwrap_or_else(PoisonError::into_inner);
+        !state.aborted
+    }
+
+    pub(crate) fn wait_ready(&self, count: u8) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = self
+            .changed
+            .wait_while(state, |state| state.ready < count && !state.aborted)
+            .unwrap_or_else(PoisonError::into_inner);
+        !state.aborted
+    }
+
+    pub(crate) fn release(&self) {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).go = true;
+        self.changed.notify_all();
     }
 
     pub(crate) fn abort(&self) {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).1 = true;
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .aborted = true;
         self.changed.notify_all();
     }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) enum Startup<'a> {
+    Boot(&'a X86BootRegisters),
+    #[cfg(target_os = "linux")]
+    Restore(&'a MachineState),
 }
 
 /// What every worker of one VM shares.
@@ -65,7 +94,7 @@ impl StartGate {
 pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) host_vm: &'a H,
     pub(crate) vcpu_count: u8,
-    pub(crate) boot_regs: &'a X86BootRegisters,
+    pub(crate) startup: Startup<'a>,
     pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
     pub(crate) lifecycle: &'a Lifecycle,
@@ -80,34 +109,43 @@ impl<H: X86Vm> Workers<'_, H> {
     /// whose lock an earlier panic poisoned, ends the VM with
     /// [`Error::VcpuPanicked`] instead of leaving the thread.
     pub(crate) fn run(&self, id: u8) {
-        let vcpu = match catch_panic(id, || self.configure(id)) {
-            Ok(vcpu) => Some(vcpu),
-            Err(error) => {
-                // Sent before arriving, so the latch is set before any vCPU
-                // leaves the gate and none enters the guest.
-                self.sender.send(Event::VcpuFailed(error));
-                None
+        match catch_panic(id, || {
+            let mut vcpu = self.configure(id)?;
+            if !self.gate.arrive_and_wait() {
+                return Ok(None);
             }
-        };
-        // A failed vCPU still arrives, so the others are never left waiting.
-        self.gate.arrive_and_wait(self.vcpu_count);
-        let Some(mut vcpu) = vcpu else {
-            return;
-        };
-        match catch_panic(id, || self.run_guest(&mut vcpu, id)) {
+            self.run_guest(&mut vcpu, id)
+        }) {
             Ok(Some(event)) => self.sender.send(event),
             Ok(None) => {}
-            Err(error) => self.sender.send(Event::VcpuFailed(error)),
+            Err(error) => {
+                self.sender.send(Event::VcpuFailed(error));
+                self.gate.abort();
+            }
         }
     }
 
     fn configure(&self, id: u8) -> Result<H::Vcpu> {
         let mut vcpu = self.host_vm.create_vcpu(id.into())?;
-        let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
-        vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
-        // The other vCPUs wait in their reset state for INIT and SIPI.
-        if id == 0 {
-            vcpu.set_boot_registers(self.boot_regs)?;
+        match self.startup {
+            Startup::Boot(regs) => {
+                let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
+                vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
+                // The other vCPUs wait in their reset state for INIT and SIPI.
+                if id == 0 {
+                    vcpu.set_boot_registers(regs)?;
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Startup::Restore(machine) => {
+                let record = &machine.vcpus[usize::from(id)];
+                vcpu.restore_state(&record.state)?;
+                match vcpu.notify_guest_stopped() {
+                    Err(boxlite_hypervisor::Error::ConfigureVcpu { source, .. })
+                        if source.kind() == std::io::ErrorKind::Unsupported => {}
+                    result => result?,
+                }
+            }
         }
         self.kicks
             .lock()
