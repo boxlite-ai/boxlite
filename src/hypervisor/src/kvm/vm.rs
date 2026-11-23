@@ -173,9 +173,9 @@ impl KvmVm {
         prepared.create().map_err(Error::CreateVm)
     }
 
-    /// Captures the global platform without entering any vCPU. The caller must
-    /// stop all vCPUs/IRQ producers, complete userspace I/O, then save this
-    /// image before the per-vCPU images.
+    /// Captures the global platform and starts a new snapshot round. Stop all
+    /// vCPUs and IRQ producers, complete userspace I/O, then save this image
+    /// before capturing each vCPU once in the round.
     pub fn save_state(&self) -> Result<crate::X86VmState> {
         let capture = || -> io::Result<_> {
             let mut irqchips = std::array::from_fn(|chip_id| kvm_bindings::kvm_irqchip {
@@ -424,6 +424,14 @@ mod tests {
             .data
     }
 
+    fn assert_vcpu_save_error(error: Error, message: &str) {
+        assert!(
+            matches!(error, Error::ConfigureVcpu { operation: "save CPU state", ref source, .. }
+            if source.kind() == io::ErrorKind::Other && source.to_string() == message),
+            "{error:?}"
+        );
+    }
+
     #[test]
     fn parse_xsave2_size_preserves_negative_ioctl_errno() {
         let result = parse_xsave2_size(-1, io::Error::from_raw_os_error(libc::ENOTTY));
@@ -605,6 +613,7 @@ mod tests {
             VcpuExit::IoOut { port: 0x80, .. }
         ));
         cpu.complete_pending_io().unwrap();
+        vm.save_state().unwrap();
         let error = cpu.save_state().unwrap_err();
         assert!(
             matches!(error, Error::ConfigureVcpu { operation: "save CPU state", ref source, .. }
@@ -678,7 +687,6 @@ mod tests {
         #[derive(Clone, Copy, Debug)]
         enum CaptureOrder {
             VmFirst,
-            InterleavedVmSave,
             ReorderedRetry,
             NoopIoCompletion,
         }
@@ -687,7 +695,6 @@ mod tests {
         for (order, skew_ms) in [
             (CaptureOrder::VmFirst, 100),
             (CaptureOrder::VmFirst, 0),
-            (CaptureOrder::InterleavedVmSave, 0),
             (CaptureOrder::ReorderedRetry, 0),
             (CaptureOrder::NoopIoCompletion, 0),
         ] {
@@ -709,7 +716,7 @@ mod tests {
                     assert!(second.set_tsc_offset(offset).unwrap());
                     assert_eq!(second.get_tsc_offset().unwrap(), Some(offset));
                     ready.send(()).unwrap();
-                    for () in wait_for_capture {
+                    if wait_for_capture.recv().is_ok() {
                         if matches!(order, CaptureOrder::NoopIoCompletion) {
                             second.complete_pending_io().unwrap();
                         }
@@ -728,39 +735,27 @@ mod tests {
                         capture.send(()).unwrap();
                         receive_state.recv().unwrap()
                     };
-                    let platform = if matches!(order, CaptureOrder::InterleavedVmSave) {
-                        None
-                    } else {
-                        Some(vm.save_state().unwrap())
-                    };
-                    let first_state = first.save_state().unwrap();
-                    thread::sleep(pause);
-                    let platform = match order {
-                        CaptureOrder::InterleavedVmSave => {
-                            let platform = vm.save_state().unwrap();
-                            thread::sleep(pause);
-                            platform
-                        }
-                        CaptureOrder::ReorderedRetry => {
-                            // Capture once before injecting the failure to verify
-                            // that the rejected save also preserves the anchor.
-                            let error = first.save_state_with_pending_io().unwrap_err();
-                            assert!(matches!(
-                                error,
-                                Error::ConfigureVcpu { operation: "save CPU state", ref source, .. }
-                                    if source.to_string() == "complete pending I/O before saving"
-                            ));
+                    let platform = vm.save_state().unwrap();
+                    let (first_state, second_state) =
+                        if matches!(order, CaptureOrder::ReorderedRetry) {
+                            assert_vcpu_save_error(
+                                first.save_state_with_pending_io().unwrap_err(),
+                                "complete pending I/O before saving",
+                            );
                             let second_state = save_second();
                             thread::sleep(pause);
-                            let retry_first = first.save_state().unwrap();
-                            let retry_second = save_second();
-                            assert_eq!(saved_tsc(&retry_first), saved_tsc(&first_state));
-                            assert_eq!(saved_tsc(&retry_second), saved_tsc(&second_state));
-                            return Some((platform.unwrap(), retry_first, retry_second, skew));
-                        }
-                        CaptureOrder::VmFirst | CaptureOrder::NoopIoCompletion => platform.unwrap(),
-                    };
-                    Some((platform, first_state, save_second(), skew))
+                            let first_state = first.save_state().unwrap();
+                            assert_vcpu_save_error(
+                                first.save_state().unwrap_err(),
+                                "save VM state before recapturing vCPU state",
+                            );
+                            (first_state, second_state)
+                        } else {
+                            let first_state = first.save_state().unwrap();
+                            thread::sleep(pause);
+                            (first_state, save_second())
+                        };
+                    Some((platform, first_state, second_state, skew))
                 };
                 scope.spawn(capture_first).join().unwrap()
             });
@@ -834,63 +829,70 @@ mod tests {
 
     #[test]
     #[ignore = "requires Linux x86_64 with KVM TSC offset controls"]
-    fn paused_vm_first_save_uses_its_clock_after_an_interleaved_round() {
+    fn paused_snapshot_requires_vm_save_for_each_vcpu_capture_round() {
         let vm = &KvmVm::new().unwrap();
         thread::scope(|scope| {
             let (ready, wait_for_ready) = mpsc::channel();
             let (capture, wait_for_capture) = mpsc::channel();
-            let second = scope.spawn(move || {
+            let (saved, receive_state) = mpsc::channel();
+            scope.spawn(move || {
                 let mut cpu = vm.create_vcpu(1).unwrap();
                 cpu.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
                 cpu.has_tsc_offset().unwrap();
                 ready.send(cpu.get_tsc_offset().unwrap()).unwrap();
-                wait_for_capture
-                    .recv()
-                    .ok()
-                    .map(|()| cpu.save_state().unwrap())
+                for () in wait_for_capture {
+                    saved.send(cpu.save_state().unwrap()).unwrap();
+                }
             });
             let mut first = vm.create_vcpu(0).unwrap();
             first.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
+            let second_offset = wait_for_ready.recv().unwrap();
+            assert_vcpu_save_error(
+                first.save_state().unwrap_err(),
+                "save VM state before saving vCPU state",
+            );
             first.has_tsc_offset().unwrap();
-            let (Some(first_offset), Some(second_offset)) = (
-                first.get_tsc_offset().unwrap(),
-                wait_for_ready.recv().unwrap(),
-            ) else {
+            let (Some(first_offset), Some(second_offset)) =
+                (first.get_tsc_offset().unwrap(), second_offset)
+            else {
                 eprintln!(
                     "skipping clock correlation test: KVM does not expose TSC offset controls"
                 );
                 return;
             };
 
-            let before = vm.fd.get_clock().unwrap().clock;
-            let first_cpu = first.save_state().unwrap();
+            let capture_round = |first: &mut KvmVcpu| {
+                let first_cpu = first.save_state().unwrap();
+                capture.send(()).unwrap();
+                let second_cpu = receive_state.recv().unwrap();
+                assert_eq!(first_cpu.tsc_khz, second_cpu.tsc_khz);
+                let scaled_tsc = saved_tsc(&first_cpu).wrapping_sub(first_offset);
+                assert_eq!(
+                    scaled_tsc,
+                    saved_tsc(&second_cpu).wrapping_sub(second_offset)
+                );
+                (first_cpu.tsc_khz, scaled_tsc)
+            };
+
             let first_vm = vm.save_state().unwrap();
-            capture.send(()).unwrap();
-            let second_cpu = second.join().unwrap().unwrap();
-            assert_eq!(first_cpu.tsc_khz, second_cpu.tsc_khz);
-            assert_eq!(
-                saved_tsc(&first_cpu).wrapping_sub(first_offset),
-                saved_tsc(&second_cpu).wrapping_sub(second_offset)
+            let (first_khz, first_tsc) = capture_round(&mut first);
+            thread::sleep(Duration::from_millis(50));
+            assert_vcpu_save_error(
+                first.save_state().unwrap_err(),
+                "save VM state before recapturing vCPU state",
             );
 
-            thread::sleep(Duration::from_millis(50));
             let second_vm = vm.save_state().unwrap();
             thread::sleep(Duration::from_millis(50));
-            let recaptured_cpu = first.save_state().unwrap();
-            assert_eq!(recaptured_cpu.tsc_khz, first_cpu.tsc_khz);
+            let (second_khz, second_tsc) = capture_round(&mut first);
+            assert_eq!(first_khz, second_khz);
             let elapsed_ns =
-                u128::from(saved_tsc(&recaptured_cpu).wrapping_sub(saved_tsc(&first_cpu)))
-                    * 1_000_000
-                    / u128::from(first_cpu.tsc_khz);
-            let min_ns = second_vm.clock.clock.wrapping_sub(first_vm.clock.clock);
-            let max_ns = second_vm.clock.clock.wrapping_sub(before);
-            let tolerance_ns = 15_000_000;
-            assert!(min_ns >= 50_000_000);
+                u128::from(second_tsc.wrapping_sub(first_tsc)) * 1_000_000 / u128::from(first_khz);
+            let clock_elapsed_ns = second_vm.clock.clock.wrapping_sub(first_vm.clock.clock);
+            assert!(clock_elapsed_ns >= 50_000_000);
             assert!(
-                (u128::from(min_ns.saturating_sub(tolerance_ns))
-                    ..=u128::from(max_ns + tolerance_ns))
-                    .contains(&elapsed_ns),
-                "guest TSC elapsed {elapsed_ns} ns, kvmclock elapsed {min_ns}..={max_ns} ns"
+                elapsed_ns.abs_diff(u128::from(clock_elapsed_ns)) <= 15_000_000,
+                "guest TSC elapsed {elapsed_ns} ns, kvmclock elapsed {clock_elapsed_ns} ns"
             );
         });
     }
@@ -1551,9 +1553,9 @@ mod tests {
             source.run().unwrap(),
             VcpuExit::IoOut { port: 0x80, .. }
         ));
-        assert!(
-            source.save_state().is_err(),
-            "pending I/O must not be snapshotted"
+        assert_vcpu_save_error(
+            source.save_state().unwrap_err(),
+            "complete pending I/O before saving",
         );
         source.complete_pending_io().unwrap();
         let platform = vm.save_state().unwrap();

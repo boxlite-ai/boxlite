@@ -60,9 +60,10 @@ pub struct X86BootRegisters {
 
 /// Boot configuration and paused platform-state transfer for an x86 VM.
 pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
-    /// Captures VM-global state with all vCPUs and IRQ producers stopped.
-    /// Complete pending userspace I/O first, then save the VM before saving each
-    /// vCPU with [`X86Vcpu::save_state`]. Non-snapshot backends report Unsupported.
+    /// Captures VM-global state and starts a snapshot round with all vCPUs and
+    /// IRQ producers stopped. Complete pending userspace I/O first, then save
+    /// the VM and call [`X86Vcpu::save_state`] once per vCPU in the round.
+    /// Non-snapshot backends report Unsupported.
     #[cfg(target_os = "linux")]
     fn save_state(&self) -> Result<X86VmState> {
         Err(crate::Error::vm_state(
@@ -101,7 +102,9 @@ pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
 /// Boot configuration and paused-state transfer for an x86 vCPU.
 pub trait X86Vcpu: Vcpu {
     /// Captures a stopped CPU without entering the guest. Complete I/O first.
-    /// Capture VM-global state with [`X86Vm::save_state`] before saving each vCPU.
+    /// Start each snapshot round with [`X86Vm::save_state`]. KVM rejects saves
+    /// before that call and permits one successful save per vCPU in the round.
+    /// A failed capture can be retried in the same round.
     /// The image is architecture- and host-version-specific. The default reports
     /// Unsupported (with placeholder CPU id 0) for non-snapshot backends/mocks.
     #[cfg(target_os = "linux")]

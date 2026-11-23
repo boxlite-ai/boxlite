@@ -101,11 +101,16 @@ range, which the LAPIC image carries. MCE bank configuration via
 the MSR image at 4096 entries.
 
 Stop all vCPUs and IRQ producers and complete userspace I/O with
-`complete_pending_io`. Call `X86Vm::save_state`, then `X86Vcpu::save_state`
-on each vCPU's owning thread. Capture never enters the guest and checks for
-nonempty CPUID and rejects SHSTK before reading MP state, which can consume
-pending INIT/SIPI. Capture rechecks and saves CPUID after MP state and vCPU
-events so runtime bits such as OSXSAVE match the saved registers.
+`complete_pending_io`. Start each snapshot round with `X86Vm::save_state`,
+then call `X86Vcpu::save_state` once on each vCPU's owning thread. KVM rejects
+vCPU saves before the round starts and duplicate saves within the round. A
+failed vCPU save can be retried in the same round. Finish all vCPU saves before
+starting another round, even if the VM stays paused.
+
+Capture never enters the guest. It requires nonempty CPUID and rejects SHSTK
+before reading MP state, which can consume pending INIT/SIPI. Capture rechecks
+and saves CPUID after MP state and vCPU events so runtime bits such as OSXSAVE
+match the saved registers.
 The `X86Vm` and `X86Vcpu` snapshot methods are Linux x86_64 extensions.
 `KvmVcpu::notify_guest_stopped` and the cross-platform `Vcpu` method notify an
 enabled KVM pvclock on the stopped vCPU's owning thread. They succeed with an
@@ -150,12 +155,11 @@ source for x87, SSE and extended state. The caller supplies compatible CPU
 policy, kernel release and register sets.
 
 With `KVM_VCPU_TSC_OFFSET`, capture and restore share a scaled host TSC reference
-per guest frequency. Each VM-first capture anchors the reference to its own
-VM clock. Restore anchors it to the clock set by `KVM_SET_CLOCK`. Capture and
+per guest frequency. Capture anchors the reference to the round's VM clock.
+Restore anchors it to the clock set by `KVM_SET_CLOCK`. Capture and
 restore bracket TSC reads with `KVM_GET_CLOCK` to preserve inter-vCPU skew and
 keep the guest TSC aligned with kvmclock across sequential ioctls.
-A VM must finish saving all vCPUs of the current round before starting the next
-round's `save_state`. `sample_scaled_tsc` retries up to five times with a 1 ms
+`sample_scaled_tsc` retries up to five times with a 1 ms
 early-accept threshold and otherwise selects the narrowest valid sampling window.
 Capture and restore use direct TSC MSR access if probing the offset attribute
 returns `ENXIO`, `ENOTTY` or `EINVAL`, or if reading or writing the offset returns

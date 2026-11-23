@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -121,23 +121,61 @@ struct TscSaveAnchor {
 
 #[derive(Debug, Default)]
 struct TscSaveState {
-    vm_saved: bool,
     vm_clock_ns: Option<u64>,
     per_freq: HashMap<u32, u64>,
+    saved_vcpus: HashSet<u32>,
+}
+
+impl TscSaveState {
+    fn clock_for_vcpu_save(&self, id: u32) -> io::Result<u64> {
+        let clock_ns = self
+            .vm_clock_ns
+            .ok_or_else(|| io::Error::other("save VM state before saving vCPU state"))?;
+        if self.saved_vcpus.contains(&id) {
+            return Err(io::Error::other(
+                "save VM state before recapturing vCPU state",
+            ));
+        }
+        Ok(clock_ns)
+    }
 }
 
 impl TscSaveAnchor {
     fn record_vm_clock(&self, clock_ns: u64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        // The first platform save in a vCPU-first round keeps the vCPU anchor.
-        if !state.per_freq.is_empty() && !state.vm_saved {
-            state.vm_saved = true;
-            return;
-        }
         state.per_freq.clear();
+        state.saved_vcpus.clear();
         state.vm_clock_ns = Some(clock_ns);
-        state.vm_saved = true;
         self.active.store(true, Ordering::Release);
+    }
+
+    fn check_vcpu_save(&self, id: u32) -> io::Result<()> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.clock_for_vcpu_save(id)?;
+        Ok(())
+    }
+
+    fn commit_vcpu_save(
+        &self,
+        id: u32,
+        normalize_tsc: impl FnOnce(u64, &mut HashMap<u32, u64>) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let clock_ns = state.clock_for_vcpu_save(id)?;
+        normalize_tsc(clock_ns, &mut state.per_freq)?;
+        state.saved_vcpus.insert(id);
+        self.active.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn clear(&self) {
+        // Capture requires quiescent vCPUs. The flag bypasses the mutex on
+        // normal guest entry and is set while holding the capture lock.
+        if self.active.load(Ordering::Acquire) {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            *state = TscSaveState::default();
+            self.active.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -249,14 +287,7 @@ impl VcpuSnapshotShared {
     }
 
     pub(super) fn clear_tsc_save_anchor(&self) {
-        let anchor = &self.tsc_save_anchor;
-        // Capture requires quiescent vCPUs. The flag bypasses the mutex on
-        // normal guest entry and is set while holding the capture lock.
-        if anchor.active.load(Ordering::Acquire) {
-            let mut state = anchor.state.lock().unwrap_or_else(|e| e.into_inner());
-            *state = TscSaveState::default();
-            anchor.active.store(false, Ordering::Release);
-        }
+        self.tsc_save_anchor.clear();
     }
 
     pub(super) fn record_tsc_restore_clock(&self, clock_ns: u64) {
@@ -629,28 +660,25 @@ impl KvmVcpu {
         })
     }
 
-    fn normalize_saved_tsc(&self, msrs: &mut [kvm_msr_entry], tsc_khz: u32) -> io::Result<()> {
-        let Some(tsc) = msrs.iter_mut().find(|entry| entry.index == MSR_IA32_TSC) else {
-            return Ok(());
-        };
-        let Some(offset) = self.get_tsc_offset()? else {
-            return Ok(());
-        };
-        let anchor = &self.fd.snapshot.tsc_save_anchor;
-        let mut state = anchor.state.lock().unwrap_or_else(|e| e.into_inner());
-        let clock_ns = state.vm_clock_ns;
-        let host_tsc = scaled_tsc_anchor(&mut state.per_freq, tsc_khz, || {
-            match clock_ns {
-                Some(ns) => self.sample_scaled_tsc(offset, tsc_khz, Some(ns)),
-                None => Ok(tsc.data.wrapping_sub(offset)),
-            }
-            .map(Some)
-        })?;
-        if let Some(host_tsc) = host_tsc {
-            tsc.data = host_tsc.wrapping_add(offset);
-            anchor.active.store(true, Ordering::Release);
-        }
-        Ok(())
+    fn commit_saved_state(&self, msrs: &mut [kvm_msr_entry], tsc_khz: u32) -> io::Result<()> {
+        self.fd
+            .snapshot
+            .tsc_save_anchor
+            .commit_vcpu_save(self.id, |clock_ns, per_freq| {
+                let Some(tsc) = msrs.iter_mut().find(|entry| entry.index == MSR_IA32_TSC) else {
+                    return Ok(());
+                };
+                let Some(offset) = self.get_tsc_offset()? else {
+                    return Ok(());
+                };
+                if let Some(host_tsc) = scaled_tsc_anchor(per_freq, tsc_khz, || {
+                    self.sample_scaled_tsc(offset, tsc_khz, Some(clock_ns))
+                        .map(Some)
+                })? {
+                    tsc.data = host_tsc.wrapping_add(offset);
+                }
+                Ok(())
+            })
     }
 
     fn restore_tsc(&self, tsc: kvm_msr_entry, tsc_khz: u32) -> io::Result<()> {
@@ -705,9 +733,9 @@ impl KvmVcpu {
     }
 
     /// Captures an architecture- and host-version-specific CPU image.
-    /// Does not enter KVM_RUN, even to complete outstanding I/O: the caller must
-    /// complete pending I/O and stop all VM state producers before saving VM
-    /// state, then capture each vCPU.
+    /// Complete pending I/O and stop all VM state producers before saving VM
+    /// state, then capture each vCPU once. A failed capture can be retried in the
+    /// same round. Capture never enters KVM_RUN.
     ///
     /// After preflight, read `KVM_GET_MP_STATE` so `kvm_apic_accept_events()` can apply
     /// pending INIT/SIPI events and update `CS:RIP` and related state. Then read
@@ -719,6 +747,7 @@ impl KvmVcpu {
             if self.pending_io.0 {
                 return Err(io::Error::other("complete pending I/O before saving"));
             }
+            self.fd.snapshot.tsc_save_anchor.check_vcpu_save(self.id)?;
             let read_cpuid = |fd: &VcpuFd| -> io::Result<_> {
                 let cpuid = fd.get_cpuid2(kvm_bindings::KVM_MAX_CPUID_ENTRIES)?;
                 validate_cpuid_count(cpuid.as_slice().len())?;
@@ -772,7 +801,7 @@ impl KvmVcpu {
                 lapic: self.fd.get_lapic()?,
                 tsc_khz,
             };
-            self.normalize_saved_tsc(&mut state.msrs, state.tsc_khz)?;
+            self.commit_saved_state(&mut state.msrs, state.tsc_khz)?;
             Ok(state)
         };
         save().map_err(|source| Error::ConfigureVcpu {
@@ -1055,50 +1084,103 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_vm_first_saves_reanchor_the_cached_tsc() {
+    fn tsc_save_requires_vm_clock_and_rejects_duplicate_vcpus() {
         let anchor = TscSaveAnchor::default();
-        let tsc_khz = 1_000_000;
-        let capture = |clock_ns, tsc| {
-            let mut state = anchor.state.lock().unwrap();
-            let anchor_ns = state.vm_clock_ns.unwrap();
-            scaled_tsc_anchor(&mut state.per_freq, tsc_khz, || {
-                Ok(anchored_scaled_tsc(tsc, clock_ns, anchor_ns, tsc_khz))
-            })
-            .unwrap()
-            .unwrap()
+        let no_vm = "save VM state before saving vCPU state";
+        let duplicate = "save VM state before recapturing vCPU state";
+        let must_reject_commit = |message| {
+            let error = anchor
+                .commit_vcpu_save(0, |_, _| panic!("invalid capture reached normalization"))
+                .unwrap_err();
+            assert_eq!(error.to_string(), message);
         };
+        assert_eq!(anchor.check_vcpu_save(0).unwrap_err().to_string(), no_vm);
+        must_reject_commit(no_vm);
 
+        // Even a successful capture without TSC normalization consumes its slot.
         anchor.record_vm_clock(1_000);
-        let first_tsc = capture(1_100, 10_100);
-        assert_eq!(first_tsc, 10_000);
-        assert_eq!(capture(1_200, 10_200), first_tsc);
+        anchor.check_vcpu_save(0).unwrap();
+        anchor.commit_vcpu_save(0, |_, _| Ok(())).unwrap();
+        assert_eq!(
+            anchor.check_vcpu_save(0).unwrap_err().to_string(),
+            duplicate
+        );
+        must_reject_commit(duplicate);
 
+        anchor.check_vcpu_save(1).unwrap();
+        anchor.clear();
+        assert!(!anchor.active.load(Ordering::Acquire));
+        assert_eq!(anchor.check_vcpu_save(1).unwrap_err().to_string(), no_vm);
+        must_reject_commit(no_vm);
         anchor.record_vm_clock(2_000);
-        let second_tsc = capture(2_200, 11_200);
-        assert_eq!(second_tsc - first_tsc, 1_000);
+        anchor.check_vcpu_save(0).unwrap();
+        anchor.commit_vcpu_save(0, |_, _| Ok(())).unwrap();
     }
 
     #[test]
-    fn vm_first_save_reanchors_after_an_interleaved_round() {
+    fn tsc_save_shares_tsc_and_reanchors_each_round() {
         let anchor = TscSaveAnchor::default();
         let tsc_khz = 1_000_000;
-        let capture = |clock_ns, tsc| {
-            let mut state = anchor.state.lock().unwrap();
-            let anchor_ns = state.vm_clock_ns;
-            scaled_tsc_anchor(&mut state.per_freq, tsc_khz, || {
-                Ok(match anchor_ns {
-                    Some(ns) => anchored_scaled_tsc(tsc, clock_ns, ns, tsc_khz),
-                    None => Some(tsc),
+        let capture = |id, sampled_clock_ns, sampled_tsc| {
+            let mut tsc = None;
+            anchor
+                .commit_vcpu_save(id, |clock_ns, per_freq| {
+                    tsc = scaled_tsc_anchor(per_freq, tsc_khz, || {
+                        Ok(anchored_scaled_tsc(
+                            sampled_tsc,
+                            sampled_clock_ns,
+                            clock_ns,
+                            tsc_khz,
+                        ))
+                    })?;
+                    Ok(())
                 })
-            })
-            .unwrap()
+                .unwrap();
+            tsc.unwrap()
         };
 
-        assert_eq!(capture(1_000, 10_000), Some(10_000));
-        anchor.record_vm_clock(1_100);
-        assert_eq!(capture(1_200, 10_200), Some(10_000));
+        anchor.record_vm_clock(1_000);
+        assert_eq!(capture(0, 1_100, 10_100), 10_000);
+        assert_eq!(capture(1, 1_200, 10_201), 10_000);
+
         anchor.record_vm_clock(2_000);
-        assert_eq!(capture(2_100, 11_100), Some(11_000));
+        assert_eq!(capture(0, 2_100, 11_100), 11_000);
+        assert_eq!(capture(1, 2_200, 11_201), 11_000);
+    }
+
+    #[test]
+    fn failed_tsc_save_preserves_the_round_for_retry() {
+        let anchor = TscSaveAnchor::default();
+        anchor.record_vm_clock(1_000);
+        let error = anchor
+            .commit_vcpu_save(0, |_, per_freq| {
+                scaled_tsc_anchor(per_freq, 1_000, || Err(io::Error::other("sample failed")))?;
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "sample failed");
+
+        anchor
+            .commit_vcpu_save(1, |clock_ns, per_freq| {
+                assert_eq!(clock_ns, 1_000);
+                assert_eq!(
+                    scaled_tsc_anchor(per_freq, 1_000, || Ok(Some(900)))?,
+                    Some(900)
+                );
+                Ok(())
+            })
+            .unwrap();
+        anchor.check_vcpu_save(0).unwrap();
+        anchor
+            .commit_vcpu_save(0, |clock_ns, per_freq| {
+                assert_eq!(clock_ns, 1_000);
+                assert_eq!(
+                    scaled_tsc_anchor(per_freq, 1_000, || panic!("frequency already sampled"))?,
+                    Some(900)
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
@@ -1267,6 +1349,7 @@ mod tests {
     fn snapshot_save_rejects_unconfigured_empty_cpuid() {
         let vm = KvmVm::new().unwrap();
         let mut cpu = vm.create_vcpu(0).unwrap();
+        vm.save_state().unwrap();
         let error = cpu.save_state().unwrap_err();
         assert!(
             matches!(error, Error::ConfigureVcpu { operation: "save CPU state", ref source, .. }
@@ -1312,6 +1395,7 @@ mod tests {
         cpu.xsave_size = Err(CachedIoError::from_io(io::Error::from_raw_os_error(
             libc::EPERM,
         )));
+        vm.save_state().unwrap();
         for error in [
             cpu.save_state().unwrap_err(),
             cpu.restore_state(&state).unwrap_err(),
@@ -1402,6 +1486,7 @@ mod tests {
     fn snapshot_restore_rejects_invalid_cpuid_before_writing_registers() {
         let vm = KvmVm::new().unwrap();
         let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
         let mut state = cpu.save_state().unwrap();
         let original = cpu.fd.get_regs().unwrap();
         let original_cpuid = state.cpuid.clone();
@@ -1429,6 +1514,7 @@ mod tests {
     fn snapshot_restore_skips_set_xcrs_when_nr_xcrs_is_zero() {
         let vm = KvmVm::new().unwrap();
         let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
         let mut state = cpu.save_state().unwrap();
         state.xcrs.nr_xcrs = 0;
         state.xcrs.flags = 1;
@@ -1450,6 +1536,7 @@ mod tests {
     fn snapshot_restore_rejects_xsave_and_xcr_shapes_before_writing_registers() {
         let vm = KvmVm::new().unwrap();
         let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
         let valid = cpu.save_state().unwrap();
         let original = cpu.fd.get_regs().unwrap();
         for case in 0..4 {
@@ -1483,6 +1570,7 @@ mod tests {
     fn snapshot_restore_rejects_a_cpu_after_interrupted_entry() {
         let vm = KvmVm::new().unwrap();
         let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
         let state = cpu.save_state().unwrap();
         cpu.fd.set_kvm_immediate_exit(1);
         assert!(matches!(cpu.run().unwrap(), VcpuExit::Interrupted));
@@ -1507,6 +1595,7 @@ mod tests {
             // for each boundary and report all failures, not just the first.
             let vm = KvmVm::new().unwrap();
             let mut cpu = snapshot_cpu(&vm);
+            vm.save_state().unwrap();
             let mut state = cpu.save_state().unwrap();
             state.msrs = (0..count)
                 .map(|i| kvm_bindings::kvm_msr_entry {
@@ -1522,6 +1611,7 @@ mod tests {
                 failures.push((count, error));
                 continue;
             }
+            vm.save_state().unwrap();
             let actual = cpu.save_state().unwrap();
             assert_eq!(
                 actual
@@ -1544,6 +1634,7 @@ mod tests {
     fn snapshot_restore_matches_kvm_for_a_changed_tsc_scale() {
         let vm = KvmVm::new().unwrap();
         let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
         let mut state = cpu.save_state().unwrap();
         assert!(state.tsc_khz > 1);
         let original = state.tsc_khz;
@@ -1574,6 +1665,7 @@ mod tests {
     fn snapshot_restore_reports_the_first_rejected_msr() {
         let vm = KvmVm::new().unwrap();
         let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
         let mut state = cpu.save_state().unwrap();
         state.msrs = vec![kvm_bindings::kvm_msr_entry {
             index: MSR_MTRR_DEF_TYPE,
@@ -1600,6 +1692,7 @@ mod tests {
         const KERNEL_GS_BASE: u32 = 0xc000_0102;
         let vm = KvmVm::new().unwrap();
         let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
         let mut state = cpu.save_state().unwrap();
         state.msrs = (1..=(MAX_MSR_BATCH_ENTRIES + 2))
             .map(|data| kvm_msr_entry {
@@ -1650,6 +1743,7 @@ mod tests {
         // with a buffer smaller than the real destination's capability.
         cpu.xsave_size = Ok(0);
         let fixed = cpu.fd.get_xsave().unwrap();
+        vm.save_state().unwrap();
         let state = cpu.save_state().unwrap();
         assert_eq!(state.xsave.len(), XSAVE_REGION_WORDS);
         assert_eq!(state.xsave, fixed.region);
@@ -1680,6 +1774,11 @@ mod tests {
         let platform = vm.save_state().unwrap();
         let before = read_tsc(&cpu);
         let state = cpu.save_state().unwrap();
+        let error = cpu.save_state().unwrap_err();
+        assert!(
+            matches!(error, Error::ConfigureVcpu { operation: "save CPU state", ref source, .. }
+            if source.to_string() == "save VM state before recapturing vCPU state")
+        );
         let saved_tsc = state
             .msrs
             .iter()
