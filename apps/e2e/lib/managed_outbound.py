@@ -213,6 +213,7 @@ class TcpFaultObservations:
     bad_credentials: Path
     negotiation: NegotiationFaults | None = None
     bridge_log_dir: Path | None = None
+    anonymous_listener_address: str | None = None
 
     @classmethod
     def load(cls, config, target_ip, target_origin, variants):
@@ -243,8 +244,10 @@ class TcpFaultObservations:
         bridge_dir = Path(config["bridge_log_dir"]).resolve() if "bridge_log_dir" in config else None
         if bridge_dir is not None:
             require(bridge_dir.is_dir(), "configure the live per-Box shim log directory")
+        listener = config.get("anonymous_listener_address")
         return cls(PacketCapture(syn_log, "syn", syn_ip, urlsplit(target_origin).port or 443), refused,
-                   refused_proxy, stalled, malformed, Path(config["bad_credentials"]), negotiation, bridge_dir)
+                   refused_proxy, stalled, malformed, Path(config["bad_credentials"]), negotiation, bridge_dir,
+                   str(IPv4Address(listener)) if listener is not None else None)
 
 
 @dataclass(frozen=True)
