@@ -1,16 +1,32 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{io, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{
+    collections::HashMap,
+    io,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    os::fd::AsRawFd,
+    rc::Rc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use kvm_bindings::{
     KVM_EXIT_HLT, KVM_EXIT_INTR, KVM_EXIT_IO, KVM_EXIT_IO_IN, KVM_EXIT_IO_OUT, KVM_EXIT_MMIO,
     KVM_EXIT_SHUTDOWN, KVM_EXIT_SYSTEM_EVENT, KVM_SYSTEM_EVENT_RESET, KVM_SYSTEM_EVENT_SHUTDOWN,
-    kvm_run,
+    KVM_VCPU_TSC_CTRL, KVM_VCPU_TSC_OFFSET, Msrs, kvm_device_attr, kvm_msr_entry, kvm_run,
+    kvm_sregs,
 };
 use kvm_ioctls::VcpuFd;
 
-use super::{KvmVcpuHandle, kick::WorkerSignal};
+use super::{
+    KvmVcpuHandle,
+    features::{MSR_IA32_TSC, check_written, order_msrs_for_restore, snapshot_msrs},
+    kick::WorkerSignal,
+};
 use crate::{Error, Result, VcpuExit};
 
 /// Number of u32 words in kvm_xsave.region, before its flexible-array tail.
@@ -20,19 +36,138 @@ const XSAVE_REGION_WORDS: usize = 1024;
 /// each ioctl can write at most 255 entries.
 const MAX_MSR_BATCH_ENTRIES: usize = kvm_bindings::KVM_MAX_MSR_ENTRIES - 1;
 
+pub(super) const MSR_KVM_WALL_CLOCK: u32 = 0x11;
+pub(super) const MSR_KVM_WALL_CLOCK_NEW: u32 = 0x4b56_4d00;
+
+// Linux x86_64 _IOW(KVMIO, nr, struct kvm_device_attr).
+const KVM_SET_DEVICE_ATTR: libc::c_ulong = 0x4018_aee1;
+const KVM_GET_DEVICE_ATTR: libc::c_ulong = 0x4018_aee2;
+const KVM_HAS_DEVICE_ATTR: libc::c_ulong = 0x4018_aee3;
+const _: () = assert!(size_of::<kvm_device_attr>() == 24);
+
+fn tsc_offset_ioctl(fd: &VcpuFd, request: libc::c_ulong, addr: u64) -> io::Result<bool> {
+    let attr = kvm_device_attr {
+        group: KVM_VCPU_TSC_CTRL,
+        attr: u64::from(KVM_VCPU_TSC_OFFSET),
+        addr,
+        ..Default::default()
+    };
+    // SAFETY: attr lives through the synchronous ioctl. Its addr is unused for
+    // HAS and points to a u64 writable for GET and readable for SET.
+    if unsafe { libc::ioctl(fd.as_raw_fd(), request as _, &raw const attr) } == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ENXIO) => Ok(false),
+        Some(libc::ENOTTY | libc::EINVAL) if request == KVM_HAS_DEVICE_ATTR => Ok(false),
+        _ => Err(error),
+    }
+}
+
+#[derive(Debug, Default)]
+struct TscSaveAnchor {
+    active: AtomicBool,
+    state: Mutex<Option<TscSaveSample>>,
+}
+
+#[derive(Debug)]
+struct TscSaveSample {
+    tsc_khz: u32,
+    scaled_host_tsc: u64,
+}
+
+#[derive(Debug, Default)]
+struct TscRestoreAnchor {
+    scaled_host_tsc: Mutex<HashMap<u32, u64>>,
+}
+
+#[derive(Debug)]
+pub(super) struct VcpuSnapshotShared {
+    msr_indices: Arc<[u32]>,
+    wall_clock_lock: Mutex<()>,
+    tsc_save_anchor: TscSaveAnchor,
+    tsc_restore_anchor: TscRestoreAnchor,
+}
+
+impl VcpuSnapshotShared {
+    pub(super) fn new(msr_indices: Arc<[u32]>) -> Self {
+        Self {
+            msr_indices,
+            wall_clock_lock: Mutex::default(),
+            tsc_save_anchor: TscSaveAnchor::default(),
+            tsc_restore_anchor: TscRestoreAnchor::default(),
+        }
+    }
+
+    pub(super) fn clear_tsc_save_anchor(&self) {
+        let anchor = &self.tsc_save_anchor;
+        // Capture requires quiescent vCPUs. The flag bypasses the mutex on
+        // normal guest entry and is set while holding the capture lock.
+        if anchor.active.load(Ordering::Acquire) {
+            let mut sample = anchor.state.lock().unwrap_or_else(|e| e.into_inner());
+            *sample = None;
+            anchor.active.store(false, Ordering::Release);
+        }
+    }
+
+    pub(super) fn reset_tsc_restore_anchor(&self) {
+        self.tsc_restore_anchor
+            .scaled_host_tsc
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct SnapshotVcpuFd {
+    inner: VcpuFd,
+    snapshot: Arc<VcpuSnapshotShared>,
+}
+
+impl SnapshotVcpuFd {
+    pub(super) fn set_sregs(
+        &self,
+        state: &kvm_sregs,
+    ) -> std::result::Result<(), kvm_ioctls::Error> {
+        // Boot register setup reaches this write through both public entry points.
+        self.clear_tsc_save_anchor();
+        self.inner.set_sregs(state)
+    }
+
+    pub(super) fn clear_tsc_save_anchor(&self) {
+        self.snapshot.clear_tsc_save_anchor();
+    }
+}
+
+impl Deref for SnapshotVcpuFd {
+    type Target = VcpuFd;
+
+    fn deref(&self) -> &VcpuFd {
+        &self.inner
+    }
+}
+
+impl DerefMut for SnapshotVcpuFd {
+    fn deref_mut(&mut self) -> &mut VcpuFd {
+        &mut self.inner
+    }
+}
+
 /// A Linux x86_64 vCPU bound to its creating thread.
 ///
 /// Creation leaves KVM's reset register state intact and reserves the kick
 /// signal on this worker until drop. The caller supplies entry registers.
 #[derive(Debug)]
 pub struct KvmVcpu {
-    pub(super) fd: VcpuFd,
+    pub(super) fd: SnapshotVcpuFd,
     pub(super) id: u32,
     run_size: usize,
     pending_io: PendingIo,
     entered: bool,
     xsave_size: usize,
-    msr_indices: Arc<[u32]>,
+    has_tsc_offset: bool,
     kick: WorkerSignal,
     _thread_bound: PhantomData<Rc<()>>,
 }
@@ -44,19 +179,23 @@ impl KvmVcpu {
         run_size: usize,
         kick: WorkerSignal,
         xsave_size: usize,
-        msr_indices: Arc<[u32]>,
-    ) -> Self {
-        Self {
-            fd,
+        snapshot: Arc<VcpuSnapshotShared>,
+    ) -> io::Result<Self> {
+        let has_tsc_offset = tsc_offset_ioctl(&fd, KVM_HAS_DEVICE_ATTR, 0)?;
+        Ok(Self {
+            fd: SnapshotVcpuFd {
+                inner: fd,
+                snapshot,
+            },
             id,
             run_size,
             pending_io: PendingIo::default(),
             entered: false,
             xsave_size,
-            msr_indices,
+            has_tsc_offset,
             kick,
             _thread_bound: PhantomData,
-        }
+        })
     }
 
     /// Returns a handle that interrupts this worker, including before entry.
@@ -67,6 +206,7 @@ impl KvmVcpu {
     /// Runs until the next exit; handle borrowed device bytes before re-entry.
     /// An idle guest blocks until an interrupt or a cross-thread kick arrives.
     pub fn run(&mut self) -> Result<VcpuExit<'_>> {
+        self.fd.clear_tsc_save_anchor();
         self.entered = true;
         match self.fd.run().map(|_| ()) {
             Ok(()) => {}
@@ -101,6 +241,7 @@ impl KvmVcpu {
     pub fn complete_pending_io(&mut self) -> Result<()> {
         self.pending_io
             .complete(|| {
+                self.fd.clear_tsc_save_anchor();
                 self.fd.set_kvm_immediate_exit(1);
                 let result = self.fd.run().map(|_| ()).map_err(io::Error::from);
                 self.fd.set_kvm_immediate_exit(0);
@@ -259,6 +400,103 @@ unsafe fn decode_exit(id: u32, run: &mut kvm_run, run_size: usize) -> Result<Vcp
 }
 
 impl KvmVcpu {
+    pub(super) fn get_tsc_offset(&self) -> io::Result<Option<u64>> {
+        if !self.has_tsc_offset {
+            return Ok(None);
+        }
+        let mut offset = 0u64;
+        tsc_offset_ioctl(&self.fd, KVM_GET_DEVICE_ATTR, &raw mut offset as u64)
+            .map(|supported| supported.then_some(offset))
+    }
+
+    pub(super) fn set_tsc_offset(&self, offset: u64) -> io::Result<bool> {
+        if !self.has_tsc_offset {
+            return Ok(false);
+        }
+        tsc_offset_ioctl(&self.fd, KVM_SET_DEVICE_ATTR, &raw const offset as u64)
+    }
+
+    fn normalize_saved_tsc(&self, msrs: &mut [kvm_msr_entry], tsc_khz: u32) -> io::Result<()> {
+        let Some(tsc) = msrs.iter_mut().find(|entry| entry.index == MSR_IA32_TSC) else {
+            return Ok(());
+        };
+        let Some(offset) = self.get_tsc_offset()? else {
+            return Ok(());
+        };
+        let anchor = &self.fd.snapshot.tsc_save_anchor;
+        let mut sample = anchor.state.lock().unwrap_or_else(|e| e.into_inner());
+        match sample.as_ref() {
+            Some(sample) if sample.tsc_khz == tsc_khz => {
+                tsc.data = sample.scaled_host_tsc.wrapping_add(offset);
+            }
+            Some(_) => {}
+            None => {
+                *sample = Some(TscSaveSample {
+                    tsc_khz,
+                    scaled_host_tsc: tsc.data.wrapping_sub(offset),
+                });
+                anchor.active.store(true, Ordering::Release);
+            }
+        }
+        Ok(())
+    }
+
+    fn restore_tsc(&self, tsc: kvm_msr_entry, tsc_khz: u32) -> io::Result<()> {
+        if !self.has_tsc_offset {
+            return self.write_msr_batches(&[tsc]);
+        }
+        let mut anchors = self
+            .fd
+            .snapshot
+            .tsc_restore_anchor
+            .scaled_host_tsc
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let host_tsc = match anchors.get(&tsc_khz) {
+            Some(&host_tsc) => host_tsc,
+            None => {
+                let Some(offset) = self.get_tsc_offset()? else {
+                    return self.write_msr_batches(&[tsc]);
+                };
+                let msrs = snapshot_msrs(&self.fd, &[MSR_IA32_TSC])?;
+                let initial_tsc = msrs
+                    .first()
+                    .ok_or_else(|| io::Error::other("KVM did not return IA32_TSC"))?;
+                initial_tsc.data.wrapping_sub(offset)
+            }
+        };
+        if self.set_tsc_offset(tsc.data.wrapping_sub(host_tsc))? {
+            anchors.insert(tsc_khz, host_tsc);
+            Ok(())
+        } else {
+            self.write_msr_batches(&[tsc])
+        }
+    }
+
+    fn write_msr_batches(&self, entries: &[kvm_msr_entry]) -> io::Result<()> {
+        for chunk in entries.chunks(MAX_MSR_BATCH_ENTRIES) {
+            let msrs = Msrs::from_entries(chunk)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            let written = if chunk
+                .iter()
+                .any(|entry| matches!(entry.index, MSR_KVM_WALL_CLOCK | MSR_KVM_WALL_CLOCK_NEW))
+            {
+                // Each vCPU can rewrite the same pvclock sequence counter.
+                let _guard = self
+                    .fd
+                    .snapshot
+                    .wall_clock_lock
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                self.fd.set_msrs(&msrs)?
+            } else {
+                self.fd.set_msrs(&msrs)?
+            };
+            check_written(&msrs, written)?;
+        }
+        Ok(())
+    }
+
     /// Captures an architecture- and host-version-specific CPU image.
     /// Does not enter KVM_RUN, even to complete outstanding I/O: the caller must
     /// call `complete_pending_io` first, then stop all other VM state producers.
@@ -287,7 +525,10 @@ impl KvmVcpu {
             let mut words = Vec::with_capacity(XSAVE_REGION_WORDS + xsave.as_slice().len());
             words.extend_from_slice(&xsave.as_fam_struct_ref().xsave.region);
             words.extend_from_slice(xsave.as_slice());
-            Ok(crate::X86VcpuState {
+            // Sample timer MSRs before LAPIC state so an intervening timer
+            // expiration can be reflected in the captured interrupt state.
+            let msrs = snapshot_msrs(&self.fd, &self.fd.snapshot.msr_indices)?;
+            let mut state = crate::X86VcpuState {
                 regs: self.fd.get_regs()?,
                 sregs,
                 fpu: self.fd.get_fpu()?,
@@ -296,7 +537,7 @@ impl KvmVcpu {
                     .get_cpuid2(kvm_bindings::KVM_MAX_CPUID_ENTRIES)?
                     .as_slice()
                     .to_vec(),
-                msrs: super::features::snapshot_msrs(&self.fd, &self.msr_indices)?,
+                msrs,
                 xsave: words,
                 xcrs: self.fd.get_xcrs()?,
                 debug_regs: self.fd.get_debug_regs()?,
@@ -304,13 +545,23 @@ impl KvmVcpu {
                 mp_state,
                 lapic: self.fd.get_lapic()?,
                 tsc_khz: self.fd.get_tsc_khz()?,
-            })
+            };
+            self.normalize_saved_tsc(&mut state.msrs, state.tsc_khz)?;
+            Ok(state)
         };
         save().map_err(|source| Error::ConfigureVcpu {
             id: self.id,
             operation: "save CPU state",
             source,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn save_state_with_pending_io(&mut self) -> Result<crate::X86VcpuState> {
+        self.pending_io.0 = true;
+        let state = self.save_state();
+        self.pending_io.0 = false;
+        state
     }
 
     /// Overwrites a fresh, never-entered vCPU; never executes guest code.
@@ -320,11 +571,17 @@ impl KvmVcpu {
     /// CPUID must precede CPUID-gated MSRs/XCRs.
     /// TSC scaling precedes TSC writes; SREGS precedes REGS and establishes mode
     /// and APIC base. LAPIC precedes MSRs so its timer setup cannot clobber the
-    /// saved TSC deadline. MSRs (including XSS/XFD) precede XCRS/XSAVE. Dedicated
-    /// SET_FPU follows XSAVE so the legacy x87/SSE image is authoritative.
+    /// saved TSC deadline. TSC_ADJUST precedes the TSC offset, and the deadline
+    /// follows it. MSRs (including XSS/XFD) precede XCRS/XSAVE. KVM_SET_XSAVE
+    /// restores the authoritative x87, SSE and extended state.
     /// Debug/REGS follow mode setup, MP state and events are last (LAPIC/SREGS
-    /// can change pending events). No VM-global clock/device state is touched.
+    /// can change pending events).
+    ///
+    /// MSR_KVM_WALL_CLOCK and MSR_KVM_WALL_CLOCK_NEW update the VM-global
+    /// wall_clock and write the epoch into guest RAM. Call
+    /// [`crate::X86Vm::restore_before_vcpus`] before restoring any vCPU.
     pub fn restore_state(&mut self, state: &crate::X86VcpuState) -> Result<()> {
+        self.fd.clear_tsc_save_anchor();
         let mut restore = || -> io::Result<()> {
             let invalid = |message| io::Error::new(io::ErrorKind::InvalidInput, message);
             if self.entered || self.pending_io.0 {
@@ -334,6 +591,7 @@ impl KvmVcpu {
             let mut xsave = self.xsave_buffer()?;
             if state.xsave.len() != XSAVE_REGION_WORDS + xsave.as_slice().len()
                 || state.xcrs.nr_xcrs as usize > state.xcrs.xcrs.len()
+                || state.xcrs.flags != 0
             {
                 return Err(invalid("invalid XSAVE/XCR snapshot shape"));
             }
@@ -357,17 +615,24 @@ impl KvmVcpu {
             }
             self.fd.set_sregs(&state.sregs)?;
             self.fd.set_lapic(&state.lapic)?;
-            for chunk in state.msrs.chunks(MAX_MSR_BATCH_ENTRIES) {
-                let msrs = kvm_bindings::Msrs::from_entries(chunk)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                let written = self.fd.set_msrs(&msrs)?;
-                super::features::check_written(&msrs, written)?;
+            let plan = order_msrs_for_restore(&state.msrs);
+            self.write_msr_batches(&plan.before_tsc)?;
+            if let Some(tsc) = plan.tsc {
+                self.restore_tsc(tsc, state.tsc_khz)?;
             }
-            self.fd.set_xcrs(&state.xcrs)?;
+            self.write_msr_batches(&plan.after_tsc)?;
+            if state.xcrs.nr_xcrs > 0 {
+                self.fd.set_xcrs(&state.xcrs)?;
+            }
             // SAFETY: destination-sized allocation, checked above; no dynamic
             // XSTATE permission changes are allowed during the vCPU lifetime.
-            unsafe { self.fd.set_xsave2(&xsave) }?;
-            self.fd.set_fpu(&state.fpu)?;
+            unsafe {
+                if self.xsave_size == 0 {
+                    self.fd.set_xsave(&xsave.as_fam_struct_ref().xsave)
+                } else {
+                    self.fd.set_xsave2(&xsave)
+                }
+            }?;
             self.fd.set_debug_regs(&state.debug_regs)?;
             self.fd.set_regs(&state.regs)?;
             self.fd.set_mp_state(state.mp_state)?;
@@ -524,6 +789,67 @@ mod tests {
     }
 
     #[test]
+    fn kvm_tsc_device_attr_ioctl_numbers() {
+        // _IOW packs the write bit, structure size, KVMIO type and request.
+        let iow = |nr: libc::c_ulong| {
+            (1 << 30) | ((size_of::<kvm_device_attr>() as libc::c_ulong) << 16) | (0xae << 8) | nr
+        };
+        assert_eq!(KVM_SET_DEVICE_ATTR, iow(0xe1));
+        assert_eq!(KVM_GET_DEVICE_ATTR, iow(0xe2));
+        assert_eq!(KVM_HAS_DEVICE_ATTR, iow(0xe3));
+        assert_eq!((KVM_VCPU_TSC_CTRL, KVM_VCPU_TSC_OFFSET), (0, 0));
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_rejects_invalid_cpuid_before_writing_registers() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let mut state = cpu.save_state().unwrap();
+        let original = cpu.fd.get_regs().unwrap();
+        let original_cpuid = state.cpuid.clone();
+        state.regs.rax = original.rax ^ 1;
+        for count in [0, kvm_bindings::KVM_MAX_CPUID_ENTRIES + 1] {
+            state.cpuid.resize(count, original_cpuid[0]);
+            let error = cpu.restore_state(&state).unwrap_err();
+            assert!(matches!(error, Error::ConfigureVcpu { ref source, .. }
+                if source.kind() == io::ErrorKind::InvalidInput
+                    && source.to_string() == "invalid CPUID count"));
+            assert_eq!(cpu.fd.get_regs().unwrap(), original);
+            assert_eq!(
+                cpu.fd
+                    .get_cpuid2(kvm_bindings::KVM_MAX_CPUID_ENTRIES)
+                    .unwrap()
+                    .as_slice(),
+                original_cpuid
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_skips_set_xcrs_when_nr_xcrs_is_zero() {
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let mut state = cpu.save_state().unwrap();
+        state.xcrs.nr_xcrs = 0;
+        state.xcrs.flags = 1;
+        let original = cpu.fd.get_regs().unwrap();
+        state.regs.rax = original.rax ^ 1;
+        let error = cpu.restore_state(&state).unwrap_err();
+        assert!(matches!(error, Error::ConfigureVcpu { ref source, .. }
+            if source.kind() == io::ErrorKind::InvalidInput
+                && source.to_string() == "invalid XSAVE/XCR snapshot shape"));
+        assert_eq!(cpu.fd.get_regs().unwrap(), original);
+
+        state.xcrs.flags = 0;
+        cpu.restore_state(&state).unwrap();
+        assert_eq!(cpu.fd.get_regs().unwrap(), state.regs);
+    }
+
+    #[test]
     #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
     fn snapshot_restore_rejects_xsave_and_xcr_shapes_before_writing_registers() {
         let vm = super::super::KvmVm::new().unwrap();
@@ -649,6 +975,8 @@ mod tests {
         }
     }
 
+    const MSR_MTRR_DEF_TYPE: u32 = 0x2ff;
+
     #[test]
     #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
     fn snapshot_restore_reports_the_first_rejected_msr() {
@@ -657,14 +985,46 @@ mod tests {
         cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
         let mut state = cpu.save_state().unwrap();
         state.msrs = vec![kvm_bindings::kvm_msr_entry {
-            index: u32::MAX,
+            index: MSR_MTRR_DEF_TYPE,
+            data: u64::MAX,
             ..Default::default()
         }];
         let error = cpu.restore_state(&state).unwrap_err();
         assert!(
             matches!(error, Error::ConfigureVcpu { operation: "restore CPU state", ref source, .. }
-            if source.to_string().contains("first rejected index 0xffffffff"))
+            if source.to_string() == "KVM wrote 0 of 1 MSRs; first rejected index 0x2ff")
         );
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_restore_reports_first_rejected_msr_in_second_batch() {
+        const FS_BASE: u32 = 0xc000_0100;
+        const KERNEL_GS_BASE: u32 = 0xc000_0102;
+        let vm = super::super::KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        let mut state = cpu.save_state().unwrap();
+        state.msrs = (1..=(MAX_MSR_BATCH_ENTRIES + 2))
+            .map(|data| kvm_msr_entry {
+                index: KERNEL_GS_BASE,
+                data: data as u64,
+                ..Default::default()
+            })
+            .collect();
+        state.msrs[MAX_MSR_BATCH_ENTRIES + 1].index = FS_BASE;
+        state.msrs.push(kvm_msr_entry {
+            index: MSR_MTRR_DEF_TYPE,
+            data: u64::MAX,
+            ..Default::default()
+        });
+        let error = cpu.restore_state(&state).unwrap_err();
+        assert!(
+            matches!(error, Error::ConfigureVcpu { operation: "restore CPU state", ref source, .. }
+            if source.to_string() == "KVM wrote 2 of 3 MSRs; first rejected index 0x2ff")
+        );
+        let actual = snapshot_msrs(&cpu.fd, &[KERNEL_GS_BASE, FS_BASE]).unwrap();
+        assert_eq!(actual, state.msrs[MAX_MSR_BATCH_ENTRIES..][..2]);
     }
 
     #[test]
@@ -672,7 +1032,7 @@ mod tests {
     fn snapshot_vcpus_share_the_kvm_advertised_msr_index_cache() {
         let vm = super::super::KvmVm::new().unwrap();
         let first = vm.create_vcpu(0).unwrap();
-        let indices = Arc::clone(&first.msr_indices);
+        let indices = Arc::clone(&first.fd.snapshot.msr_indices);
         // One worker owns at most one reserved kick signal at a time.
         drop(first);
         let second = vm.create_vcpu(1).unwrap();
@@ -680,8 +1040,11 @@ mod tests {
             .unwrap()
             .get_msr_index_list()
             .unwrap();
-        assert_eq!(&*indices, advertised.as_slice());
-        assert!(Arc::ptr_eq(&indices, &second.msr_indices));
+        assert_eq!(
+            indices,
+            super::super::features::build_snapshot_msr_indices(advertised.as_slice())
+        );
+        assert!(Arc::ptr_eq(&indices, &second.fd.snapshot.msr_indices));
     }
 
     #[test]

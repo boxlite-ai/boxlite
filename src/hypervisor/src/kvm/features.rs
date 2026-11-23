@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::io;
+use std::{collections::HashSet, io, sync::Arc};
 
 use kvm_bindings::{
     CpuId, KVM_CPUID_FLAG_SIGNIFCANT_INDEX, KVM_CPUID_FLAG_STATE_READ_NEXT,
@@ -11,6 +11,91 @@ use kvm_ioctls::Kvm;
 
 use super::KvmVcpu;
 use crate::{Error, Result, X86CpuidEntry, X86Msr};
+
+pub(super) const MSR_IA32_TSC: u32 = 0x10;
+const MSR_IA32_TSC_ADJUST: u32 = 0x3b;
+const MSR_MTRR_CAP: u32 = 0xfe;
+const MSR_IA32_RTIT_CTL: u32 = 0x570;
+pub(super) const MSR_IA32_TSC_DEADLINE: u32 = 0x6e0;
+const MSR_IA32_DEBUGCTLMSR: u32 = 0x1d9;
+const MSR_IA32_XSS: u32 = 0xda0;
+
+const SUPPLEMENTAL_SNAPSHOT_MSRS: &[u32] = &[
+    // MTRR_DEF_TYPE.
+    0x2ff,
+    // Fixed MTRRs.
+    0x250,
+    0x258,
+    0x259,
+    0x268,
+    0x269,
+    0x26a,
+    0x26b,
+    0x26c,
+    0x26d,
+    0x26e,
+    0x26f,
+    // Variable MTRRs.
+    0x200,
+    0x201,
+    0x202,
+    0x203,
+    0x204,
+    0x205,
+    0x206,
+    0x207,
+    0x208,
+    0x209,
+    0x20a,
+    0x20b,
+    0x20c,
+    0x20d,
+    0x20e,
+    0x20f,
+    MSR_IA32_XSS,
+    MSR_IA32_DEBUGCTLMSR,
+];
+
+fn is_excluded_msr(index: u32) -> bool {
+    // MTRRcap is read-only. LAPIC ioctls carry x2APIC state. Hyper-V's
+    // paravirtualized state has separate VM-wide and per-vCPU dependencies.
+    matches!(index, MSR_MTRR_CAP | 0x800..=0xbff | 0x4000_0000..=0x4000_01ff)
+}
+
+pub(super) fn build_snapshot_msr_indices(kvm_advertised: &[u32]) -> Arc<[u32]> {
+    let mut seen = HashSet::new();
+    kvm_advertised
+        .iter()
+        .chain(SUPPLEMENTAL_SNAPSHOT_MSRS)
+        .copied()
+        .filter(|&index| !is_excluded_msr(index) && seen.insert(index))
+        .collect()
+}
+
+#[derive(Debug, Default)]
+pub(super) struct RestoreMsrPlan {
+    pub(super) before_tsc: Vec<kvm_msr_entry>,
+    pub(super) tsc: Option<kvm_msr_entry>,
+    pub(super) after_tsc: Vec<kvm_msr_entry>,
+}
+
+pub(super) fn order_msrs_for_restore(entries: &[kvm_msr_entry]) -> RestoreMsrPlan {
+    let mut plan = RestoreMsrPlan::default();
+    let mut deadlines = Vec::new();
+    let mut trace_controls = Vec::new();
+    for &entry in entries {
+        match entry.index {
+            MSR_IA32_TSC_ADJUST => plan.before_tsc.push(entry),
+            MSR_IA32_TSC => plan.tsc = Some(entry),
+            MSR_IA32_TSC_DEADLINE => deadlines.push(entry),
+            MSR_IA32_RTIT_CTL => trace_controls.push(entry),
+            _ => plan.after_tsc.push(entry),
+        }
+    }
+    plan.after_tsc.extend(deadlines);
+    plan.after_tsc.extend(trace_controls);
+    plan
+}
 
 pub(super) fn supported_cpuid(kvm: &Kvm) -> io::Result<Vec<X86CpuidEntry>> {
     let cpuid = kvm
@@ -62,6 +147,7 @@ impl KvmVcpu {
         };
         let cpuid = cpuid_buffer(cpuid).map_err(|e| failure("prepare CPUID", e))?;
         let msrs = msr_buffer(msrs).map_err(|e| failure("prepare MSRs", e))?;
+        self.fd.clear_tsc_save_anchor();
         self.fd
             .set_cpuid2(&cpuid)
             .map_err(|e| failure("set CPUID", e.into()))?;
@@ -128,16 +214,14 @@ fn msr_buffer(entries: &[X86Msr]) -> io::Result<Msrs> {
 
 /// Probe one index at a time: a short batch read stops at the first unavailable
 /// MSR and would lose every subsequent register (notably CPUID-gated PMU MSRs).
-/// No boot-MSR allowlist: retain every readable index advertised by KVM.
+/// Probe the VM's filtered list of KVM-advertised and supplemental indices.
 pub(super) fn snapshot_msrs(
     fd: &kvm_ioctls::VcpuFd,
     indices: &[u32],
 ) -> io::Result<Vec<kvm_msr_entry>> {
     let mut entries = Vec::new();
     for &index in indices {
-        // x2APIC's register window includes write-only EOI/SELF_IPI registers.
-        // LAPIC state is saved/restored via its dedicated ioctl instead.
-        if (0x800..=0xbff).contains(&index) {
+        if is_excluded_msr(index) {
             continue;
         }
         let mut msr = Msrs::from_entries(&[kvm_msr_entry {
@@ -168,6 +252,93 @@ pub(super) fn snapshot_cpuid(entries: &[kvm_cpuid_entry2]) -> io::Result<CpuId> 
 mod tests {
     use super::*;
     use kvm_bindings::{KVM_CPUID_FLAG_STATE_READ_NEXT, KVM_CPUID_FLAG_STATEFUL_FUNC};
+
+    #[test]
+    fn build_snapshot_msr_indices_adds_all_writable_mtrrs_and_supplements() {
+        let indices = build_snapshot_msr_indices(&[]);
+        let expected: Vec<_> = [0x2ff, 0x250, 0x258, 0x259]
+            .into_iter()
+            .chain(0x268..=0x26f)
+            .chain(0x200..=0x20f)
+            .chain([0xda0, 0x1d9])
+            .collect();
+        assert_eq!(expected.len(), 28 + 2);
+        assert_eq!(&*indices, expected);
+    }
+
+    #[test]
+    fn build_snapshot_msr_indices_deduplicates_and_excludes_reserved_ranges() {
+        let retained = [0x1d9, 0x7ff, 0xc00, 0xda0, 0x4000_0200, 0x250, 0x10];
+        let indices = build_snapshot_msr_indices(&[
+            0x1d9,
+            0x7ff,
+            0x800,
+            0xbff,
+            0xc00,
+            0xda0,
+            0x4000_0000,
+            0x4000_01ff,
+            0x4000_0200,
+            0xfe,
+            0x250,
+            0x10,
+            0x1d9,
+            0xda0,
+            0x10,
+        ]);
+        assert_eq!(&indices[..retained.len()], &retained);
+        let expected: Vec<_> = retained
+            .into_iter()
+            .chain(
+                SUPPLEMENTAL_SNAPSHOT_MSRS
+                    .iter()
+                    .copied()
+                    .filter(|index| !retained.contains(index)),
+            )
+            .collect();
+        assert_eq!(&*indices, expected);
+    }
+
+    #[test]
+    fn order_msrs_for_restore_places_dependencies_and_keeps_the_last_tsc() {
+        let entries = [
+            0x570,
+            0x6e0,
+            0x10,
+            0x2ff,
+            0x3b,
+            0x571,
+            0xda0,
+            0x10,
+            0x1d9,
+            0x11,
+            0x4b56_4d00,
+            0x560,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(pos, index)| kvm_msr_entry {
+            index,
+            data: pos as u64,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+        let plan = order_msrs_for_restore(&entries);
+        assert_eq!(plan.before_tsc, [entries[4]]);
+        assert_eq!(plan.tsc, Some(entries[7]));
+        assert_eq!(
+            plan.after_tsc,
+            [3, 5, 6, 8, 9, 10, 11, 1, 0].map(|pos| entries[pos])
+        );
+    }
+
+    #[test]
+    fn order_msrs_for_restore_accepts_empty_input() {
+        let plan = order_msrs_for_restore(&[]);
+        assert!(plan.before_tsc.is_empty());
+        assert!(plan.tsc.is_none());
+        assert!(plan.after_tsc.is_empty());
+    }
 
     #[test]
     fn snapshot_cpuid_preserves_entries_and_only_checks_count() {

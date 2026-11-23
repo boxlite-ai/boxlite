@@ -64,20 +64,32 @@ pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
     /// Complete pending userspace I/O first. Non-snapshot backends report Unsupported.
     #[cfg(target_os = "linux")]
     fn save_state(&self) -> Result<X86VmState> {
-        Err(crate::Error::CreateVm(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "save VM state (unsupported backend)",
-        )))
+        Err(crate::Error::vm_state(
+            "save",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported backend"),
+        ))
     }
 
-    /// Overwrites platform state on an identically configured, stopped VM.
+    /// Restores the VM clock offset after RAM is mapped and before any
+    /// [`X86Vcpu::restore_state`] call on the identically configured destination.
     /// Discard the destination after any ioctl error: writes are not transactional.
     #[cfg(target_os = "linux")]
-    fn restore_state(&self, _state: &X86VmState) -> Result<()> {
-        Err(crate::Error::CreateVm(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "restore VM state (unsupported backend)",
-        )))
+    fn restore_before_vcpus(&self, _state: &X86VmState) -> Result<()> {
+        Err(crate::Error::vm_state(
+            "restore",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported backend"),
+        ))
+    }
+
+    /// Restores PIC0, PIC1, IOAPIC and PIT2 after every vCPU has completed
+    /// [`X86Vcpu::restore_state`] and before any [`Vcpu::run`] call.
+    /// Discard the destination after any ioctl error: writes are not transactional.
+    #[cfg(target_os = "linux")]
+    fn restore_after_vcpus(&self, _state: &X86VmState) -> Result<()> {
+        Err(crate::Error::vm_state(
+            "restore",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported backend"),
+        ))
     }
 
     /// Host-supported CPUID values, before the VMM applies guest topology and
@@ -101,9 +113,12 @@ pub trait X86Vcpu: Vcpu {
         })
     }
 
-    /// Overwrites a fresh CPU without entering the guest. On any error, discard
-    /// it: KVM has no transactional validation/rollback API. The default reports
+    /// Overwrites a fresh CPU after [`X86Vm::restore_before_vcpus`] without
+    /// entering the guest. Discard the destination on any error. The default reports
     /// Unsupported (with placeholder CPU id 0) for non-snapshot backends/mocks.
+    /// After this Linux-only restore installs the pvclock MSRs, call the
+    /// cross-platform [`Vcpu::notify_guest_stopped`] on each vCPU's owning
+    /// thread before its first [`Vcpu::run`].
     #[cfg(target_os = "linux")]
     fn restore_state(&mut self, _state: &X86VcpuState) -> Result<()> {
         Err(crate::Error::ConfigureVcpu {
@@ -129,8 +144,9 @@ pub trait X86Vcpu: Vcpu {
 /// userspace I/O and external IRQ producers must be quiescent during transfer.
 /// RAM, per-vCPU state, IRQ routing and device/irqfd configuration are separate.
 /// KVM's running timers make capture non-atomic even with stopped vCPUs.
-/// SET_PIT2 reloads counters: channels 1/2's host `count_load_time` is rebased
-/// by KVM, so exact sub-tick timer phase is not preserved by this ioctl.
+/// KVM_SET_PIT2 rebases the host `count_load_time` for channels 1 and 2 and
+/// restarts channel 0 with its initial `count`. This loses sub-tick phase
+/// and can re-arm one-shot modes 0, 1 and 4.
 ///
 /// A created PIT is captured even if the guest never programmed it: its reset
 /// channels/flags must overwrite the destination, not be confused with no PIT.
@@ -143,7 +159,7 @@ pub struct X86VmState {
     pub pit: Option<kvm_bindings::kvm_pit_state2>,
     /// Full GET_CLOCK image: guest nanoseconds (from which SET_CLOCK rebuilds
     /// the offset), flags, realtime and host TSC correlation. Restore excludes
-    /// snapshot downtime by clearing KVM_CLOCK_REALTIME; other flags are metadata.
+    /// snapshot downtime by passing zero flags to SET_CLOCK.
     pub clock: kvm_bindings::kvm_clock_data,
 }
 
@@ -211,7 +227,8 @@ impl PartialEq for X86IrqchipState {
                             .zip(&b.redirtbl)
                             .all(|(a, b)| a.bits == b.bits)
                 }
-                // Unknown IDs remain comparable; KVM handles ioctl validation.
+                // Unknown IDs compare deterministically. Restore validates the
+                // expected IRQ chip IDs before issuing ioctls.
                 _ => a.chip.dummy == b.chip.dummy,
             }
         }
@@ -221,12 +238,18 @@ impl PartialEq for X86IrqchipState {
 /// A paused KVM x86 CPU image, specific to this architecture, host CPU and
 /// KVM/kernel version; not a portable or stable wire format.
 ///
-/// Includes the entire XSAVE area (including AVX and newer enabled components)
-/// in addition to the dedicated FPU image. CPUID/MSR flexible arrays are owned.
-/// MSRs are discovered with KVM_GET_MSR_INDEX_LIST and individually probed:
-/// indices unavailable under this vCPU's CPUID/MCE configuration are omitted.
-/// The x2APIC register range is represented by `lapic`, not by MSR accesses.
-/// `tsc_khz` is KVM_GET_TSC_KHZ's scale input, not a VM-wide clock snapshot.
+/// KVM_SET_XSAVE restores x87, SSE and enabled extended state from `xsave`.
+/// The image also carries the dedicated FPU capture and owned CPUID/MSR arrays.
+/// Capture probes KVM's advertised MSRs plus the 28 writable MTRRs, IA32_XSS
+/// and IA32_DEBUGCTLMSR. It excludes MTRRcap, Hyper-V's
+/// `0x4000_0000..=0x4000_01ff` window and the x2APIC range carried by `lapic`.
+/// MCE bank configuration via KVM_X86_SETUP_MCE is outside this interface.
+///
+/// When KVM exposes KVM_VCPU_TSC_OFFSET, equal-frequency vCPUs share a host
+/// TSC reference at capture and another at restore. The resulting offsets
+/// preserve their relative TSC skew. Restore writes TSC_ADJUST, then TSC,
+/// then ordinary MSRs, followed by TSC_DEADLINE and RTIT_CTL. APICv requires
+/// the host kernel fix `9cfec6d097c6` or its backport for LAPIC transfer.
 ///
 /// Requires completed userspace I/O and a stopped vCPU. Nested virtualization,
 /// Hyper-V SynIC, guest-debug configuration, VM clock/irqchip/PIT state and RAM
@@ -253,7 +276,8 @@ pub struct X86VcpuState {
         deserialize_with = "vcpu_state_serde::entries::<_, _, { kvm_bindings::KVM_MAX_CPUID_ENTRIES }>"
     )]
     pub cpuid: Vec<kvm_bindings::kvm_cpuid_entry2>,
-    /// Readable KVM-advertised MSRs; decoding permits at most 4096 entries.
+    /// Readable MSRs from the filtered KVM-advertised and supplemental list.
+    /// Decoding permits at most 4096 entries.
     /// This is a decoding policy, not KVM's per-ioctl MSR batch limit.
     #[serde(deserialize_with = "vcpu_state_serde::entries::<_, _, 4096>")]
     pub msrs: Vec<kvm_bindings::kvm_msr_entry>,

@@ -239,12 +239,22 @@ fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
         pit: None,
         clock: Default::default(),
     };
-    for error in [
-        Backend.save_state().unwrap_err(),
-        Backend.restore_state(&platform).unwrap_err(),
+    for (operation, error) in [
+        ("save", Backend.save_state().unwrap_err()),
+        (
+            "restore",
+            Backend.restore_before_vcpus(&platform).unwrap_err(),
+        ),
+        (
+            "restore",
+            Backend.restore_after_vcpus(&platform).unwrap_err(),
+        ),
     ] {
-        assert!(matches!(error, crate::Error::CreateVm(ref source)
-            if source.kind() == std::io::ErrorKind::Unsupported && source.raw_os_error().is_none()));
+        assert!(
+            matches!(error, crate::Error::VmState { operation: actual, ref source }
+            if actual == operation && source.kind() == std::io::ErrorKind::Unsupported
+                && source.raw_os_error().is_none())
+        );
     }
     for (operation, error) in [
         (
@@ -254,6 +264,10 @@ fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
         (
             "restore CPU state (unsupported backend)",
             Cpu.restore_state(&cpu()).unwrap_err(),
+        ),
+        (
+            "notify guest stopped (unsupported backend)",
+            Cpu.notify_guest_stopped().unwrap_err(),
         ),
     ] {
         assert!(

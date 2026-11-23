@@ -76,9 +76,9 @@ the entry PC, X0 and PSTATE (`set_boot_registers`).
 
 ## Linux x86_64 paused state
 
-`X86Vm::save_state` / `restore_state` and `X86Vcpu::save_state` /
-`restore_state` transfer owned `X86VmState` and `X86VcpuState` images. KVM also
-exposes these methods directly. They support the **same host and KVM environment
+`X86Vm::save_state` and `X86Vcpu::save_state` capture owned `X86VmState` and
+`X86VcpuState` images. KVM exposes the capture and restore methods directly.
+They support the **same host and KVM environment
 only**, with a **non-stable ABI**; they do not promise portable migration.
 The types implement Serde for Postcard encoding; the VMM owns machine-state
 assembly, RAM, devices and persistence. There is no file container, checksum,
@@ -87,47 +87,78 @@ signature or compatibility negotiation in this crate.
 | Image | Captured state |
 | --- | --- |
 | `X86VmState` | PIC master/slave, IOAPIC, every created PIT (including unused reset state), and KVM clock |
-| `X86VcpuState` | regs, sregs, FPU, CPUID, all KVM-advertised readable MSRs, complete host-sized XSAVE, XCRs, debug registers, events, MP state, LAPIC and TSC frequency |
+| `X86VcpuState` | regs, sregs, FPU, CPUID, filtered KVM-advertised and supplemental MSRs, complete host-sized XSAVE, XCRs, debug registers, events, MP state, LAPIC and TSC frequency |
 
-KVM caches the advertised MSR index list at VM creation and shares it with
-its vCPUs; capture still probes readability under each vCPU's CPUID/MCE state.
+KVM shares a filtered MSR list across the VM's vCPUs and probes each index
+under the current vCPU's CPUID/MCE configuration. The list supplements KVM's
+advertised indices with 28 writable MTRRs, IA32_XSS and IA32_DEBUGCTLMSR. It
+excludes read-only MTRRcap, Hyper-V indices `0x4000_0000..=0x4000_01ff`
+and x2APIC indices, which the LAPIC image carries. MCE bank configuration via
+`KVM_X86_SETUP_MCE` is outside the snapshot contract.
 
 Stop all vCPUs and IRQ producers and complete userspace I/O with
 `complete_pending_io` before capture. `save_state` never enters the guest.
-`Vcpu::notify_guest_stopped`, called on the stopped vCPU's owning thread,
-notifies an enabled KVM pvclock about the pause; an inactive pvclock is a no-op.
-Other backends report unsupported for these operations.
+The `X86Vm` and `X86Vcpu` snapshot methods are Linux x86_64 extensions.
+The cross-platform `Vcpu::notify_guest_stopped` method notifies an enabled KVM
+pvclock on the stopped vCPU's owning thread. It succeeds with an inactive
+pvclock. The default implementation reports `Unsupported`.
 
-KVM VM-state ioctl failures return `Error::VmState` with operation `"save"` or
-`"restore"`; its display identifies the state transfer, not VM creation.
-Its `source()` is the original `io::Error`, preserving `raw_os_error()` and
-`kind()` without a message wrapper. Unsupported `X86Vm` default methods retain
-`Error::CreateVm` with `Unsupported` and no errno.
+VM-state errors return `Error::VmState` with operation `"save"` or `"restore"`.
+For ioctl failures, `source()` is the original `io::Error`, preserving
+`raw_os_error()` and `kind()`. The default `X86Vm` snapshot methods use an
+`Unsupported` source with no errno.
 
-Restore into an identically configured VM and fresh, never-entered vCPUs, with
-RAM available before register restore; do not enter a vCPU until all state is
-installed. Writes are not transactional: discard the destination after any
-error. CPUID/MSR writes rejected by KVM, including short MSR writes, fail the
+Restore into an identically configured VM with fresh vCPUs in this order.
+
+1. Register the restored guest RAM with `Vm::map_memory`.
+2. Call `X86Vm::restore_before_vcpus` to set the guest clock in nanoseconds.
+   KVM receives `flags: 0` for compatibility across kernel versions and to
+   exclude snapshot downtime from the restored clock.
+3. Create the vCPUs and call `X86Vcpu::restore_state` on each owning thread.
+   KVM wall-clock MSR writes use the restored clock to write the pvclock epoch
+   into guest RAM. Those writes are serialized across the VM's vCPUs.
+4. Call `X86Vm::restore_after_vcpus` once all vCPUs have restored. It validates
+   the PIC master, PIC slave and IOAPIC IDs in order before writing any IRQ chip,
+   then restores the PIT if present.
+5. Call `Vcpu::notify_guest_stopped` on each vCPU's owning thread after
+   `X86Vcpu::restore_state` has installed its pvclock MSRs and before entering
+   the guest with `Vcpu::run`.
+
+Discard the destination after any restore error because writes may be partial.
+CPUID/MSR writes rejected by KVM, including short MSR writes, fail the
 restore. Decoding bounds flexible arrays; kvm-bindings zero-fills and
-pads/truncates ABI buffers. Restore allocates XSAVE storage from the local KVM size
-and checks the captured XSAVE length against it. CPU policy, kernel release,
-register-set identity, duplicates and ordering are not compatibility-checked.
+pads/truncates ABI buffers. Restore validates the captured XSAVE length against
+the local KVM size. `KVM_SET_XSAVE` uses that buffer as the authoritative
+source for x87, SSE and extended state. The caller supplies compatible CPU
+policy, kernel release and register sets.
 
-The LAPIC image represents x2APIC MSRs. Nested virtualization, Hyper-V SynIC,
+During a pause, saves at the sampled TSC frequency share one host TSC reference.
+Saves at other frequencies use the TSC MSR reading directly. Restore uses a
+separate host TSC reference per frequency. `KVM_VCPU_TSC_OFFSET` applies the
+saved relative offsets directly, preserving inter-vCPU skew across sequential
+ioctls. Capture and restore use each vCPU's TSC MSR if probing the offset
+attribute returns `ENXIO`, `ENOTTY`, or `EINVAL`, or if reading or writing
+the offset returns `ENXIO`. Restore applies TSC_ADJUST before TSC, then ordinary
+MSRs in snapshot order, followed by TSC_DEADLINE and RTIT_CTL. This arms the
+LAPIC timer against the restored TSC and enables processor trace after its
+configuration is installed. APICv requires a host kernel with fix
+`9cfec6d097c6` or its backport for LAPIC snapshot transfer.
+
+Nested virtualization, Hyper-V SynIC,
 guest-debug configuration, IRQ routing and device/irqfd configuration are outside
 these images. Paged 32-bit PAE guests are unsupported because KVM SREGS omits
 cached PDPTRs; callers must exclude this mode, which these primitives do not
 validate. Do not enable dynamic host XSTATE permissions after vCPU creation.
-KVM timers make platform capture non-atomic; PIT restore rebases host load
-timestamps, so exact sub-tick phase is not preserved. Restoring the KVM clock
-excludes snapshot downtime.
+KVM timers make platform capture non-atomic. `KVM_SET_PIT2` rebases host load
+timestamps for channels 1 and 2 and restarts channel 0 with its initial
+`count`. This loses sub-tick phase and can re-arm one-shot modes 0, 1 and 4.
 
 `make test:unit:vmm` checks VM-state error construction, display and cause
 preservation without hardware, and includes Postcard round trips, truncated input
 and flexible-array bounds on Linux x86_64, without `/dev/kvm`.
 `make test:integration:vmm:kvm` also exercises platform and vCPU restoration
-with KVM, including errno preservation through both VM-state ioctl failure
-paths and executing AVX loads/stores across a vCPU restore on an AVX-capable host.
+with KVM, including ioctl errno preservation, concurrent pvclock restoration,
+pending IOAPIC interrupt delivery and AVX state on an AVX-capable host.
 
 ## Host execution
 

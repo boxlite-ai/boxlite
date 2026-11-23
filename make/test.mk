@@ -307,8 +307,8 @@ _ensure-kvm:
 test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
 	@status=0; \
-	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
-	timeout 60s cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: snapshot::restore::tests:: control::tests::execution:: || status=1; \
+	timeout 60s cargo test -p boxlite-hypervisor --lib kvm:: -- --ignored --test-threads=1 || status=1; \
+	timeout 60s cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: || status=1; \
 	exit $$status
 
 # make vmm:boot produces this kernel by default.

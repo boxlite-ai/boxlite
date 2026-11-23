@@ -28,6 +28,10 @@ pub trait Vcpu {
     /// Notifies the guest that its clock was interrupted, while stopped on
     /// the owning thread. An unused guest clock is a successful no-op; backends
     /// without this capability report Unsupported (with placeholder CPU id 0).
+    ///
+    /// On a KVM destination, call this on each vCPU's owning thread after
+    /// `X86Vcpu::restore_state` installs its pvclock MSRs and before its first
+    /// [`Vcpu::run`].
     fn notify_guest_stopped(&mut self) -> Result<()> {
         Err(crate::Error::ConfigureVcpu {
             id: 0,
@@ -43,8 +47,7 @@ pub trait Vcpu {
 #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
 pub(crate) fn kvmclock_ctrl_result(result: std::io::Result<()>) -> std::io::Result<()> {
     match result {
-        // KVM's kvm_set_guest_paused returns EINVAL when pv_time is inactive:
-        // the guest has no enabled pvclock to notify, not a broken ioctl.
+        // KVM's kvm_set_guest_paused returns EINVAL when pv_time is inactive.
         Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
         result => result,
     }
@@ -61,13 +64,52 @@ pub trait VcpuHandle: Clone + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::kvmclock_ctrl_result;
+    use super::*;
     use std::io;
 
     #[test]
     fn kvmclock_inactive_pvclock_is_a_noop() {
-        assert!(kvmclock_ctrl_result(Err(io::Error::from_raw_os_error(22))).is_ok());
+        assert!(kvmclock_ctrl_result(Err(io::Error::from(io::ErrorKind::InvalidInput))).is_ok());
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        assert!(kvmclock_ctrl_result(Err(io::Error::from_raw_os_error(libc::EINVAL))).is_ok());
         assert!(kvmclock_ctrl_result(Ok(())).is_ok());
+    }
+
+    #[test]
+    fn notify_guest_stopped_defaults_to_unsupported() {
+        #[derive(Clone)]
+        struct Cpu;
+
+        impl VcpuHandle for Cpu {
+            fn kick(&self) -> Result<()> {
+                unreachable!()
+            }
+        }
+
+        impl Vcpu for Cpu {
+            type Handle = Self;
+
+            fn run(&mut self) -> Result<VcpuExit<'_>> {
+                unreachable!()
+            }
+
+            fn complete_pending_io(&mut self) -> Result<()> {
+                unreachable!()
+            }
+
+            fn handle(&self) -> Self::Handle {
+                Self
+            }
+        }
+
+        assert!(matches!(
+            Cpu.notify_guest_stopped(),
+            Err(crate::Error::ConfigureVcpu {
+                id: 0,
+                operation: "notify guest stopped (unsupported backend)",
+                source,
+            }) if source.kind() == io::ErrorKind::Unsupported
+        ));
     }
 
     #[test]
