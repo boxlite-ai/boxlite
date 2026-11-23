@@ -1554,7 +1554,7 @@ the session, including when navigation is expanded or the viewport changes.
 
 A stopped Box shows a compact bordered panel with guidance and Start Box, replacing
 the header Start in this view. The action uses the existing permission check and
-start mutation. Pending requests disable it, starting waits for the Box state, and
+start mutation. The action stays disabled through the post-start detail refresh; starting waits for the Box state, and
 a failed start retains a local notice alongside the existing API error notification.
 Startup progress uses a polite status region; failures use a separate alert.
 Read-only members receive permission guidance. Overview keeps its header Start.

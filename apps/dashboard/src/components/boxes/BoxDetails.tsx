@@ -81,6 +81,7 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [startFailed, setStartFailed] = useState(false)
+  const [startInProgress, setStartInProgress] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [copiedName, setCopiedName] = useState(false)
   const [sshRefreshSignal, setSshRefreshSignal] = useState(0)
@@ -134,15 +135,17 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
   const transitioning = box ? isTransitioning(box) : false
   const anyMutating =
     startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending
-  const actionsDisabled = anyMutating || transitioning
+  const actionsDisabled = anyMutating || transitioning || startInProgress
 
   useEffect(() => setStartFailed(false), [box?.state])
 
   const handleStart = async () => {
     if (!box || !writePermitted || !isStartable(box) || actionsDisabled) return
     setStartFailed(false)
+    setStartInProgress(true)
     try {
       await startMutation.mutateAsync({ boxId: box.id, detailRef: boxId })
+      await refetch()
       toast.success('Box started')
     } catch (error) {
       setStartFailed(true)
@@ -156,6 +159,8 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
             </Button>
           ) : undefined,
       })
+    } finally {
+      setStartInProgress(false)
     }
   }
 
@@ -369,7 +374,7 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
                 box={box}
                 onStart={handleStart}
                 startDisabled={actionsDisabled}
-                starting={startMutation.isPending}
+                starting={startMutation.isPending || startInProgress}
                 startFailed={startFailed}
               />
             </div>

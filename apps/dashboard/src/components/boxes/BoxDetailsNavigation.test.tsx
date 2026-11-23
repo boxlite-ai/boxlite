@@ -136,6 +136,7 @@ describe('BoxTerminal page', () => {
     mocks.writable = true
     mocks.pending = false
     mocks.start.mockResolvedValue(undefined)
+    mocks.refetch.mockResolvedValue(undefined)
     const host = document.createElement('div')
     document.body.appendChild(host)
     root = createRoot(host)
@@ -316,6 +317,30 @@ describe('BoxTerminal page', () => {
     expect(status?.textContent).toBe('Starting Box…')
     expect(status?.closest('[aria-busy="true"]')).toBeNull()
     expect(buttonNamed('Start Box').disabled).toBe(true)
+  })
+
+  it('keeps an accepted start pending until detail refresh completes', async () => {
+    let finishRefresh!: () => void
+    mocks.refetch.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishRefresh = resolve
+      }),
+    )
+    mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
+    await renderPage()
+    await act(async () => buttonNamed('Start Box').click())
+    expect(mocks.pending).toBe(false)
+    expect(document.querySelector('[role="status"]')?.textContent).toBe('Starting Box…')
+    expect(buttonNamed('Start Box').disabled).toBe(true)
+    await act(async () => buttonNamed('Start Box').click())
+    expect(mocks.start).toHaveBeenCalledOnce()
+    expect(mocks.refetch).toHaveBeenCalledOnce()
+    mocks.box = { ...mocks.box, state: BoxState.STARTING } as Box
+    await act(async () => finishRefresh())
+    await renderPage()
+    mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
+    await renderPage()
+    expect(buttonNamed('Start Box').disabled).toBe(false)
   })
 
   it('retains the Overview start action', async () => {
