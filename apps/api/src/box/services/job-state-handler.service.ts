@@ -238,7 +238,7 @@ export class JobStateHandlerService {
         this.logger.warn(`Box ${boxId} not found for DESTROY_BOX job ${job.id}`)
         return false
       }
-      if (box.runnerId !== job.runnerId || box.desiredState !== BoxDesiredState.DESTROYED) return false
+      if (box.desiredState !== BoxDesiredState.DESTROYED) return false
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {

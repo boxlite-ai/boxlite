@@ -713,14 +713,15 @@ CI and recovery acceptance are still pending.
 ### JIT Box deletion and capacity recovery
 
 Hosted worker recovery checks the recorded Box ID and organization before
-interpreting its lifecycle state. V2 polling reads incomplete and terminal jobs
-for the executing BoxLite runner. A destroy callback must match the Box's current
-runner, including at the final state write. A stale callback leaves the current
-operation's Redis lock intact. Platform soft deletion renames the Box; a
-confirmed `DESTROYED` record for that original ID releases its physical capacity
+interpreting its lifecycle state. V2 polling reads jobs by the globally unique
+Box ID, preferring an incomplete job to the latest terminal result.
+A destroy callback applies while the Box is marked for deletion.
+
+Platform soft deletion renames the Box. A confirmed `DESTROYED` record for that original ID releases its physical capacity
 even after the rename. Pending deletion retains capacity until confirmation.
+
 Unknown IDs, conflicting ledgers, foreign organizations and renamed live Boxes
-remain denied. Confirmed Box absence makes its physical capacity available; the
+remain denied. After confirmed Box absence releases physical capacity, the
 allocation remains recorded until the original runner cleanup also finishes.
 A successful CI job alone does not prove that cleanup finished.
 

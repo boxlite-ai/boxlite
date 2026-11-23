@@ -77,7 +77,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
 
     // An incomplete job takes precedence over a previous terminal result.
-    const where = { resourceType: ResourceType.BOX, resourceId: boxId, runnerId: this.runner.id }
+    const where = { resourceType: ResourceType.BOX, resourceId: boxId }
     const order = { createdAt: 'DESC' } as const
     const incompleteJob = await this.jobRepository.findOne({
       where: { ...where, completedAt: IsNull() },

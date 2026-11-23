@@ -604,16 +604,18 @@ still get reconciled after an ordinary per-worker error. Lease loss, corrupt or
 conflicting state, abort and unretired credential handles stop further work.
 
 If soft deletion frees a Hosted worker's name but the runner fails to confirm
-destruction, the Box manager retries on the original runner. It matches the
-Box ID, original name and organization in the configured Hosted App's ledger.
-If a V2 Box still says destroying after its last destroy job failed on that runner,
+destruction, the Box manager retries on the Box's assigned runner. Hosted recovery
+matches the Box ID, original name and organization in the configured Hosted App's ledger.
+
+If a V2 Box still says destroying after its last destroy job failed,
 the manager submits a replacement once no incomplete job remains. A late failure
 from an earlier attempt preserves a confirmed destroyed Box.
+
 Stale-error cleanup retains the row while destruction is pending. The 24-hour
 cleanup keeps a destroyed Box while a charged allocation still needs its receipt.
 If historical cleanup already pruned a failed destruction, recovery keeps the
-slot reserved. A destroy job on a previous runner can refer to an older copy of
-the same Box ID.
+slot reserved.
+
 A change to the primary Hosted App ID requires draining its old namespace first.
 
 An absent Box's allocation remains in the journal until runner cleanup is confirmed.

@@ -20,7 +20,7 @@ describe('JobStateHandlerService business events', () => {
     update = jest.fn().mockResolvedValue(undefined),
     organizationId = 'org-1',
   ) {
-    const box = { id: 'box-1', runnerId: 'runner-1', organizationId, desiredState }
+    const box = { id: 'box-1', organizationId, desiredState }
     const boxRepository = { findOne: jest.fn().mockResolvedValue(box), update } as any
     const redisLockProvider = { unlock: jest.fn().mockResolvedValue(undefined) } as any
     // A failed create or start asks for the pull failure's reason; pass the job's own through.
