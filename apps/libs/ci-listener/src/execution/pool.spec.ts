@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JitRegistration, RunnerIdentity } from '../runners'
+import { GitHubRequestError } from '../github'
+import { GitHubRunners, JitRegistration, RunnerIdentity } from '../runners'
 import { Json, LeaseLost, StateConflict, StateCorrupt } from '../state/database'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { SqliteStateDatabase } from '../state/sqlite'
@@ -398,6 +399,61 @@ describe('CI shared worker lifecycle', () => {
       expect(backend.workers.create).not.toHaveBeenCalled()
     },
   )
+  it('keeps one shrink opportunity when REST and scale set membership disagree after DELETE', async () => {
+    const capacity = testCapacity({ account: 3, tenant: 3 })
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      assigned: 3,
+      held: 0,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: false },
+    }
+    const balance = () => pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+    await balance()
+    const deletions: string[] = []
+    const open = backend.runners.bind(backend)
+    backend.runners = async (guard, ...args) => {
+      const session = await open(guard, ...args)
+      session.registry.retireIdle = async (identity, signal, verify) => {
+        // The scale-set membership lookup still sees A, even after REST stops finding it.
+        const owned = await session.registry.lookup(identity, signal)
+        if (!owned) throw Error('fixture lost membership')
+        const repo = { id: 21, owner: { id: 7, login: 'owner' }, name: 'repo', private: true }
+        const credential = {
+          request: async (route: string, opts: { method?: string }) => {
+            if (route === '/repositories/21') return repo
+            if (opts?.method === 'DELETE') {
+              deletions.push(identity.name)
+              return
+            }
+            if (deletions.includes(identity.name)) throw new GitHubRequestError(404, false)
+            return { ...identity, status: 'online', busy: false }
+          },
+        }
+        const registry = new GitHubRunners(credential as never, definition.runners!, settings.labels, guard)
+        return registry.retireKnownIdle(
+          identity,
+          async () => (identity.name === deletions[0] ? owned : null),
+          signal,
+          verify,
+        )
+      }
+      return session
+    }
+    target.assigned = 2
+    await expect(balance()).rejects.toThrow('not yet confirmed')
+    const advanced = Date.now() + 61_000
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(advanced)
+    try {
+      await balance()
+      await balance()
+      expect(deletions).toHaveLength(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
   it('tries another original runner after a busy refusal and retires only the surplus', async () => {
     const capacity = testCapacity({ account: 3, tenant: 3 })
     const [check] = await state.read(['journal/format'], lease)

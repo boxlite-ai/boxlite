@@ -477,7 +477,9 @@ PostgreSQL uses the API's connection pool and SQLite uses the Listener Box journ
 
 When assigned demand falls, the pool first withdraws surplus allocations that have no Box creation intent. For a running worker it checks the original runner ID, name and Scale Set membership.
 
-A successful idle unregister and confirmation of absence precede stopping the Box. After a definite refusal, the next plan can check another original worker within the same surplus. Each worker keeps its retry deadline. A queued or uncertain removal still consumes one retirement opportunity until its outcome is known.
+A successful idle unregister and confirmation of absence precede stopping the Box. After a definite refusal, the next plan can check another original worker within the same surplus. Each worker keeps its retry deadline.
+
+A queued or uncertain removal still consumes one retirement opportunity until its outcome is known. If REST returns 404 while the Scale Set still lists that runner, the pool keeps the outstanding removal charged against the surplus.
 
 ### Diagnosing a queued job
 

@@ -24,7 +24,7 @@ export interface RunnerSession {
     create(name: string, signal?: AbortSignal): Promise<JitRegistration>
     lookup(identity: { id?: number; name: string }, signal?: AbortSignal): Promise<RunnerIdentity | null>
     remove(identity: RunnerIdentity, signal?: AbortSignal): Promise<void>
-    retireIdle?(identity: RunnerIdentity, signal?: AbortSignal, checkRetirement?: () => void): Promise<boolean>
+    retireIdle?(identity: RunnerIdentity, signal?: AbortSignal, checkRetirement?: () => void): Promise<boolean | null>
   }
   close(): Promise<void>
 }
@@ -690,8 +690,10 @@ export class WorkerPool {
         this.idleRetryAt.set(row.record.key, Date.now() + 60000)
         const set = row.value.supply?.scaleSet
         if (set === undefined) throw new StateCorrupt()
-        this.forgetDecline(set, row.record.key)
         const previousEffect = row.value.effect
+        const pendingDelete =
+          previousEffect?.kind === 'runner-retire' && !this.declinedRetirements.get(set)?.has(row.record.key)
+        this.forgetDecline(set, row.record.key)
         let withdrawn = false
         const beforeDelete = () => {
           try {
@@ -701,7 +703,7 @@ export class WorkerPool {
             throw error
           }
         }
-        let retired: boolean
+        let retired: boolean | null
         try {
           retired = await registry(
             (client) =>
@@ -718,7 +720,8 @@ export class WorkerPool {
           if (row.value.effect?.kind !== 'runner-retire') throw new StateCorrupt()
           await update({ runner: { phase: 'absent', id: row.value.runner.id }, closing: true })
           this.idleRetryAt.delete(row.record.key)
-        } else {
+        } else if (retired === false || !pendingDelete) {
+          // A REST 404 cannot free an earlier DELETE's slot until membership confirms absence.
           const declined = this.declinedRetirements.get(set) ?? new Set<string>()
           declined.add(row.record.key)
           this.declinedRetirements.set(set, declined)

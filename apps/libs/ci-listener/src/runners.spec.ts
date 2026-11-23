@@ -88,7 +88,7 @@ describe('CI shared GitHub JIT runners', () => {
     },
   )
   it.each([
-    [404, false],
+    [404, null],
     [500, 'http'],
     [{ id: 92, name }, 'identity'],
     [{ id: 91, name: other }, 'identity'],
@@ -105,7 +105,7 @@ describe('CI shared GitHub JIT runners', () => {
     const retirement = registry().retireKnownIdle({ id: 91, name }, remaining)
     if (expected === 'http') await expect(retirement).rejects.toMatchObject({ status: 500 })
     else if (expected === 'identity') await expect(retirement).rejects.toThrow('Original scale set runner changed')
-    else await expect(retirement).resolves.toBe(false)
+    else await expect(retirement).resolves.toBe(expected)
     expect(journal).not.toHaveBeenCalled()
     expect(calls.some((call) => call.method === 'DELETE')).toBe(false)
   })

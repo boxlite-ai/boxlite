@@ -154,20 +154,20 @@ export class GitHubRunners {
     if (expected.size) throw new Error('Runner group repository authorization is incomplete')
     return names
   }
-  /** Scale set recovery knows the original ID and verifies membership through the Actions service. */
+  /** A REST 404 leaves retirement unresolved while the Actions service still lists the original runner. */
   async retireKnownIdle(
     identity: RunnerIdentity,
     absentAfterDelete: () => Promise<RunnerIdentity | null>,
     signal?: AbortSignal,
     checkRetirement?: () => void,
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     if (!positive(identity.id) || !workerName(identity.name)) throw new Error('Known original runner required')
     await this.authority(false, signal)
     let value: unknown
     try {
       value = await this.credential.request(this.route + '/actions/runners/' + identity.id, { signal })
     } catch (error) {
-      if (error instanceof GitHubRequestError && error.status === 404) return false
+      if (error instanceof GitHubRequestError && error.status === 404) return null
       throw error
     }
     if (!object(value) || value.id !== identity.id || value.name !== identity.name)
