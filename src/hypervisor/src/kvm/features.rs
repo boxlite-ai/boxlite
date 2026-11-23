@@ -1,24 +1,88 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashSet, io, sync::Arc};
+use std::{collections::HashSet, io, os::fd::AsRawFd, sync::Arc};
 
 use kvm_bindings::{
     CpuId, KVM_CPUID_FLAG_SIGNIFCANT_INDEX, KVM_CPUID_FLAG_STATE_READ_NEXT,
-    KVM_CPUID_FLAG_STATEFUL_FUNC, KVM_MAX_CPUID_ENTRIES, Msrs, kvm_cpuid_entry2, kvm_msr_entry,
+    KVM_CPUID_FLAG_STATEFUL_FUNC, KVM_MAX_CPUID_ENTRIES, KVM_MAX_MSR_ENTRIES, Msrs,
+    kvm_cpuid_entry2, kvm_msr_entry,
 };
 use kvm_ioctls::Kvm;
 
 use super::KvmVcpu;
+use crate::x86::MAX_SNAPSHOT_MSR_ENTRIES;
 use crate::{Error, Result, X86CpuidEntry, X86Msr};
 
 pub(super) const MSR_IA32_TSC: u32 = 0x10;
+const MSR_IA32_FEAT_CTL: u32 = 0x3a;
 const MSR_IA32_TSC_ADJUST: u32 = 0x3b;
 const MSR_MTRR_CAP: u32 = 0xfe;
 const MSR_IA32_RTIT_CTL: u32 = 0x570;
 pub(super) const MSR_IA32_TSC_DEADLINE: u32 = 0x6e0;
 const MSR_IA32_DEBUGCTLMSR: u32 = 0x1d9;
 const MSR_IA32_XSS: u32 = 0xda0;
+const MSR_KVM_ASYNC_PF_EN: u32 = 0x4b56_4d02;
+const MSR_KVM_ASYNC_PF_INT: u32 = 0x4b56_4d06;
+const SGX_LC_MSRS: &[u32] = &[0x8c, 0x8d, 0x8e, 0x8f];
+
+// Linux x86_64 _IOWR(KVMIO, 0x02, struct kvm_msr_list).
+const KVM_GET_MSR_INDEX_LIST: libc::c_ulong = 0xc004_ae02;
+
+pub(super) fn kvm_msr_index_list(kvm: &Kvm) -> io::Result<Vec<u32>> {
+    query_msr_index_list_with(MAX_SNAPSHOT_MSR_ENTRIES, |buf| {
+        // SAFETY: the aligned buffer holds the u32 header and the number of
+        // u32 indices advertised by the header for the synchronous ioctl.
+        if unsafe {
+            libc::ioctl(
+                kvm.as_raw_fd(),
+                KVM_GET_MSR_INDEX_LIST as _,
+                buf.as_mut_ptr(),
+            )
+        } == 0
+        {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    })
+}
+
+fn query_msr_index_list_with(
+    max_entries: usize,
+    mut ioctl: impl FnMut(&mut [u32]) -> io::Result<()>,
+) -> io::Result<Vec<u32>> {
+    let max_entries = max_entries.min(MAX_SNAPSHOT_MSR_ENTRIES);
+    let mut cap = KVM_MAX_MSR_ENTRIES.min(max_entries);
+    let mut retries = 4;
+    loop {
+        let mut buf = vec![0; 1 + cap];
+        buf[0] = cap as u32;
+        match ioctl(&mut buf) {
+            Ok(()) => {
+                let count = buf[0] as usize;
+                if count > cap {
+                    return Err(io::Error::other("KVM returned an invalid MSR index count"));
+                }
+                buf.copy_within(1..1 + count, 0);
+                buf.truncate(count);
+                return Ok(buf);
+            }
+            Err(error) => {
+                let needed = buf[0] as usize;
+                if error.raw_os_error() != Some(libc::E2BIG)
+                    || needed <= cap
+                    || needed > max_entries
+                    || retries == 0
+                {
+                    return Err(error);
+                }
+                retries -= 1;
+                cap = needed;
+            }
+        }
+    }
+}
 
 const SUPPLEMENTAL_SNAPSHOT_MSRS: &[u32] = &[
     // MTRR_DEF_TYPE.
@@ -62,13 +126,25 @@ fn is_excluded_msr(index: u32) -> bool {
     matches!(index, MSR_MTRR_CAP | 0x800..=0xbff | 0x4000_0000..=0x4000_01ff)
 }
 
+pub(super) fn validate_restore_msrs(entries: &[kvm_msr_entry]) -> io::Result<()> {
+    if let Some(entry) = entries.iter().find(|entry| is_excluded_msr(entry.index)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("MSR index {:#x} is excluded from snapshots", entry.index),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn build_snapshot_msr_indices(kvm_advertised: &[u32]) -> Arc<[u32]> {
     let mut seen = HashSet::new();
     kvm_advertised
         .iter()
         .chain(SUPPLEMENTAL_SNAPSHOT_MSRS)
         .copied()
-        .filter(|&index| !is_excluded_msr(index) && seen.insert(index))
+        .filter(|&index| {
+            !is_excluded_msr(index) && !SGX_LC_MSRS.contains(&index) && seen.insert(index)
+        })
         .collect()
 }
 
@@ -81,17 +157,25 @@ pub(super) struct RestoreMsrPlan {
 
 pub(super) fn order_msrs_for_restore(entries: &[kvm_msr_entry]) -> RestoreMsrPlan {
     let mut plan = RestoreMsrPlan::default();
+    let mut ordinary = Vec::new();
+    let mut feature_controls = Vec::new();
     let mut deadlines = Vec::new();
     let mut trace_controls = Vec::new();
     for &entry in entries {
         match entry.index {
             MSR_IA32_TSC_ADJUST => plan.before_tsc.push(entry),
             MSR_IA32_TSC => plan.tsc = Some(entry),
+            MSR_KVM_ASYNC_PF_INT => plan.after_tsc.push(entry),
+            // The interrupt vector must be installed before the enable bit.
+            MSR_KVM_ASYNC_PF_EN => ordinary.push(entry),
+            MSR_IA32_FEAT_CTL => feature_controls.push(entry),
             MSR_IA32_TSC_DEADLINE => deadlines.push(entry),
             MSR_IA32_RTIT_CTL => trace_controls.push(entry),
-            _ => plan.after_tsc.push(entry),
+            _ => ordinary.push(entry),
         }
     }
+    plan.after_tsc.extend(ordinary);
+    plan.after_tsc.extend(feature_controls);
     plan.after_tsc.extend(deadlines);
     plan.after_tsc.extend(trace_controls);
     plan
@@ -238,20 +322,243 @@ pub(super) fn snapshot_msrs(
     Ok(entries)
 }
 
-pub(super) fn snapshot_cpuid(entries: &[kvm_cpuid_entry2]) -> io::Result<CpuId> {
-    if entries.is_empty() || entries.len() > KVM_MAX_CPUID_ENTRIES {
+pub(super) fn validate_cpuid_count(len: usize) -> io::Result<()> {
+    if !(1..=KVM_MAX_CPUID_ENTRIES).contains(&len) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid CPUID count",
         ));
     }
+    Ok(())
+}
+
+pub(super) fn snapshot_cpuid(entries: &[kvm_cpuid_entry2]) -> io::Result<CpuId> {
+    validate_cpuid_count(entries.len())?;
     CpuId::from_entries(entries).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+}
+
+fn cpuid_leaf7_subleaf0(entries: &[kvm_cpuid_entry2]) -> Option<&kvm_cpuid_entry2> {
+    entries.iter().find(|entry| {
+        entry.function == 7
+            && (entry.flags & KVM_CPUID_FLAG_SIGNIFCANT_INDEX == 0 || entry.index == 0)
+    })
+}
+
+pub(super) fn validate_snapshot_cpuid_features(entries: &[kvm_cpuid_entry2]) -> io::Result<()> {
+    if cpuid_leaf7_subleaf0(entries).is_some_and(|entry| entry.ecx & (1 << 7) != 0) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "CET shadow stack (SHSTK) state cannot be snapshotted",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn extra_cpuid_gated_msr_indices(cpuid: &[kvm_cpuid_entry2]) -> &'static [u32] {
+    if cpuid_leaf7_subleaf0(cpuid).is_some_and(|entry| entry.ecx & (1 << 30) != 0) {
+        SGX_LC_MSRS
+    } else {
+        &[]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use kvm_bindings::{KVM_CPUID_FLAG_STATE_READ_NEXT, KVM_CPUID_FLAG_STATEFUL_FUNC};
+
+    #[test]
+    fn msr_index_list_ioctl_number_matches_kvm_abi() {
+        assert_eq!(size_of::<kvm_bindings::kvm_msr_list>(), 4);
+        assert_eq!(KVM_GET_MSR_INDEX_LIST, 0xc004_ae02);
+    }
+
+    #[test]
+    fn msr_index_list_retries_with_the_kernel_count() {
+        for count in [0, 1, 256, 257, MAX_SNAPSHOT_MSR_ENTRIES] {
+            let mut caps = Vec::new();
+            let indices = query_msr_index_list_with(MAX_SNAPSHOT_MSR_ENTRIES, |buf| {
+                let cap = buf[0] as usize;
+                assert_eq!(buf.len(), cap + 1);
+                caps.push(cap);
+                buf[0] = count as u32;
+                if count > cap {
+                    return Err(io::Error::from_raw_os_error(libc::E2BIG));
+                }
+                for (i, index) in buf[1..=count].iter_mut().enumerate() {
+                    *index = i as u32 + 0x10;
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(indices, (0x10..0x10 + count as u32).collect::<Vec<_>>());
+            let mut expected = vec![KVM_MAX_MSR_ENTRIES];
+            if count > KVM_MAX_MSR_ENTRIES {
+                expected.push(count);
+            }
+            assert_eq!(caps, expected);
+        }
+    }
+
+    #[test]
+    fn msr_index_list_rejects_bad_counts_and_preserves_errno() {
+        for (max_entries, count, errno) in [
+            (
+                MAX_SNAPSHOT_MSR_ENTRIES + 1,
+                MAX_SNAPSHOT_MSR_ENTRIES + 1,
+                libc::E2BIG,
+            ),
+            (MAX_SNAPSHOT_MSR_ENTRIES, KVM_MAX_MSR_ENTRIES, libc::E2BIG),
+            (MAX_SNAPSHOT_MSR_ENTRIES, 0, libc::E2BIG),
+            (8, 9, libc::E2BIG),
+            (MAX_SNAPSHOT_MSR_ENTRIES, 257, libc::EPERM),
+        ] {
+            let mut calls = 0;
+            let error = query_msr_index_list_with(max_entries, |buf| {
+                calls += 1;
+                assert_eq!(buf[0] as usize, KVM_MAX_MSR_ENTRIES.min(max_entries));
+                buf[0] = count as u32;
+                Err(io::Error::from_raw_os_error(errno))
+            })
+            .unwrap_err();
+            assert_eq!(calls, 1);
+            assert_eq!(error.raw_os_error(), Some(errno));
+        }
+        let error = query_msr_index_list_with(0, |buf| {
+            assert_eq!(buf, [0]);
+            buf[0] = 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "KVM returned an invalid MSR index count");
+    }
+
+    #[test]
+    fn msr_index_list_stops_after_four_resizes() {
+        let mut caps = Vec::new();
+        let error = query_msr_index_list_with(MAX_SNAPSHOT_MSR_ENTRIES, |buf| {
+            caps.push(buf[0] as usize);
+            buf[0] += 1;
+            Err(io::Error::from_raw_os_error(libc::E2BIG))
+        })
+        .unwrap_err();
+        assert_eq!(
+            caps,
+            (KVM_MAX_MSR_ENTRIES..=KVM_MAX_MSR_ENTRIES + 4).collect::<Vec<_>>()
+        );
+        assert_eq!(error.raw_os_error(), Some(libc::E2BIG));
+    }
+
+    #[test]
+    fn restore_rejects_excluded_msrs() {
+        for index in [0xfe, 0x800, 0xbff, 0x4000_0000, 0x4000_01ff] {
+            assert_eq!(
+                validate_restore_msrs(&[kvm_msr_entry {
+                    index,
+                    ..Default::default()
+                }])
+                .unwrap_err()
+                .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        let allowed = [0x7ff, 0xc00, 0x3fff_ffff, 0x4000_0200].map(|index| kvm_msr_entry {
+            index,
+            ..Default::default()
+        });
+        assert!(validate_restore_msrs(&allowed).is_ok());
+    }
+
+    #[test]
+    fn cpuid_count_requires_at_least_one_leaf_and_respects_the_kvm_limit() {
+        for count in [0, KVM_MAX_CPUID_ENTRIES + 1] {
+            assert_eq!(
+                validate_cpuid_count(count).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        assert!(validate_cpuid_count(1).is_ok());
+        assert!(validate_cpuid_count(KVM_MAX_CPUID_ENTRIES).is_ok());
+    }
+
+    #[test]
+    fn shstk_is_rejected_for_leaf_seven_subleaf_zero() {
+        let mut entry = kvm_cpuid_entry2 {
+            function: 7,
+            flags: KVM_CPUID_FLAG_SIGNIFCANT_INDEX,
+            ecx: 1 << 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            validate_snapshot_cpuid_features(&[entry])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
+        entry.index = 1;
+        assert!(validate_snapshot_cpuid_features(&[entry]).is_ok());
+        entry.flags = 0;
+        assert_eq!(
+            validate_snapshot_cpuid_features(&[entry])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
+        assert!(validate_snapshot_cpuid_features(&[]).is_ok());
+    }
+
+    #[test]
+    fn sgx_launch_hashes_follow_sgx_lc() {
+        let mut entry = kvm_cpuid_entry2 {
+            function: 7,
+            flags: KVM_CPUID_FLAG_SIGNIFCANT_INDEX,
+            ebx: 1 << 2,
+            ..Default::default()
+        };
+        assert!(extra_cpuid_gated_msr_indices(&[entry]).is_empty());
+        entry.ecx = 1 << 30;
+        assert_eq!(extra_cpuid_gated_msr_indices(&[entry]), SGX_LC_MSRS);
+        entry.index = 1;
+        assert!(extra_cpuid_gated_msr_indices(&[entry]).is_empty());
+    }
+
+    #[test]
+    fn restore_orders_async_pf_and_sgx_dependencies() {
+        let ordered = [
+            MSR_KVM_ASYNC_PF_INT,
+            MSR_KVM_ASYNC_PF_INT,
+            MSR_KVM_ASYNC_PF_EN,
+            0x4b56_4d07,
+            0x8c,
+            0x8d,
+            0x8e,
+            0x8f,
+            MSR_IA32_FEAT_CTL,
+            MSR_IA32_TSC_DEADLINE,
+            MSR_IA32_RTIT_CTL,
+        ];
+        let entries = ordered.map(|index| kvm_msr_entry {
+            index,
+            ..Default::default()
+        });
+        for msrs in [
+            entries,
+            [10, 9, 8, 2, 3, 4, 5, 6, 7, 0, 1].map(|i| entries[i]),
+        ] {
+            assert_eq!(order_msrs_for_restore(&msrs).after_tsc, entries);
+        }
+        for entry in entries {
+            assert_eq!(order_msrs_for_restore(&[entry]).after_tsc, [entry]);
+        }
+        let mut duplicate_vectors = [entries[0], entries[0]];
+        duplicate_vectors[1].data = 42;
+        let plan =
+            order_msrs_for_restore(&[entries[2], duplicate_vectors[0], duplicate_vectors[1]]);
+        assert_eq!(
+            plan.after_tsc,
+            [duplicate_vectors[0], duplicate_vectors[1], entries[2]]
+        );
+    }
 
     #[test]
     fn build_snapshot_msr_indices_adds_all_writable_mtrrs_and_supplements() {
@@ -264,6 +571,15 @@ mod tests {
             .collect();
         assert_eq!(expected.len(), 28 + 2);
         assert_eq!(&*indices, expected);
+    }
+
+    #[test]
+    fn build_snapshot_msr_indices_excludes_advertised_sgx_launch_hashes() {
+        let advertised = [0x8c, 0x8d, 0x8e, 0x8f];
+        let indices = build_snapshot_msr_indices(&advertised);
+        for index in advertised {
+            assert!(!indices.contains(&index), "shared MSR index {index:#x}");
+        }
     }
 
     #[test]

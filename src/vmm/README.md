@@ -618,6 +618,9 @@ no topology, so it sets:
 - leaf 1: APIC ID `index`, `count` rounded up to a power of two, a 64-byte
   CLFLUSH line whatever the host reports, HTT when `count > 1`, and the
   hypervisor and TSC-deadline bits;
+- leaf 7 subleaf 0: SHSTK is masked because KVM snapshots do not capture the
+  shadow stack pointer (SSP) via `KVM_GET_ONE_REG`. `boxlite-hypervisor` rejects
+  CPUID that advertises SHSTK with `Unsupported` during capture and restore;
 - leaf 0xB, and 0x1F when KVM lists it: an SMT level of one thread and a
   core level of `count` cores whose shift of 6 covers every APIC ID up to 64;
 - on AMD and Hygon, 0x8000_001E (APIC and core ID `index`, node 0) and

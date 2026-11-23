@@ -21,6 +21,7 @@ use crate::{
 
 const LEAF_VENDOR: u32 = 0;
 const LEAF_FEATURES: u32 = 1;
+const LEAF_STRUCTURED_FEATURES: u32 = 7;
 const LEAF_TOPOLOGY: u32 = 0xb;
 const LEAF_TOPOLOGY_V2: u32 = 0x1f;
 const LEAF_AMD_ADDRESS_SIZES: u32 = 0x8000_0008;
@@ -32,6 +33,8 @@ const HYPERVISOR: u32 = 1 << 31;
 /// Leaf 1 ECX: the TSC-deadline timer, which the in-kernel local APIC
 /// emulates and which spares Linux its APIC timer calibration.
 const TSC_DEADLINE: u32 = 1 << 24;
+/// Leaf 7 subleaf 0 ECX: CET shadow stack (CET_SS or SHSTK).
+const SHSTK: u32 = 1 << 7;
 /// Leaf 1 EDX: more than one logical processor per package.
 const HTT: u32 = 1 << 28;
 /// Leaf 1 EBX[15:8]: the CLFLUSH line in 8-byte units, 64 bytes, the same on
@@ -137,8 +140,11 @@ pub(crate) fn preflight_x86(
 
 /// The CPUID of vCPU `index` of `count`: `supported` with APIC ID `index`, one
 /// package of `count` single-thread cores, a 64-byte CLFLUSH line, and the
-/// hypervisor and TSC-deadline bits. Every other entry is kept, so all vCPUs
-/// differ only in the APIC ID.
+/// hypervisor and TSC-deadline bits.
+///
+/// The VMM masks SHSTK because KVM snapshots do not capture the shadow stack
+/// pointer (SSP) via `KVM_GET_ONE_REG`. `boxlite-hypervisor` rejects CPUID that
+/// advertises SHSTK with `Unsupported` during capture and restore.
 pub(crate) fn vcpu_cpuid(supported: &[X86CpuidEntry], index: u8, count: u8) -> Vec<X86CpuidEntry> {
     debug_assert!(index < count && count <= MAX_VCPUS);
     let apic_id = u32::from(index);
@@ -162,6 +168,9 @@ pub(crate) fn vcpu_cpuid(supported: &[X86CpuidEntry], index: u8, count: u8) -> V
                 } else {
                     entry.edx & !HTT
                 };
+            }
+            LEAF_STRUCTURED_FEATURES if !entry.subleaf_required || entry.subleaf == 0 => {
+                entry.ecx &= !SHSTK;
             }
             // ApicIdSize in ECX[15:12] and the core count minus one in ECX[7:0].
             LEAF_AMD_ADDRESS_SIZES if amd => {

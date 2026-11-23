@@ -14,18 +14,18 @@ use kvm_bindings::{
 use kvm_ioctls::{Cap, Kvm, VmFd};
 
 use super::KvmVcpu;
-use super::features::build_snapshot_msr_indices;
+use super::features::{build_snapshot_msr_indices, kvm_msr_index_list};
 use super::memory::{MAX_PAGES_PER_SLOT, MemorySlots};
-use super::vcpu::VcpuSnapshotShared;
+use super::vcpu::{CachedIoError, VcpuSnapshotShared};
 use crate::{Error, MemoryRegion, Result};
 
 /// An x86_64 KVM VM with an in-kernel interrupt controller and timer.
 ///
 /// Memory backing remains owned by the caller, under the same lifetime contract
-/// as [`crate::Vm::map_memory`]. Dropping this value closes the VM descriptor.
+/// as [`crate::Vm::map_memory`]. vCPUs share the VM descriptor for clock sampling.
 #[derive(Debug)]
 pub struct KvmVm {
-    fd: VmFd,
+    fd: Arc<VmFd>,
     slots: Mutex<MemorySlots>,
     run_size: usize,
     kick_signal: i32,
@@ -134,15 +134,18 @@ impl PreparedKvm {
             ..Default::default()
         })
         .map_err(io::Error::from)?;
-        let advertised = kvm.get_msr_index_list().map_err(io::Error::from)?;
-        let msr_indices = build_snapshot_msr_indices(advertised.as_slice());
+        let msr_indices = kvm_msr_index_list(&kvm)
+            .map(|list| build_snapshot_msr_indices(&list))
+            .map_err(CachedIoError::from_io);
+        let fd = Arc::new(fd);
+        let vcpu_snapshot = Arc::new(VcpuSnapshotShared::new(Arc::clone(&fd), msr_indices));
         Ok(KvmVm {
             fd,
             slots: Mutex::new(MemorySlots::new(kvm.get_nr_memslots(), page_size as usize)),
             run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
             kick_signal,
             cpuid,
-            vcpu_snapshot: Arc::new(VcpuSnapshotShared::new(msr_indices)),
+            vcpu_snapshot,
         })
     }
 }
@@ -171,7 +174,8 @@ impl KvmVm {
     }
 
     /// Captures the global platform without entering any vCPU. The caller must
-    /// stop all vCPUs/IRQ producers and complete userspace I/O first.
+    /// stop all vCPUs/IRQ producers, complete userspace I/O, then save this
+    /// image before the per-vCPU images.
     pub fn save_state(&self) -> Result<crate::X86VmState> {
         let capture = || -> io::Result<_> {
             let mut irqchips = std::array::from_fn(|chip_id| kvm_bindings::kvm_irqchip {
@@ -193,7 +197,9 @@ impl KvmVm {
                 clock: self.fd.get_clock().map_err(io::Error::from)?,
             })
         };
-        capture().map_err(|source| Error::vm_state("save", source))
+        let state = capture().map_err(|source| Error::vm_state("save", source))?;
+        self.vcpu_snapshot.record_tsc_save_clock(state.clock.clock);
+        Ok(state)
     }
 
     /// Sets the VM clock offset after RAM mapping, before restoring any vCPU.
@@ -206,7 +212,8 @@ impl KvmVm {
             })
             .map_err(|source| Error::vm_state("restore", source.into()))?;
         self.vcpu_snapshot.clear_tsc_save_anchor();
-        self.vcpu_snapshot.reset_tsc_restore_anchor();
+        self.vcpu_snapshot
+            .record_tsc_restore_clock(state.clock.clock);
         Ok(())
     }
 
@@ -255,16 +262,16 @@ impl KvmVm {
                 .map_err(io::Error::from)?;
             self.vcpu_snapshot.clear_tsc_save_anchor();
             // KVM locks guest XSTATE permissions when it creates the first vCPU.
-            let xsave_size = xsave2_size(&self.fd)?;
+            let xsave_size = xsave2_size(&self.fd).map_err(CachedIoError::from_io);
             kick.configure(fd.as_raw_fd())?;
-            KvmVcpu::new(
+            Ok(KvmVcpu::new(
                 fd,
                 id,
                 self.run_size,
                 kick,
                 xsave_size,
                 Arc::clone(&self.vcpu_snapshot),
-            )
+            ))
         };
         create().map_err(|source| Error::CreateVcpu { id, source })
     }
@@ -396,7 +403,26 @@ mod tests {
 
     use super::super::features::{MSR_IA32_TSC, MSR_IA32_TSC_DEADLINE, snapshot_msrs};
     use super::*;
-    use crate::{Vcpu, VcpuExit, VcpuHandle, X86Msr};
+    use crate::{VcpuExit, VcpuHandle, X86Msr};
+
+    fn snapshot_cpuid(vm: &KvmVm) -> Vec<crate::X86CpuidEntry> {
+        let mut cpuid = vm.supported_cpuid().to_vec();
+        for entry in &mut cpuid {
+            if entry.leaf == 7 && (!entry.subleaf_required || entry.subleaf == 0) {
+                entry.ecx &= !(1 << 7); // CET shadow stack is outside the snapshot contract.
+            }
+        }
+        cpuid
+    }
+
+    fn saved_tsc(state: &crate::X86VcpuState) -> u64 {
+        state
+            .msrs
+            .iter()
+            .find(|msr| msr.index == MSR_IA32_TSC)
+            .unwrap()
+            .data
+    }
 
     #[test]
     fn parse_xsave2_size_preserves_negative_ioctl_errno() {
@@ -548,6 +574,46 @@ mod tests {
 
     #[test]
     #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_msr_probe_error_does_not_prevent_vcpu_creation_or_run() {
+        let ram = Ram::new();
+        // SAFETY: the two-byte OUT 0x80, AL instruction fits in private RAM.
+        unsafe { ram.0.as_ptr().cast::<[u8; 2]>().write([0xe6, 0x80]) };
+        let mut vm = KvmVm::new().unwrap();
+        // SAFETY: RAM outlives the VM and its vCPU.
+        unsafe { vm.map_memory(&ram.region()) }.unwrap();
+        vm.vcpu_snapshot = Arc::new(VcpuSnapshotShared::new(
+            Arc::clone(&vm.fd),
+            Err(CachedIoError::from_io(io::Error::from_raw_os_error(
+                libc::EPERM,
+            ))),
+        ));
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(&snapshot_cpuid(&vm), &[]).unwrap();
+        let mut sregs = cpu.fd.get_sregs().unwrap();
+        sregs.cs.base = 0;
+        sregs.cs.selector = 0;
+        cpu.fd.set_sregs(&sregs).unwrap();
+        cpu.fd
+            .set_regs(&kvm_regs {
+                rip: ram.region().guest_addr,
+                rflags: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(matches!(
+            cpu.run().unwrap(),
+            VcpuExit::IoOut { port: 0x80, .. }
+        ));
+        cpu.complete_pending_io().unwrap();
+        let error = cpu.save_state().unwrap_err();
+        assert!(
+            matches!(error, Error::ConfigureVcpu { operation: "save CPU state", ref source, .. }
+            if source.raw_os_error() == Some(libc::EPERM))
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
     fn snapshot_restore_preserves_mtrr_def_type_and_mtrrs() {
         let mtrrs = [
             (0x2ff, 0x806),
@@ -565,7 +631,7 @@ mod tests {
         let vm = KvmVm::new().unwrap();
         let mut cpu = vm.create_vcpu(0).unwrap();
         cpu.set_cpu_features(
-            vm.supported_cpuid(),
+            &snapshot_cpuid(&vm),
             &mtrrs.map(|(index, value)| X86Msr { index, value }),
         )
         .unwrap();
@@ -580,14 +646,17 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+        let platform = vm.save_state().unwrap();
         let state = cpu.save_state().unwrap();
         drop(cpu);
 
         let destination = KvmVm::new().unwrap();
         // SAFETY: the page outlives the destination VM and vCPU.
         unsafe { destination.map_memory(&ram.region()) }.unwrap();
+        destination.restore_before_vcpus(&platform).unwrap();
         let mut cpu = destination.create_vcpu(0).unwrap();
         cpu.restore_state(&state).unwrap();
+        destination.restore_after_vcpus(&platform).unwrap();
         let mut readback = Msrs::from_entries(&mtrrs.map(|(index, _)| kvm_msr_entry {
             index,
             ..Default::default()
@@ -608,24 +677,16 @@ mod tests {
     fn snapshot_restore_preserves_inter_vcpu_tsc_skew_and_sync() {
         #[derive(Clone, Copy, Debug)]
         enum CaptureOrder {
-            Sequential,
+            VmFirst,
             InterleavedVmSave,
             ReorderedRetry,
             NoopIoCompletion,
         }
 
         let pause = Duration::from_millis(5);
-        let saved_tsc = |state: &crate::X86VcpuState| {
-            state
-                .msrs
-                .iter()
-                .find(|msr| msr.index == MSR_IA32_TSC)
-                .unwrap()
-                .data
-        };
         for (order, skew_ms) in [
-            (CaptureOrder::Sequential, 100),
-            (CaptureOrder::Sequential, 0),
+            (CaptureOrder::VmFirst, 100),
+            (CaptureOrder::VmFirst, 0),
             (CaptureOrder::InterleavedVmSave, 0),
             (CaptureOrder::ReorderedRetry, 0),
             (CaptureOrder::NoopIoCompletion, 0),
@@ -643,7 +704,8 @@ mod tests {
                         return;
                     };
                     let mut second = vm.create_vcpu(1).unwrap();
-                    second.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+                    second.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
+                    assert!(second.has_tsc_offset().unwrap());
                     assert!(second.set_tsc_offset(offset).unwrap());
                     assert_eq!(second.get_tsc_offset().unwrap(), Some(offset));
                     ready.send(()).unwrap();
@@ -656,7 +718,8 @@ mod tests {
                 });
                 let capture_first = move || {
                     let mut first = vm.create_vcpu(0).unwrap();
-                    first.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+                    first.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
+                    first.has_tsc_offset().unwrap();
                     let offset = first.get_tsc_offset().unwrap()?;
                     let skew = u64::from(first.fd.get_tsc_khz().unwrap()) * skew_ms;
                     send_offset.send(offset.wrapping_add(skew)).unwrap();
@@ -665,12 +728,18 @@ mod tests {
                         capture.send(()).unwrap();
                         receive_state.recv().unwrap()
                     };
+                    let platform = if matches!(order, CaptureOrder::InterleavedVmSave) {
+                        None
+                    } else {
+                        Some(vm.save_state().unwrap())
+                    };
                     let first_state = first.save_state().unwrap();
                     thread::sleep(pause);
-                    match order {
+                    let platform = match order {
                         CaptureOrder::InterleavedVmSave => {
-                            vm.save_state().unwrap();
+                            let platform = vm.save_state().unwrap();
                             thread::sleep(pause);
+                            platform
                         }
                         CaptureOrder::ReorderedRetry => {
                             // Capture once before injecting the failure to verify
@@ -687,15 +756,15 @@ mod tests {
                             let retry_second = save_second();
                             assert_eq!(saved_tsc(&retry_first), saved_tsc(&first_state));
                             assert_eq!(saved_tsc(&retry_second), saved_tsc(&second_state));
-                            return Some((retry_first, retry_second, skew));
+                            return Some((platform.unwrap(), retry_first, retry_second, skew));
                         }
-                        CaptureOrder::Sequential | CaptureOrder::NoopIoCompletion => {}
-                    }
-                    Some((first_state, save_second(), skew))
+                        CaptureOrder::VmFirst | CaptureOrder::NoopIoCompletion => platform.unwrap(),
+                    };
+                    Some((platform, first_state, save_second(), skew))
                 };
                 scope.spawn(capture_first).join().unwrap()
             });
-            let Some((first_state, second_state, skew)) = states else {
+            let Some((platform, first_state, second_state, skew)) = states else {
                 eprintln!("skipping TSC snapshot test: KVM does not expose TSC offset controls");
                 return;
             };
@@ -706,6 +775,7 @@ mod tests {
                 "{order:?} capture"
             );
             let destination = KvmVm::new().unwrap();
+            destination.restore_before_vcpus(&platform).unwrap();
             let restore_offset = |id, state: &crate::X86VcpuState| {
                 let mut cpu = destination.create_vcpu(id).unwrap();
                 cpu.restore_state(state).unwrap();
@@ -734,13 +804,149 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Linux x86_64 with KVM TSC offset controls"]
+    fn consecutive_paused_vm_first_saves_use_each_rounds_vm_clock() {
+        let vm = KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(&snapshot_cpuid(&vm), &[]).unwrap();
+        if !cpu.has_tsc_offset().unwrap() {
+            eprintln!("skipping clock correlation test: KVM does not expose TSC offset controls");
+            return;
+        }
+
+        let first_vm = vm.save_state().unwrap();
+        let first_cpu = cpu.save_state().unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let second_vm = vm.save_state().unwrap();
+        let second_cpu = cpu.save_state().unwrap();
+
+        assert_eq!(first_cpu.tsc_khz, second_cpu.tsc_khz);
+        let clock_elapsed_ns = second_vm.clock.clock.wrapping_sub(first_vm.clock.clock);
+        assert!(clock_elapsed_ns >= 50_000_000);
+        let tsc_elapsed_ns = u128::from(saved_tsc(&second_cpu).wrapping_sub(saved_tsc(&first_cpu)))
+            * 1_000_000
+            / u128::from(second_cpu.tsc_khz);
+        assert!(
+            tsc_elapsed_ns.abs_diff(u128::from(clock_elapsed_ns)) <= 15_000_000,
+            "guest TSC elapsed {tsc_elapsed_ns} ns, kvmclock elapsed {clock_elapsed_ns} ns"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with KVM TSC offset controls"]
+    fn paused_vm_first_save_uses_its_clock_after_an_interleaved_round() {
+        let vm = &KvmVm::new().unwrap();
+        thread::scope(|scope| {
+            let (ready, wait_for_ready) = mpsc::channel();
+            let (capture, wait_for_capture) = mpsc::channel();
+            let second = scope.spawn(move || {
+                let mut cpu = vm.create_vcpu(1).unwrap();
+                cpu.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
+                cpu.has_tsc_offset().unwrap();
+                ready.send(cpu.get_tsc_offset().unwrap()).unwrap();
+                wait_for_capture
+                    .recv()
+                    .ok()
+                    .map(|()| cpu.save_state().unwrap())
+            });
+            let mut first = vm.create_vcpu(0).unwrap();
+            first.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
+            first.has_tsc_offset().unwrap();
+            let (Some(first_offset), Some(second_offset)) = (
+                first.get_tsc_offset().unwrap(),
+                wait_for_ready.recv().unwrap(),
+            ) else {
+                eprintln!(
+                    "skipping clock correlation test: KVM does not expose TSC offset controls"
+                );
+                return;
+            };
+
+            let before = vm.fd.get_clock().unwrap().clock;
+            let first_cpu = first.save_state().unwrap();
+            let first_vm = vm.save_state().unwrap();
+            capture.send(()).unwrap();
+            let second_cpu = second.join().unwrap().unwrap();
+            assert_eq!(first_cpu.tsc_khz, second_cpu.tsc_khz);
+            assert_eq!(
+                saved_tsc(&first_cpu).wrapping_sub(first_offset),
+                saved_tsc(&second_cpu).wrapping_sub(second_offset)
+            );
+
+            thread::sleep(Duration::from_millis(50));
+            let second_vm = vm.save_state().unwrap();
+            thread::sleep(Duration::from_millis(50));
+            let recaptured_cpu = first.save_state().unwrap();
+            assert_eq!(recaptured_cpu.tsc_khz, first_cpu.tsc_khz);
+            let elapsed_ns =
+                u128::from(saved_tsc(&recaptured_cpu).wrapping_sub(saved_tsc(&first_cpu)))
+                    * 1_000_000
+                    / u128::from(first_cpu.tsc_khz);
+            let min_ns = second_vm.clock.clock.wrapping_sub(first_vm.clock.clock);
+            let max_ns = second_vm.clock.clock.wrapping_sub(before);
+            let tolerance_ns = 15_000_000;
+            assert!(min_ns >= 50_000_000);
+            assert!(
+                (u128::from(min_ns.saturating_sub(tolerance_ns))
+                    ..=u128::from(max_ns + tolerance_ns))
+                    .contains(&elapsed_ns),
+                "guest TSC elapsed {elapsed_ns} ns, kvmclock elapsed {min_ns}..={max_ns} ns"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with KVM TSC offset controls"]
+    fn vm_first_restore_keeps_guest_tsc_correlated_with_kvmclock() {
+        let vm = KvmVm::new().unwrap();
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.set_cpu_features(&snapshot_cpuid(&vm), &[]).unwrap();
+        if !cpu.has_tsc_offset().unwrap() {
+            eprintln!("skipping clock correlation test: KVM does not expose TSC offset controls");
+            return;
+        }
+        let platform = vm.save_state().unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let state = cpu.save_state().unwrap();
+        let saved_tsc = saved_tsc(&state);
+        let check_correlation = |phase, vm: &KvmVm, cpu: &KvmVcpu| {
+            let before = vm.fd.get_clock().unwrap().clock;
+            let guest_tsc = snapshot_msrs(&cpu.fd, &[MSR_IA32_TSC]).unwrap()[0].data;
+            let after = vm.fd.get_clock().unwrap().clock;
+
+            let elapsed_ns = u128::from(guest_tsc.wrapping_sub(saved_tsc)) * 1_000_000
+                / u128::from(state.tsc_khz);
+            let min_ns = before.wrapping_sub(platform.clock.clock);
+            let max_ns = after.wrapping_sub(platform.clock.clock);
+            assert!(min_ns >= 50_000_000);
+            // Allow for scheduling delays in the save and restore samples.
+            let tolerance_ns = 15_000_000;
+            assert!(
+                (u128::from(min_ns.saturating_sub(tolerance_ns))
+                    ..=u128::from(max_ns + tolerance_ns))
+                    .contains(&elapsed_ns),
+                "{phase}: guest TSC elapsed {elapsed_ns} ns, kvmclock elapsed {min_ns}..={max_ns} ns"
+            );
+        };
+        check_correlation("save", &vm, &cpu);
+        drop(cpu);
+
+        let vm = KvmVm::new().unwrap();
+        vm.restore_before_vcpus(&platform).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let mut cpu = vm.create_vcpu(0).unwrap();
+        cpu.restore_state(&state).unwrap();
+        check_correlation("restore", &vm, &cpu);
+    }
+
+    #[test]
     #[ignore = "requires Linux x86_64 with KVM TSC deadline timers"]
     fn snapshot_restore_delivers_armed_tsc_deadline_after_tsc_restore() {
         const VECTOR: u8 = 0x51;
         const TSC_DEADLINE: u32 = 1 << 24;
         let ram = Ram::new();
         let vm = KvmVm::new().unwrap();
-        let mut cpuid = vm.supported_cpuid().to_vec();
+        let mut cpuid = snapshot_cpuid(&vm);
         let leaf = cpuid.iter_mut().find(|entry| entry.leaf == 1).unwrap();
         if leaf.ecx & TSC_DEADLINE == 0 {
             let capability = Kvm::new()
@@ -804,6 +1010,7 @@ mod tests {
         }])
         .unwrap();
         assert_eq!(cpu.fd.set_msrs(&msr).unwrap(), 1);
+        let platform = vm.save_state().unwrap();
         let mut state = cpu.save_state().unwrap();
         drop(cpu);
         let deadline_index = state
@@ -825,8 +1032,10 @@ mod tests {
         let destination = KvmVm::new().unwrap();
         // SAFETY: RAM outlives the destination VM and vCPU.
         unsafe { destination.map_memory(&ram.region()) }.unwrap();
+        destination.restore_before_vcpus(&platform).unwrap();
         let mut cpu = destination.create_vcpu(0).unwrap();
         cpu.restore_state(&state).unwrap();
+        destination.restore_after_vcpus(&platform).unwrap();
         let kick = cpu.handle();
         let exit = thread::scope(|scope| {
             let (done, finished) = mpsc::channel::<()>();
@@ -859,7 +1068,7 @@ mod tests {
         cpu.notify_guest_stopped().unwrap();
         let active = ram.region().guest_addr | 1;
         cpu.set_cpu_features(
-            source.supported_cpuid(),
+            &snapshot_cpuid(&source),
             &[X86Msr {
                 index: MSR_KVM_SYSTEM_TIME_NEW,
                 value: active,
@@ -868,8 +1077,8 @@ mod tests {
         .unwrap();
         cpu.fd.kvmclock_ctrl().unwrap();
         cpu.notify_guest_stopped().unwrap();
-        let state = cpu.save_state().unwrap();
         let platform = source.save_state().unwrap();
+        let state = cpu.save_state().unwrap();
         drop(cpu);
         drop(source);
 
@@ -903,23 +1112,44 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        let cpus = [0, 1].map(|id| {
-            let mut vcpu = source.create_vcpu(id).unwrap();
-            vcpu.set_cpu_features(
-                source.supported_cpuid(),
+        let configure = |id| {
+            let mut cpu = source.create_vcpu(id).unwrap();
+            cpu.set_cpu_features(
+                &snapshot_cpuid(&source),
                 &[X86Msr {
                     index: MSR_KVM_WALL_CLOCK_NEW,
                     value: region.guest_addr,
                 }],
             )
             .unwrap();
-            let state = vcpu.save_state().unwrap();
+            cpu
+        };
+        let (platform, cpus) = thread::scope(|scope| {
+            let (start, wait_for_start) = mpsc::channel();
+            let (ready, wait_for_ready) = mpsc::channel();
+            let (capture, wait_for_capture) = mpsc::channel();
+            let second = scope.spawn(move || {
+                wait_for_start.recv().unwrap();
+                let mut cpu = configure(1);
+                ready.send(()).unwrap();
+                wait_for_capture.recv().unwrap();
+                cpu.save_state().unwrap()
+            });
+            let mut first = configure(0);
+            start.send(()).unwrap();
+            wait_for_ready.recv().unwrap();
+            let platform = source.save_state().unwrap();
+            capture.send(()).unwrap();
+            (
+                platform,
+                [first.save_state().unwrap(), second.join().unwrap()],
+            )
+        });
+        for state in &cpus {
             assert!(state.msrs.iter().any(|entry| {
                 entry.index == MSR_KVM_WALL_CLOCK_NEW && entry.data == region.guest_addr
             }));
-            state
-        });
-        let platform = source.save_state().unwrap();
+        }
         assert!(platform.clock.clock >= offset);
 
         let read_wall_clock = |ram: &Ram| -> [u32; 3] {
@@ -1031,7 +1261,7 @@ mod tests {
         // SAFETY: RAM outlives both VMs, and only the destination enters the guest.
         unsafe { source.map_memory(&ram.region()) }.unwrap();
         let mut cpu = source.create_vcpu(0).unwrap();
-        cpu.set_cpu_features(source.supported_cpuid(), &[]).unwrap();
+        cpu.set_cpu_features(&snapshot_cpuid(&source), &[]).unwrap();
         cpu.set_boot_registers(&X86BootRegisters {
             rip: ENTRY as u64,
             rsp: (ENTRY + 4096) as u64,
@@ -1304,7 +1534,7 @@ mod tests {
         // SAFETY: RAM outlives both VMs and their CPUs; only one runs at a time.
         unsafe { vm.map_memory(&ram.region()) }.unwrap();
         let mut source = vm.create_vcpu(0).unwrap();
-        source.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        source.set_cpu_features(&snapshot_cpuid(&vm), &[]).unwrap();
         let mut segments = source.fd.get_sregs().unwrap();
         segments.cs.base = 0;
         segments.cs.selector = 0;
@@ -1326,8 +1556,8 @@ mod tests {
             "pending I/O must not be snapshotted"
         );
         source.complete_pending_io().unwrap();
-        let mut state = crate::X86Vcpu::save_state(&mut source).unwrap();
         let platform = vm.save_state().unwrap();
+        let mut state = crate::X86Vcpu::save_state(&mut source).unwrap();
         assert_eq!(state.regs.rip, 0x104c);
         assert_eq!(state.fpu.xmm[0], xmm);
         if diverging_fpu {
@@ -1431,14 +1661,14 @@ mod tests {
             vm.map_memory(&ram.region()).unwrap();
             vm.map_memory(&sipi_region).unwrap();
         }
-        let state = thread::scope(|scope| {
+        let (platform, state) = thread::scope(|scope| {
             let vm = &vm;
             let (ap_ready, wait_for_ap) = mpsc::channel();
             // Spawn before creating the AP so the BSP worker inherits an
             // unblocked kick signal that it can reserve for itself.
             let bsp = scope.spawn(move || {
                 let mut bsp = vm.create_vcpu(0).unwrap();
-                bsp.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+                bsp.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
                 bsp.set_boot_registers(&X86BootRegisters {
                     rip: BSP_ENTRY,
                     rflags: 2,
@@ -1467,7 +1697,7 @@ mod tests {
             });
 
             let mut ap = vm.create_vcpu(1).unwrap();
-            ap.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+            ap.set_cpu_features(&snapshot_cpuid(vm), &[]).unwrap();
             let mut segments = ap.fd.get_sregs().unwrap();
             segments.cs.selector = 0;
             segments.cs.base = 0;
@@ -1488,14 +1718,13 @@ mod tests {
             // The BSP queues the SIPI while the AP stays out of KVM_RUN.
             ap_ready.send(()).unwrap();
             bsp.join().unwrap();
-            ap.save_state().unwrap()
+            (vm.save_state().unwrap(), ap.save_state().unwrap())
         });
 
         assert_eq!(state.mp_state.mp_state, KVM_MP_STATE_RUNNABLE);
         assert_eq!(state.sregs.cs.selector, u16::from(SIPI_VECTOR) << 8);
         assert_eq!(state.sregs.cs.base, SIPI_ENTRY);
         assert_eq!(state.regs.rip, 0);
-        let platform = vm.save_state().unwrap();
         drop(vm);
 
         let destination = KvmVm::new().unwrap();
@@ -1560,7 +1789,7 @@ mod tests {
         // SAFETY: RAM outlives both VMs; only one CPU executes at a time.
         unsafe { vm.map_memory(&ram.region()) }.unwrap();
         let mut source = vm.create_vcpu(0).unwrap();
-        source.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
+        source.set_cpu_features(&snapshot_cpuid(&vm), &[]).unwrap();
         source
             .set_boot_registers(&X86BootRegisters {
                 rip: 0x1000,
@@ -1587,8 +1816,8 @@ mod tests {
             VcpuExit::IoOut { port: 0x80, .. }
         ));
         source.complete_pending_io().unwrap();
-        let state = source.save_state().unwrap();
         let platform = vm.save_state().unwrap();
+        let state = source.save_state().unwrap();
         // The standard XSAVE layout starts YMM_Hi128 at byte 576.
         let high: Vec<_> = state.xsave[144..148]
             .iter()
