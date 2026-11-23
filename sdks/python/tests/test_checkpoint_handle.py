@@ -1,5 +1,6 @@
 """Exercise checkpoint serialization and result ownership through native REST."""
 
+import asyncio
 import importlib.util
 import json
 import threading
@@ -78,7 +79,12 @@ async def test_checkpoint_rejects_mutated_empty_collections(checkpoint_server, f
 
 
 @pytest.fixture
-def checkpoint_server():
+def checkpoint_settings():
+    return {"enabled": True, "memory": {}}
+
+
+@pytest.fixture
+def checkpoint_server(checkpoint_settings):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -91,13 +97,22 @@ def checkpoint_server():
                 self.end_headers()
                 return
             payload = INFO
-            if self.path == "/v1/checkpoints" and self.command == "GET":
-                payload = {"checkpoints": [INFO]}
+            if self.path == "/v1/config":
+                payload = {
+                    "capabilities": {
+                        "memory_checkpoints_enabled": checkpoint_settings["enabled"]
+                    }
+                }
+            elif self.path == "/v1/checkpoints" and self.command == "GET":
+                payload = {"checkpoints": [{**INFO, "kind": "future"}]}
+            elif self.path == "/v1/checkpoints" and (body or {}).get("kind") == "full":
+                payload = {**INFO, "kind": "full", **checkpoint_settings["memory"]}
             elif self.path.startswith("/v1/boxes"):
                 payload = BOX
             if self.command == "GET" and self.path == "/v1/checkpoints/checkpoint-1":
                 payload = {
                     **INFO,
+                    "kind": "future",
                     "state": "failed",
                     "error_reason": "archive upload failed",
                 }
@@ -134,8 +149,10 @@ async def test_checkpoint_native_rest_management_and_box_creation(checkpoint_ser
         4096,
         "ready",
     )
-    assert (await checkpoints.list())[0].source_box_id == "source-1"
+    listed = (await checkpoints.list())[0]
+    assert (listed.source_box_id, listed.kind) == ("source-1", "unknown")
     detail = await checkpoints.get("checkpoint-1")
+    assert detail.kind == "unknown"
     assert (detail.id, detail.state, detail.error_reason) == (
         "checkpoint-1",
         "failed",
@@ -185,3 +202,60 @@ def test_checkpoint_sync_bridge_returns_managed_box_handles(checkpoint_server):
         assert isinstance(target, boxlite.SyncBox)
         assert target.id == "target-1"
     assert requests[1][2] == {"checkpoint_id": "checkpoint-1", "name": "worker"}
+
+
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.parametrize(
+    "kwargs, enabled, memory, error",
+    [
+        (None, False, None, None),
+        ({}, False, None, None),
+        ({"kind": "disk"}, False, None, None),
+        ({"kind": "full"}, True, None, None),
+        ({"kind": "full"}, True, 0, None),
+        ({"kind": "full"}, True, 8192, None),
+        ({"kind": "full"}, False, None, "UnsupportedError"),
+        ({"kind": "bogus"}, True, None, "InvalidArgumentError"),
+        ({"kind": ""}, True, None, "InvalidArgumentError"),
+    ],
+)
+def test_checkpoint_create_options(
+    checkpoint_server, checkpoint_settings, sync, kwargs, enabled, memory, error
+):
+    url, requests = checkpoint_server
+    checkpoint_settings["enabled"] = enabled
+    if memory is not None:
+        checkpoint_settings["memory"]["memory_size_bytes"] = memory
+    rest = boxlite.BoxliteRestOptions(url=url)
+    options = None if kwargs is None else boxlite.CheckpointOptions(**kwargs)
+    full = (kwargs or {}).get("kind") == "full"
+    name = "base" if memory == 0 else None
+
+    async def capture_async():
+        return await boxlite.Boxlite.rest(rest).checkpoints.create(
+            "source-1", name, options=options
+        )
+
+    def capture():
+        if sync:
+            with boxlite.SyncBoxlite.rest(rest) as runtime:
+                return runtime.checkpoints.create("source-1", name, options=options)
+        return asyncio.run(capture_async())
+
+    expected = [("GET", "/v1/config", None)] if full else []
+    if error:
+        with pytest.raises(getattr(boxlite, error)):
+            capture()
+    else:
+        info = capture()
+        assert (info.kind, info.memory_size_bytes) == (
+            "full" if full else "disk",
+            memory,
+        )
+        body = {"source_box_id": "source-1"}
+        if full:
+            body["kind"] = "full"
+        if name is not None:
+            body["name"] = name
+        expected.append(("POST", "/v1/checkpoints", body))
+    assert requests == expected
