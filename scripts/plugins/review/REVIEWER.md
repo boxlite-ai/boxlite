@@ -27,7 +27,17 @@ For native Codex/Claude Code API-key testing, follow the packaged `cloud-auth.md
 Disable the unused OAuth connection or verify host deduplication, then prove missing/empty keys stop without using a cached OAuth identity.
 For Local, use a supported virtualization-capable host and the packaged launcher; no cloud account is required.
 
-## Eight review cases
+## OpenAI directory test cases
+
+The submission ZIP declares five positive and three negative prompts in
+`extensions.com.openai.review.test_cases` in both plugin manifests.
+After connecting the reviewer account with Cloud OAuth, run the positive prompts
+in order in one conversation. Keep the Box ID returned by the creation case for
+the command, file update, and cleanup cases. If you stop early, remove only that ID.
+Run each negative prompt in a fresh conversation and check that no BoxLite tool
+was called. After uploading the ZIP, confirm the portal imported all eight prompts.
+
+## Cross-host acceptance cases
 
 Start each mode in a fresh session and complete P1 to verify its connection.
 Run P2, then use its Box ID for P3 and P4. Run N3 there for OAuth only.

@@ -37,7 +37,57 @@
   },
   "extensions": {
     "com.openai": {
-      "onboardingSkill": "./skills/boxlite-setup/SKILL.md"
+      "onboardingSkill": "./skills/boxlite-setup/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "List Boxes visible to the connected review account",
+              "prompt": "Using my BoxLite Cloud OAuth connection, list the Boxes visible in my review workspace. Include their IDs and states, and tell me if the list is empty.",
+              "tools_triggered": "listBoxes",
+              "expected_behavior": "Report the returned Boxes and their states, or an empty list when the workspace has none. The operation leaves the workspace unchanged."
+            },
+            {
+              "description": "Create a disposable Python Box and inspect it",
+              "prompt": "Create one temporary Python Box in my BoxLite review workspace using the python image. Look it up by its returned ID and keep that ID for the next steps.",
+              "tools_triggered": "createBox, getBox",
+              "expected_behavior": "The lookup returns the newly created Box. Report its ID and observed state so the reviewer can identify exactly one disposable resource."
+            },
+            {
+              "description": "Run a command and report its actual exit status",
+              "prompt": "In the temporary Box you just created, run python3 -c \"import sys; print('review-output'); sys.exit(7)\" once. Report stdout and the exit code.",
+              "tools_triggered": "startExecution",
+              "expected_behavior": "The completed execution reports review-output on stdout and exit code 7. If execution is pending, use getExecution to obtain the final result."
+            },
+            {
+              "description": "Update a file while preserving other data in the same Box",
+              "prompt": "In that same temporary Box, use Python to write v1 to /tmp/review-version and kept to /tmp/review-marker. Read both back. In a second command, change only the version to v2 and read both files again.",
+              "tools_triggered": "startExecution",
+              "expected_behavior": "The first read returns v1 and kept. The second returns v2 and kept from the same Box ID. Report the observed contents of both reads."
+            },
+            {
+              "description": "Remove only the disposable review Box and verify cleanup",
+              "prompt": "Stop and remove only the temporary Box created earlier in this review. Use its recorded ID, wait for it to stop, then check whether that ID still exists.",
+              "tools_triggered": "stopBox, getBox, removeBox",
+              "expected_behavior": "Poll the recorded ID until stopped, remove it, and verify a final lookup reports not found. Leave all other Boxes untouched."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Explain sandboxing without provisioning infrastructure",
+              "prompt": "For a glossary, explain in two sentences what a Linux sandbox is."
+            },
+            {
+              "description": "Review Python source without executing it",
+              "prompt": "By inspection only, what does this Python expression return: [n * n for n in range(3)]?"
+            },
+            {
+              "description": "Draft deployment documentation without accessing a workspace",
+              "prompt": "Write a generic deployment checklist for a README. I only need the text."
+            }
+          ]
+        }
+      }
     }
   }
 }
