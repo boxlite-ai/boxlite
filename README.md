@@ -183,6 +183,7 @@ Official examples and guides:
 
 - **[Moonshot AI Kimi Agent SDK](https://github.com/MoonshotAI/kimi-agent-sdk/tree/main/examples/python/kaos/boxlite)** — example KAOS backend that runs the agent inside a Box
 - **[Rivet Sandbox Agent](https://github.com/rivet-dev/agents/blob/main/sandbox-agent/docs/content/docs/deploy/boxlite.mdx)** — guide and examples for deploying Sandbox Agent in a BoxLite micro-VM
+- **[planning-with-files](https://github.com/OthmanAdi/planning-with-files/blob/master/docs/boxlite.md)** — guide and example for running Claude Code with this skill inside a BoxLite micro-VM
 
 ## Architecture
 

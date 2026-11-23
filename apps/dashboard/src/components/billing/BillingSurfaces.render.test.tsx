@@ -58,6 +58,7 @@ beforeAll(() => {
 afterEach(() => {
   act(() => root?.unmount())
   document.body.innerHTML = ''
+  vi.useRealTimers()
 })
 function render(content: ReactNode) {
   const host = document.createElement('div')
@@ -226,6 +227,30 @@ describe('billing surface contracts', () => {
     expect(host.textContent).toContain('Wallet balance$10.00')
     expect(host.textContent).toContain('Quota consumed$62.50/ $250.00')
     expect(host.textContent).not.toContain('no subscription')
+    expect(host.textContent).not.toContain('FREE TRIAL')
+  })
+  it('shows the remaining trial time in the active subscription summary', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-04T00:00:00.000Z'))
+    const host = render(
+      <CycleOverview
+        wallet={wallet}
+        organizationPlan={{
+          ...plan,
+          trial: {
+            startedAt: new Date('2026-08-01T00:00:00.000Z'),
+            endsAt: new Date('2026-08-07T00:00:00.000Z'),
+            conversionAmountCents: 14900,
+            currency: 'USD',
+            conversionState: 'not_attempted',
+          },
+        }}
+        catalogPlan={catalog[1]}
+      />,
+    )
+    expect(host.textContent).toContain('Pro$149/mo')
+    expect(host.textContent).toContain('FREE TRIAL')
+    expect(host.textContent).toMatch(/3\s*days\s*left/)
   })
   it('shows grant progress across the summary width and retains plan guidance', () => {
     const host = render(

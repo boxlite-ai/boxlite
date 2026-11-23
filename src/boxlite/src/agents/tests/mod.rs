@@ -3,6 +3,8 @@ use crate::litebox::{BoxTunnel, TunnelOptions};
 use crate::{BoxOptions, BoxStatus, BoxliteOptions, BoxliteRuntime};
 use std::net::SocketAddr;
 
+mod go_records;
+
 /// A network with no tunnels: any operation that reaches the Box fails with
 /// this message, so a different error proves the call stopped earlier.
 struct NoTunnels;

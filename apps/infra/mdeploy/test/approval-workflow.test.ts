@@ -18,7 +18,6 @@ const approvedJobs = (stage: string, version: string) => {
     resolve: { result: 'success', outputs: { version } },
     plan: {
       result: 'success',
-      outputs: { api: version ? 'release-import' : 'build', runner: version ? 'skip' : 'build' },
     },
   }
   return Object.entries<any>(workflow.jobs)
@@ -44,6 +43,60 @@ test('published releases require one target Environment approval for verificatio
   for (const stage of ['dev', 'prod']) assert.deepEqual(approvedJobs(stage, 'v0.13.1'), ['plan'])
 })
 
+test('apply notices precede each protected batch and never fall back to another stage secret', () => {
+  const { resolve, plan, deploy, 'notify-deploy': second } = workflow.jobs
+  const notices = resolve.steps.filter((step: any) => step.run?.endsWith('release-pipeline.mjs approval'))
+  const devSecret = '${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}'
+  const prodSecret = '${{ secrets.SLACK_WEBHOOK_URL }}'
+  assert.deepEqual(notices.map((step: any) => step.env.SLACK_WEBHOOK_URL), [devSecret, prodSecret])
+  assert.deepEqual(resolve.steps.slice(-2), notices)
+  for (const step of notices) assert.equal(step['continue-on-error'], true)
+  assert.deepEqual(plan.needs, ['resolve'])
+  assert.deepEqual(second.needs, ['resolve', 'plan'])
+  assert.ok(deploy.needs.includes('notify-deploy'))
+  assert.equal(second.environment, undefined)
+  assert.equal(second.strategy, undefined)
+  assert.equal(resolve.permissions.actions, 'read')
+  assert.deepEqual(second.permissions, { contents: 'read', actions: 'read' })
+  const send = second.steps.at(-1)
+  for (const step of notices) assert.equal(send.run, step.run)
+  assert.equal(send.env.SLACK_WEBHOOK_URL, devSecret)
+  assert.equal(send.env.APPROVAL_PHASE, 'Commit deployment approval')
+  const expr = (value: string) => value.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+  const batch = new Function('steps', 'return ' + expr(notices[0].env.APPROVAL_PHASE))
+  assert.equal(notices[1].env.APPROVAL_PHASE, 'Release deployment approval')
+  const next = new Function('inputs', 'needs', 'return ' + second.if)
+  for (const stage of ['dev', 'prod', 'stage']) {
+    for (const apply of [false, true]) {
+      const selected = notices.filter((step: any) => new Function('inputs', 'return ' + step.if)({ stage, apply }))
+      const expected = apply && stage !== 'stage' ? [stage === 'dev' ? devSecret : prodSecret] : []
+      assert.deepEqual(selected.map((step: any) => step.env.SLACK_WEBHOOK_URL), expected)
+      for (const version of ['', 'v1.2.3']) {
+        const needs = { resolve: { outputs: { version } }, plan: { result: 'success' } }
+        assert.equal(next({ stage, apply }, needs), stage === 'dev' && apply && !version)
+      }
+    }
+  }
+  for (const version of ['', 'v1.2.3']) {
+    const phase = batch({ classify: { outputs: { version } } })
+    assert.equal(phase, version ? 'Release deployment approval' : 'Commit preparation approval')
+  }
+  for (const result of ['failure', 'cancelled', 'skipped']) {
+    const needs = { resolve: { outputs: { version: '' } }, plan: { result } }
+    assert.equal(next({ stage: 'dev', apply: true }, needs), false)
+  }
+  assert.equal(second['continue-on-error'], true)
+  const applyJob = new Function('inputs', 'github', 'needs', 'cancelled', 'return (' + expr(deploy.if) + ')')
+  for (const result of ['failure', 'skipped', 'success']) {
+    const needs = {
+      resolve: { result: 'success', outputs: { version: '' } },
+      plan: { result: 'success' },
+      'notify-deploy': { result },
+    }
+    assert.equal(applyJob({ stage: 'dev' }, { ref: 'refs/heads/main' }, needs, () => false), true)
+  }
+})
+
 test('shared operations declare every input they read and preserve the original requested ref', () => {
   for (const name of ['mbuild', 'mdeploy', 'build-staged-runner']) {
     const source = actionSource(name)
@@ -56,7 +109,6 @@ test('shared operations declare every input they read and preserve the original 
     const action = workflow.jobs[name].steps.find((step: any) => step.uses === './.github/actions/mdeploy')
     assert.equal(action.with.ref, '$' + '{{ inputs.ref }}')
   }
-  assert.equal(workflow.jobs.plan.concurrency.group, 'mbuild-publish-' + '$' + '{{ inputs.stage }}')
 })
 
 test('failure and cancellation prevent the separate commit apply job', () => {
@@ -80,18 +132,15 @@ test('failure and cancellation prevent the separate commit apply job', () => {
   const release = workflow.jobs.plan.steps.find((step: any) => step.uses === './.github/actions/mdeploy')
   assert.equal(release.if, "needs.resolve.outputs.version != ''")
   assert.equal(release['continue-on-error'], undefined)
-})
-
-test('orchestration sources are restored between image checkout and the next local action', () => {
-  const steps = workflow.jobs.plan.steps
-  const image = steps.findIndex((step: any) => step.uses === './.github/actions/mbuild')
-  const restore = steps.findIndex((step: any) => step.name === 'Restore orchestration sources')
-  const runner = steps.findIndex((step: any) => step.uses === './.github/actions/build-staged-runner')
-  assert.ok(image >= 0 && image < restore && restore < runner)
-  assert.equal(steps[restore].if, steps[image].if)
-  assert.equal(steps[restore].with.ref, '$' + '{{ github.sha }}')
-  assert.equal(steps[runner].with.sha, '$' + '{{ needs.resolve.outputs.sha }}')
-  assert.equal(steps[runner].with.stage, '$' + '{{ inputs.stage }}')
+  for (const result of ['success', 'failure', 'cancelled', 'skipped']) {
+    assert.equal(evaluate(
+      { stage: 'dev' },
+      { ref: 'refs/heads/main' },
+      { resolve: { result: 'success', outputs: { version: '' } }, plan: { result } },
+      () => result === 'cancelled',
+      () => result === 'failure',
+    ), result === 'success', `preparation ${result}`)
+  }
 })
 
 test('composite boolean strings preserve preview and protected confirmation arguments', (t) => {

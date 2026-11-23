@@ -68,6 +68,11 @@ interface Auth0EmailProviderReceipt {
   templates: Array<{
     created: boolean
     desired: JsonObject
+    // Set before a run overwrites an existing template: the tenant's values for
+    // the fields the run writes, so rollback can put them back. Receipts
+    // written by create-only runs carry neither field.
+    updated?: boolean
+    previous?: JsonObject
   }>
 }
 
@@ -192,16 +197,12 @@ export class Auth0EmailProviderConfigurator {
     const desiredTemplates = buildAuth0CodeEmailTemplates(this.options.fromAddress, this.sources.templates)
     const state = this.readState(desiredTemplates)
     this.assertProviderAdoptable(state, desiredProvider)
-    this.assertTemplatesAdoptable(state, desiredTemplates)
 
     return {
       mode: 'preview',
       tenant: this.options.tenant,
       provider: this.previewProvider(state.provider, desiredProvider),
-      templates: desiredTemplates.map((template) => ({
-        name: template.template,
-        change: state.templates.get(template.template) ? 'reuse' : 'create',
-      })),
+      templates: desiredTemplates.map((template) => previewTemplate(state.templates.get(template.template), template)),
       readyToApply: true,
     }
   }
@@ -223,7 +224,6 @@ export class Auth0EmailProviderConfigurator {
     const desiredTemplates = buildAuth0CodeEmailTemplates(this.options.fromAddress, this.sources.templates)
     const state = this.readState(desiredTemplates)
     this.assertProviderAdoptable(state, desiredProvider)
-    this.assertTemplatesAdoptable(state, desiredTemplates)
     this.beginReceipt(desiredProvider, desiredTemplates)
     const receipt = this.receipt
     if (!receipt) throw new Error('Auth0 email-provider receipt was not initialized')
@@ -246,11 +246,22 @@ export class Auth0EmailProviderConfigurator {
       }
 
       for (const template of desiredTemplates) {
-        if (state.templates.get(template.template)) continue
-        this.client.request('post', 'email-templates', { data: template })
+        const existing = state.templates.get(template.template)
+        if (existing && containsJson(existing, template)) continue
         const receiptEntry = receipt.templates.find((entry) => entry.desired.template === template.template)
         if (!receiptEntry) throw new Error(`Auth0 email template '${template.template}' has no receipt entry`)
-        receiptEntry.created = true
+        if (!existing) {
+          this.client.request('post', 'email-templates', { data: template })
+          receiptEntry.created = true
+          this.flushReceipt()
+          continue
+        }
+        // The backup is flushed before the write, so a run that stops between
+        // the two still leaves rollback what it needs.
+        receiptEntry.previous = managedFields(existing, template)
+        this.flushReceipt()
+        this.client.request('patch', `email-templates/${encodeURIComponent(template.template)}`, { data: template })
+        receiptEntry.updated = true
         this.flushReceipt()
       }
 
@@ -279,8 +290,22 @@ export class Auth0EmailProviderConfigurator {
     }
     assertJournalSnapshotSafe('Auth0 email-provider receipt', receipt)
     const disabledTemplates: string[] = []
+    const restoredTemplates: string[] = []
 
     for (const entry of [...receipt.templates].reverse()) {
+      if (entry.previous) {
+        const templateName = entry.desired.template
+        const current = objectOrNull(
+          client.request('get', `email-templates/${encodeURIComponent(templateName)}`, { allowNotFound: true }),
+        )
+        if (!current || containsJson(current, entry.previous)) continue
+        if (!containsJson(current, entry.desired)) {
+          throw new Error(`refusing to restore changed Auth0 email template '${templateName}'`)
+        }
+        client.request('patch', `email-templates/${encodeURIComponent(templateName)}`, { data: entry.previous })
+        restoredTemplates.push(templateName)
+        continue
+      }
       if (!entry.created) continue
       const templateName = entry.desired.template
       const current = objectOrNull(
@@ -312,6 +337,7 @@ export class Auth0EmailProviderConfigurator {
       tenant: receipt.tenant,
       providerDeleted,
       disabledTemplates,
+      restoredTemplates,
     }
   }
 
@@ -359,15 +385,6 @@ export class Auth0EmailProviderConfigurator {
         `--from '${this.options.fromAddress}' is not the tenant provider's sender '${senderInUse}'; ` +
           'the templates would send as an address the provider cannot',
       )
-    }
-  }
-
-  private assertTemplatesAdoptable(state: Auth0EmailProviderState, desiredTemplates: JsonObject[]): void {
-    for (const desired of desiredTemplates) {
-      const existing = state.templates.get(desired.template)
-      if (existing && !containsJson(existing, desired)) {
-        throw new Error(`Auth0 email template '${desired.template}' differs from the checked-in BoxLite template`)
-      }
     }
   }
 
@@ -443,6 +460,24 @@ function matchesProviderFingerprint(actual: JsonObject, expected: EmailProviderF
     actual.default_from_address === expected.default_from_address &&
     actual.credentials?.region === expected.region
   )
+}
+
+/*
+ * The checked-in copy is the source of truth, as in Auth0's Terraform provider
+ * and Deploy CLI: a template that differs is updated, not refused. Preview names
+ * the fields that would change so an operator sees what an apply overwrites.
+ */
+function previewTemplate(existing: JsonObject | null | undefined, desired: JsonObject): JsonObject {
+  if (!existing) return { name: desired.template, change: 'create' }
+  const fields = Object.keys(desired).filter((key) => !containsJson(existing[key], desired[key]))
+  return fields.length === 0
+    ? { name: desired.template, change: 'reuse' }
+    : { name: desired.template, change: 'update', fields }
+}
+
+/** The tenant's values for exactly the fields a run writes; null where the tenant has none. */
+function managedFields(existing: JsonObject, desired: JsonObject): JsonObject {
+  return Object.fromEntries(Object.keys(desired).map((key) => [key, existing[key] ?? null]))
 }
 
 function requireCredential(label: string, value: string): string {

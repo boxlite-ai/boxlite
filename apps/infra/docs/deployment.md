@@ -95,7 +95,7 @@ When the target Environment has required reviewers:
 
 | Path | Protected work | Approval rounds |
 | --- | --- | --- |
-| Commit or PR to dev/stage | Plan and conditional builds together, then a separate deploy job | 2 |
+| Commit or PR to dev/stage | Parallel per-artifact plan/build jobs, then a separate deploy job | 2 batches |
 | Published release to dev/prod | Verify release artifacts, import GHCR images and deploy in one job | 1 |
 | Stable tag to stage | Resolve as a commit and follow the commit path | 2 |
 
@@ -103,8 +103,13 @@ Ref validation runs before either protected path.
 Both paths retain stage concurrency, image verification, scan policy, configuration fingerprint and protected-stage confirmation.
 The shared deployment action owns the apply checks; the shared image action also backs the reusable `mbuild` workflow.
 
-Commit image and Runner builds execute sequentially within their approved job.
-Rerunning a grouped job repeats planning and verification; existing artifacts remain reusable.
+Commit image and Runner preparation run in separate matrix jobs, each checking only its selected artifact.
+Both jobs bind the target Environment; approve the preparation batch after both are awaiting review, then approve deployment separately.
+Approval covers jobs currently waiting: a queued or later job can require another review.
+
+The matrix permits two concurrent legs with separate artifact locks and keeps a successful sibling running when another fails.
+Deploy waits for the complete preparation matrix to succeed; commit routes do not depend on matrix output ordering.
+Rerunning a preparation leg repeats its checks and reuses existing artifacts.
 A failed import or build stops deployment.
 Apply is never automatically retried; inspect failed applies and any retained state lock before rerunning.
 The release pipeline's separate E2E workflow retains its own Environment gate.

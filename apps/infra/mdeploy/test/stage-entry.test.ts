@@ -129,6 +129,7 @@ test('missing stage commit images build while dev and prod import existing relea
       writeFileSync(output, '')
       const addressed = run(step(deployment.jobs.resolve, 'tag').run, {
         VERSION: fields.version,
+        COMPONENTS: deployment.on.workflow_dispatch.inputs.components.default,
         RESOLVED: 'a'.repeat(40),
         GITHUB_OUTPUT: output,
       })

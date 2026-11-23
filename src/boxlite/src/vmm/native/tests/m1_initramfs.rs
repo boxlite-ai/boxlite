@@ -75,7 +75,7 @@ fn print_and_restart(line: &str) -> Vec<u8> {
 
 /// An uncompressed newc archive holding one executable file, `name`
 /// (`Documentation/driver-api/early-userspace/buffer-format.rst`).
-fn newc_archive(name: &str, data: &[u8]) -> Vec<u8> {
+pub(super) fn newc_archive(name: &str, data: &[u8]) -> Vec<u8> {
     fn entry(archive: &mut Vec<u8>, ino: u32, mode: u32, name: &str, data: &[u8]) {
         let fields = [
             ino,

@@ -1231,6 +1231,25 @@ struct CBoxCopyInStream *boxlite_copy_in_start(CBoxHandle *handle,
                                                void *user_data,
                                                CBoxliteError *out_error);
 
+// Begin streaming copy-in with explicit overwrite policy. False rejects
+// conflicting entries; earlier new entries can remain after a conflict.
+// The original start function retains overwrite=true for ABI compatibility.
+//
+// # Safety
+//
+// Non-null `handle` and `guest_dst` must reference a live box handle and a
+// NUL-terminated string for this call. A non-null `out_error` must reference
+// writable, exclusively accessible error storage for this call. The callback
+// and any data accessed through `user_data` must stay valid until the runtime
+// dispatches the copy completion event to `copy_cb`. Handle destruction must
+// not race this call.
+struct CBoxCopyInStream *boxlite_copy_in_start_with_overwrite(CBoxHandle *handle,
+                                                              const char *guest_dst,
+                                                              bool overwrite,
+                                                              CBoxCopyCb copy_cb,
+                                                              void *user_data,
+                                                              CBoxliteError *out_error);
+
 // Push a chunk of archive bytes into the guest. Blocks when the guest is
 // slow (bounded-channel backpressure).
 enum BoxliteErrorCode boxlite_copy_in_write(struct CBoxCopyInStream *stream,
@@ -1764,8 +1783,8 @@ void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
 // name — the server resolves either.
 //
 // `managed_volume` is the volume's id or name (`"my-data"`, `"vol_01K2…"`).
-// Managed volumes need a REST runtime; the local runtime has no volume backend
-// and rejects one at create.
+// LocalRuntime resolves managed volumes through `LocalVolumeStore`; REST
+// runtimes resolve them on the server.
 //
 // A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
 // [`boxlite_options_add_bind_mount`].

@@ -12,6 +12,7 @@ PHONY_TARGETS += _local-registry
 PHONY_TARGETS += _guest-boot-probe
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
 PHONY_TARGETS += test\:integration\:c\:agents
+PHONY_TARGETS += test\:integration\:agent-sdk-parity
 PHONY_TARGETS += test\:integration\:lifecycle-race
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -318,7 +319,13 @@ export VMM_KERNEL
 VMM_BALLOON_INIT ?= $(CURDIR)/target/vmm/boot/balloon-init
 export VMM_BALLOON_INIT
 
+# Freestanding guest that watches its disk grow while it runs.
+VMM_DISK_GROW_INIT ?= $(CURDIR)/target/vmm/boot/disk-grow-init
+export VMM_DISK_GROW_INIT
+
 $(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
+$(VMM_DISK_GROW_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/disk_grow_init.c
+$(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT):
 	@mkdir -p "$(@D)"
 	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
 
@@ -339,7 +346,7 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
 
@@ -360,7 +367,7 @@ export VMM_GUEST VMM_GUEST_PROBE
 _guest-boot-probe: $(if $(SETUP_DONE),,runtime\:debug)
 	@bash "$(SCRIPT_DIR)/test/build-guest-boot-probe.sh"
 
-test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe
+test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe $(VMM_DISK_GROW_INIT)
 	@cargo test -p boxlite --features native --lib --no-run
 	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
 	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1
@@ -533,6 +540,18 @@ test\:integration\:c\:agents:
 	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
 		cargo test -p boxlite-c --lib c_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
 
+# Run the same OpenCode scenario in Rust, Python and Node, comparing each SDK
+# result with the Rust result produced in this invocation.
+test\:integration\:agent-sdk-parity: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { echo "Set BOXLITE_TEST_OPENCODE_BINARY" >&2; exit 1; }
+	@set -eu; parity_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/boxlite-agent-parity.XXXXXXXX")"; \
+	trap 'rm -rf "$$parity_dir"' EXIT; \
+	export BOXLITE_AGENT_RUST_BASELINE="$$parity_dir/rust.json"; \
+	$(MAKE) test:integration:agents SETUP_DONE=1 CARGOTEST_FILTER=opencode_agent_creates_sends_streams_and_waits NEXTEST_FILTER="-E 'test(opencode_agent_creates_sends_streams_and_waits)' --no-tests=pass"; \
+	test -s "$$BOXLITE_AGENT_RUST_BASELINE"; \
+	$(MAKE) test:integration:python SETUP_DONE=1 PYTEST_FILTER='-k python_agent_opencode_flow'; \
+	$(MAKE) test:integration:node SETUP_DONE=1 VITEST_FILTER='tests/agents-opencode.integration.test.ts'
+
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
@@ -557,6 +576,7 @@ test\:unit\:gvproxy:
 # error mapping checks. The server target supplies its own Python dependencies.
 test\:unit\:openapi:
 	@$(MAKE) test:unit:openapi:server
+	@. .venv/bin/activate && uv run --with pyyaml --with jsonschema --python .venv/bin/python python -m unittest discover -s openapi/tests -p 'test_*.py' -v
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 
@@ -712,6 +732,11 @@ test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
+PHONY_TARGETS += test\:apps\:infra\:auth0
+test\:apps\:infra\:auth0: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:tooling
+	@cd apps/infra && node --import tsx --test bootstrap/auth0*.test.ts bootstrap/configure-auth0-login.test.ts
+
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy
@@ -761,6 +786,10 @@ test\:apps\:proxy:
 PHONY_TARGETS += test\:apps\:secret-server
 test\:apps\:secret-server:
 	@cd apps/secret-server && GOWORK=off go test -race ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:apps\:secret-server\:integration
+test\:apps\:secret-server\:integration:
+	@cd apps/secret-server && SECRET_TEST_DATABASE_URL="$${SECRET_TEST_DATABASE_URL:-postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite}" GOWORK=off go test -race -count=1 ./internal/database ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM)$$'
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
@@ -834,8 +863,6 @@ test\:e2e\:deps\:node:
 test\:e2e\:build\:python:
 	@"$(E2E_PYTHON)" -m uv pip install --python "$(E2E_PYTHON)" --no-deps --no-build-isolation --config-settings 'build-args=--locked --profile dev' --editable sdks/python
 
-test\:e2e\:build\:minio:
-	@python3 apps/e2e/minio.py --state-dir "$(E2E_STATE_DIR)"
 
 # Go's build cache does not track external CGO archives.
 test\:e2e\:build\:runner:

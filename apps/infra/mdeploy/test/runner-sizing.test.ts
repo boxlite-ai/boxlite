@@ -101,6 +101,8 @@ test('GCP keeps existing machine types while supplying the requested size for ne
   for (const [size, machineType] of [
     ['small', 'n4-standard-4'],
     ['large', 'n4-standard-16'],
+    ['xlarge', 'n4-standard-32'],
+    ['2xlarge', 'n4-standard-64'],
   ] as const) {
     provider(requestFor(size))
     const host = resources.get('Runner')!
@@ -109,6 +111,8 @@ test('GCP keeps existing machine types while supplying the requested size for ne
     assert.equal(host.args.deletionProtection, true)
     assert.equal(host.options.protect, true)
   }
+  provider({ ...requestFor('small'), machineTypes: { small: 'n4-standard-8' } })
+  assert.equal(resources.get('Runner')!.args.machineType, 'n4-standard-8')
 })
 
 test('GCP honors an explicit data disk capacity and retains the default and disk protections', (t) => {
@@ -138,6 +142,7 @@ test('AWS refuses a GCP data disk size before creating resources', (t) => {
   const request = { ...requestFor(), dataDiskGb: 2048 }
   assert.throws(() => provider(request), /AWS runners do not support dataDiskGb; configure rootDiskGb instead/)
   assert.equal(resources.size, 0)
-  provider(requestFor())
+  provider({ ...requestFor('2xlarge'), machineTypes: { '2xlarge': 'c8i.12xlarge' } })
+  assert.equal(resources.get('Runner')!.args.instanceType, 'c8i.12xlarge')
   assert.equal(resources.get('Runner')!.args.rootBlockDevice.volumeSize, 100)
 })

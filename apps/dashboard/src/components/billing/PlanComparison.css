@@ -4,6 +4,8 @@
 }
 
 .plan-comparison-scroll {
+  /* Keep absolute screen-reader labels inside this scroll boundary. */
+  position: relative;
   overflow: auto;
   max-height: max(320px, calc(100svh - 340px));
 }

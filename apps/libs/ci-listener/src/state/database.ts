@@ -15,6 +15,12 @@ export interface StateTransaction {
   lock?(key: string): Promise<void>
   now(): Promise<number>
   get(key: string, lock?: boolean): Promise<StateRecord | undefined>
+  /** Hold an identity stable without excluding other guarded transactions. */
+  getShared?(key: string): Promise<StateRecord | undefined>
+  /** Ordinary point reads; callers restore key order and bound batches to 100. */
+  getMany?(keys: readonly string[]): Promise<StateRecord[]>
+  /** Expected-absent ordinary records; a short insert requires transaction rollback. */
+  insertMany?(records: readonly StateRecord[]): Promise<boolean>
   page(after: string, limit: number, prefix?: string, lock?: 'skip-locked'): Promise<StateRecord[]>
   put(record: StateRecord, expected: string | null): Promise<boolean>
   remove(key: string, expected: string): Promise<boolean>

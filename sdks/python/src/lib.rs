@@ -1,6 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn, non_local_definitions)]
 
 mod advanced_options;
+mod agents;
 mod box_handle;
 mod checkpoints;
 mod domains;

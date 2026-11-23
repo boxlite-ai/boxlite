@@ -470,6 +470,7 @@ impl VmmController for ShimController {
             memory_mib: config.memory_mib,
             kernel: config.kernel.clone(),
             fs_shares: config.fs_shares.clone(),
+            volume_access: Vec::new(),
             block_devices: config.block_devices.clone(),
             guest_entrypoint,
             transport: config.transport.clone(),
@@ -514,7 +515,8 @@ impl VmmController for ShimController {
             self.box_id.as_str(),
             &self.options,
         )
-        .with_nested_virtualization(config.nested_virtualization);
+        .with_nested_virtualization(config.nested_virtualization)
+        .with_volume_access(config.volume_access.clone());
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();

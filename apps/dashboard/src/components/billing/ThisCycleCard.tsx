@@ -21,12 +21,15 @@ import { differenceInCalendarDays, format } from 'date-fns'
  * testable without a DOM.
  */
 export function cycleFacts(plan: OrganizationPlan, now: Date, catalog: Plan[] = []) {
+  const activeTrial = plan.trial?.conversionState === 'not_attempted' ? plan.trial : null
+  const periodFrom = activeTrial?.startedAt ?? plan.cycleFrom
+  const periodTo = activeTrial?.endsAt ?? plan.cycleTo
   // Clamping to 0 swallowed "already over": a cycle whose roll date has
   // passed rendered a large `0` beside "ends in", which reads as "today".
-  const rawDaysLeft = differenceInCalendarDays(plan.cycleTo, now)
+  const rawDaysLeft = differenceInCalendarDays(periodTo, now)
   const daysLeft = Math.max(0, rawDaysLeft)
   const ended = rawDaysLeft < 0
-  const rollDay = format(plan.cycleTo, 'MMM d')
+  const rollDay = format(periodTo, 'MMM d')
   // Shared with the Overview panel: a scheduled cancellation outranks the
   // downgrade queued behind it, so this tab cannot promise a roll the other
   // tab says will never come.
@@ -37,10 +40,11 @@ export function cycleFacts(plan: OrganizationPlan, now: Date, catalog: Plan[] = 
     queued?.kind === 'downgrade' ? (catalog.find((entry) => entry.id === queued.planId)?.name ?? queued.planId) : null
   return {
     unlimited: plan.includedQuotaCents === null,
+    trialActive: activeTrial !== null,
     daysLeft,
     ended,
     rollDay,
-    window: `${format(plan.cycleFrom, 'MMM d')} – ${rollDay}`,
+    window: `${format(periodFrom, 'MMM d')} – ${rollDay}`,
     note:
       plan.status === 'canceled'
         ? `Canceled — quota stays usable until ${rollDay}, then pay-as-you-go from the wallet`
@@ -53,8 +57,8 @@ export function cycleFacts(plan: OrganizationPlan, now: Date, catalog: Plan[] = 
 }
 
 /**
- * The current billing cycle at a glance: quota remaining from the plan's
- * grant, the wallet that funds the overage, and when the cycle rolls. Every
+ * The current trial or billing cycle at a glance: quota remaining from the plan's
+ * grant, the wallet that funds the overage, and when the current period ends. Every
  * number is the billing service's own — the plan block and the wallet — so
  * the meter here is the meter settlement charges by. Renders nothing when
  * the organization has no live plan: there is no cycle to show, and
@@ -86,7 +90,7 @@ export function ThisCycleCard() {
   }
   if (!plan) return null
 
-  const { unlimited, daysLeft, ended, rollDay, window, note } = cycleFacts(plan, new Date(), plans ?? [])
+  const { unlimited, trialActive, daysLeft, ended, rollDay, window, note } = cycleFacts(plan, new Date(), plans ?? [])
 
   return (
     <section>
@@ -99,9 +103,17 @@ export function ThisCycleCard() {
             sub={unlimited ? 'unlimited quota' : `of ${formatAmount(plan.includedQuotaCents ?? 0)} included`}
           />
           {ended ? (
-            <Metric label="Cycle" value="Ended" sub={`rolled ${rollDay}`} />
+            <Metric
+              label={trialActive ? 'Free trial' : 'Cycle'}
+              value="Ended"
+              sub={`${trialActive ? 'ended' : 'rolled'} ${rollDay}`}
+            />
           ) : (
-            <Metric label="Cycle ends in" value={String(daysLeft)} sub={daysLeft === 1 ? 'day' : 'days'} />
+            <Metric
+              label={trialActive ? 'Free trial ends in' : 'Cycle ends in'}
+              value={String(daysLeft)}
+              sub={daysLeft === 1 ? 'day' : 'days'}
+            />
           )}
         </div>
 

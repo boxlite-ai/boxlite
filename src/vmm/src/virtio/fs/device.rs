@@ -4,6 +4,7 @@
 use std::io;
 
 use super::{AggregateFs, Share, descriptor::request_buffers, server::Server};
+use crate::memory::GuestMemoryMmap;
 use crate::virtio::{
     ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, SnapshotSupport,
     VirtioDevice,
@@ -119,10 +120,11 @@ impl VirtioDevice for Fs {
             .as_mut()
             .ok_or(DeviceError::NeedsReset("virtio-fs is inactive"))?;
         let server = &self.server;
-        let memory = &ctx.memory;
+        let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
+        let memory: &GuestMemoryMmap = &snapshot;
         let mut processed = false;
         let result = ctx.queues.drain(usize::from(index), |chain| {
-            let (reader, writer) = request_buffers(memory.as_ref(), chain)
+            let (reader, writer) = request_buffers(memory, chain)
                 .map_err(|_| DeviceError::NeedsReset("virtio-fs request descriptors"))?;
             let written = server.handle_message(reader, writer).map_err(|error| {
                 tracing::warn!(%error, "virtio-fs request failed");

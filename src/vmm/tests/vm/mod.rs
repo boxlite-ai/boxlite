@@ -5,17 +5,34 @@
 //! the mock backend, and real KVM VMs whose guests read the mapped RAM and run
 //! 64-bit code with the boot CPU state.
 
-use std::{cell::Cell, error::Error as _, io};
+use std::{
+    cell::Cell,
+    error::Error as _,
+    fmt::{self, Write as _},
+    io,
+    sync::{
+        Arc, Mutex, OnceLock, Weak,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
 
-use boxlite_hypervisor::Error as HypervisorError;
-use vm_memory::GuestMemoryBackend;
+use boxlite_hypervisor::{Error as HypervisorError, MemoryRegion, Vm as HostVm};
+use tracing::{Event, Level, Metadata, Subscriber, field::Field, span};
+use vm_memory::{GuestAddress, GuestAddressSpace, GuestMemoryBackend};
 
 use super::{BootRegisters, Vm};
 use crate::{
-    config::{MAX_VCPUS, VmConfig},
+    bus::BusDevice,
+    chipset::ChipsetBuilder,
+    config::VmConfig,
     error::Error,
-    memory::{MAX_MEMORY_MIB, RAM_START, ram_ranges},
+    irq::IrqLine,
+    memory::{GuestMemoryMmap, GuestRam, RAM_START, ram_ranges},
     mock_vm::{Call, MockVm},
+    virtio::{
+        DeviceContext, DeviceError, VirtioDevice, VirtioInterrupt, WorkerContext,
+        worker::{ShutdownError, SlotId, VirtioWorkers, WorkerRuntime},
+    },
 };
 
 /// A VM on `host_vm` with no boot data and no devices.
@@ -56,7 +73,6 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
         (config(0, 1), "invalid vCPU count: 0"),
         (config(65, 1), "invalid vCPU count: 65"),
         (config(1, 0), "invalid memory size: 0 MiB"),
-        (config(1, 3073), "invalid memory size: 3073 MiB"),
     ];
     for (config, message) in cases {
         let built = Cell::new(false);
@@ -74,18 +90,17 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
         assert!(error.source().is_none());
         assert!(!built.get(), "the host VM must not exist for {config:?}");
     }
-    config(MAX_VCPUS, MAX_MEMORY_MIB).validate().unwrap();
 }
 
 #[test]
 fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
     let vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
-    let log = vm.host_vm.log();
+    let log = vm.host_vm.as_deref().unwrap().log();
     let [(start, size)] = ram_ranges(16)[..] else {
         panic!("one region")
     };
     assert_eq!(start.0, RAM_START);
-    let host_addr = vm.ram.memory().get_host_address(start).unwrap() as usize;
+    let host_addr = vm.ram.memory().memory().get_host_address(start).unwrap() as usize;
     let map = Call::Map {
         guest_addr: start.0,
         host_addr,
@@ -110,9 +125,9 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
     use crate::virtio::worker::{SharedRuntime, Timeouts, VirtioWorkers};
 
     let mut vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
-    let log = vm.host_vm.log();
-    let memory = Arc::downgrade(vm.ram.memory());
-    vm.workers = VirtioWorkers::with_runtime(Arc::new(
+    let log = vm.host_vm.as_deref().unwrap().log();
+    let memory = Arc::downgrade(vm.ram.boot_memory());
+    vm.workers = Some(VirtioWorkers::with_runtime(Arc::new(
         SharedRuntime::new(
             vm.sender.clone(),
             Timeouts {
@@ -121,13 +136,14 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
             },
         )
         .unwrap(),
-    ));
+    )));
+    let workers = vm.workers.as_ref().unwrap();
     crate::virtio::fs::worker_tests::with_blocked_vm_read(
-        vm.ram.memory().clone(),
-        &vm.workers,
+        vm.ram.boot_memory().clone(),
+        workers,
         &vm.events.lock().unwrap(),
         |release| {
-            let error = vm.workers.shutdown().map_err(Error::from).unwrap_err();
+            let error = workers.shutdown().map_err(Error::from).unwrap_err();
             assert!(matches!(error, Error::VirtioWorker(error)
                 if error.kind() == io::ErrorKind::TimedOut));
             assert!(memory.upgrade().is_some());
@@ -139,16 +155,16 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
                 "a blocked Fs still uses registered VM RAM"
             );
             release();
-            vm.workers.shutdown().unwrap();
+            workers.shutdown().unwrap();
         },
     );
     assert!(memory.upgrade().is_some(), "VM still owns the backing");
     assert_eq!(log.lock().unwrap().len(), 1, "only RAM registration");
+    let region = vm.ram.regions().next().expect("one RAM region");
+    let map = Call::map(&region);
+    let unmap = Call::unmap(&region);
     drop(vm);
-    assert!(matches!(
-        &log.lock().unwrap()[..],
-        [Call::Map { .. }, Call::Unmap { .. }]
-    ));
+    assert_eq!(*log.lock().unwrap(), [map, unmap]);
     assert!(
         memory.upgrade().is_none(),
         "successful VM drop frees backing RAM"
@@ -166,8 +182,8 @@ fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
     };
 
     let mut vm = bare(config(1, 1), || Ok(MockVm::new())).unwrap();
-    let log = vm.host_vm.log();
-    let memory = vm.ram.memory().clone();
+    let log = vm.host_vm.as_deref().unwrap().log();
+    let memory = vm.ram.boot_memory().clone();
     let backing = Arc::downgrade(&memory);
     let events = EventLoop::new().unwrap();
     let runtime = Arc::new(
@@ -181,7 +197,7 @@ fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
         .unwrap(),
     );
     let workers = VirtioWorkers::with_runtime(runtime.clone());
-    vm.workers = VirtioWorkers::with_runtime(runtime);
+    vm.workers = Some(VirtioWorkers::with_runtime(runtime));
     crate::virtio::fs::worker_tests::with_blocked_vm_read(memory, &workers, &events, |release| {
         drop(vm);
         assert_eq!(
@@ -206,24 +222,530 @@ fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
 }
 
 #[test]
-fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
+fn a_rejected_vm_mapping_releases_the_backing() {
     let backend = MockVm::failing_at(&[0]);
     let log = backend.log();
+    let call_log = backend.call_log();
+    let mut backing = None;
 
-    let error = bare(config(1, 16), || Ok(backend)).expect_err("mapping fails");
+    let error = Vm::with_backend(
+        config(1, 16),
+        || Ok(backend),
+        |_, _| panic!("a rejected map must not reach boot"),
+        |_, ctx| {
+            let host_addr = ctx
+                .memory
+                .memory()
+                .get_host_address(GuestAddress(RAM_START))
+                .unwrap() as usize;
+            backing = Some((Arc::downgrade(&ctx.memory.memory().into_inner()), host_addr));
+            Ok(())
+        },
+    )
+    .expect_err("mapping fails");
 
     assert!(matches!(
         error,
-        Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, .. })
+        Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, source })
             if guest_addr == RAM_START && size == 16 << 20
+                && source.kind() == io::ErrorKind::OutOfMemory
     ));
-    let calls = log.lock().unwrap().clone();
-    assert_eq!(
-        calls.len(),
-        1,
-        "nothing was registered, so nothing is unmapped"
+    let (backing, host_addr) = backing.expect("allocated 16 MiB backing");
+    let map = Call::Map {
+        guest_addr: RAM_START,
+        host_addr,
+        size: 16 << 20,
+    };
+    let unmap = Call::Unmap {
+        guest_addr: RAM_START,
+        host_addr,
+        size: 16 << 20,
+    };
+    assert_eq!(log.lock().unwrap().as_slice(), [map, unmap]);
+    assert_eq!(call_log.ioctl_calls(), [map]);
+    assert!(
+        backing.upgrade().is_none(),
+        "failed VM construction must release the backing"
     );
-    assert!(matches!(calls[0], Call::Map { .. }));
+}
+
+struct MappingTestDevice {
+    _irq: Option<IrqLine>,
+}
+
+impl BusDevice for MappingTestDevice {
+    fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+    fn write(&mut self, _offset: u64, _data: &[u8]) {}
+}
+
+fn failing_mapping() -> (u32, MockVm) {
+    // x86_64 maps low RAM before rejecting high RAM. On arm64, the mock
+    // fails the rollback attempt on the single region.
+    let memory_mib = if cfg!(target_arch = "x86_64") {
+        3073
+    } else {
+        16
+    };
+    let ranges = ram_ranges(memory_mib);
+    let backend = MockVm::failing_with(&[
+        (ranges.len() - 1, io::ErrorKind::PermissionDenied),
+        (2 * ranges.len() - 1, io::ErrorKind::OutOfMemory),
+    ]);
+    (memory_mib, backend)
+}
+
+fn with_fresh_backend<H: HostVm + 'static>(
+    config: VmConfig,
+    backend: H,
+    boot: impl FnOnce(&GuestRam, &VmConfig) -> crate::error::Result<BootRegisters>,
+    devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>) -> crate::error::Result<()>,
+) -> crate::error::Result<Vm<H>> {
+    Vm::build(
+        config,
+        || Ok(backend),
+        true,
+        VirtioWorkers::new,
+        boot,
+        |chipset, ctx, _| devices(chipset, ctx),
+    )
+}
+
+fn failed_boot(_: &GuestRam, _: &VmConfig) -> crate::error::Result<BootRegisters> {
+    Err(Error::WriteBootData {
+        what: "boot data",
+        source: io::ErrorKind::InvalidData.into(),
+    })
+}
+
+fn assert_boot_error(error: Error) {
+    assert!(matches!(
+        error,
+        Error::WriteBootData { what: "boot data", source }
+            if source.kind() == io::ErrorKind::InvalidData
+    ));
+}
+
+fn capture_warnings<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+    struct Warnings(Arc<Mutex<Vec<String>>>);
+
+    impl Subscriber for Warnings {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            *metadata.level() == Level::WARN
+        }
+
+        fn event(&self, event: &Event<'_>) {
+            if self.enabled(event.metadata()) {
+                let mut warning = String::new();
+                event.record(&mut |field: &Field, value: &dyn fmt::Debug| {
+                    write!(warning, "{}={value:?} ", field.name()).unwrap();
+                });
+                self.0.lock().unwrap().push(warning);
+            }
+        }
+
+        fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+        fn enter(&self, _: &span::Id) {}
+        fn exit(&self, _: &span::Id) {}
+    }
+
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    // Keep callsite interest independent of which test thread registers it first.
+    let _dispatcher = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new());
+    let result = tracing::subscriber::with_default(Warnings(warnings.clone()), run);
+    let warnings = std::mem::take(&mut *warnings.lock().unwrap());
+    (result, warnings)
+}
+
+struct DropCheckedVm {
+    backend: MockVm,
+    backing: Arc<OnceLock<Weak<GuestMemoryMmap>>>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl HostVm for DropCheckedVm {
+    type Vcpu = <MockVm as HostVm>::Vcpu;
+
+    unsafe fn map_memory(&self, region: &MemoryRegion) -> boxlite_hypervisor::Result<()> {
+        // SAFETY: The caller upholds the forwarded mapping contract.
+        unsafe { self.backend.map_memory(region) }
+    }
+
+    fn unmap_memory(&self, region: &MemoryRegion) -> boxlite_hypervisor::Result<()> {
+        self.backend.unmap_memory(region)
+    }
+
+    fn create_vcpu(&self, id: u32) -> boxlite_hypervisor::Result<Self::Vcpu> {
+        self.backend.create_vcpu(id)
+    }
+
+    fn set_irq_line(&self, line: u32, level: bool) -> boxlite_hypervisor::Result<()> {
+        self.backend.set_irq_line(line, level)
+    }
+}
+
+impl Drop for DropCheckedVm {
+    fn drop(&mut self) {
+        assert!(
+            self.backing.get().unwrap().upgrade().is_some(),
+            "RAM must stay alive while the host VM closes"
+        );
+        self.dropped.store(true, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn failed_vm_mapping_releases_backing_after_failed_rollback() {
+    let (memory_mib, backend) = failing_mapping();
+    let ranges = ram_ranges(memory_mib);
+    let (failed_start, failed_size) = *ranges.last().unwrap();
+    let log = backend.log();
+    let backing = Arc::new(OnceLock::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+
+    let (result, warnings) = capture_warnings(|| {
+        with_fresh_backend(
+            config(1, memory_mib),
+            DropCheckedVm {
+                backend,
+                backing: backing.clone(),
+                dropped: dropped.clone(),
+            },
+            |_, _| panic!("a rejected map must not reach boot"),
+            |chipset, ctx| {
+                backing
+                    .set(Arc::downgrade(&ctx.memory.memory().into_inner()))
+                    .unwrap();
+                // The device's interrupt line holds a strong reference to the host VM.
+                chipset.add("device", |resources| {
+                    Ok(MappingTestDevice {
+                        _irq: Some(resources.line(4)),
+                    })
+                })
+            },
+        )
+    });
+    let error = result.expect_err("mapping fails");
+
+    assert!(matches!(
+        error,
+        Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, source })
+            if guest_addr == failed_start.0 && size == failed_size
+                && source.kind() == io::ErrorKind::PermissionDenied
+    ));
+    let calls = log.lock().unwrap();
+    assert_eq!(calls.len(), 2 * ranges.len());
+    assert!(
+        matches!(calls.last(), Some(Call::Unmap { guest_addr, .. }) if *guest_addr == RAM_START)
+    );
+    assert!(dropped.load(Ordering::Relaxed), "the host VM must close");
+    assert!(
+        backing.get().unwrap().upgrade().is_none(),
+        "failed VM construction must release backing after closing the host VM"
+    );
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.contains("failed to roll back guest RAM mappings")
+                && warning.contains("rollback=Hypervisor(UnmapMemory")
+                && warning.contains("OutOfMemory")
+        }),
+        "missing rollback error warning in {warnings:?}"
+    );
+}
+
+#[test]
+fn failed_boot_keeps_backing_while_an_irq_line_owns_the_host_vm() {
+    let backend = MockVm::failing_at(&[1]);
+    let call_log = backend.call_log();
+    let mut backing = None;
+    let mut irq = None;
+
+    let error = with_fresh_backend(config(1, 16), backend, failed_boot, |chipset, ctx| {
+        backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
+        chipset.add("device", |resources| {
+            irq = Some(resources.line(4));
+            Ok(MappingTestDevice { _irq: None })
+        })
+    })
+    .expect_err("boot fails");
+
+    assert_boot_error(error);
+    assert!(matches!(
+        call_log.ioctl_calls().as_slice(),
+        [Call::Map { .. }, Call::Unmap { .. }]
+    ));
+    assert!(backing.unwrap().upgrade().is_some());
+    irq.unwrap().pulse().unwrap();
+}
+
+#[test]
+fn failed_boot_keeps_backing_without_a_fresh_backend() {
+    let backend = MockVm::failing_at(&[1]);
+    let call_log = backend.call_log();
+    let mut backing = None;
+
+    let error = Vm::with_backend(
+        config(1, 16),
+        || Ok(backend),
+        failed_boot,
+        |_, ctx| {
+            backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
+            Ok(())
+        },
+    )
+    .expect_err("boot fails");
+
+    assert_boot_error(error);
+    assert!(matches!(
+        call_log.ioctl_calls().as_slice(),
+        [Call::Map { .. }, Call::Unmap { .. }]
+    ));
+    assert!(backing.unwrap().upgrade().is_some());
+}
+
+#[test]
+fn failed_boot_quiesces_devices_before_unmapping_ram() {
+    use crate::virtio::{
+        ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, SnapshotSupport,
+        VirtioDevice, mmio,
+    };
+
+    struct QuiesceCheck {
+        log: Arc<Mutex<Vec<Call>>>,
+        quiesced: Arc<AtomicBool>,
+    }
+
+    impl VirtioDevice for QuiesceCheck {
+        fn spec(&self) -> &DeviceSpec {
+            &DeviceSpec {
+                name: "quiesce-check",
+                device_id: 1,
+                features: 0,
+                config_len: 0,
+                queue_max: &[8],
+                snapshot: SnapshotSupport::Unsupported,
+            }
+        }
+
+        fn set_features(&mut self, _: u64) -> Result<(), FeatureError> {
+            Ok(())
+        }
+
+        fn read_config(&mut self, _: u64, _: &mut [u8]) -> Result<(), DeviceError> {
+            Ok(())
+        }
+
+        fn write_config(&mut self, _: u64, _: &[u8]) -> Result<(), DeviceError> {
+            Ok(())
+        }
+
+        fn activate(&mut self, _: ActivationContext) -> Result<(), DeviceError> {
+            Ok(())
+        }
+
+        fn reset(&mut self) -> Result<(), DeviceError> {
+            Ok(())
+        }
+
+        fn on_event(&mut self, _: DeviceEvent) -> Result<(), DeviceError> {
+            Ok(())
+        }
+
+        fn quiesce(&mut self) -> Result<(), DeviceError> {
+            assert!(
+                matches!(self.log.lock().unwrap().as_slice(), [Call::Map { .. }]),
+                "RAM must still be registered during quiesce"
+            );
+            self.quiesced.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    let backend = MockVm::new();
+    let log = backend.log();
+    let quiesced = Arc::new(AtomicBool::new(false));
+
+    let error = with_fresh_backend(config(1, 16), backend, failed_boot, |chipset, ctx| {
+        mmio::add_device(
+            chipset,
+            &ctx,
+            "quiesce-check",
+            mmio::Slots::new().take()?,
+            Arc::new(Mutex::new(QuiesceCheck {
+                log: log.clone(),
+                quiesced: quiesced.clone(),
+            })),
+        )
+    })
+    .expect_err("boot fails");
+
+    assert_boot_error(error);
+    assert!(quiesced.load(Ordering::Relaxed), "quiesce must complete");
+    assert!(matches!(
+        log.lock().unwrap().as_slice(),
+        [Call::Map { .. }, Call::Unmap { .. }]
+    ));
+}
+
+#[test]
+fn failed_boot_releases_backing_after_failed_unmap() {
+    let backend = MockVm::failing_at(&[1]);
+    let call_log = backend.call_log();
+    let backing = Arc::new(OnceLock::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let backend = DropCheckedVm {
+        backend,
+        backing: backing.clone(),
+        dropped: dropped.clone(),
+    };
+
+    let (result, warnings) = capture_warnings(|| {
+        with_fresh_backend(config(1, 16), backend, failed_boot, |_, ctx| {
+            backing
+                .set(Arc::downgrade(&ctx.memory.memory().into_inner()))
+                .unwrap();
+            Ok(())
+        })
+    });
+
+    assert_boot_error(result.expect_err("boot fails"));
+    assert!(matches!(
+        call_log.ioctl_calls().as_slice(),
+        [Call::Map { .. }, Call::Unmap { .. }]
+    ));
+    assert!(dropped.load(Ordering::Relaxed), "the host VM must close");
+    assert!(
+        backing.get().unwrap().upgrade().is_none(),
+        "failed boot must release backing after closing the host VM"
+    );
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.contains("failed to unmap guest RAM")
+                && warning.contains("cause=Some(UnmapMemory")
+                && warning.contains("OutOfMemory")
+        }),
+        "missing unmap error warning in {warnings:?}"
+    );
+}
+
+/// A runtime that never stops, as when a device event never returns.
+#[derive(Default)]
+struct StuckRuntime {
+    shutdowns: AtomicUsize,
+}
+
+impl WorkerRuntime for StuckRuntime {
+    fn add(
+        &self,
+        _name: &'static str,
+        _device: Arc<Mutex<dyn VirtioDevice>>,
+        _interrupt: Arc<dyn VirtioInterrupt>,
+    ) -> SlotId {
+        SlotId(0)
+    }
+
+    fn prepare(&self, _slot: SlotId) -> Result<WorkerContext, DeviceError> {
+        Err(DeviceError::Fatal("stuck"))
+    }
+
+    fn start(&self, _slot: SlotId) -> Result<(), DeviceError> {
+        Err(DeviceError::Fatal("stuck"))
+    }
+
+    fn kick(&self, _slot: SlotId, _index: u16) {}
+
+    fn stop(&self, _slot: SlotId) -> Result<(), DeviceError> {
+        Err(DeviceError::Fatal("stuck"))
+    }
+
+    fn cancel_prepare(&self, _slot: SlotId) {}
+
+    fn shutdown(&self) -> Result<(), ShutdownError> {
+        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+        Err(ShutdownError::Join(io::Error::from(
+            io::ErrorKind::TimedOut,
+        )))
+    }
+}
+
+#[test]
+fn failed_boot_keeps_registration_and_backing_when_workers_fail_to_join() {
+    let backend = MockVm::new();
+    let log = backend.log();
+    let runtime = Arc::new(StuckRuntime::default());
+    let mut backing = None;
+
+    let (result, warnings) = capture_warnings(|| {
+        Vm::build(
+            config(1, 16),
+            || Ok(backend),
+            true,
+            |_| Ok(VirtioWorkers::with_runtime(runtime.clone())),
+            failed_boot,
+            |_, ctx, _| {
+                backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
+                Ok(())
+            },
+        )
+    });
+
+    assert_boot_error(result.expect_err("boot fails"));
+    assert_eq!(runtime.shutdowns.load(Ordering::SeqCst), 1);
+    assert!(matches!(log.lock().unwrap().as_slice(), [Call::Map { .. }]));
+    assert!(backing.unwrap().upgrade().is_some());
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.contains("the virtio workers did not stop; leaking guest RAM")
+        }),
+        "missing worker join warning in {warnings:?}"
+    );
+}
+
+#[test]
+fn panicking_boot_unmaps_ram_and_releases_backing_after_host_vm_closes() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let backend = MockVm::failing_at(&[1]);
+    let call_log = backend.call_log();
+    let backing = Arc::new(OnceLock::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let backend = DropCheckedVm {
+        backend,
+        backing: backing.clone(),
+        dropped: dropped.clone(),
+    };
+
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        with_fresh_backend(
+            config(1, 16),
+            backend,
+            |_, _| panic!("boot panic"),
+            |chipset, ctx| {
+                backing
+                    .set(Arc::downgrade(&ctx.memory.memory().into_inner()))
+                    .unwrap();
+                chipset.add("device", |resources| {
+                    Ok(MappingTestDevice {
+                        _irq: Some(resources.line(4)),
+                    })
+                })
+            },
+        )
+    }))
+    .expect_err("boot panics");
+
+    assert_eq!(panic.downcast_ref::<&str>(), Some(&"boot panic"));
+    assert!(matches!(
+        call_log.ioctl_calls().as_slice(),
+        [Call::Map { .. }, Call::Unmap { .. }]
+    ));
+    assert!(dropped.load(Ordering::Relaxed), "the host VM must close");
+    assert!(backing.get().unwrap().upgrade().is_none());
 }
 
 /// A chipset conflict fails the build before any RAM is registered, so the
@@ -297,13 +819,16 @@ fn vm_is_send_and_sync() {
 fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
     use std::sync::Arc;
 
-    use boxlite_hypervisor::{VcpuExit, X86BootRegisters, X86Segment};
+    use boxlite_hypervisor::{KvmVm, VcpuExit, X86BootRegisters, X86Segment};
     use vm_memory::{Bytes, GuestAddress};
 
-    use crate::memory::MMIO_HOLE_START;
+    use crate::{boot::BOOT_LEAF, cpu_features::preflight_x86, memory::MMIO_HOLE_START};
 
-    let vm = bare(config(1, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
-    let memory = Arc::clone(vm.ram.memory());
+    let config = config(1, 3072);
+    let prepared = KvmVm::prepare().unwrap();
+    preflight_x86(config.memory_mib, prepared.supported_cpuid(), BOOT_LEAF).unwrap();
+    let vm = bare(config, move || KvmVm::from_prepared(prepared)).unwrap();
+    let memory = Arc::clone(vm.ram.boot_memory());
     let last = GuestAddress(MMIO_HOLE_START - 1);
     // mov al,[0xBFFFFFFF]; mov dx,0x3f8; out dx,al; hlt
     let program = [
@@ -321,7 +846,7 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
             .unwrap();
     }
 
-    let mut vcpu = vm.host_vm.create_vcpu(0).unwrap();
+    let mut vcpu = vm.host_vm.as_deref().unwrap().create_vcpu(0).unwrap();
     let code = X86Segment {
         limit: u32::MAX,
         selector: 8,
@@ -371,13 +896,12 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
 fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     use std::sync::Arc;
 
-    use boxlite_hypervisor::VcpuExit;
+    use boxlite_hypervisor::{KvmVm, VcpuExit};
     use vm_memory::{Bytes, GuestAddress};
 
     use crate::{
-        boot::entry::long_mode_entry,
-        cpu_features::{BOOT_MSRS, vcpu_cpuid},
-        memory::MMIO_HOLE_START,
+        boot::{BOOT_LEAF, entry::long_mode_entry},
+        cpu_features::{BOOT_MSRS, preflight_x86, vcpu_cpuid},
     };
 
     const ENTRY: u64 = 0x100_0000;
@@ -385,7 +909,16 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     const RESULTS: u64 = 0x6000;
     const PARAMS_MARKER: u64 = 0x0123_4567_89ab_cdef;
     const TOP_MARKER: u64 = 0xfedc_ba98_7654_3210;
-    let top = MMIO_HOLE_START - 8;
+
+    // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
+    let config = config(2, 4097);
+    // The marker occupies the last eight bytes of RAM, above 4 GiB.
+    let (start, len) = ram_ranges(config.memory_mib).pop().expect("high RAM range");
+    let top = start.0 + len as u64 - 8;
+    assert!(
+        top > 0x1_0000_0000,
+        "marker GPA {top:#x} is not above 4 GiB"
+    );
     let mut program = vec![
         0xb8, 0x18, 0x00, 0x00, 0x00, // mov eax, 0x18 (__BOOT_DS)
         0x8e, 0xd8, // mov ds, eax: each reload reads the GDT in RAM
@@ -400,9 +933,9 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         0x8f, 0x47, 0x10, // pop qword [rdi + 0x10]
         0x48, 0x8b, 0x06, // mov rax, [rsi]
         0x48, 0x89, 0x07, // mov [rdi], rax
-        0xbb, // mov ebx, top
+        0x48, 0xbb, // mov rbx, top
     ];
-    program.extend_from_slice(&(top as u32).to_le_bytes());
+    program.extend_from_slice(&top.to_le_bytes());
     program.extend_from_slice(&[
         0x48, 0x8b, 0x03, // mov rax, [rbx]
         0x48, 0x89, 0x47, 0x08, // mov [rdi + 0x08], rax
@@ -440,18 +973,28 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         0x0f, 0x0b, // ud2
     ]);
 
-    // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
-    let vm = bare(config(2, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
-    let memory = Arc::clone(vm.ram.memory());
+    let prepared = KvmVm::prepare().unwrap();
+    let leaf = preflight_x86(config.memory_mib, prepared.supported_cpuid(), BOOT_LEAF).unwrap();
+    let vm = bare(config, move || KvmVm::from_prepared(prepared)).unwrap();
+    let memory = Arc::clone(vm.ram.boot_memory());
     memory.write_slice(&program, GuestAddress(ENTRY)).unwrap();
     memory
         .write_obj(PARAMS_MARKER, GuestAddress(BOOT_PARAMS))
         .unwrap();
     memory.write_obj(TOP_MARKER, GuestAddress(top)).unwrap();
-    let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS).unwrap();
-    let cpuid = vcpu_cpuid(vm.host_vm.supported_cpuid(), 0, 2);
+    let ranges: Vec<_> = vm.ram.ranges().collect();
+    let plan = crate::x86_boot_layout::plan_boot_tables(
+        &ranges,
+        (ENTRY, ENTRY + program.len() as u64),
+        None,
+        leaf.page_size(),
+    )
+    .unwrap();
+    let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS, &plan).unwrap();
+    let host_vm = vm.host_vm.as_deref().unwrap();
+    let cpuid = vcpu_cpuid(host_vm.supported_cpuid(), 0, 2);
 
-    let mut vcpu = vm.host_vm.create_vcpu(0).unwrap();
+    let mut vcpu = host_vm.create_vcpu(0).unwrap();
     vcpu.set_cpu_features(&cpuid, &BOOT_MSRS).unwrap();
     vcpu.set_boot_registers(&regs).unwrap();
     match vcpu.run().unwrap() {
@@ -513,6 +1056,14 @@ mod lifecycle {
         bare(config(vcpu_count, 16), || Ok(backend)).unwrap()
     }
 
+    fn memory_calls(calls: &[Call]) -> Vec<Call> {
+        calls
+            .iter()
+            .copied()
+            .filter(|call| matches!(call, Call::Map { .. } | Call::Unmap { .. }))
+            .collect()
+    }
+
     #[test]
     fn the_first_guest_exit_decides_the_outcome_and_stops_every_vcpu() {
         for (step, expected) in [
@@ -522,7 +1073,11 @@ mod lifecycle {
             // vCPU 1 never exits on its own, so only a kick ends it.
             let (exit, vm) = run(mock(2, MockVm::with_scripts(vec![vec![step]])));
             assert_eq!(exit.unwrap(), expected);
-            let log = vm.host_vm.log();
+            let host_vm = vm.host_vm.as_deref().unwrap();
+            let log = host_vm.log();
+            let call_log = host_vm.call_log();
+            let region = vm.ram.regions().next().expect("one RAM region");
+            let expected_memory = [Call::map(&region), Call::unmap(&region)];
             drop(vm);
             let calls = log.lock().unwrap().clone();
             let first_unmap = calls
@@ -537,6 +1092,8 @@ mod lifecycle {
                 .collect();
             assert_eq!(drops.len(), 2, "{calls:?}");
             assert!(drops.iter().all(|&index| index < first_unmap), "{calls:?}");
+            assert_eq!(memory_calls(&calls), expected_memory);
+            assert_eq!(memory_calls(&call_log.ioctl_calls()), expected_memory);
         }
     }
 
@@ -545,7 +1102,7 @@ mod lifecycle {
         let (exit, vm) = run(mock(3, MockVm::with_scripts(vec![vec![Step::Shutdown]])));
         exit.unwrap();
 
-        let calls = vm.host_vm.calls();
+        let calls = vm.host_vm.as_deref().unwrap().calls();
         let boot: Vec<_> = calls
             .iter()
             .filter(|call| matches!(call, Call::SetBootRegisters { .. }))
@@ -777,15 +1334,12 @@ mod lifecycle {
 
     mod virtio {
         use std::{
-            sync::{
-                Arc, Mutex,
-                atomic::{AtomicUsize, Ordering},
-            },
+            sync::{Arc, Mutex},
             thread,
             time::{Duration, Instant},
         };
 
-        use super::{super::*, SlowSink, run};
+        use super::{super::*, SlowSink, memory_calls, run};
         use crate::{
             VmExit,
             chipset::ChipsetBuilder,
@@ -793,9 +1347,8 @@ mod lifecycle {
             mock_vm::Step,
             virtio::{
                 ActivationContext, DeviceContext, DeviceError, DeviceEvent, DeviceSpec,
-                FeatureError, SnapshotSupport, VirtioDevice, VirtioInterrupt, WorkerContext,
+                FeatureError, SnapshotSupport, VirtioDevice,
                 mmio::{self, Slot},
-                worker::{ShutdownError, SlotId, VirtioWorkers, WorkerRuntime},
             },
         };
 
@@ -917,7 +1470,7 @@ mod lifecycle {
                 || Ok(MockVm::with_scripts(vec![driver()])),
                 |_, _| Ok(BootRegisters::default()),
                 |chipset, ctx| {
-                    memory = Some(Arc::downgrade(ctx.memory));
+                    memory = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
                     add(chipset, ctx, ResetOnKick::shared(Box::new(|| {})))
                 },
             )
@@ -975,6 +1528,7 @@ mod lifecycle {
             assert_eq!(
                 vm.ram
                     .memory()
+                    .memory()
                     .read_obj::<u16>(GuestAddress(0x3002))
                     .unwrap(),
                 1u16.to_le()
@@ -986,8 +1540,8 @@ mod lifecycle {
             for (step, clean) in [(Step::Reset, true), (Step::Fail, false)] {
                 // A writable TX descriptor is rejected by the final scan.
                 let (vm, sink) = console_vm(2, step);
-                let log = vm.host_vm.log();
-                let memory = Arc::downgrade(vm.ram.memory());
+                let log = vm.host_vm.as_deref().unwrap().log();
+                let memory = Arc::downgrade(vm.ram.boot_memory());
                 let (exit, vm) = run(vm);
                 let error = exit.unwrap_err();
                 if clean {
@@ -1008,16 +1562,18 @@ mod lifecycle {
                     );
                 }
                 assert!(sink.0.lock().unwrap().is_empty());
-                assert!(vm.workers.shutdown().is_err(), "hook failure is cached");
+                assert!(
+                    vm.workers.as_ref().unwrap().shutdown().is_err(),
+                    "hook failure is cached"
+                );
 
+                let call_log = vm.host_vm.as_deref().unwrap().call_log();
+                let region = vm.ram.regions().next().expect("one RAM region");
+                let expected_memory = [Call::map(&region), Call::unmap(&region)];
                 drop(vm);
 
-                assert!(
-                    log.lock()
-                        .unwrap()
-                        .iter()
-                        .any(|call| matches!(call, Call::Unmap { .. }))
-                );
+                assert_eq!(memory_calls(&log.lock().unwrap()), expected_memory);
+                assert_eq!(memory_calls(&call_log.ioctl_calls()), expected_memory);
                 assert!(
                     memory.upgrade().is_none(),
                     "joined workers permit RAM release"
@@ -1061,12 +1617,15 @@ mod lifecycle {
                 |_, _| Ok(BootRegisters::default()),
                 |chipset, ctx| {
                     ctx.memory
+                        .memory()
                         .write_slice(b"final", GuestAddress(0x4000))
                         .unwrap();
                     ctx.memory
+                        .memory()
                         .write_obj(Descriptor::new(0x4000, 5, flags, 0), GuestAddress(0x1000))
                         .unwrap();
                     ctx.memory
+                        .memory()
                         .write_obj(1u16.to_le(), GuestAddress(0x2002))
                         .unwrap();
                     add(chipset, ctx, console)
@@ -1075,46 +1634,6 @@ mod lifecycle {
             .unwrap();
             vm.console = Mutex::new(Some(worker));
             (vm, sink)
-        }
-
-        /// A runtime that never stops, as when a device event never returns.
-        #[derive(Default)]
-        struct StuckRuntime {
-            shutdowns: AtomicUsize,
-        }
-
-        impl WorkerRuntime for StuckRuntime {
-            fn add(
-                &self,
-                _name: &'static str,
-                _device: Arc<Mutex<dyn VirtioDevice>>,
-                _interrupt: Arc<dyn VirtioInterrupt>,
-            ) -> SlotId {
-                SlotId(0)
-            }
-
-            fn prepare(&self, _slot: SlotId) -> Result<WorkerContext, DeviceError> {
-                Err(DeviceError::Fatal("stuck"))
-            }
-
-            fn start(&self, _slot: SlotId) -> Result<(), DeviceError> {
-                Err(DeviceError::Fatal("stuck"))
-            }
-
-            fn kick(&self, _slot: SlotId, _index: u16) {}
-
-            fn stop(&self, _slot: SlotId) -> Result<(), DeviceError> {
-                Err(DeviceError::Fatal("stuck"))
-            }
-
-            fn cancel_prepare(&self, _slot: SlotId) {}
-
-            fn shutdown(&self) -> Result<(), ShutdownError> {
-                self.shutdowns.fetch_add(1, Ordering::SeqCst);
-                Err(ShutdownError::Join(io::Error::from(
-                    io::ErrorKind::TimedOut,
-                )))
-            }
         }
 
         /// A clean exit becomes the workers' failure; an error exit keeps
@@ -1126,7 +1645,7 @@ mod lifecycle {
                 let log = backend.log();
                 let mut vm = bare(config(1, 16), || Ok(backend)).unwrap();
                 let runtime = Arc::new(StuckRuntime::default());
-                vm.workers = VirtioWorkers::with_runtime(runtime.clone());
+                vm.workers = Some(VirtioWorkers::with_runtime(runtime.clone()));
 
                 let (exit, vm) = run(vm);
 
@@ -1247,7 +1766,7 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     let mut vm = Vm::with_backend(
         config(2, 2),
         boxlite_hypervisor::KvmVm::new,
-        |ram, _| Ok(flat_guest::load(ram.memory(), &program)),
+        |ram, _| Ok(flat_guest::load(&ram.memory().memory(), &program)),
         |chipset, _| {
             chipset.add("i8042", |resources| {
                 resources.pio(0x64, 1);
@@ -1258,6 +1777,121 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     .unwrap();
 
     assert_eq!(vm.run().unwrap(), VmExit::GuestReset);
+}
+
+/// Exercises the production composition and boot loader at the disk limit;
+/// the backend is mocked, but none of the attached devices are test doubles.
+/// Eight disks, the balloon and the aggregate filesystem fill the slots up
+/// to and across the RTC's line, so every virtio GSI must land past GSI 8.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn rtc_coexists_with_max_disks_balloon_and_aggregate_filesystem() {
+    use boxlite_hypervisor::VcpuExit;
+    use linux_loader::loader::bootparam::boot_params;
+    use vm_memory::{Bytes, GuestAddress};
+
+    use crate::{
+        config::{DiskConfig, DiskFormat, MAX_DISKS},
+        devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES},
+        x86_boot_layout::PageSize,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let kernel = directory.path().join("kernel.elf");
+    std::fs::write(&kernel, crate::boot::elf::tests::fixture()).unwrap();
+    let disks: Vec<_> = (0..MAX_DISKS)
+        .map(|index| {
+            let block_id = format!("disk-{index}");
+            let path = directory.path().join(&block_id);
+            std::fs::File::create(&path).unwrap().set_len(4096).unwrap();
+            DiskConfig {
+                block_id,
+                path,
+                format: DiskFormat::Raw,
+                read_only: false,
+            }
+        })
+        .collect();
+    let mut configuration = config(1, 2);
+    configuration.kernel = kernel;
+    configuration.cmdline = "console=ttyS0".into();
+    configuration.disks = disks;
+    configuration.filesystem = Some(crate::FsConfig {
+        tag: "aggregate-test".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "BoxLiteShared".into(),
+            path: directory.path().to_owned(),
+            read_only: false,
+        }],
+    });
+    let (writer, mut console) =
+        ConsoleWorker::spawn(Box::new(io::sink()), DEFAULT_QUEUE_BYTES).unwrap();
+    let leaf = PageSize::Mib.checked(false).unwrap();
+    let vm = Vm::with_devices(
+        configuration,
+        || Ok(MockVm::new()),
+        |ram, config| crate::boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
+        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+    )
+    .expect("real RTC and all configured virtio devices must compose without conflicts");
+
+    let memory = vm.ram.memory().memory();
+    let params: boot_params = memory.read_obj(GuestAddress(vm.boot_regs.rsi)).unwrap();
+    let mut line = vec![0; params.hdr.cmdline_size as usize];
+    memory
+        .read_slice(&mut line, GuestAddress(params.hdr.cmd_line_ptr.into()))
+        .unwrap();
+    let line = std::ffi::CStr::from_bytes_with_nul(&line)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let (announcements, _) = line.split_once("console=ttyS0").unwrap();
+    let announcements: Vec<_> = announcements.split_whitespace().collect();
+    assert_eq!(announcements.len(), MAX_DISKS + 2);
+    let gsis = [5, 6, 7, 9, 10, 11, 12, 13, 14, 15];
+    let chipset = vm.chipset.as_ref().unwrap();
+    for (index, argument) in announcements.iter().enumerate() {
+        let base = 0xd000_0000 + index as u64 * 0x1000;
+        assert_eq!(
+            *argument,
+            format!("virtio_mmio.device=4K@{base:#x}:{}", gsis[index])
+        );
+        let read = |offset, bytes: &mut [u8]| {
+            assert!(
+                chipset
+                    .dispatch(VcpuExit::MmioRead {
+                        guest_addr: base + offset,
+                        bytes,
+                    })
+                    .is_none()
+            );
+        };
+        let mut id = [0; 4];
+        read(8, &mut id);
+        assert_eq!(
+            u32::from_le_bytes(id),
+            if index < MAX_DISKS {
+                2
+            } else if index == MAX_DISKS {
+                5
+            } else {
+                26
+            }
+        );
+    }
+    // Register D's valid-RAM bit identifies the real CMOS device at its ports.
+    chipset.dispatch(VcpuExit::IoOut {
+        port: 0x70,
+        bytes: &[0x0d],
+    });
+    let mut status = [0];
+    chipset.dispatch(VcpuExit::IoIn {
+        port: 0x71,
+        bytes: &mut status,
+    });
+    assert_eq!(status, [0x80]);
+    drop(vm);
+    console.finish();
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -1293,13 +1927,14 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
     )
     .unwrap();
     let mut id = [0; 4];
-    vm.chipset.dispatch(VcpuExit::MmioRead {
+    let chipset = vm.chipset.as_ref().unwrap();
+    chipset.dispatch(VcpuExit::MmioRead {
         guest_addr: 0xd000_1008,
         bytes: &mut id,
     });
     assert_eq!(u32::from_le_bytes(id), 26);
     let mut tag = [0; 4];
-    vm.chipset.dispatch(VcpuExit::MmioRead {
+    chipset.dispatch(VcpuExit::MmioRead {
         guest_addr: 0xd000_1100,
         bytes: &mut tag,
     });

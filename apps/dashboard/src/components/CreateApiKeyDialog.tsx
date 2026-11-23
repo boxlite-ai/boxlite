@@ -10,7 +10,7 @@ import { Dialog, DialogDescription, DialogTitle, DialogTrigger } from '@/compone
 import { FormDialogContent, FormDialogHeader, FormDialogFooter, FormDialogBody } from '@/components/ui/form-dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus } from '@/components/ui/icon'
+import { CheckIcon, CopyIcon, Plus } from '@/components/ui/icon'
 import { useCreateApiKeyMutation } from '@/hooks/mutations/useCreateApiKeyMutation'
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 import {
@@ -184,18 +184,35 @@ function ApiKeyForm({
           </div>
           <div className="flex items-center justify-between gap-3 text-body">
             <span>Expires</span>
-            <span>{apiKeyExpirationDate(result.expiresAt)}</span>
+            <span className="min-w-0 text-right">{apiKeyExpirationDate(result.expiresAt)}</span>
           </div>
-          <div className="ph-no-capture border border-border bg-card p-4 space-y-3">
-            <p className="ph-mask break-all select-all font-mono text-body">{result.value}</p>
+          <div className="ph-no-capture flex min-w-0 items-center gap-3 border border-border bg-card px-3 py-2">
+            <div
+              role="region"
+              className="ph-mask min-w-0 flex-1 overflow-x-auto whitespace-nowrap select-all font-mono text-body"
+              tabIndex={0}
+              aria-label="API key"
+            >
+              {result.value}
+            </div>
             <AsciiButton
               type="button"
-              variant="primary"
+              variant="quiet"
+              size="icon"
+              className="shrink-0"
+              aria-label={copied === result.value ? 'Copied' : 'Copy API key'}
               onClick={async () => setCopyFailed(!(await copy(result.value)))}
             >
-              {copied === result.value ? 'Copied' : 'Copy'}
+              {copied === result.value ? (
+                <CheckIcon aria-hidden className="size-4" />
+              ) : (
+                <CopyIcon aria-hidden className="size-4" />
+              )}
             </AsciiButton>
           </div>
+          <span role="status" className="sr-only">
+            {copied === result.value ? 'API key copied' : ''}
+          </span>
           {copyFailed && (
             <p role="alert" className="text-body text-destructive">
               Could not copy. Select the key above and copy it manually.

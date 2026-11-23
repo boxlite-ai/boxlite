@@ -97,10 +97,11 @@ jobs:
     # it, so `contents: read` is restated. `pull-requests: read` is what lets a
     # request's merge resolve below, and it is granted here rather than at
     # workflow level so the jobs that reach a cloud role never carry it — this
-    # is the only job that reads the API, and it binds no Environment.
-    # `id-token` is not restated: nothing here federates.
+    # is the only job that reads pull requests, and it binds no Environment.
+    # The approval notice reads this run's display title through the Actions API.
     permissions:
       contents: read
+      actions: read
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
@@ -108,6 +109,7 @@ jobs:
       version: ${{ steps.classify.outputs.version }}
       image_tag: ${{ steps.tag.outputs.image }}
       line: ${{ steps.classify.outputs.line }}
+      prepare_components: ${{ steps.tag.outputs.prepare_components }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -170,10 +172,12 @@ jobs:
           [ -z "$version" ] || line="release $version"
           [ -z "$pr" ] || line="pull request #$pr"
 
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'pr=%s\n' "$pr" >> "$GITHUB_OUTPUT"
-          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
-          printf 'line=%s\n' "$line" >> "$GITHUB_OUTPUT"
+          {
+            printf 'version=%s\n' "$version"
+            printf 'pr=%s\n' "$pr"
+            printf 'candidate=%s\n' "$candidate"
+            printf 'line=%s\n' "$line"
+          } >> "$GITHUB_OUTPUT"
           echo "${STAGE}: ${line}"
 
       # A pull request becomes the commit it would merge to, not its head.
@@ -327,6 +331,7 @@ jobs:
           VERSION: ${{ steps.classify.outputs.version }}
           RESOLVED: ${{ steps.ref.outputs.sha }}
           MERGED: ${{ steps.pr.outputs.sha }}
+          COMPONENTS: ${{ inputs.components }}
         run: |
           set -Eeuo pipefail
           sha="${RESOLVED:-$MERGED}"
@@ -336,10 +341,37 @@ jobs:
           fi
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
           printf 'image=%s\n' "${VERSION:+${VERSION}-}${sha}" >> "$GITHUB_OUTPUT"
+          if [ -n "$VERSION" ]; then
+            echo 'prepare_components=["release"]' >> "$GITHUB_OUTPUT"
+          else
+            case "$COMPONENTS" in
+              api+runner) echo 'prepare_components=["api","runner"]' >> "$GITHUB_OUTPUT" ;;
+              api|runner) printf 'prepare_components=["%s"]\n' "$COMPONENTS" >> "$GITHUB_OUTPUT" ;;
+              *) echo '::error title=components::Unsupported artifact selection'; exit 1 ;;
+            esac
+          fi
 
-  # Plan and prepare commit artifacts; releases also apply within this protected job.
+      - name: Notify dev reviewers
+        if: inputs.apply && inputs.stage == 'dev'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          APPROVAL_PHASE: ${{ steps.classify.outputs.version != '' && 'Release deployment approval' || 'Commit preparation approval' }}
+        run: node apps/infra/scripts/release-pipeline.mjs approval
+
+      - name: Notify prod reviewers
+        if: inputs.apply && inputs.stage == 'prod'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          APPROVAL_PHASE: Release deployment approval
+        run: node apps/infra/scripts/release-pipeline.mjs approval
+
+  # Each commit artifact plans/builds on its own runner; releases use one apply leg.
   plan:
-    name: ${{ needs.resolve.outputs.version != '' && 'deploy release' || 'plan and build' }} ${{ inputs.stage }}
+    name: ${{ matrix.component == 'release' && 'deploy release' || format('plan and build {0}', matrix.component) }} ${{ inputs.stage }}
     permissions:
       contents: read
       id-token: write
@@ -348,12 +380,14 @@ jobs:
     if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        component: ${{ fromJSON(needs.resolve.outputs.prepare_components) }}
     concurrency:
-      group: mbuild-publish-${{ inputs.stage }}
+      group: ${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
-    outputs:
-      api: ${{ steps.plan.outputs.api }}
-      runner: ${{ steps.plan.outputs.runner }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -409,7 +443,7 @@ jobs:
           VERSION: ${{ needs.resolve.outputs.version }}
           LINE: ${{ needs.resolve.outputs.line }}
           STAGE: ${{ inputs.stage }}
-          COMPONENTS: ${{ inputs.components }}
+          COMPONENTS: ${{ matrix.component == 'release' && inputs.components || matrix.component }}
           GHCR_REPOSITORY: ${{ github.repository }}
         run: |
           set -Eeuo pipefail
@@ -485,23 +519,22 @@ jobs:
         if: steps.plan.outputs.api == 'build'
         uses: ./.github/actions/mbuild
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           command: publish
           tag: ${{ needs.resolve.outputs.sha }}
           stage: ${{ inputs.stage }}
-
-      # Image builds check out the selected commit. Restore action definitions
-      # from this workflow before resolving the next local composite.
-      - name: Restore orchestration sources
-        if: steps.plan.outputs.api == 'build'
-        uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
 
       - name: Build and upload the missing Runner
         if: steps.plan.outputs.runner == 'build'
         uses: ./.github/actions/build-staged-runner
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
           stage: ${{ inputs.stage }}
           sha: ${{ needs.resolve.outputs.sha }}
 
@@ -509,6 +542,11 @@ jobs:
         if: needs.resolve.outputs.version != ''
         uses: ./.github/actions/mdeploy
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           ref: ${{ inputs.ref }}
           stage: ${{ inputs.stage }}
           sha: ${{ needs.resolve.outputs.sha }}
@@ -520,15 +558,35 @@ jobs:
           apply: ${{ inputs.apply }}
           confirm: ${{ inputs.confirm }}
 
+  notify-deploy:
+    name: Notify reviewers of the commit deployment
+    continue-on-error: true
+    needs: [resolve, plan]
+    if: inputs.apply && inputs.stage == 'dev' && needs.resolve.outputs.version == '' && needs.plan.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Notify reviewers
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          APPROVAL_PHASE: Commit deployment approval
+        run: node apps/infra/scripts/release-pipeline.mjs approval
+
   deploy:
     name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
     permissions:
       contents: read
       id-token: write
       packages: read
-    needs: [resolve, plan]
+    needs: [resolve, plan, notify-deploy]
     if: >-
-      ${{ !cancelled() && !failure() && needs.resolve.outputs.version == ''
+      ${{ !cancelled() && needs.resolve.result == 'success' && needs.plan.result == 'success' && needs.resolve.outputs.version == ''
       && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
@@ -539,6 +597,11 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/mdeploy
         with:
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
+          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           ref: ${{ inputs.ref }}
           stage: ${{ inputs.stage }}
           sha: ${{ needs.resolve.outputs.sha }}
@@ -546,6 +609,6 @@ jobs:
           image-tag: ${{ needs.resolve.outputs.image_tag }}
           line: ${{ needs.resolve.outputs.line }}
           components: ${{ inputs.components }}
-          api-route: ${{ needs.plan.outputs.api }}
+          api-route: skip
           apply: ${{ inputs.apply }}
           confirm: ${{ inputs.confirm }}

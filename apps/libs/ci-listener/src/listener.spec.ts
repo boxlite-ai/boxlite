@@ -6,9 +6,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ExecutionJournal } from './execution/journal'
-import { ExecutionScope, decodeScope } from './execution/model'
+import { ExecutionScope, decodeScope, scopeKey } from './execution/model'
 import { Listener, ListenerBackend, ListenerHost } from './listener'
 import { JitRegistration } from './runners'
+import { WorkerPool } from './execution/pool'
+import { WorkQueue } from './execution/work-queue'
 import { SqliteStateDatabase } from './state/sqlite'
 import { ExecutionLease, ListenerState } from './state/store'
 import { ListenerInbox, verifyWebhook } from './webhook'
@@ -41,14 +43,14 @@ describe('CI shared Listener orchestration', () => {
     abort: AbortController,
     publishScan: jest.Mock<Promise<void>, [ScanClaim, readonly WorkflowJob[]]>
   const settings = { image: 'runner-test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] }
-  const notification = (job = 55, installation = 1, account = 7, repository = 21) => {
+  const notification = (job = 55, installation = 1, account = 7, repository = 21, run = 33) => {
     const secret = Buffer.alloc(32, 1),
       raw = Buffer.from(
         JSON.stringify({
           action: 'queued',
           installation: { id: installation },
           repository: { id: repository, owner: { id: account } },
-          workflow_job: { id: job, run_id: 33, status: 'queued', labels: ['boxlite'] },
+          workflow_job: { id: job, run_id: run, status: 'queued', labels: ['boxlite'] },
         }),
       )
     return verifyWebhook(
@@ -171,9 +173,9 @@ describe('CI shared Listener orchestration', () => {
     await db.close()
     rmSync(directory, { recursive: true, force: true })
   })
-  const runUntil = async (event: Promise<void>) => {
+  const runUntil = async (event: Promise<void>, deadline = 2000) => {
     const task = listener.run(abort.signal),
-      timeout = setTimeout(() => abort.abort(new Error('Listener test deadline')), 2000)
+      timeout = setTimeout(() => abort.abort(new Error('Listener test deadline')), deadline)
     try {
       await Promise.race([
         event,
@@ -188,6 +190,414 @@ describe('CI shared Listener orchestration', () => {
     }
   }
   const ingressRows = () => state.recover(lease, 1000, ['notice/', 'wake/', 'receipt/'])
+  it.each([3, 5])('coordinates slow repository scans and defers an expired cohort: %s repositories', async (count) => {
+    const repos = Array.from({ length: count }, (_, index) => index + 21)
+    scope = {
+      ...scope,
+      installation: { id: 1, account: { id: 7, login: 'owner', type: 'Organization' } },
+      runners: {
+        kind: 'organization',
+        account: { id: 7, login: 'owner' },
+        group: 5,
+        repositories: repos,
+        allowPrivate: true,
+        allowPublic: false,
+      },
+    }
+    const journal = new ExecutionJournal(state)
+    await journal.initialize()
+    const original = (await state.acquire('former-owner', 300000))!
+    const key = await journal.define(original, scope)
+    const pool = new WorkerPool(
+      journal,
+      key,
+      async () => backend,
+      settings,
+      () => {},
+    )
+    await pool.tick(original, testCapacity({ account: 1, tenant: 1 }), { repository: 21, run: 33, job: 55 })
+    await pool.close()
+    const [row] = (await journal.workers(original, key)).rows
+    await journal.advance(original, row.record.key, row.record.version, {
+      runner: { ...row.value.runner, registeredAt: Date.now() - 301000 },
+    })
+    await db.transaction(namespace, async (tx) => {
+      const expiry = (await tx.get('@lease', true))!
+      await tx.put({ ...expiry, version: randomUUID(), payload: { until: 0 } }, expiry.version)
+    })
+    const started = new Set<number>(),
+      allStarted = deferred(),
+      held = deferred(),
+      lastStarted = deferred(),
+      lastHeld = deferred(),
+      retired = deferred(),
+      deferredRetirement = deferred()
+    jest.mocked(host.report).mockImplementation((_error, operation) => {
+      if (operation === 'surplus-retirement-deferred') deferredRetirement.resolve()
+    })
+    Object.assign(backend, {
+      inventory: async () => [{ id: 91, name: row.value.name, status: 'online', busy: false, labels: ['boxlite'] }],
+    })
+    jest.mocked(backend.queued).mockImplementation(async (repository) => {
+      started.add(repository)
+      if (started.size === Math.min(4, count)) allStarted.resolve()
+      if (repository === 25) {
+        lastStarted.resolve()
+        await lastHeld.promise
+      } else await held.promise
+      return []
+    })
+    const open = jest.mocked(backend.runners).getMockImplementation()!
+    jest.mocked(backend.runners).mockImplementation(async (...args) => {
+      const session = await open(...args)
+      session.registry.retireIdle = async (identity) => {
+        await args[0]({ kind: 'remove', ...identity })
+        retired.resolve()
+        return false
+      }
+      return session
+    })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    let now = Date.now()
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => now)
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 1 }) },
+      timing: { tickMs: 1, leaseMs: 300000 },
+    })
+    const running = listener.run(abort.signal)
+    let decisionTimer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([allStarted.promise, new Promise((resolve) => setTimeout(resolve, 250))])
+      expect(started).toEqual(new Set(repos.slice(0, 4)))
+      now += 35000
+      held.resolve()
+      if (count === 5) {
+        await lastStarted.promise
+        now += 35000
+        lastHeld.resolve()
+      }
+      await Promise.race([
+        count === 3 ? retired.promise : deferredRetirement.promise,
+        new Promise((_, reject) => {
+          decisionTimer = setTimeout(() => reject(new Error('No retirement decision')), 2000)
+        }),
+      ])
+      expect(started).toEqual(new Set(repos))
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      if (count === 5) {
+        expect(jest.mocked(backend.queued).mock.calls).toHaveLength(5)
+        expect(host.report).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'ScopeProofFreshnessExceeded' }),
+          'surplus-retirement-deferred',
+        )
+      }
+    } finally {
+      held.resolve()
+      lastHeld.resolve()
+      clearTimeout(decisionTimer)
+      abort.abort()
+      await running
+      clock.mockRestore()
+    }
+  })
+  it('keeps stopped-resource recovery available after 101 repository snapshots complete', async () => {
+    const repos = Array.from({ length: 101 }, (_, index) => 21 + index)
+    scope = {
+      ...scope,
+      installation: { id: 1, account: { id: 7, login: 'owner', type: 'Organization' } },
+      runners: {
+        kind: 'organization',
+        account: { id: 7, login: 'owner' },
+        group: 5,
+        repositories: repos,
+        allowPrivate: true,
+        allowPublic: false,
+      },
+    }
+    const completed = new Set<number>(),
+      recovered = deferred(),
+      invalidLookup = deferred()
+    jest.mocked(host.report).mockImplementation((error) => {
+      if (error instanceof Error && error.message === 'Invalid Listener lookup keys') invalidLookup.resolve()
+    })
+    let name = '',
+      completeInventories = 0,
+      stopped = false,
+      removed = false
+    const get = jest.mocked(backend.workers.get).getMockImplementation()!
+    jest.mocked(backend.workers.get).mockImplementation(async (name) => {
+      if (removed) throw new ConfirmedWorkerAbsent()
+      return { ...(await get(name)), status: stopped ? 'stopped' : 'running' }
+    })
+    jest.mocked(backend.workers.remove).mockImplementation(async () => {
+      removed = true
+    })
+    jest.mocked(backend.workers.deliverJit).mockImplementation(async (worker) => {
+      name = worker
+      delivered.resolve()
+    })
+    Object.assign(backend, {
+      inventory: async () => {
+        if (completed.size === repos.length && ++completeInventories >= 2) stopped = true
+        return name ? [{ id: 91, name, status: 'online', busy: false, labels: ['boxlite'] }] : []
+      },
+      reader: () => {
+        let repository: number | undefined
+        return {
+          queued: async (id: number) => {
+            repository = id
+            await delivered.promise
+            return id === 21
+              ? [{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }]
+              : []
+          },
+          close: async () => {
+            if (repository !== undefined) completed.add(repository)
+          },
+        }
+      },
+    })
+    host.observe = (event) => {
+      if (event.event === 'ci-worker-released') recovered.resolve()
+    }
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 1 }) },
+      timing: { tickMs: 1, leaseMs: 30000 },
+    })
+    await listener.receive(notification())
+    await runUntil(
+      Promise.race([
+        recovered.promise,
+        invalidLookup.promise.then(() => {
+          expect(completed.size).toBe(101)
+          throw new Error('101 repository proofs blocked stopped-resource recovery: Invalid Listener lookup keys')
+        }),
+      ]),
+      10000,
+    )
+    expect(completed.size).toBe(101)
+    expect(stopped).toBe(true)
+    expect(backend.workers.remove).toHaveBeenCalled()
+  }, 15000)
+  it('retires a failed verification reader before opening its replacement', async () => {
+    const reopened = deferred(),
+      trace: string[] = []
+    let reads = 0,
+      closeFailed = false
+    Object.assign(backend, {
+      inventory: jest.fn(async () => []),
+      reader: () => {
+        let verification = false,
+          first = false
+        return {
+          queued: backend.queued,
+          pending: async (notices: readonly { repository: number; run: number; job: number }[]) => {
+            verification = true
+            first = ++reads === 1
+            trace.push('verify-' + reads)
+            if (reads === 2) reopened.resolve()
+            return notices.map((notice) => ({
+              ...notice,
+              status: 'queued' as const,
+              runner: null,
+              labels: ['boxlite'],
+            }))
+          },
+          close: async () => {
+            if (!verification || !first) return
+            if (!closeFailed) {
+              closeFailed = true
+              trace.push('close-failed')
+              throw new Error('Token retirement pending')
+            }
+            trace.push('close-succeeded')
+          },
+        }
+      },
+    })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    await listener.receive(notification())
+    await runUntil(reopened.promise)
+    expect(trace.indexOf('close-succeeded')).toBeGreaterThan(trace.indexOf('close-failed'))
+    expect(trace.indexOf('verify-2')).toBeGreaterThan(trace.indexOf('close-succeeded'))
+  })
+  it('verifies another run in the same scope while the first run job lookup is pending', async () => {
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    const untilAbort = (signal?: AbortSignal) =>
+      new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    jest.mocked(backend.queued).mockImplementation(async (_repository, signal) => {
+      await untilAbort(signal)
+      return []
+    })
+    jest.mocked(backend.job).mockImplementation(async (notice, signal) => {
+      if (notice.run === 33) {
+        await untilAbort(signal)
+        signal?.throwIfAborted()
+      }
+      return { ...notice, status: 'queued', runner: null, labels: ['boxlite'] }
+    })
+    const created = deferred(),
+      create = jest.mocked(backend.workers.create).getMockImplementation()!
+    let count = 0
+    jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
+      const box = await create(launch)
+      if (++count === 16) created.resolve()
+      return box
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 16, tenant: 16 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    for (let id = 55; id < 71; id++) await listener.receive(notification(id))
+    for (let id = 71; id < 87; id++) await listener.receive(notification(id, 1, 7, 21, 34))
+    const running = listener.run(abort.signal)
+    try {
+      await Promise.race([created.promise, new Promise((resolve) => setTimeout(resolve, 1000))])
+      expect(backend.workers.create).toHaveBeenCalledTimes(16)
+      const rows = [...(await inspectJournal(state, lease)).allocations.values()]
+      expect(rows).toHaveLength(16)
+      expect(rows.every((row) => row.value.job.run === 34)).toBe(true)
+    } finally {
+      abort.abort()
+      await running
+    }
+  })
+  it('accumulates 64 notified jobs across verification turns while enumeration is blocked', async () => {
+    const created = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockImplementation(async (_repository, signal) => {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return []
+    })
+    const create = backend.workers.create
+    let count = 0
+    jest.mocked(create).mockImplementation(async () => {
+      if (++count === 64) created.resolve()
+      return { box_id: randomUUID(), status: 'running' }
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 64, tenant: 64 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    for (let id = 55; id < 119; id++) {
+      await listener.receive(notification(id, 1, 7, 21, id + 1000))
+    }
+    await runUntil(created.promise)
+    expect(create).toHaveBeenCalledTimes(64)
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(64)
+  })
+  it('reuses each of 64 same-run notice verifications across twelve scheduler pumps', async () => {
+    const pumped = deferred()
+    Object.assign(backend, {
+      inventory: jest.fn(async () => []),
+      pending: jest.fn(async (notices: readonly { repository: number; run: number; job: number }[]) =>
+        notices.map((notice) => ({ ...notice, status: 'queued' as const, runner: null, labels: ['boxlite'] })),
+      ),
+    })
+    jest.mocked(backend.queued).mockRejectedValue(new Error('enumeration unavailable'))
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    let pumps = 0
+    const recover = state.recover.bind(state)
+    jest.spyOn(state, 'recover').mockImplementation(async (...args) => {
+      const rows = await recover(...args)
+      if (args[2]?.includes('notice/') && ++pumps === 12) pumped.resolve()
+      return rows
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 0, tenant: 0 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    for (let id = 55; id < 119; id++) await listener.receive(notification(id))
+    await runUntil(pumped.promise)
+    const requests = jest.mocked(backend.pending!).mock.calls.map(([notices]) => notices)
+    expect(new Set(requests.flat().map((notice) => notice.job)).size).toBe(64)
+    expect(requests.every((notices) => notices.length <= 32)).toBe(true)
+    expect(requests).toHaveLength(2)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('does not grant positive capacity from stale queued HTTP data after recorded completion', async () => {
+    const checked = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(backend.queued).mockRejectedValue(new Error('Background scan unavailable'))
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    await listener.receive(observePhase('completed', 55))
+    const { observation: _observation, ...replayed } = notification()
+    await listener.receive(replayed)
+    await listener.receive(notification(56))
+    const balance = WorkerPool.prototype.balance
+    const balanced = jest.spyOn(WorkerPool.prototype, 'balance').mockImplementation(async function (
+      this: WorkerPool,
+      ...args
+    ) {
+      await balance.apply(this, args)
+      if (String(args[4]) === 'positive' && (await inspectJournal(state, lease)).allocations.size) checked.resolve()
+    })
+    try {
+      await runUntil(Promise.all([checked.promise, delivered.promise]).then(() => {}))
+      const rows = [...(await inspectJournal(state, lease)).allocations.values()]
+      expect(rows).toHaveLength(1)
+      expect(rows[0].value.job.job).toBe(56)
+      expect(backend.job).toHaveBeenCalledWith({ repository: 21, run: 33, job: 55 }, expect.any(AbortSignal))
+    } finally {
+      balanced.mockRestore()
+    }
+  })
+  it('admits a notified job while complete repository enumeration is blocked', async () => {
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockImplementation(async (_repository, signal) => {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return []
+    })
+    await listener.receive(notification())
+    const task = listener.run(abort.signal)
+    try {
+      await Promise.race([delivered.promise, new Promise((resolve) => setTimeout(resolve, 300))])
+      expect(jest.mocked(host.report).mock.calls).toEqual([])
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(backend.job).toHaveBeenCalledWith({ repository: 21, run: 33, job: 55 }, expect.any(AbortSignal))
+    } finally {
+      abort.abort()
+      await task
+    }
+  })
   const observePhase = (status: 'in_progress' | 'completed', job: number, runner: number | null = null) => {
     const secret = Buffer.alloc(32, 1)
     const raw = Buffer.from(
@@ -208,6 +618,175 @@ describe('CI shared Listener orchestration', () => {
       secret,
     )!
   }
+  it('ignores a freshly replayed queued notification when the authoritative queue is empty', async () => {
+    const settled = deferred()
+    const commit = state.commit.bind(state)
+    jest.spyOn(state, 'commit').mockImplementation(async (...args) => {
+      const result = await commit(...args)
+      if (args[1].some((write) => write.key === 'notice/1/55' && write.payload === undefined)) settled.resolve()
+      return result
+    })
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    await listener.receive(notification())
+    await runUntil(settled.promise)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
+    expect(backend.queued).toHaveBeenCalledWith(21, expect.any(AbortSignal))
+  })
+  it('does not expand from a fresh notification when its authoritative job cannot be read', async () => {
+    const failed = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockRejectedValue(new Error('queue unavailable'))
+    jest.mocked(backend.job).mockRejectedValue(new Error('queue unavailable'))
+    jest.mocked(host.report).mockImplementation((error, operation) => {
+      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'queue-reconciliation')
+        failed.resolve()
+    })
+    await listener.receive(notification())
+    await runUntil(failed.promise)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect(await state.read(['notice/1/55'])).toHaveLength(1)
+  })
+  it('continues original stopped Box cleanup when a dirty queue refresh fails', async () => {
+    const failed = deferred(),
+      removed = deferred()
+    jest.mocked(backend.workers.remove).mockImplementation(async () => removed.resolve())
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    jest.mocked(backend.workers.deliverJit).mockImplementation(async () => {
+      const box = await jest.mocked(backend.workers.create).mock.results[0].value
+      jest.mocked(backend.workers.get).mockResolvedValue({ ...box, status: 'stopped' })
+      const [counter] = await state.recover(lease, 1000, ['demand/'])
+      await state.commit(lease, [
+        { key: counter.key, expected: counter.version, payload: { ...(counter.payload as object), dirty: true } },
+      ])
+      jest.mocked(backend.queued).mockRejectedValue(new Error('queue unavailable'))
+      jest.mocked(backend.job).mockRejectedValue(new Error('queue unavailable'))
+    })
+    jest.mocked(host.report).mockImplementation((error, operation) => {
+      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'queue-reconciliation')
+        failed.resolve()
+    })
+    await listener.receive(notification())
+    await runUntil(Promise.all([failed.promise, removed.promise]).then(() => {}))
+    expect(backend.workers.remove).toHaveBeenCalledTimes(1)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+  })
+  it('cleans a stopped Box with fresh positive notices while both GitHub job reads fail', async () => {
+    const cleaned = deferred(),
+      failedQueue = deferred(),
+      failedJob = deferred()
+    const journal = new ExecutionJournal(state)
+    await journal.initialize()
+    const original = (await state.acquire('former-owner', 300000))!,
+      key = await journal.define(original, scope),
+      pool = new WorkerPool(
+        journal,
+        key,
+        async () => backend,
+        settings,
+        () => {},
+      )
+    await pool.tick(original, testCapacity({ account: 2, tenant: 2 }), { repository: 21, run: 33, job: 55 })
+    await pool.close()
+    const box = await jest.mocked(backend.workers.create).mock.results[0].value
+    let removed = false
+    jest.mocked(backend.workers.get).mockImplementation(async () => {
+      if (removed) throw new ConfirmedWorkerAbsent()
+      return { ...box, status: 'stopped' }
+    })
+    jest.mocked(backend.workers.remove).mockImplementation(async () => {
+      removed = true
+      cleaned.resolve()
+    })
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(backend.queued).mockRejectedValue(new Error('queue unavailable'))
+    jest.mocked(backend.job).mockRejectedValue(new Error('job unavailable'))
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(host.report).mockImplementation((error) => {
+      if (!(error instanceof Error)) return
+      if (error.message === 'queue unavailable') failedQueue.resolve()
+      if (error.message === 'job unavailable') failedJob.resolve()
+    })
+    await db.transaction(namespace, async (tx) => {
+      const expiry = (await tx.get('@lease', true))!
+      await tx.put({ ...expiry, version: randomUUID(), payload: { until: 0 } }, expiry.version)
+    })
+    await listener.receive(notification(56))
+    await runUntil(Promise.all([cleaned.promise, failedQueue.promise, failedJob.promise]).then(() => {}))
+    expect(backend.queued).toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
+    expect(backend.workers.remove).toHaveBeenCalledTimes(1)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(await state.read(['notice/1/56'])).toHaveLength(1)
+  })
+  it.each([false, true])(
+    'uses database time for queue proof admission and final expiry; expires=%s',
+    async (expires) => {
+      let databaseNow = Date.now()
+      state = new ListenerState(
+        {
+          transaction: (ns, work) =>
+            db.transaction(ns, (tx) => {
+              const wrapped = Object.create(tx) as typeof tx
+              wrapped.now = async () => databaseNow
+              return work(wrapped)
+            }),
+        },
+        namespace,
+      )
+      const clock = jest.spyOn(Date, 'now').mockImplementation(() => databaseNow + (expires ? -31000 : 31000))
+      Object.assign(backend, { inventory: jest.fn(async () => []) })
+      jest.mocked(backend.job).mockRejectedValue(new Error('only full queue evidence is available'))
+      jest
+        .mocked(backend.queued)
+        .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+      jest
+        .mocked(host.scan)
+        .mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+      const pumped = deferred()
+      let pumps = 0,
+        verified = false
+      const recover = state.recover.bind(state)
+      jest.spyOn(state, 'recover').mockImplementation(async (...args) => {
+        const rows = await recover(...args)
+        if (args[2]?.includes('notice/') && ++pumps === 12) pumped.resolve()
+        return rows
+      })
+      const balance = WorkerPool.prototype.balance
+      const checked = jest.spyOn(WorkerPool.prototype, 'balance').mockImplementation(async function (
+        this: WorkerPool,
+        ...args
+      ) {
+        if (args[4] === true && args[5]?.length) {
+          verified = true
+          if (expires) databaseNow = args[5][0].expiresAt!
+        }
+        return balance.apply(this, args)
+      })
+      listener = new Listener({
+        state,
+        host: withScanCatalog(host),
+        worker: settings,
+        capacity: { resolve: async () => testCapacity({ account: 1, tenant: 1 }) },
+        timing: { tickMs: 1, leaseMs: 300000 },
+      })
+      try {
+        await runUntil(pumped.promise)
+        expect(verified).toBe(true)
+        expect(backend.workers.create).toHaveBeenCalledTimes(expires ? 0 : 1)
+        if (expires) expect(host.report).toHaveBeenCalledWith(expect.any(StateConflict), 'label-capacity-balance')
+      } finally {
+        checked.mockRestore()
+        clock.mockRestore()
+      }
+    },
+  )
   it('refreshes aged positive counts before reserving from the current queue', async () => {
     Object.assign(backend, { inventory: jest.fn(async () => []) })
     jest
@@ -234,7 +813,7 @@ describe('CI shared Listener orchestration', () => {
     expect(counter.payload).toMatchObject({ queued: 1, dirty: false })
     expect(backend.queued).toHaveBeenCalledWith(21, expect.any(AbortSignal))
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
   })
   it('rebuilds a legacy notice without an aggregate before label admission', async () => {
     Object.assign(backend, { inventory: jest.fn(async () => []) })
@@ -245,7 +824,7 @@ describe('CI shared Listener orchestration', () => {
     await listener.receive(legacy)
     await runUntil(delivered.promise)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
     expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 1, dirty: false })
   })
   it('retries a conflicting repository scan from fresh counters and wake before balancing', async () => {
@@ -258,7 +837,11 @@ describe('CI shared Listener orchestration', () => {
       await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), dirty: true } }, row.version)
     })
     let reads = 0
+    const observations: { wake: string; queued: number }[] = []
     jest.mocked(backend.queued).mockImplementation(async () => {
+      const [wake] = await state.read(['queue-revision/1/21'])
+      const [counter] = await state.recover(lease, 1000, ['demand/'])
+      observations.push({ wake: wake.version, queued: (counter.payload as { queued: number }).queued })
       if (++reads === 1) {
         await listener.receive(observePhase('completed', 55))
         return [{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }]
@@ -277,12 +860,20 @@ describe('CI shared Listener orchestration', () => {
       return result
     })
     await runUntil(balanced.promise)
-    expect(reads).toBe(2)
+    expect(observations[0].wake).not.toBe(observations[1].wake)
+    expect(observations.slice(0, 2).map((read) => read.queued)).toEqual([1, 0])
     expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 0, dirty: false })
-    expect(host.report).not.toHaveBeenCalledWith(expect.any(StateConflict), 'label-capacity-balance')
+    expect(host.report).not.toHaveBeenCalledWith(expect.any(StateCorrupt), 'queue-reconciliation')
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
-  it('defers a repeatedly conflicting repository without reserving its stale counts or blocking another repository', async () => {
+  it('admits verified jobs while another repository snapshot remains incomplete', async () => {
+    const settled = deferred()
+    const commit = state.commit.bind(state)
+    jest.spyOn(state, 'commit').mockImplementation(async (...args) => {
+      const result = await commit(...args)
+      if (args[1].some((write) => write.key === 'notice/1/56' && write.payload === undefined)) settled.resolve()
+      return result
+    })
     scope.installation.account.type = 'Organization'
     scope.runners = {
       kind: 'organization',
@@ -315,10 +906,10 @@ describe('CI shared Listener orchestration', () => {
       ]
     })
     await runUntil(delivered.promise)
-    expect(conflictingReads).toBe(2)
     const allocations = [...(await inspectJournal(state, lease)).allocations.values()]
     expect(allocations).toHaveLength(1)
-    expect(allocations[0].value.job.repository).toBe(22)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(conflictingReads).toBeGreaterThan(0)
     expect(await state.read(['notice/1/55'])).toHaveLength(1)
     expect((await state.recover(lease, 1000, ['demand/1/21/']))[0].payload).toMatchObject({ queued: 99, dirty: true })
   })
@@ -358,7 +949,7 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     const [counter] = await state.recover(lease, 1000, ['demand/'])
     expect(counter.payload).toMatchObject({ queued: 1, dirty: false })
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
   })
   it('uses a queue fallback for busy PAT-style supply without webhook claim observations', async () => {
     let busy = false,
@@ -386,6 +977,12 @@ describe('CI shared Listener orchestration', () => {
       capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
       timing: { tickMs: 1, leaseMs: 3000 },
     })
+    jest.mocked(backend.job).mockImplementation(async (notice) => ({
+      ...notice,
+      status: busy ? 'in_progress' : 'queued',
+      runner: busy ? 91 : null,
+      labels: ['boxlite'],
+    }))
     await listener.receive(notification())
     await runUntil(repaired.promise)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
@@ -393,9 +990,13 @@ describe('CI shared Listener orchestration', () => {
   })
   it('fences a reservation when a completion changes demand during inventory lookup', async () => {
     const rejected = deferred()
+    let reads = 0
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
     Object.assign(backend, {
       inventory: jest.fn(async () => {
-        await listener.receive(observePhase('completed', 55))
+        if (++reads === 1) await listener.receive(observePhase('completed', 55))
         return []
       }),
     })
@@ -418,6 +1019,9 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
   it('replenishes label capacity when a triggering job runner claims another job', async () => {
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
     const inventory = new Map<number, { id: number; name: string; busy: boolean; status: 'online'; labels: string[] }>()
     let nextId = 100
     const second = deferred()
@@ -481,10 +1085,20 @@ describe('CI shared Listener orchestration', () => {
       await task
     }
     expect(backend.workers.create).toHaveBeenCalledTimes(2)
-    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.job).toHaveBeenCalled()
     expect((await inspectJournal(state, lease)).workers).toHaveLength(2)
   })
   it('creates all missing label capacity concurrently within the organization quota', async () => {
+    jest.mocked(backend.queued).mockResolvedValue(
+      Array.from({ length: 17 }, (_, index) => ({
+        repository: 21,
+        run: 33,
+        job: index + 100,
+        status: 'queued' as const,
+        runner: null,
+        labels: ['boxlite'],
+      })),
+    )
     const release = deferred(),
       entered = deferred()
     let inFlight = 0,
@@ -739,7 +1353,7 @@ describe('CI shared Listener orchestration', () => {
       clearTimeout(deadline)
       release.resolve()
       abort.abort()
-      await running
+      await running.catch(() => {})
     }
   })
   it('compensates a missed webhook by recording the scanned job before dispatching it', async () => {
@@ -772,24 +1386,43 @@ describe('CI shared Listener orchestration', () => {
     await listener.receive(notification())
     const entered = deferred(),
       resume = deferred(),
-      scanned = deferred()
+      checked = deferred()
     jest.mocked(backend.job).mockImplementation(async (notice) => {
       entered.resolve()
       await resume.promise
       return { ...notice, status: 'completed', labels: ['boxlite'], runner: null }
     })
-    jest.mocked(backend.queued).mockImplementation(async () => {
-      scanned.resolve()
-      return []
+    const [original] = await state.read(['notice/1/55'])
+    const commit = state.commit.bind(state)
+    let newerVersion = '',
+      staleRejected = false
+    jest.spyOn(state, 'commit').mockImplementation(async (...args) => {
+      try {
+        return await commit(...args)
+      } catch (error) {
+        if (
+          error instanceof StateConflict &&
+          args[1].some(
+            (change) =>
+              change.key === original.key && change.expected === original.version && change.payload === undefined,
+          )
+        ) {
+          expect((await state.read([original.key]))[0].version).toBe(newerVersion)
+          staleRejected = true
+          checked.resolve()
+        }
+        throw error
+      }
     })
     const test = (async () => {
       await entered.promise
       await listener.receive(notification())
+      newerVersion = (await state.read([original.key]))[0].version
       resume.resolve()
     })()
-    await runUntil(scanned.promise)
+    await runUntil(checked.promise)
     await test
-    expect((await ingressRows()).some((row) => row.key === 'notice/1/55')).toBe(true)
+    expect(staleRejected).toBe(true)
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
   it('does not turn a notice for another installation into an authorized job', async () => {
@@ -1051,6 +1684,277 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.close).toHaveBeenCalledTimes(2)
     jest.mocked(backend.close).mockResolvedValue()
   })
+  it('ends a superseded deployment after retiring local owners without deleting its running worker', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const close = jest.fn(async () => {})
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    let current!: ExecutionLease
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async () => {
+      await replacement.activate()
+      current = (await replacement.acquire('new-deployment', 300000))!
+      delivered.resolve()
+    })
+    const deadline = setTimeout(() => abort.abort(), 1000)
+    try {
+      await listener.run(abort.signal)
+      expect(abort.signal.aborted).toBe(false)
+      expect(close).toHaveBeenCalledTimes(2)
+      expect(backend.close).toHaveBeenCalled()
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+      expect((await inspectJournal(replacement, current)).allocations.size).toBe(1)
+      await expect(listener.receive(notification(56))).resolves.toBe('stored')
+    } finally {
+      clearTimeout(deadline)
+      abort.abort()
+    }
+  })
+  it('retires independent deployment owners while an uncancellable create is still pending', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const entered = deferred(),
+      release = deferred(),
+      closed = deferred()
+    const close = jest.fn(async () => closed.resolve())
+    jest.mocked(backend.workers.create).mockImplementation(async () => {
+      entered.resolve()
+      await release.promise
+      return { box_id: 'late-created-box', status: 'running' }
+    })
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 300 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    const running = listener.run(abort.signal)
+    let stopped = false
+    void running.then(
+      () => {
+        stopped = true
+      },
+      () => {
+        stopped = true
+      },
+    )
+    try {
+      await entered.promise
+      await replacement.activate()
+      const result = await Promise.race([
+        closed.promise.then(() => 'closed'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ])
+      expect(result).toBe('closed')
+      expect(stopped).toBe(false)
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+      release.resolve()
+      await running
+      const current = (await replacement.acquire('replacement', 3000))!
+      const active = await inspectJournal(replacement, current)
+      expect(active.allocations.size).toBe(1)
+      expect([...active.allocations.values()][0].value.box.phase).toBe('requested')
+    } finally {
+      release.resolve()
+      abort.abort()
+      await running.catch(() => {})
+    }
+  })
+  it('ends an already superseded deployment before opening discovery or worker backends', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const replacement = new ListenerState(db, namespace, 2)
+    await replacement.activate()
+    const close = jest.fn(async () => {})
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    const deadline = setTimeout(() => abort.abort(), 500)
+    try {
+      await listener.run(abort.signal)
+      expect(abort.signal.aborted).toBe(false)
+      expect(close).toHaveBeenCalledTimes(2)
+      expect(host.discover).not.toHaveBeenCalled()
+      expect(host.backend).not.toHaveBeenCalled()
+    } finally {
+      clearTimeout(deadline)
+      abort.abort()
+    }
+  })
+  it.each([false, true])('drains known owners while a scan is opening (revocation retries: %s)', async (retry) => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const opening = deferred(),
+      release = deferred(),
+      closed = deferred()
+    let closes = 0
+    const reader = {
+      queued: jest.fn(async () => []),
+      publish: jest.fn(async () => {}),
+      close: jest.fn(async () => {
+        if (++closes <= (retry ? 2 : 0)) throw new Error('Late reader revocation pending')
+      }),
+    }
+    jest.mocked(host.scan).mockImplementation(async () => {
+      opening.resolve()
+      await release.promise
+      return reader
+    })
+    const close = jest.fn(async () => closed.resolve())
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async () => {
+      await opening.promise
+      await replacement.activate()
+    })
+    const running = listener.run(abort.signal)
+    try {
+      const result = await Promise.race([
+        closed.promise.then(() => 'closed'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ])
+      expect(result).toBe('closed')
+      expect(backend.close).toHaveBeenCalled()
+      expect(reader.close).not.toHaveBeenCalled()
+      release.resolve()
+      await running
+      expect(reader.close).toHaveBeenCalled()
+      expect(reader.queued).not.toHaveBeenCalled()
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+    } finally {
+      release.resolve()
+      abort.abort()
+      await running.catch(() => {})
+    }
+  })
+  it('drains every local owner after takeover despite compensation retirement failures', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const entered = deferred(),
+      trace: string[] = []
+    let closes = 0
+    const reader = {
+      queued: async (signal: AbortSignal) => {
+        entered.resolve()
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve()
+          else signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return []
+      },
+      publish: async () => {},
+      close: jest.fn(async () => {
+        trace.push('scan-close-' + ++closes)
+        if (closes <= 3) throw new Error('Revocation pending')
+      }),
+    }
+    jest.mocked(host.scan).mockResolvedValue(reader)
+    const close = jest.fn(async () => {
+      trace.push('host-close')
+    })
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async () => {
+      await Promise.race([
+        entered.promise,
+        new Promise<void>((resolve) => {
+          abort.signal.addEventListener('abort', () => resolve(), { once: true })
+        }),
+      ])
+      abort.signal.throwIfAborted()
+      await replacement.activate()
+    })
+    const deadline = setTimeout(() => abort.abort(), 1000)
+    try {
+      await listener.run(abort.signal)
+      expect(abort.signal.aborted).toBe(false)
+      expect(close).toHaveBeenCalledTimes(3)
+      expect(reader.close).toHaveBeenCalledTimes(4)
+      expect(trace.indexOf('host-close')).toBeLessThan(trace.indexOf('scan-close-4'))
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+    } finally {
+      clearTimeout(deadline)
+      abort.abort()
+    }
+  })
+  it('reports a failed renewal while JIT delivery is still draining under a live lease', async () => {
+    const entered = deferred(),
+      cancelled = deferred(),
+      release = deferred()
+    const queryError = new Error('Injected renewal query failure')
+    const renewal = jest.spyOn(state, 'renew').mockImplementationOnce(async () => {
+      await entered.promise
+      throw queryError
+    })
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async (_name, _jit, signal) => {
+      if (!signal) throw new Error('Expected the owner session signal')
+      signal.addEventListener('abort', cancelled.resolve, { once: true })
+      entered.resolve()
+      await release.promise
+      signal.throwIfAborted()
+    })
+    await listener.receive(notification())
+    const task = listener.run(abort.signal)
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        cancelled.promise,
+        task.then(() => {
+          throw new Error('Listener stopped before cancelling the pending JIT delivery')
+        }),
+        new Promise<void>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error('Renewal did not cancel the pending JIT delivery')), 2500)
+        }),
+      ])
+      expect(abort.signal.aborted).toBe(false)
+      await expect(state.now(lease)).resolves.toEqual(expect.any(Number))
+      expect(host.report).toHaveBeenCalledWith(queryError, 'listener-renewal')
+      expect(host.report).not.toHaveBeenCalledWith(queryError, 'listener-session')
+    } finally {
+      clearTimeout(deadline)
+      entered.resolve()
+      release.resolve()
+      abort.abort()
+      await task
+      renewal.mockRestore()
+    }
+  })
+
   it('renews ownership while a GitHub operation is waiting beyond the original lease expiry', async () => {
     listener = new Listener({
       state,
@@ -1116,6 +2020,382 @@ describe('CI shared Listener orchestration', () => {
       await task
     }
     expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('rotates capacity planning after a full buffer so later scopes are eventually executed', async () => {
+    const definitions = Array.from({ length: 7 }, (_, index) => {
+      const current = structuredClone(scope)
+      const login = index ? `owner${index}` : 'owner'
+      current.binding = `binding-${index}`
+      current.installation = { id: index + 1, account: { id: index + 7, login, type: 'User' } }
+      current.runners = {
+        kind: 'repository',
+        repository: {
+          id: index + 21,
+          owner: { id: index + 7, login },
+          name: 'repo',
+          private: true,
+        },
+        allowPublic: false,
+        allowPrivate: true,
+      }
+      return current
+    })
+    const finished = deferred(),
+      seen = new Set<string>()
+    const create = jest.mocked(backend.workers.create).getMockImplementation()!
+    jest.mocked(host.backend).mockImplementation(async (current) => ({
+      ...backend,
+      inventory: async () => [],
+      queued: async (repository) => [
+        { repository, run: 33, job: repository + 34, status: 'queued', labels: ['boxlite'], runner: null },
+      ],
+      workers: {
+        ...backend.workers,
+        create: async (launch) => {
+          const result = await create(launch)
+          seen.add(current.binding)
+          if (seen.size === definitions.length) finished.resolve()
+          return result
+        },
+      },
+    }))
+    jest.mocked(host.discover).mockImplementation(async (owner, _signal, request) => {
+      lease = owner
+      return { scopes: definitions, completed: request.wakes.map((row) => ({ ...row })), ready: true, pending: false }
+    })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    // The queue unit tests exercise real buffer exhaustion; this boundary forces the
+    // same rejection while the real Listener must retain and rotate durable scope work.
+    let admitted = 0
+    const recover = state.recover.bind(state)
+    jest.spyOn(state, 'recover').mockImplementation(async (...args) => {
+      if (args[2]?.includes('notice/')) admitted = 0
+      return recover(...args)
+    })
+    const enqueue = WorkQueue.prototype.enqueue
+    const bounded = jest.spyOn(WorkQueue.prototype, 'enqueue').mockImplementation(function (this: WorkQueue, ...args) {
+      if (args[0].startsWith('scope/') && ++admitted > 3) return false
+      return enqueue.apply(this, args)
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 10 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    try {
+      for (let index = 0; index < definitions.length; index++)
+        await listener.receive(notification(index + 55, index + 1, index + 7, index + 21))
+      await runUntil(finished.promise)
+      expect(seen).toEqual(new Set(definitions.map((current) => current.binding)))
+    } finally {
+      bounded.mockRestore()
+    }
+  })
+  it('accepts all three scopes once per complete planning pass across four rounds', async () => {
+    const definitions: ExecutionScope[] = Array.from({ length: 3 }, (_, index) => ({
+      ...scope,
+      binding: `planning-${index}`,
+      runners: {
+        kind: 'repository',
+        repository: { id: 21 + index, owner: { id: 7, login: 'owner' }, name: `repo-${index}`, private: true },
+        allowPrivate: true,
+        allowPublic: false,
+      },
+    }))
+    jest.mocked(host.discover).mockImplementation(async (owner) => {
+      lease = owner
+      return { scopes: definitions, completed: [], ready: true, pending: false }
+    })
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    let identifiedPlanning = false,
+      completed = 0
+    const keys = definitions.map((definition) => scopeKey(decodeScope(definition))),
+      executed: string[] = [],
+      planning = new WeakSet<WorkQueue>(),
+      planned = deferred(),
+      enqueue = WorkQueue.prototype.enqueue,
+      observed = jest.spyOn(WorkQueue.prototype, 'enqueue').mockImplementation(function (this: WorkQueue, ...args) {
+        if (!keys.includes(args[0])) return enqueue.apply(this, args)
+        if (!identifiedPlanning) {
+          planning.add(this)
+          identifiedPlanning = true
+        }
+        if (!planning.has(this)) return enqueue.apply(this, args)
+        return enqueue.call(this, args[0], args[1], async (queueWaitMs) => {
+          executed.push(args[0])
+          await args[2](queueWaitMs)
+          if (++completed === 12) planned.resolve()
+        })
+      })
+    try {
+      await runUntil(planned.promise)
+      for (let round = 0; round < 4; round++) expect(executed.slice(round * 3, round * 3 + 3)).toEqual(keys)
+      expect(completed).toBe(12)
+      expect(host.report).not.toHaveBeenCalled()
+      expect(backend.workers.create).not.toHaveBeenCalled()
+    } finally {
+      observed.mockRestore()
+    }
+  })
+  it.each([
+    [false, 'running'],
+    [true, 'running'],
+    [false, 'stopped'],
+  ] as const)('recovers a pending retirement with returned demand=%s and Box=%s', async (needed, status) => {
+    const journal = new ExecutionJournal(state)
+    await journal.initialize()
+    const original = (await state.acquire('former-owner', 3000))!
+    const key = await journal.define(original, scope)
+    let row = (await journal.reserve(
+      original,
+      key,
+      { repository: 21, run: 33, job: 55 },
+      testCapacity({ account: 1, tenant: 2 }),
+    ))!
+    row = await journal.advance(original, row.record.key, row.record.version, {
+      box: { phase: 'requested', id: null },
+      effect: { kind: 'box-create', id: randomUUID() },
+    })
+    row = await journal.advance(original, row.record.key, row.record.version, {
+      box: { phase: 'known', id: 'original-box' },
+    })
+    row = await journal.advance(original, row.record.key, row.record.version, {
+      runner: { phase: 'requested', id: null },
+      effect: { kind: 'runner-register', id: randomUUID() },
+    })
+    row = await journal.advance(original, row.record.key, row.record.version, {
+      runner: { phase: 'known', id: 91, registeredAt: Date.now() - 360000 },
+      delivery: 'requested',
+      effect: { kind: 'jit-deliver', id: randomUUID() },
+    })
+    row = await journal.advance(original, row.record.key, row.record.version, {
+      delivery: 'done',
+      effect: { kind: 'runner-retire', id: randomUUID() },
+    })
+    await db.transaction(namespace, async (tx) => {
+      const prior = (await tx.get('@lease', true))!
+      await tx.put(
+        { ...prior, version: randomUUID(), payload: { ...(prior.payload as object), until: 0 } },
+        prior.version,
+      )
+    })
+    const checked = deferred(),
+      retired = deferred(),
+      removed = deferred()
+    const retire = jest.fn(async () => {
+      retired.resolve()
+      return false
+    })
+    Object.assign(backend, {
+      inventory: jest.fn(async () => [
+        ...(status === 'running'
+          ? [{ id: 91, name: row.value.name, status: 'online', busy: false, labels: ['boxlite'] }]
+          : []),
+      ]),
+    })
+    jest.mocked(backend.workers.get).mockResolvedValue({ box_id: 'original-box', status })
+    jest.mocked(backend.workers.remove).mockImplementation(async () => removed.resolve())
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue(
+        needed ? [{ repository: 21, run: 33, job: 55, status: 'queued', labels: ['boxlite'], runner: null }] : [],
+      )
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    const open = jest.mocked(backend.runners).getMockImplementation()!
+    jest.mocked(backend.runners).mockImplementation(async (...args) => {
+      const session = await open(...args)
+      session.registry.retireIdle = async (identity) => {
+        await args[0]({ kind: 'remove', ...identity })
+        return retire()
+      }
+      return session
+    })
+    const balance = WorkerPool.prototype.balance
+    const balanced = jest.spyOn(WorkerPool.prototype, 'balance').mockImplementation(async function (
+      this: WorkerPool,
+      ...args
+    ) {
+      const result = await balance.apply(this, args)
+      if (args[4] === true) checked.resolve()
+      return result
+    })
+    try {
+      await runUntil(status === 'stopped' ? removed.promise : needed ? checked.promise : retired.promise)
+      expect(backend.workers.create).not.toHaveBeenCalled()
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(retire).toHaveBeenCalledTimes(needed || status === 'stopped' ? 0 : 1)
+    } finally {
+      balanced.mockRestore()
+    }
+  })
+  it('starts the first allocation before the second reservation finishes', async () => {
+    const entered = deferred(),
+      release = deferred(),
+      started = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockResolvedValue(
+      [55, 56].map((job) => ({
+        repository: 21,
+        run: 33,
+        job,
+        status: 'queued',
+        runner: null,
+        labels: ['boxlite'],
+      })),
+    )
+    const reserve = ExecutionJournal.prototype.reserve
+    let reservations = 0
+    const reservation = jest.spyOn(ExecutionJournal.prototype, 'reserve').mockImplementation(async function (
+      this: ExecutionJournal,
+      ...args
+    ) {
+      if (reservations === 1) {
+        entered.resolve()
+        await release.promise
+      }
+      const row = await reserve.apply(this, args)
+      if (row) reservations++
+      return row
+    })
+    const create = jest.mocked(backend.workers.create).getMockImplementation()!
+    jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
+      started.resolve()
+      return create(launch)
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const running = listener.run(abort.signal)
+    try {
+      await entered.promise
+      const outcome = await Promise.race([
+        started.promise.then(() => 'started'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ])
+      expect(outcome).toBe('started')
+    } finally {
+      abort.abort()
+      release.resolve()
+      await running
+      reservation.mockRestore()
+    }
+  })
+  it('plans another scope while the first runner inventory is pending', async () => {
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    const entered = deferred(),
+      release = deferred(),
+      started = deferred()
+    const other = structuredClone(scope)
+    other.binding = 'other'
+    other.installation = { id: 2, account: { id: 8, login: 'other', type: 'User' } }
+    other.runners = {
+      kind: 'repository',
+      repository: { id: 22, owner: { id: 8, login: 'other' }, name: 'repo', private: true },
+      allowPrivate: true,
+      allowPublic: false,
+    }
+    let scopes = [scope]
+    Object.assign(backend, {
+      inventory: jest.fn(async () => {
+        entered.resolve()
+        await release.promise
+        return []
+      }),
+    })
+    const otherBackend = {
+      ...backend,
+      inventory: async () => [],
+      queued: async () => [
+        { repository: 22, run: 33, job: 56, status: 'queued' as const, labels: ['boxlite'], runner: null },
+      ],
+      workers: {
+        ...backend.workers,
+        create: async (launch: Parameters<typeof backend.workers.create>[0]) => {
+          started.resolve()
+          return backend.workers.create(launch)
+        },
+      },
+    }
+    jest
+      .mocked(host.backend)
+      .mockImplementation(async (current) => (current.binding === 'other' ? otherBackend : backend))
+    jest.mocked(host.discover).mockImplementation(async (owner, _signal, request) => {
+      lease = owner
+      return { scopes, completed: request.wakes.map((row) => ({ ...row })), pending: false, ready: true }
+    })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    await listener.receive(notification())
+    const running = listener.run(abort.signal)
+    try {
+      await entered.promise
+      scopes = [scope, other]
+      await listener.receive(notification(56, 2, 8, 22))
+      const outcome = await Promise.race([
+        started.promise.then(() => 'started'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ])
+      expect(outcome).toBe('started')
+    } finally {
+      abort.abort()
+      release.resolve()
+      await running
+    }
+  })
+  it.each(['create', 'jit'] as const)('admits later demand while an earlier %s is pending', async (stage) => {
+    const entered = deferred(),
+      release = deferred(),
+      next = deferred()
+    const queued = [{ repository: 21, run: 33, job: 55, status: 'queued' as const, labels: ['boxlite'], runner: null }]
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(backend.queued).mockImplementation(async () => [...queued])
+    const create = jest.mocked(backend.workers.create).getMockImplementation()!
+    let creations = 0
+    jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
+      if (++creations === 1 && stage === 'create') {
+        entered.resolve()
+        await release.promise
+      } else if (creations === 2) next.resolve()
+      return create(launch)
+    })
+    if (stage === 'jit')
+      jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async () => {
+        entered.resolve()
+        await release.promise
+      })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const running = listener.run(abort.signal)
+    try {
+      await entered.promise
+      queued.push({ ...queued[0], job: 56 })
+      await listener.receive(notification(56))
+      const outcome = await Promise.race([
+        next.promise.then(() => 'started'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ])
+      expect(outcome).toBe('started')
+    } finally {
+      abort.abort()
+      release.resolve()
+      await running
+    }
   })
   it('forwards persisted recovery facts from the actual pool to its host', async () => {
     const finished = deferred(),

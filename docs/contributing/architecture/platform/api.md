@@ -79,9 +79,7 @@ The inventory is implementation-grounded:
   and [`kafka-exception.filter.ts`](../../../../apps/api/src/filters/kafka-exception.filter.ts).
 - Local-stack listeners come from the service specs in
   [`services.py`](../../../../apps/infra-local/compose/services.py) and
-  [`native.py`](../../../../apps/infra-local/compose/native.py); the container-based
-  environment's come from
-  [`local-dex-env.mjs`](../../../../apps/scripts/local-dex-env.mjs).
+  [`native.py`](../../../../apps/infra-local/compose/native.py).
 
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including clone, binary archive import/export,
@@ -103,7 +101,6 @@ capability before every private prepare.
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
 | [Telemetry collector API](#telemetry-collector-api)                       | `apps/otel-collector`        | OTLP/HTTP and health listeners                                                       | `4318`, `13133`, `13132` |
 | [Local development stack](#local-development-stack)                       | `apps/infra-local`           | `http://localhost:28080`                                                             | local host ports only    |
-| [Container-based local environment](#container-based-local-environment)   | `apps/scripts`               | containers on `5556`, `5432`, `6379`, `5001`; apps on `3000`, `3001`, `4000`, `8080` | local host ports only    |
 | [Externally served APIs](#externally-served-apis)                         | `apps/dashboard`, `apps/api` | discovered via `GET /config`                                                         | —                        |
 | [Services without a first-party API](#services-without-a-first-party-api) | remaining apps               | —                                                                                    | —                        |
 
@@ -544,6 +541,57 @@ GitHub installation settings URL. See
 [management contracts](../../../../apps/api/README.md#hosted-ci-management).
 
 ## Hosted BoxLite-compatible API
+
+### Secret Server forwarding (staging)
+
+`SECRET_SERVER_ENABLED=true` forwards each new box's nonempty inline secret batch
+before inserting the box. The API generates the box ID in memory and sends
+`POST {SECRET_SERVER_URL}/internal/v1/boxes/{box_id}/secrets` with `org_id`,
+the authenticated caller's `created_by`, and the secret values and access policy.
+Omitted placeholders become `<BOXLITE_SECRET:{name}>` before transfer.
+
+Enabled forwarding rejects conflicting secret names with HTTP 400 before
+Secret Server authentication or transfer, even when their hosts and headers differ. Names use
+the write contract's normalization: ASCII lowercase becomes uppercase, and each
+other character outside `[A-Z0-9_]` becomes `_`. For example, `open-ai` conflicts
+with `OPEN_AI`. Disabled forwarding preserves the existing name behavior.
+
+Before transfer, enabled forwarding also rejects batches above 64 secrets,
+normalized names outside 1–64 characters, and values outside 1–65,536 UTF-8 bytes.
+An explicitly empty placeholder is rejected; an omitted placeholder still gets
+the default above. These input errors return HTTP 400 naming the invalid field,
+without acquiring Secret Server credentials or sending a POST.
+
+Only a complete 200/201 name-to-ID mapping permits insertion. UUID uniqueness is
+case-insensitive: differently cased spellings of the same ID are rejected.
+The box's `secrets`
+then contain `{name, hosts, headers, placeholder, secretId}` without `value`;
+persistence callbacks and creation events receive that same representation.
+For example, `openai` with an inline value becomes an `openai` reference with the
+returned UUID and its original host/header policy. New creations with the flag
+off retain the inline representation; empty batches make no transfer call.
+
+Configuration requires `SECRET_SERVER_URL` when enabled. HTTPS is mandatory
+outside `ENVIRONMENT=local|dev`; credentials, query strings, and fragments are
+refused in the URL. Google identity uses the API service account and the base URL
+as audience. `SECRET_SERVER_DEV_TOKEN` selects a static bearer for local/dev only.
+
+A six-second deadline covers identity acquisition, POST, and response parsing.
+There are no automatic transfer retries or redirects. Transfer, authentication,
+timeout, and invalid-response failures return HTTP 503 with
+`code: secret_store_unavailable` before any box insertion; plaintext fallback is
+never attempted. Logs contain box ID, count, result, and latency, without bodies
+or upstream errors. A later insert failure can leave encrypted orphan secrets.
+
+Enable only on staging after the BUI-1385 credential handoff is deployed in an
+all-v2 environment. Flipping this flag does not migrate existing inline boxes or
+convert reference-only boxes back to plaintext. Runner adapters own rejection
+of unsupported stored representations and v0 dispatch.
+
+Design: [API forwarding](https://github.com/boxlite-ai/boxlite/issues/2736) and
+[Secret Server write contract](https://github.com/boxlite-ai/boxlite/issues/2626).
+
+### Hosted routes
 
 **Service:** `apps/api` · **Base URL:** `https://api.<domain>/v1` · **Port:** `3000` in
 deployments (shared with the control-plane API)
@@ -1056,7 +1104,7 @@ unchanged:
 | Permissions | The token's `scope` limited to [`MCP_OAUTH_SCOPES`](../../../../apps/api/src/mcp/mcp-oauth-policy.ts) (box, volume, image and template permissions), then to what the user's role holds; an owner holds all |
 
 [`McpScopeGuard`](../../../../apps/api/src/mcp/mcp-scope.guard.ts) checks every `tools/call` from
-an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike:
+an OAuth caller before it runs, for direct tools and both catalog invocation tools alike:
 
 - An operation off `MCP_OAUTH_OPERATIONS` answers `403`: SSH keys, tunnels, network
   rules, domains, export and import, registries, members and invitations stay API-key
@@ -1075,14 +1123,15 @@ still covers a client or user that grants fewer. Whether a client completes step
 checked per client on the dev tenant. API-key callers skip both checks; the key's own
 permissions apply in REST.
 
-**Tools.** `tools/list` returns 13 tools:
+**Tools.** `tools/list` returns 14 tools, each with a display title and complete behavior hints:
 
 | Tools | What they do |
 | --- | --- |
 | `createBox`, `listBoxes`, `getBox`, `startBox`, `stopBox`, `removeBox` | The box operations of the same `operationId` |
 | `startExecution`, `getExecution` | Run a command; with `wait` (default) the result carries `stdout`, `stderr`, `exit_code` and `complete` |
 | `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/mcp` accepts JSON bodies up to 12 MiB for this, read only after the caller is authenticated, so an unauthenticated call gets its `401` (or `403` if it carries an `Origin` header) before any of the body is buffered; every other route keeps the default limit |
-| `list_api_endpoints`, `get_api_endpoint_schema`, `invoke_api_endpoint` | Find, describe and call any other catalog operation by `operationId` |
+| `list_api_endpoints`, `get_api_endpoint_schema` | Find and describe catalog operations, including the `invocationTool` for each operation |
+| `read_api_endpoint`, `write_api_endpoint` | Call safe HTTP operations or modifying operations respectively, by `operationId` |
 
 Each box tool sets all four MCP tool annotations in
 [`DIRECT_TOOLS`](../../../../apps/api/src/mcp/mcp-tools.ts), so hosts can prompt before destructive
@@ -1100,8 +1149,14 @@ calls and keep the read-only ones in a read-only mode:
 The schema ignores the destructive and idempotent hints on read-only tools. Idempotent
 describes the effect on the box, so a repeated `removeBox` counts even though it answers
 `404`. `list_api_endpoints` and `get_api_endpoint_schema` are read-only;
-`invoke_api_endpoint` carries no annotations because it reaches reads and deletes alike,
-so hosts treat it as destructive.
+`read_api_endpoint` accepts only GET, HEAD and OPTIONS; `write_api_endpoint` refuses those methods.
+
+Both handlers reject an operation in the wrong class before dispatch, and the existing OAuth and REST permission checks still apply.
+Generic writes advertise destructive, non-idempotent behavior because their actual effect depends on the selected operation.
+Reading execution output may mint a short-lived attach ticket inside the existing transport; it does not start a command or change guest data.
+
+The former mixed `invoke_api_endpoint` tool is removed. Clients must rediscover tools and use the catalog's `invocationTool` value;
+keeping a mixed compatibility alias would defeat the read/write boundary. REST operations and schemas are unchanged.
 
 The catalog is built at startup from [`openapi/box.openapi.yaml`](../../../../openapi/box.openapi.yaml),
 [`openapi/admin.openapi.yaml`](../../../../openapi/admin.openapi.yaml) and the product Swagger
@@ -1299,9 +1354,9 @@ inside a box the same listeners are reachable as `host.boxlite.internal:<port>`.
 | `ANY`  | `<digits>-<token>.localhost:28080/{path...}` | Forwards signed port-preview hosts to the preview proxy on `4000`. |
 | `ANY`  | `localhost:28080/pgadmin/*`                  | Reverse-proxies the pgAdmin UI.                                    |
 | `ANY`  | `localhost:28080/jaeger/*`                   | Reverse-proxies the Jaeger UI.                                     |
-| `ANY`  | `localhost:28080/dex/*`                      | Reverse-proxies the Dex OIDC provider.                             |
-| `ANY`  | `localhost:28080/minio/*`                    | Reverse-proxies the MinIO S3 API.                                  |
-| `ANY`  | `localhost:28080/minio-console/*`            | Reverse-proxies the MinIO console UI.                              |
+| `ANY`  | `localhost:28080/auth/*`                     | Reverse-proxies the Rauthy OIDC provider.                          |
+| `ANY`  | `localhost:28080/rustfs/*`                   | Reverse-proxies the RustFS S3 API.                                 |
+| `ANY`  | `localhost:28080/rustfs-console/*`           | Reverse-proxies the RustFS console UI.                             |
 | `ANY`  | `localhost:28080/registry/*`                 | Reverse-proxies the Docker registry v2 API.                        |
 | `ANY`  | `localhost:28080/registry-ui/*`              | Reverse-proxies the registry browser UI.                           |
 | `ANY`  | `localhost:28080/maildev/*`                  | Reverse-proxies the MailDev caught-mail UI.                        |
@@ -1315,19 +1370,18 @@ each of the other services below carries one of its own.
 </details>
 
 <details>
-<summary><b>Dependency services</b> · 11 services</summary>
+<summary><b>Dependency services</b> · 10 services</summary>
 
 | Service       | Host port to container port                           | Interface                                                                         |
 | ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `postgres`    | `25432` → `5432`                                      | PostgreSQL wire protocol; `postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite`. |
 | `redis`       | `26379` → `6379`                                      | Redis protocol, backing caches, the Socket.IO adapter, and proxy lookups.         |
-| `minio`       | `29000` → `9000`, `29001` → `9001`                    | S3-compatible object storage API and console UI; probed at `/minio/health/live`.  |
-| `minio-init`  | none                                                  | One-shot `minio/mc` job that creates the `boxlite` bucket; no listener.           |
+| `rustfs`      | `29000` → `9000`, `29001` → `9001`                    | S3-compatible object storage API and console UI; probed at `/health`.             |
 | `registry`    | `25000` → `5000`                                      | Docker registry v2 API; probed at `/v2/`.                                         |
 | `registry-ui` | `25052` → `80`                                        | Registry browser UI.                                                              |
-| `dex`         | `25556` → `5556`                                      | OIDC provider served under the `/dex` issuer path.                                |
+| `rauthy`      | `25556` → `8080`                                      | OIDC provider; issuer `http://localhost:25556/auth/v1/`.                          |
 | `jaeger`      | `26686` → `16686`, `26687` → `4317`                   | Trace UI, plus an OTLP/gRPC receiver fed by the local collector.                  |
-| `pgadmin`     | `25051` → `80`                                        | Postgres administration UI; probed at `/misc/ping`.                               |
+| `pgadmin`     | `25051` → `5050`                                      | Postgres administration UI; probed at `/misc/ping`.                               |
 | `maildev`     | `25053` → `1080`, `25054` → `1025`                    | Caught-mail UI and the SMTP sink the API sends to; probed at `/healthz`.          |
 | `otel`        | `24317` → `4317`, `24318` → `4318`, `23133` → `13133` | OTLP gRPC and HTTP receivers, plus a `health_check` extension at `/`.             |
 
@@ -1337,17 +1391,15 @@ inline config, not the first-party build described in
 well as HTTP, exports traces to the Jaeger box, and answers health at `/`
 instead of `/health/status`.
 
-This Dex box serves the inline `_DEX_CONFIG` from
-[`services.py`](../../../../apps/infra-local/compose/services.py), written to
-`/tmp/dex-config.yaml` at boot: one public static client, `boxlite`, whose
-redirect URIs cover the dashboard, the Vite dev server, and the CLI loopback
-callback at `http://127.0.0.1:5555/callback`, plus a password database holding
-two static users. [`dex/config.yaml`](../../../../apps/dex/config.yaml) is a separate file for
-a separate environment — see
-[Container-based local environment](#container-based-local-environment).
-`apps/infra` deploys no Dex service; deployed stacks point
-`OIDC_ISSUER_BASE_URL` at a hosted provider and reach it through the same
-`/.well-known/openid-configuration` discovery document.
+The Rauthy box runs the shared configuration in
+[`apps/rauthy/`](../../../../apps/rauthy/), which the `apps/e2e` local stack also mounts.
+It seeds two users, the MCP scopes and one public client, `boxlite`.
+That client redirects to the dashboard, the Vite dev server and the CLI callback
+`http://127.0.0.1:5555/callback`.
+
+MCP clients register by client ID metadata document or dynamic registration and
+receive tokens whose audience is the MCP endpoint. `apps/infra` deploys no
+Rauthy service; deployed stacks point `OIDC_ISSUER_BASE_URL` at a hosted provider.
 
 </details>
 
@@ -1366,45 +1418,6 @@ The local API listens on `3001` rather than the deployed `3000`, which the
 dashboard dev server uses; `BOXLITE_LOCAL_API_PORT` overrides it. This stack
 points the API's `SMTP_HOST` at its own MailDev box, so the one email the API
 sends — the organization invitation — is caught rather than dropped.
-
-</details>
-
-## Container-based local environment
-
-**Service:** `apps/scripts` · **Entry points:** `yarn dev:dex`, `yarn e2e:local`
-
-A second local environment: [`local-dex-env.mjs`](../../../../apps/scripts/local-dex-env.mjs)
-starts four Docker containers, then runs the same four application processes on
-the host through the `serve-slim` target. It is the only environment here that
-runs [`dex/config.yaml`](../../../../apps/dex/config.yaml), which it renders to
-`.boxlite-home/dex/config.local.yaml` and mounts read-only into the Dex
-container.
-
-<details>
-<summary><b>Containers</b> · 4 services</summary>
-
-| Service    | Host port       | Interface                                                                                        |
-| ---------- | --------------- | ------------------------------------------------------------------------------------------------ |
-| `dex`      | `5556`          | OIDC provider: `ghcr.io/dexidp/dex:v2.41.1` serving the rendered `dex/config.yaml`.              |
-| `postgres` | `5432`          | PostgreSQL wire protocol: `postgres:16-alpine`, database `boxlite`.                              |
-| `redis`    | `6379`          | Redis protocol: `redis:7-alpine`.                                                                |
-| `registry` | `5001` → `5000` | Docker registry v2 API: `registry:2`, probed at `/v2/boxlite/{name}/manifests/{tag}` for images. |
-
-</details>
-
-<details>
-<summary><b>Application processes</b> · 4 processes</summary>
-
-| Process     | Host port | Interface                                                   |
-| ----------- | --------- | ----------------------------------------------------------- |
-| `api`       | `3001`    | Control-plane and hosted BoxLite-compatible APIs.           |
-| `dashboard` | `3000`    | Vite dev server, kept on its own `/api` proxy path.         |
-| `proxy`     | `4000`    | Preview proxy API.                                          |
-| `runner`    | `8080`    | Runner API, left on the in-code default rather than `3003`. |
-
-These are four of the five projects the boxed stack serves — all but the
-registry proxy — on the same `3000`, `3001`, and `4000` host ports, so the two
-local environments cannot run at the same time.
 
 </details>
 
@@ -1476,19 +1489,16 @@ that nothing in this repository calls.
 | Service                     | Role                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/dashboard`            | Static browser application; it consumes the control-plane API and the [externally served APIs](#externally-served-apis), and registers no server API.                                                                                                                                                                                                                                    |
-| `apps/dex`                  | Development-only configuration for the third-party Dex OIDC provider, plus a Dockerfile that bakes it into a `dex:v2.42.0` image nothing in this repository builds. The endpoints Dex serves are its own, not a BoxLite-owned API; the listener that does run this config is catalogued under [Container-based local environment](#container-based-local-environment), on `dex:v2.41.1`. |
+| `apps/rauthy`               | Development-only configuration for the third-party Rauthy OIDC provider. The endpoints Rauthy serves are its own, not a BoxLite-owned API; its listener is catalogued under [Local development stack](#local-development-stack). |
 | `apps/infra`                | Infrastructure-as-code and deployment tooling; it does not run an application API.                                                                                                                                                                                                                                                                                                       |
 | `apps/infra-local`          | Local service orchestration; it registers no API of its own, but every listener it starts is catalogued under the [local development stack](#local-development-stack).                                                                                                                                                                                                                   |
 | `apps/e2e`                  | End-to-end test client; it calls deployed APIs but does not expose one.                                                                                                                                                                                                                                                                                                                  |
 | `apps/box-images`           | Image build inputs; they produce box images and do not run a service.                                                                                                                                                                                                                                                                                                                    |
-| `apps/hack`, `apps/scripts` | Development and code-generation utilities; they register no API of their own, though `apps/scripts` starts the [container-based local environment](#container-based-local-environment).                                                                                                                                                                                                  |
+| `apps/hack`, `apps/scripts` | Development and code-generation utilities; they register no API of their own.                                                                                                                                                                                                  |
 
-MinIO, the registry UI, MailDev, Jaeger, pgAdmin and Caddy are bundled only in
-the local development stack, and a Docker registry appears in both local
-environments, so all of their interfaces are listed under
-[Local development stack](#local-development-stack) and
-[Container-based local environment](#container-based-local-environment) rather
-than here.
+RustFS, the registry UI, MailDev, Jaeger, pgAdmin and Caddy run only in the
+local development stack. Their interfaces are listed under
+[Local development stack](#local-development-stack).
 
 Libraries under `apps/libs` — generated API clients and shared Go packages —
 are consumed by the services above; they are not services. A generated client

@@ -145,3 +145,7 @@ mod tests {
         assert!(soft > 0, "Should have some file descriptors available");
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/rlimit.rs"]
+mod file_size_tests;

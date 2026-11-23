@@ -116,6 +116,38 @@ class SqliteTransaction implements StateTransaction {
       .get(this.namespace, key) as Row | undefined
     return row ? decode(row) : undefined
   }
+  async getMany(keys: readonly string[]): Promise<StateRecord[]> {
+    if (!keys.length) return []
+    return (
+      this.database
+        .prepare(
+          `SELECT * FROM ci_listener_state WHERE namespace=? AND record_key IN (${keys.map(() => '?').join(',')})`,
+        )
+        .all(this.namespace, ...keys) as Row[]
+    ).map(decode)
+  }
+  async insertMany(records: readonly StateRecord[]): Promise<boolean> {
+    if (!records.length || records.length > 100 || records.some((row) => row.key.startsWith('@')))
+      throw new Error('Invalid ordinary state insert batch')
+    const now = Date.now()
+    return (
+      this.database
+        .prepare(
+          `INSERT INTO ci_listener_state(namespace,record_key,record_version,schema_version,payload,updated_at)
+       VALUES ${records.map(() => '(?,?,?,?,?,?)').join(',')} ON CONFLICT DO NOTHING`,
+        )
+        .run(
+          ...records.flatMap((row) => [
+            this.namespace,
+            row.key,
+            row.version,
+            row.schema,
+            JSON.stringify(row.payload),
+            now,
+          ]),
+        ).changes === records.length
+    )
+  }
   async page(after: string, limit: number, prefix = ''): Promise<StateRecord[]> {
     return (
       this.database

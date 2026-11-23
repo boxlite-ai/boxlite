@@ -1,7 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
 import { GitHubAppSource, GitHubCredential, GitHubInstallation, GitHubTokenPurpose } from './github-app'
-import { Json, StateRecord } from './state/database'
+import { Json, LeaseLost, StateRecord } from './state/database'
 import { ExecutionLease, ListenerState } from './state/store'
 
 export type CredentialSource =
@@ -23,7 +23,7 @@ export class ListenerCredentials {
   private readonly lease: ExecutionLease
   private readonly held = new Map<string, Entry>()
   private readonly busy = new Map<string, symbol>()
-  private readonly retryAt = new Map<string, number>()
+  private retryAt = new Map<string, number>()
   private closed = false
   constructor(
     private readonly state: Pick<ListenerState, 'commit'>,
@@ -77,6 +77,11 @@ export class ListenerCredentials {
         installation: source.kind === 'app' ? source.installation.id : 0,
         requestedAt: Date.now(),
         phase: 'requested',
+        holder: {
+          owner: this.lease.owner,
+          epoch: this.lease.epoch,
+          ...(this.lease.deployment === undefined ? {} : { deployment: this.lease.deployment }),
+        },
       }
       const [intent] = await this.state.commit(this.lease, [{ key: recordKey, expected: null, payload }])
       let credential: GitHubCredential
@@ -137,13 +142,26 @@ export class ListenerCredentials {
       }
     if (errors.length) throw new AggregateError(errors, 'GitHub credential retirement remains pending')
   }
+  /** Share captured authority and issuance backoff; handles and purpose locks stay local. */
+  fork(owner: string): ListenerCredentials {
+    if (this.closed) throw new Error('GitHub credential provider is closed')
+    const fork = new ListenerCredentials(this.state, this.lease, owner, this.#source)
+    fork.retryAt = this.retryAt
+    return fork
+  }
   private async retire(key: string, expected?: Entry): Promise<void> {
     const entry = this.held.get(key)
     if (!entry || (expected && entry !== expected)) return
     if (entry.retiring) return entry.retiring
     const retirement = (async () => {
       await entry.credential.close()
-      await this.state.commit(this.lease, [{ key: entry.record.key, expected: entry.record.version }])
+      try {
+        await this.state.commit(this.lease, [{ key: entry.record.key, expected: entry.record.version }])
+      } catch (error) {
+        // The token is closed. Its metadata now belongs to the current owner's
+        // collector; a lost lease cannot become permanent local cleanup debt.
+        if (!(error instanceof LeaseLost)) throw error
+      }
       if (this.held.get(key) === entry) this.held.delete(key)
     })()
     entry.retiring = retirement

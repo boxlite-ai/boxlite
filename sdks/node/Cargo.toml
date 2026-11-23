@@ -27,6 +27,9 @@ futures = "0.3"
 # Logging
 tracing = "0.1"
 
+[dev-dependencies]
+boxlite = { path = "../../src/boxlite", features = ["test-support"] }
+
 [build-dependencies]
 napi-build = "2.6.0"
 

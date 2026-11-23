@@ -176,7 +176,10 @@ options = boxlite.BoxOptions(
 |--------|--------|---------|-----------------|----------|
 | `development()` | Off | Off | None | Debugging sandbox issues |
 | `standard()` | On | On (Linux) | None | General workloads |
-| `maximum()` | On | On (Linux) | `max_open_files=1024`, `max_file_size=1GiB`, `max_processes=100` | Untrusted AI code |
+| `maximum()` | On | On (Linux) | `max_open_files=1024`, `max_processes=100` | Untrusted AI code |
+
+The shim uses the configured file-size limit or inherits it from the host launcher.
+See [file-size limits](../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 
 For AI agents running untrusted code, use `SecurityOptions.maximum()`:
 
@@ -393,7 +396,7 @@ options = boxlite.BoxOptions(
 | `jailer_enabled` | `bool` | OS-level sandbox (seccomp on Linux, sandbox-exec on macOS) |
 | `seccomp_enabled` | `bool` | Syscall filtering (Linux only) |
 | `max_open_files` | `int \| None` | Limit open file descriptors |
-| `max_file_size` | `int \| None` | Maximum file size in bytes |
+| `max_file_size` | `int \| None` | Maximum host file size in bytes |
 | `max_processes` | `int \| None` | Maximum number of processes |
 | `max_memory` | `int \| None` | Maximum virtual memory in bytes |
 | `max_cpu_time` | `int \| None` | Maximum CPU time in seconds |

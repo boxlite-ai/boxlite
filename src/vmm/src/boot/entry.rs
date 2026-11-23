@@ -11,7 +11,7 @@ use std::io;
 use boxlite_hypervisor::{X86BootRegisters, X86Segment};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
 
-use crate::memory::MMIO_HOLE_START;
+use crate::x86_boot_layout::TablePlan;
 
 /// The boot GDT sits below the zero page at `0x7000`.
 const GDT_START: u64 = 0x500;
@@ -25,19 +25,6 @@ const BOOT_DS: u16 = 0x18;
 /// Top of the boot stack, below the page tables; Firecracker uses the same.
 const BOOT_STACK: u64 = 0x8ff0;
 const PAGE_SIZE: u64 = 0x1000;
-/// One PML4, one PDPT, then one page directory per GiB of the identity map.
-const PML4_START: u64 = 0x9000;
-const PDPT_START: u64 = PML4_START + PAGE_SIZE;
-const PD_START: u64 = PDPT_START + PAGE_SIZE;
-/// The identity map covers `[0, MMIO_HOLE_START)`, where all RAM lies, and
-/// none of the hole.
-const PD_COUNT: u64 = MMIO_HOLE_START >> 30;
-const _: () = assert!(MMIO_HOLE_START.is_multiple_of(1 << 30));
-const TABLES_END: u64 = PD_START + PD_COUNT * PAGE_SIZE;
-/// Page-table entry bits: present and writable, plus a 2 MiB page in a
-/// page directory.
-const PRESENT_WRITABLE: u64 = 0b11;
-const LARGE_PAGE: u64 = 1 << 7;
 
 const CR0_PE: u64 = 1;
 const CR0_ET: u64 = 1 << 4;
@@ -50,32 +37,46 @@ const RFLAGS_FIXED: u64 = 1 << 1;
 
 /// Writes the boot GDT and identity page tables into `ram` and returns the boot
 /// vCPU registers that enter `entry` in 64-bit mode with RSI at `boot_params`.
-///
-/// `entry` and `boot_params` must lie in RAM below the MMIO hole, which the
-/// identity map covers. Fails with `InvalidInput`, writing nothing, if `ram`
-/// does not hold the GDT and the page tables.
+/// Both addresses must be mapped by `plan`. If `ram` does not hold the GDT or
+/// any table page, returns `InvalidInput` without writing anything.
 pub(crate) fn long_mode_entry<M: GuestMemoryBackend>(
     ram: &M,
     entry: u64,
     boot_params: u64,
+    plan: &TablePlan,
 ) -> io::Result<X86BootRegisters> {
-    if !ram.check_range(GuestAddress(GDT_START), (TABLES_END - GDT_START) as usize) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("guest RAM does not cover the boot tables at {GDT_START:#x}..{TABLES_END:#x}"),
-        ));
+    let check = |addr, len| {
+        if ram.check_range(GuestAddress(addr), len) {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("guest RAM does not cover {len:#x} bytes of boot tables at {addr:#x}"),
+            ))
+        }
+    };
+    check(GDT_START, size_of_val(&GDT))?;
+    for page in &plan.pages {
+        check(page.addr, PAGE_SIZE as usize)?;
     }
+
     ram.write_obj(GDT, GuestAddress(GDT_START))
         .map_err(io::Error::other)?;
-    ram.write_slice(&page_tables(), GuestAddress(PML4_START))
-        .map_err(io::Error::other)?;
+    let mut bytes = [0; PAGE_SIZE as usize];
+    for page in &plan.pages {
+        for (slot, entry) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(&page.entries) {
+            *slot = entry.to_le_bytes();
+        }
+        ram.write_slice(&bytes, GuestAddress(page.addr))
+            .map_err(io::Error::other)?;
+    }
     Ok(X86BootRegisters {
         rip: entry,
         rsp: BOOT_STACK,
         rsi: boot_params,
         rflags: RFLAGS_FIXED,
         cr0: CR0_PE | CR0_ET | CR0_PG,
-        cr3: PML4_START,
+        cr3: plan.pml4,
         cr4: CR4_PAE,
         efer: EFER_LME | EFER_LMA,
         code: segment(BOOT_CS),
@@ -86,24 +87,6 @@ pub(crate) fn long_mode_entry<M: GuestMemoryBackend>(
         idt_base: 0,
         idt_limit: 0,
     })
-}
-
-/// The PML4, the PDPT and the page directories, contiguous from
-/// [`PML4_START`]; every byte of each table page is written.
-fn page_tables() -> Vec<u8> {
-    const ENTRIES: usize = 512;
-    let mut entries = vec![0u64; (2 + PD_COUNT as usize) * ENTRIES];
-    entries[0] = PDPT_START | PRESENT_WRITABLE;
-    for gib in 0..PD_COUNT {
-        entries[ENTRIES + gib as usize] = (PD_START + gib * PAGE_SIZE) | PRESENT_WRITABLE;
-    }
-    for (page, entry) in entries[2 * ENTRIES..].iter_mut().enumerate() {
-        *entry = ((page as u64) << 21) | LARGE_PAGE | PRESENT_WRITABLE;
-    }
-    entries
-        .iter()
-        .flat_map(|entry| entry.to_le_bytes())
-        .collect()
 }
 
 /// The hidden segment state for `selector`, decoded from its GDT entry so the

@@ -1342,6 +1342,10 @@ pub struct ResourceLimits {
 }
 ```
 
+When `max_file_size` is `None`, the shim inherits the host launcher's
+`RLIMIT_FSIZE` soft and hard limits.
+See [resource-limit enforcement](../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
+
 ---
 
 ## Metrics

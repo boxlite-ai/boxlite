@@ -5,10 +5,7 @@
 
 use std::path::PathBuf;
 
-use crate::{
-    error::{Error, Result},
-    memory::MAX_MEMORY_MIB,
-};
+use crate::error::{Error, Result};
 
 /// Largest vCPU count a guest can use. The M1 guest kernel configuration sets
 /// `CONFIG_NR_CPUS=64`, so further vCPUs would never run guest code; the
@@ -34,6 +31,8 @@ pub enum DiskFormat {
 /// A disk image the guest sees as a virtio-blk device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiskConfig {
+    /// Nonempty, unique host control ID; independent of guest enumeration.
+    pub block_id: String,
     /// The image file.
     pub path: PathBuf,
     /// The image format, stated rather than probed: the runtime always knows
@@ -49,7 +48,7 @@ pub struct DiskConfig {
 pub struct VmConfig {
     /// Number of vCPUs, `1..=MAX_VCPUS`.
     pub vcpu_count: u8,
-    /// Guest RAM in MiB, `1..=MAX_MEMORY_MIB`.
+    /// Guest RAM in MiB; must be nonzero and fit the host and boot layout.
     pub memory_mib: u32,
     /// The ELF kernel image to load.
     pub kernel: PathBuf,
@@ -105,19 +104,28 @@ pub struct NetConfig {
 }
 
 impl VmConfig {
-    /// Rejects counts, sizes and command-line text the layout or the kernel
-    /// cannot take, before any host call. The budget for the
-    /// `virtio_mmio.device=` arguments that `devices::add_all` prepends is
+    /// Checks static configuration without calling the host. VM creation
+    /// checks host and boot address limits before allocating RAM. The budget
+    /// for the `virtio_mmio.device=` arguments that `devices::add_all` prepends is
     /// checked in `add_all`, after the host VM and the disk images exist.
     pub(crate) fn validate(&self) -> Result<()> {
         if !(1..=MAX_VCPUS).contains(&self.vcpu_count) {
             return Err(Error::InvalidVcpuCount(self.vcpu_count));
         }
-        if !(1..=MAX_MEMORY_MIB).contains(&self.memory_mib) {
+        if self.memory_mib == 0 {
             return Err(Error::InvalidMemorySize(self.memory_mib));
         }
         if self.disks.len() > MAX_DISKS {
             return Err(Error::InvalidDiskCount(self.disks.len()));
+        }
+        for (index, disk) in self.disks.iter().enumerate() {
+            if disk.block_id.is_empty()
+                || self.disks[..index]
+                    .iter()
+                    .any(|other| other.block_id == disk.block_id)
+            {
+                return Err(Error::InvalidDiskId(disk.block_id.clone()));
+            }
         }
         if self.cmdline.len() >= MAX_CMDLINE_BYTES {
             return Err(Error::InvalidCommandLine("2048 bytes or longer"));
@@ -140,7 +148,7 @@ mod tests {
     use std::error::Error as _;
 
     use super::{DiskConfig, DiskFormat, MAX_CMDLINE_BYTES, MAX_DISKS, MAX_VCPUS, VmConfig};
-    use crate::{error::Error, memory::MAX_MEMORY_MIB};
+    use crate::error::Error;
 
     fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         VmConfig {
@@ -160,12 +168,18 @@ mod tests {
     #[test]
     fn rejects_more_disks_than_the_slots_and_names_can_take() {
         let disk = DiskConfig {
+            block_id: "container".into(),
             path: "disk.raw".into(),
             format: DiskFormat::Raw,
             read_only: false,
         };
         VmConfig {
-            disks: vec![disk.clone(); MAX_DISKS],
+            disks: (0..MAX_DISKS)
+                .map(|index| DiskConfig {
+                    block_id: format!("disk-{index}"),
+                    ..disk.clone()
+                })
+                .collect(),
             ..config(1, 1)
         }
         .validate()
@@ -203,22 +217,26 @@ mod tests {
     }
 
     #[test]
-    fn rejects_counts_and_sizes_outside_the_layout_with_typed_errors() {
+    fn static_validation_accepts_nonzero_memory_above_the_x86_low_ram_band() {
+        assert!(config(MAX_VCPUS, u32::MAX).validate().is_ok());
+        assert!(config(1, 3073).validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_counts_and_zero_memory_with_typed_errors() {
         for (config, message) in [
             (config(0, 1), "invalid vCPU count: 0"),
             (config(65, 1), "invalid vCPU count: 65"),
             (config(1, 0), "invalid memory size: 0 MiB"),
-            (config(1, 3073), "invalid memory size: 3073 MiB"),
         ] {
             let error = config.validate().unwrap_err();
             assert_eq!(error.to_string(), message);
             assert!(matches!(
                 error,
-                Error::InvalidVcpuCount(_) | Error::InvalidMemorySize(_)
+                Error::InvalidVcpuCount(_) | Error::InvalidMemorySize(0)
             ));
             assert!(error.source().is_none(), "{config:?}");
         }
         config(1, 1).validate().unwrap();
-        config(MAX_VCPUS, MAX_MEMORY_MIB).validate().unwrap();
     }
 }
