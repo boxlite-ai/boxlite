@@ -244,6 +244,8 @@ class ActionsFixture {
 }
 
 const scenarios = [
+  'subtracts assigned jobs from acquired holds on an idle poll',
+  'subtracts assigned jobs from acquired holds on reconnect',
   'reconciles acquired and replayed demand',
   'continues assigning workers when the event observer throws',
   'traces a failed poll with its scale set and HTTP status',
@@ -855,6 +857,36 @@ for (const storage of ['sqlite', 'postgres'])
               if (fixture.acquired.some((ids) => ids.includes(124))) break
             }
             expect(fixture.acquired).toEqual([[123], [124]])
+            return
+          }
+          if (
+            scenario === 'subtracts assigned jobs from acquired holds on an idle poll' ||
+            scenario === 'subtracts assigned jobs from acquired holds on reconnect'
+          ) {
+            fixture.publish(1, 0, [11, 12])
+            await until(() => fixture.acknowledged.includes(1))
+            fixture.publish(2, 1, [], [{ messageType: 'JobAssigned', runnerRequestId: 11 }])
+            await until(() => fixture.acknowledged.includes(2) && delivered.size === 1)
+            const polls = () => fixture.requests.filter((request) => request === 'GET /messages').length
+            const idlePoll = async () => {
+              const before = polls()
+              fixture.idle()
+              await until(() => polls() > before)
+            }
+            fixture.acquiredCount = 2
+            await idlePoll()
+            expect(await journal.used('tenant')).toBe(2)
+            fixture.acquiredCount = 1
+            if (scenario === 'subtracts assigned jobs from acquired holds on reconnect') {
+              await stop()
+              const before = polls()
+              fixture.initialAcquired = 1
+              stop = start()
+              await until(() => polls() > before)
+            } else await idlePoll()
+            expect(await journal.used('tenant')).toBe(1)
+            expect(fixture.acquired).toEqual([[11, 12]])
+            expect(delivered.size).toBe(1)
             return
           }
           if (scenario === 'releases an accepted hold after a missed lifecycle event on the same session') {

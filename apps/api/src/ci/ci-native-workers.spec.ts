@@ -1188,7 +1188,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.get(config.name)).rejects.toBeInstanceOf(ForbiddenException)
     expect(await journal.used(org)).toBe(1)
   })
-  it.each(['late failure', 'failure before destroying'])(
+  it.each(['late failure', 'failure before destroying', 'previous runner completed'])(
     'returns the slot only after the original runner completes a replacement destroy job: %s',
     async (scenario) => {
       const { box, host, row } = await deleting()
@@ -1260,6 +1260,17 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         await manager.syncStates()
         await Promise.all(attempts.mock.results.map((attempt) => attempt.value))
       }
+      if (scenario === 'previous runner completed') {
+        await jobRows.save({
+          runnerId: randomUUID(),
+          resourceType: ResourceType.BOX,
+          resourceId: box.box_id,
+          type: JobType.DESTROY_BOX,
+          status: JobStatus.COMPLETED,
+          completedAt: new Date(),
+          createdAt: new Date(failed.createdAt.getTime() + 1000),
+        })
+      }
       await sync()
       if (scenario === 'failure before destroying') {
         expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYING })
@@ -1291,6 +1302,38 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }
     },
   )
+  it.each(['before read', 'before write'])('ignores a destroy receipt after runner reassignment %s', async (timing) => {
+    const { box } = await deleting()
+    const repository = new BoxRepository(db, { emit: jest.fn() } as never, { invalidate: jest.fn() } as never)
+    const boxes = db.getRepository(Box)
+    const nextRunner = randomUUID()
+    const reassign = () => boxes.update(box.box_id, { runnerId: nextRunner })
+    const initial = await boxes.findOneByOrFail({ id: box.box_id })
+    if (timing === 'before read') await reassign()
+    else {
+      const read = repository.findOne.bind(repository)
+      jest.spyOn(repository, 'findOne').mockImplementationOnce(async (options) => {
+        const observed = await read(options)
+        await reassign()
+        return observed
+      })
+    }
+    const locks = { unlock: jest.fn().mockResolvedValue(undefined) }
+    const handler = new JobStateHandlerService(repository, locks as never, {} as never, {} as never, {} as never)
+    const receipt = new Job({
+      runnerId,
+      resourceId: box.box_id,
+      resourceType: ResourceType.BOX,
+      type: JobType.DESTROY_BOX,
+      status: JobStatus.COMPLETED,
+    })
+    await handler.handleJobCompletion(receipt)
+    expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({
+      runnerId: nextRunner,
+      state: initial.state,
+    })
+    expect(locks.unlock).not.toHaveBeenCalled()
+  })
   it('recognizes the original destroyed Box after production soft deletion renames it', async () => {
     const { host, config, box } = await deleting()
     const deleted = await platform.findOne(box.box_id, true)

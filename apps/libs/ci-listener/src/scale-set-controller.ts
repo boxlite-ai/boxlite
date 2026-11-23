@@ -58,6 +58,12 @@ interface SetRecord {
 }
 // Limit outstanding acquisitions awaiting assignment, independently of running workers.
 const acquisitionWindow = 1024
+
+// Assigned jobs can also be counted as acquired. Only the remainder can need a separate hold.
+function unassignedAcquisitions(acquired: number | undefined, assigned: number): number {
+  return acquired === undefined ? Infinity : Math.max(0, acquired - assigned)
+}
+
 function readRecord(row: StateRecord): SetRecord {
   const v = row.payload
   if (
@@ -458,7 +464,7 @@ export class ScaleSetController {
         const retained = Math.min(
           candidates,
           Math.max(0, held - increase),
-          idle ? (current.acquired ?? Infinity) : Infinity,
+          idle ? unassignedAcquisitions(current.acquired, current.assigned) : Infinity,
         )
         if (idle && retained > 0 && retained < pendingRequests.size && current.acquired !== undefined) {
           for (const id of pendingRequests.keys()) pendingRequests.set(id, 'verify')
@@ -473,7 +479,11 @@ export class ScaleSetController {
       // already ambiguous after an earlier reconnect. Assigned jobs have their own target.
       const increase = Math.max(0, session.initial - previous.assigned)
       const acquired = session.initialAcquired
-      const carried = Math.min(pendingRequests.size, Math.max(0, previous.held - increase), acquired ?? Infinity)
+      const carried = Math.min(
+        pendingRequests.size,
+        Math.max(0, previous.held - increase),
+        unassignedAcquisitions(acquired, session.initial),
+      )
       if (!carried) pendingRequests.clear()
       else if (acquired !== undefined && carried < pendingRequests.size) {
         // The service reports a count, not which requests survived the disconnect.

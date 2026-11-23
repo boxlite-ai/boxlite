@@ -277,6 +277,9 @@ export class BoxRepository extends BaseRepository<Box> {
           desiredState: previousBox.desiredState,
           pending: previousBox.pending,
           organizationId: previousBox.organizationId,
+          ...(previousBox.desiredState === BoxDesiredState.DESTROYED && updateData.state && previousBox.runnerId
+            ? { runnerId: previousBox.runnerId }
+            : {}),
         },
         { ...updateData, ...invariantChanges },
       )

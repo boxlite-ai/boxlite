@@ -398,6 +398,114 @@ describe('CI shared worker lifecycle', () => {
       expect(backend.workers.create).not.toHaveBeenCalled()
     },
   )
+  it('tries another original runner after a busy refusal and retires only the surplus', async () => {
+    const capacity = testCapacity({ account: 3, tenant: 3 })
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      assigned: 3,
+      held: 0,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: false },
+    }
+    const balance = () => pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+    await balance()
+    const open = backend.runners.bind(backend)
+    const attempts: string[] = []
+    const removed: string[] = []
+    backend.runners = async (guard, ...args) => {
+      const session = await open(guard, ...args)
+      session.registry.retireIdle = async (identity) => {
+        attempts.push(identity.name)
+        if (identity.name === attempts[0]) return false
+        await guard({ kind: 'remove', ...identity })
+        runners.delete(identity.name)
+        removed.push(identity.name)
+        return true
+      }
+      return session
+    }
+    target.assigned = 2
+    await balance() // The first candidate is busy.
+    await balance() // Retire one idle runner and stop its Box.
+    await balance() // Remove that stopped Box.
+    await balance() // Observe its absence and release the slot.
+    expect(new Set(attempts).size).toBe(2)
+    expect(removed).toHaveLength(1)
+    expect(runners.has(attempts[0])).toBe(true)
+    expect(await journal.used(definition.organization)).toBe(2)
+  })
+  it('holds one shrink opportunity across a busy refusal and a pending DELETE', async () => {
+    const capacity = testCapacity({ account: 3, tenant: 3 })
+    const [check] = await state.read(['journal/format'], lease)
+    const signal = new AbortController().signal
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      assigned: 3,
+      held: 0,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: false },
+    }
+    await pool.balanceScaleSets(lease, [target], capacity, signal)
+    const open = backend.runners.bind(backend)
+    const started = new Set<string>()
+    const requests: string[] = []
+    let release!: () => void
+    const response = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    backend.runners = async (guard, ...args) => {
+      const session = await open(guard, ...args)
+      session.registry.retireIdle = async (identity, _signal, verify) => {
+        started.add(identity.name)
+        if (started.size === 1) return false
+        await guard({ kind: 'remove', ...identity })
+        verify!()
+        requests.push(identity.name)
+        await response
+        runners.delete(identity.name)
+        return true
+      }
+      return session
+    }
+    const queue = new WorkQueue(3, jest.fn())
+    const queued = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    const balance = () => queued.balanceScaleSets(lease, [target], capacity, signal)
+    // The queue also schedules passive recovery. Wait for each pass to settle those tasks.
+    const idle = async (except?: string) => {
+      const keys = [...(await rows()).allocations.keys()].filter((key) => key !== except)
+      const until = Date.now() + 3000
+      while (keys.some((key) => queue.revision(key)) && Date.now() < until)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(keys.some((key) => queue.revision(key))).toBe(false)
+    }
+    try {
+      target.assigned = 2
+      await balance()
+      await idle()
+      expect(started.size).toBe(1)
+      await balance()
+      const deadline = Date.now() + 1500
+      while (requests.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(requests).toHaveLength(1)
+      const pending = await byName(requests[0])
+      for (let pass = 0; pass < 2; pass++) {
+        await balance()
+        await idle(pending.record.key)
+      }
+      expect(started.size).toBe(2)
+      expect(requests).toHaveLength(1)
+      release()
+      await idle()
+      expect(runners.size).toBe(2)
+    } finally {
+      release()
+      await queued.close()
+      await queue.close()
+    }
+  })
   it('withdraws a running idle retirement before DELETE when fresh demand arrives', async () => {
     await tick()
     const original = await allocation()

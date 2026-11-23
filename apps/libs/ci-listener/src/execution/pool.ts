@@ -155,6 +155,7 @@ export class WorkerPool {
   private readonly sessions = new Set<RunnerSession>()
   private executionAfter = 0
   private readonly idleRetryAt = new Map<string, number>()
+  private readonly declinedRetirements = new Map<number, Set<string>>()
   private readonly creationFailures = new Map<string, { attempts: number; retryAt: number }>()
   constructor(
     private readonly journal: ExecutionJournal,
@@ -249,8 +250,7 @@ export class WorkerPool {
       checks.set(target.id, proof)
       // Withdraw undispatched reservations first. An in-flight Box keeps its immutable identity.
       const surplus = Math.max(0, original.length - target.assigned - target.held)
-      const dispatched = original.filter((row) => row.value.box.phase !== 'none')
-      for (const row of [...dispatched, ...undispatched].reverse().slice(0, surplus)) {
+      for (const row of this.surplusCandidates(target.id, original, surplus)) {
         if (row.value.box.phase === 'none') {
           const changed = await this.journal.advance(
             lease,
@@ -324,6 +324,40 @@ export class WorkerPool {
     if (admissionFailure) throw admissionFailure.cause
     // Enqueuing a Box create is not a durable dispatch. A later pass observes the committed creation intent.
     for (const target of targets) target.delivery.waitingForDispatch = !fullyDispatched.has(target)
+  }
+  private surplusCandidates(set: number, original: AllocationRow[], surplus: number): AllocationRow[] {
+    if (!surplus) return []
+    const declined = this.declinedRetirements.get(set)
+    const pending: AllocationRow[] = []
+    const unused: AllocationRow[] = []
+    const untried: AllocationRow[] = []
+    const retry = new Map<string, AllocationRow>()
+    const now = Date.now()
+    for (let index = original.length - 1; index >= 0; index--) {
+      const row = original[index]
+      const key = row.record.key
+      if (row.value.box.phase === 'none') unused.push(row)
+      else if (row.value.delivery === 'done') {
+        // A queued DELETE or a lost reply still owns one shrink opportunity.
+        if (this.retirementQueued(row) || (row.value.effect?.kind === 'runner-retire' && !declined?.has(key))) {
+          pending.push(row)
+        } else if (!declined?.has(key)) untried.push(row)
+        else if ((this.idleRetryAt.get(key) ?? 0) <= now) retry.set(key, row)
+      }
+    }
+    const selected = [...pending, ...unused, ...untried].slice(0, surplus)
+    if (selected.length < surplus && retry.size && declined) {
+      for (const key of declined) {
+        const row = retry.get(key)
+        if (row) selected.push(row)
+        if (selected.length === surplus) break
+      }
+    }
+    return selected
+  }
+  private forgetDecline(set: number, key: string): void {
+    const declined = this.declinedRetirements.get(set)
+    if (declined?.delete(key) && !declined.size) this.declinedRetirements.delete(set)
   }
   creationReady(label: string): boolean {
     return (this.creationFailures.get(label)?.retryAt ?? 0) <= Date.now()
@@ -654,6 +688,9 @@ export class WorkerPool {
     if (!row.value.closing && retireIdle && row.value.runner.phase === 'known' && status === 'running') {
       if ((this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now()) {
         this.idleRetryAt.set(row.record.key, Date.now() + 60000)
+        const set = row.value.supply?.scaleSet
+        if (set === undefined) throw new StateCorrupt()
+        this.forgetDecline(set, row.record.key)
         const previousEffect = row.value.effect
         let withdrawn = false
         const beforeDelete = () => {
@@ -681,6 +718,10 @@ export class WorkerPool {
           if (row.value.effect?.kind !== 'runner-retire') throw new StateCorrupt()
           await update({ runner: { phase: 'absent', id: row.value.runner.id }, closing: true })
           this.idleRetryAt.delete(row.record.key)
+        } else {
+          const declined = this.declinedRetirements.get(set) ?? new Set<string>()
+          declined.add(row.record.key)
+          this.declinedRetirements.set(set, declined)
         }
       }
     }
@@ -731,6 +772,7 @@ export class WorkerPool {
     if (row.value.runner.phase === 'absent') {
       await this.journal.release(lease, row.record.key, row.record.version)
       this.idleRetryAt.delete(row.record.key)
+      if (row.value.supply?.scaleSet !== undefined) this.forgetDecline(row.value.supply.scaleSet, row.record.key)
       this.event(scope, row, 'ci-worker-released', 'info')
     }
   }

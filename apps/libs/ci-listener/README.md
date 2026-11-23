@@ -463,7 +463,7 @@ GitHub sends job request IDs as signed 64-bit JSON integers. The listener preser
 
 The owner admits eligible offers under the current quota. It records the request IDs before the acquire call and persists the returned result before acknowledging the message. An idle poll keeps accepted work reserved until GitHub reports assignment or cancellation.
 
-On reconnect, an explicit acquired count bounds the reservations carried from the previous session. Missing acquisition statistics preserve the existing charges.
+On idle polls and reconnects, an explicit acquired count includes jobs already assigned. At most `max(0, acquired - assigned)` additional holds remain for unassigned requests. For example, when acquired falls from two to one while assigned stays at one, only the assigned worker still needs a slot. Missing acquisition statistics preserve the outstanding holds.
 
 The pool counts the original workers for each set. An assigned job can start its reserved Box even while other Boxes are booting. The shared work queues allow eight scope planners and 32 allocation consumers to make progress independently.
 
@@ -477,7 +477,7 @@ PostgreSQL uses the API's connection pool and SQLite uses the Listener Box journ
 
 When assigned demand falls, the pool first withdraws surplus allocations that have no Box creation intent. For a running worker it checks the original runner ID, name and Scale Set membership.
 
-A successful idle unregister and confirmation of absence precede stopping the Box. A busy refusal or an uncertain result keeps the original worker available for recovery.
+A successful idle unregister and confirmation of absence precede stopping the Box. After a definite refusal, the next plan can check another original worker within the same surplus. Each worker keeps its retry deadline. A queued or uncertain removal still consumes one retirement opportunity until its outcome is known.
 
 ### Diagnosing a queued job
 
