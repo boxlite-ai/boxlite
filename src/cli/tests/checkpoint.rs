@@ -143,11 +143,14 @@ async fn checkpoint_create_list_get_delete_use_the_tenant_and_expected_request_s
         }
     })
     .await;
-    cli(&home, &server)
-        .args(["checkpoint", "create", "source-box", "--name", "base"])
-        .assert()
-        .success()
-        .stdout("checkpoint-1\n");
+    for kind in [None, Some("disk")] {
+        let mut command = cli(&home, &server);
+        command.args(["checkpoint", "create", "source", "--name", "base"]);
+        if let Some(kind) = kind {
+            command.args(["--kind", kind]);
+        }
+        command.assert().success().stdout("checkpoint-1\n");
+    }
     cli(&home, &server)
         .args(["checkpoint", "list", "--format", "json"])
         .assert()
@@ -164,20 +167,75 @@ async fn checkpoint_create_list_get_delete_use_the_tenant_and_expected_request_s
         .success()
         .stdout("checkpoint-1\n");
     let requests = server.requests.lock().unwrap();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert!(
         requests
             .iter()
             .all(|request| request.bearer == "Bearer cp-key")
     );
-    assert_eq!(requests[0].path, "/v1/tenant/checkpoints");
-    assert_eq!(
-        requests[0].body,
-        json!({"source_box_id":"source-box","name":"base"})
-    );
-    assert_eq!(requests[1].path, "/v1/tenant/checkpoints");
-    assert_eq!(requests[2].path, "/v1/tenant/checkpoints/checkpoint-1");
-    assert_eq!(requests[3].method, "DELETE");
+    for request in &requests[..2] {
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/v1/tenant/checkpoints");
+        assert_eq!(
+            request.body,
+            json!({"source_box_id":"source","name":"base"})
+        );
+    }
+    assert_eq!(requests[2].path, "/v1/tenant/checkpoints");
+    assert_eq!(requests[3].path, "/v1/tenant/checkpoints/checkpoint-1");
+    assert_eq!(requests[4].method, "DELETE");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_checkpoint_creation_checks_server_capability_before_posting() {
+    let home = TempDir::new().unwrap();
+    for enabled in [true, false] {
+        let server = Server::start(move |request| {
+            if request.path == "/v1/config" {
+                return (
+                    StatusCode::OK,
+                    json!({"capabilities":{"memory_checkpoints_enabled":enabled}}),
+                );
+            }
+            let mut checkpoint = info("checkpoint-1");
+            checkpoint["kind"] = json!("full");
+            (StatusCode::CREATED, checkpoint)
+        })
+        .await;
+        let result = cli(&home, &server)
+            .args(["checkpoint", "create", "source", "--kind", "full"])
+            .assert();
+        let requests = server.requests.lock().unwrap();
+        if enabled {
+            result.success().stdout("checkpoint-1\n");
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1].method, "POST");
+            assert_eq!(requests[1].path, "/v1/tenant/checkpoints");
+            assert_eq!(
+                requests[1].body,
+                json!({"source_box_id":"source","kind":"full"})
+            );
+        } else {
+            result
+                .failure()
+                .stderr(contains("does not support full checkpoint"));
+            assert_eq!(requests.len(), 1);
+        }
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/v1/config");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_create_rejects_an_invalid_kind_before_http() {
+    let home = TempDir::new().unwrap();
+    let server = Server::start(|_| (StatusCode::CREATED, info("checkpoint-1"))).await;
+    cli(&home, &server)
+        .args(["checkpoint", "create", "source", "--kind", "bogus"])
+        .assert()
+        .failure()
+        .stderr(contains("invalid value 'bogus' for '--kind <KIND>'"));
+    assert!(server.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -199,32 +257,69 @@ async fn create_from_a_checkpoint_sends_only_the_checkpoint_and_name() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn checkpoint_list_and_get_render_captured_metadata_as_tables() {
+async fn checkpoint_list_and_get_render_kind_and_memory_metadata() {
     let home = TempDir::new().unwrap();
-    let server = Server::start(|request| {
+    let mut full = info("checkpoint-2");
+    full["kind"] = json!("full");
+    full["memory_size_bytes"] = json!(8192);
+    let mut zero = full.clone();
+    zero["id"] = json!("checkpoint-3");
+    zero["memory_size_bytes"] = json!(0);
+    let mut expected = [info("checkpoint-1"), full, zero];
+    let responses = expected.clone();
+    let server = Server::start(move |request| {
         let body = if request.path.ends_with("/checkpoints") {
-            json!({"checkpoints":[info("checkpoint-1")]})
+            json!({"checkpoints": responses})
         } else {
-            info("checkpoint-1")
+            let id = request.path.rsplit('/').next().unwrap();
+            responses
+                .iter()
+                .find(|info| info["id"] == id)
+                .unwrap()
+                .clone()
         };
         (StatusCode::OK, body)
     })
     .await;
-    for arguments in [
-        vec!["checkpoint", "list"],
-        vec!["checkpoint", "get", "checkpoint-1", "--format", "table"],
-    ] {
+    cli(&home, &server)
+        .args(["checkpoint", "list"])
+        .assert()
+        .success()
+        .stdout(contains("KIND"))
+        .stdout(contains(" disk "))
+        .stdout(contains(" full "));
+    let list = cli(&home, &server)
+        .args(["checkpoint", "list", "--format", "json"])
+        .assert()
+        .success();
+    expected[0]["kind"] = json!("disk");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&list.get_output().stdout).unwrap(),
+        json!(expected)
+    );
+    for checkpoint in expected {
+        let id = checkpoint["id"].as_str().unwrap();
+        let kind = checkpoint["kind"].as_str().unwrap();
         cli(&home, &server)
-            .args(arguments)
+            .args(["checkpoint", "get", id, "--format", "table"])
             .assert()
             .success()
             .stdout(contains("ID"))
             .stdout(contains("SOURCE"))
-            .stdout(contains("checkpoint-1"))
+            .stdout(contains("KIND"))
+            .stdout(contains(format!(" {kind} ")))
+            .stdout(contains(id))
             .stdout(contains("source-box"))
             .stdout(contains("ready"));
+        let get = cli(&home, &server)
+            .args(["checkpoint", "get", id])
+            .assert()
+            .success();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&get.get_output().stdout).unwrap(),
+            checkpoint
+        );
     }
-    assert_eq!(server.requests.lock().unwrap().len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
