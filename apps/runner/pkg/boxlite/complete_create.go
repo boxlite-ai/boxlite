@@ -29,7 +29,8 @@ func completeCreateOwner(target string, attempt dto.CompleteCreateAttempt) (chec
 		((attempt.JobID != "" || attempt.ClaimID != "") &&
 			(!boxlite.ValidOutboundRevision(attempt.JobID) || !boxlite.ValidOutboundRevision(attempt.ClaimID))) ||
 		!boxlite.ValidOutboundRevision(snapshot.Revision) || snapshot.Revision == "initial" ||
-		snapshot.Admission != boxlite.OutboundAdmissionExtendedIPv4 ||
+		(snapshot.Admission != boxlite.OutboundAdmissionExtendedIPv4 && snapshot.Admission != boxlite.OutboundAdmissionExtendedDualStack) ||
+		(snapshot.Admission == boxlite.OutboundAdmissionExtendedDualStack) != (snapshot.IPv6 != nil) ||
 		snapshot.Policy.AllowNet == nil || snapshot.Policy.DenyNet == nil ||
 		prepared.DenyPresent == nil || (!*prepared.DenyPresent && len(snapshot.Policy.DenyNet) != 0) {
 		return checkpoint.CompleteCreateOwner{}, &boxlite.Error{Code: boxlite.ErrInvalidArgument, Message: "invalid complete create identity"}
@@ -181,7 +182,9 @@ func (c *Client) observeCompleteCreate(ctx context.Context, target string, attem
 }
 
 func sameCompleteCreateSnapshot(left, right boxlite.CompleteOutboundSnapshot) bool {
+	sameLink := left.IPv6 == right.IPv6 || (left.IPv6 != nil && right.IPv6 != nil && *left.IPv6 == *right.IPv6)
 	return left.Revision == right.Revision && left.Admission == right.Admission &&
+		sameLink &&
 		left.Policy.Mode == right.Policy.Mode &&
 		slices.Equal(left.Policy.AllowNet, right.Policy.AllowNet) &&
 		slices.Equal(left.Policy.DenyNet, right.Policy.DenyNet)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	sdk "github.com/boxlite-ai/boxlite/sdks/go"
@@ -218,4 +219,154 @@ printf '%s\n' '{"admission":false,"deny":false,"port":false,"capacity":false}'`
 		!sameCompleteCreateSnapshot(status.Observed.Snapshot, prepared.Snapshot) {
 		t.Fatalf("rebuilt live snapshot: %+v, %v", status, err)
 	}
+}
+
+func TestIntegrationQualifiedCloudOutboundLifecycle(t *testing.T) {
+	if os.Getenv("BOXLITE_PLATFORM_GUARD_PROFILE") != "cloud" {
+		t.Skip("requires a Linux host guard with qualified inventory v2")
+	}
+	const target = "cloud-dual-stack"
+	ctx := t.Context()
+	home := t.TempDir()
+	client := completeCreateFixture(t, home)
+	defer func() {
+		_ = client.Destroy(ctx, target)
+		_ = client.Close()
+	}()
+
+	assertLive := func(expected sdk.CompleteOutboundSnapshot) {
+		t.Helper()
+		status, err := client.CompleteOutboundStatus(ctx, target)
+		if err != nil || status.Observed == nil || status.ApplicationState != sdk.OutboundConfirmed ||
+			!sameCompleteCreateSnapshot(status.Persisted, expected) ||
+			!sameCompleteCreateSnapshot(status.Observed.Snapshot, expected) {
+			t.Fatalf("expected confirmed plan %+v, got %+v: %v", expected, status, err)
+		}
+	}
+	prepared, err := client.PrepareOutboundCreate(ctx, "cloud-original",
+		json.RawMessage(`{"mode":"enabled","allow_net":["2001:db8::2"]}`))
+	if err != nil || prepared.Snapshot.Admission != sdk.OutboundAdmissionExtendedDualStack || prepared.Snapshot.IPv6 == nil {
+		t.Fatalf("qualified prepare: %+v, %v", prepared, err)
+	}
+	created, err := client.CreateCompleteOutbound(ctx, target, completeCreateRequest(target, prepared))
+	if err != nil || created.Outcome != dto.CompleteCreateInstalled || created.Snapshot == nil ||
+		!sameCompleteCreateSnapshot(*created.Snapshot, prepared.Snapshot) {
+		t.Fatalf("qualified create: %+v, %v", created, err)
+	}
+	assertLive(prepared.Snapshot)
+	t.Log("qualified create confirmed the prepared plan")
+
+	command := func(input map[string]any, expected string) sdk.HostedOutboundReceipt {
+		t.Helper()
+		body, err := json.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := client.HostedOutbound(ctx, target, body)
+		if err != nil || receipt.Outcome != expected {
+			t.Fatalf("%s: expected %s, got %+v, %v", input["operation"], expected, receipt, err)
+		}
+		return receipt
+	}
+	replacement := command(map[string]any{
+		"operation": "prepare", "revision": "cloud-replaced", "previous": prepared.Snapshot,
+		"policy": json.RawMessage(`{"mode":"enabled","allow_net":["2001:db8::3"]}`),
+	}, "prepared")
+	if replacement.Candidate == nil || replacement.Candidate.Snapshot.IPv6 == nil ||
+		replacement.Candidate.Snapshot.Admission != sdk.OutboundAdmissionExtendedDualStack ||
+		replacement.Candidate.Snapshot.Revision != "cloud-replaced" ||
+		*replacement.Candidate.Snapshot.IPv6 != *prepared.Snapshot.IPv6 {
+		t.Fatalf("replacement changed the link plan: %+v", replacement)
+	}
+	attempt := map[string]any{
+		"incarnation": target, "attempt_id": "cloud-replace", "generation": 1,
+		"previous": prepared.Snapshot, "candidate": replacement.Candidate,
+	}
+	command(map[string]any{"operation": "apply", "attempt": attempt}, "applied")
+	command(map[string]any{"operation": "finalize", "attempt": attempt}, "finalized")
+	installed := replacement.Candidate.Snapshot
+	assertLive(installed)
+	t.Log("qualified replacement kept the plan and confirmed the new revision")
+
+	request := dto.CompleteRebuildRequest{
+		Snapshot: installed, Stamp: 1000,
+		Box: dto.RecoverBoxDTO{MemoryQuota: 1, StorageQuota: 4, OsUser: "root", ErrorReason: "test recovery"},
+	}
+	mismatch := request
+	altered := *installed.IPv6
+	altered.Guest, altered.Gateway = altered.Gateway, altered.Guest
+	mismatch.Snapshot.IPv6 = &altered
+	if _, err := client.RebuildCompleteOutbound(ctx, target, mismatch); err == nil {
+		t.Fatal("rebuild accepted a different IPv6 plan")
+	}
+	assertLive(installed)
+
+	previous, err := client.nativeBoxInfo(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := client.checkCompleteRebuild(ctx, target, installed, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(body)
+	lease, err := client.lockCheckpointTarget(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = lease.SaveCompleteRebuild(checkpoint.CompleteRebuild{
+		Stamp: request.Stamp, Fingerprint: hex.EncodeToString(digest[:]), PreviousID: previous.ID, RebuildPin: pinned.RebuildPin,
+	})
+	if err == nil {
+		err = client.destroy(ctx, target, lease)
+	}
+	lease.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.nativeBoxInfo(ctx, target); !sdk.IsNotFound(err) {
+		t.Fatalf("expected an empty rebuild target: %v", err)
+	}
+
+	stateDir := os.Getenv("BOXLITE_PLATFORM_GUARD_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "/run/boxlite-platform-guard"
+	}
+	t.Setenv("BOXLITE_PLATFORM_GUARD_STATE_DIR", t.TempDir())
+	if _, err := client.RebuildCompleteOutbound(ctx, target, request); err == nil || !strings.Contains(err.Error(), "Cloud platform guard") {
+		t.Fatalf("expected missing Cloud guard authority to refuse rebuild: %v", err)
+	}
+	if _, err := client.nativeBoxInfo(ctx, target); !sdk.IsNotFound(err) {
+		t.Fatalf("refused rebuild created a native Box: %v", err)
+	}
+	t.Setenv("BOXLITE_PLATFORM_GUARD_STATE_DIR", stateDir)
+	rebuilt, err := client.RebuildCompleteOutbound(ctx, target, request)
+	if err != nil || !sameCompleteCreateSnapshot(rebuilt, installed) {
+		t.Fatalf("empty-host rebuild: %+v, %v", rebuilt, err)
+	}
+	current, err := client.nativeBoxInfo(ctx, target)
+	if err != nil || current.ID == previous.ID {
+		t.Fatalf("expected a different native Box after rebuild: %+v, %v", current, err)
+	}
+	if _, err := client.Start(ctx, target, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertLive(installed)
+	for _, check := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-6", "addr", "show", "dev", installed.IPv6.Interface}, installed.IPv6.Guest + "/64"},
+		{[]string{"-6", "route", "show", "default"}, "via " + installed.IPv6.Gateway + " dev " + installed.IPv6.Interface},
+	} {
+		result, err := client.Exec(ctx, target, "ip", check.args...)
+		if err != nil || result.ExitCode != 0 || !strings.Contains(result.StdOut, check.want) {
+			t.Fatalf("rebuilt Guest ip %v did not show %q: %+v, %v", check.args, check.want, result, err)
+		}
+	}
+	t.Log("qualified empty-host rebuild restored the exact installed plan")
 }

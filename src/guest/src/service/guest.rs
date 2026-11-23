@@ -4,6 +4,7 @@
 //! Quiesce, Thaw RPCs).
 
 use crate::service::server::GuestServer;
+use boxlite_shared::generated::GuestIpv6Check;
 use boxlite_shared::{
     guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
     GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
@@ -55,6 +56,7 @@ impl GuestService for GuestServer {
         };
 
         // Step 2: Configure network (if specified)
+        let mut ipv6 = None;
         if let Some(network) = req.network {
             info!("Configuring network interface: {}", network.interface);
             if let Err(e) = crate::network::configure_network_from_config(
@@ -71,6 +73,16 @@ impl GuestService for GuestServer {
                     })),
                 }));
             }
+            if let Some(plan) = network.ipv6 {
+                if let Err(error) = crate::network::confirm_ipv6(&plan, true).await {
+                    return Ok(Response::new(GuestInitResponse {
+                        result: Some(guest_init_response::Result::Error(GuestInitError {
+                            reason: error.to_string(),
+                        })),
+                    }));
+                }
+                ipv6 = Some(plan);
+            }
         }
 
         // Mark as initialized
@@ -79,8 +91,26 @@ impl GuestService for GuestServer {
 
         info!("✅ Guest initialized successfully");
         Ok(Response::new(GuestInitResponse {
-            result: Some(guest_init_response::Result::Success(GuestInitSuccess {})),
+            result: Some(guest_init_response::Result::Success(GuestInitSuccess {
+                ipv6,
+            })),
         }))
+    }
+
+    async fn check_ipv6(
+        &self,
+        request: Request<GuestIpv6Check>,
+    ) -> Result<Response<GuestIpv6Check>, Status> {
+        let plan = request.into_inner();
+        if !self.init_state.lock().await.initialized {
+            return Err(Status::failed_precondition(
+                "Guest network is not initialized",
+            ));
+        }
+        crate::network::confirm_ipv6(&plan, false)
+            .await
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        Ok(Response::new(plan))
     }
 
     async fn ping(&self, _request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {

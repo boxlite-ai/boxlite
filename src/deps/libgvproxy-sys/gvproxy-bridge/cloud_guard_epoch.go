@@ -61,7 +61,7 @@ func (e *cloudGuardEpoch) renew(sample guardinventory.Observation, expiry time.T
 	return true
 }
 
-func (e *cloudGuardEpoch) watch(directory string, initial guardinventory.Observation) {
+func (e *cloudGuardEpoch) watch(directory string, initial guardinventory.Observation, launch *cloudBootstrap) {
 	defer e.retire()
 	nextPoll := initial.SampledAt.Add(guardinventory.PollInterval)
 	for {
@@ -84,6 +84,9 @@ func (e *cloudGuardEpoch) watch(directory string, initial guardinventory.Observa
 		}
 		poll, cancel := context.WithDeadline(e.ctx, until)
 		current, err := guardinventory.Sample(poll, directory)
+		if err == nil && current.Version == 2 {
+			err = launch.hostOperation(poll, "check_dual_stack", nil)
+		}
 		cancel()
 		if err != nil || current.Revision != initial.Revision || current.Digest != initial.Digest ||
 			!slices.Equal(current.HostAddrs, initial.HostAddrs) || !e.renew(current, initial.Expires) {

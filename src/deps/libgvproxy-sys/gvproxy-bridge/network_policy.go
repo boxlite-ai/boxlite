@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
@@ -45,23 +46,28 @@ type nicOperations interface {
 // One controller owns policy replacement for both transports and the NIC.
 // Forwarders capture immutable snapshots, so established flows keep their policy and transport.
 type outboundPolicyController struct {
-	mu           sync.Mutex
-	active       atomic.Pointer[outboundSnapshot]
-	config       *types.Configuration
-	guard        platformGuard
-	inventory    guardinventory.Observation
-	resolve      resolveFunc
-	guestIP      string
-	stack        *stack.Stack
-	nic          tcpip.NICID
-	nicOps       nicOperations
-	capabilities outboundCapabilities
+	mu                    sync.Mutex
+	active                atomic.Pointer[outboundSnapshot]
+	config                *types.Configuration
+	guard                 platformGuard
+	inventory             guardinventory.Observation
+	resolve               resolveFunc
+	resolveFamily         familyResolver
+	ipv6Ready             atomic.Bool
+	ipv6ReadinessRevision string
+	ipv6Challenge         ipv6Readiness
+	ipv6ReadinessUntil    time.Time
+	guestIP               string
+	stack                 *stack.Stack
+	nic                   tcpip.NICID
+	nicOps                nicOperations
+	capabilities          outboundCapabilities
 
 	tcpInspectionSlots chan struct{}
 	udpFlows           *udpFlowPool
 }
 
-func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.VirtualNetwork, config *types.Configuration, startup GvproxyConfig, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, resolve resolveFunc) (*outboundPolicyController, error) {
+func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.VirtualNetwork, config *types.Configuration, startup GvproxyConfig, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, resolve resolveFunc, resolveFamily familyResolver) (*outboundPolicyController, error) {
 	s, err := stackOf(vn)
 	if err != nil {
 		return nil, err
@@ -71,7 +77,8 @@ func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.Virtual
 		return nil, fmt.Errorf("policy updates require one guest NIC, got %d", len(nics))
 	}
 	p := &outboundPolicyController{
-		config: config, guard: startup.guard, resolve: resolve, guestIP: startup.GuestIP, stack: s, nicOps: s,
+		config: config, guard: startup.guard, resolve: resolve, resolveFamily: resolveFamily,
+		guestIP: startup.GuestIP, stack: s, nicOps: s,
 		capabilities:       supportedOutboundCapabilities(),
 		tcpInspectionSlots: make(chan struct{}, 10),
 		udpFlows:           newUDPFlowPool(ctx),
@@ -133,9 +140,20 @@ func (p *outboundPolicyController) replaceTrustedTCP(mode string, rules trustedT
 // The caller holds the controller mutex across candidate preparation and publication.
 func (p *outboundPolicyController) applySnapshot(candidate *outboundSnapshot) error {
 	previous := p.active.Load()
+	p.ipv6Challenge = ipv6Readiness{}
+	if !p.guard.active() && candidate.policy.required.NativeIPv6 {
+		return fmt.Errorf("Cloud topology proof expired before outbound policy update")
+	}
+	if candidate.policy.required.NativeIPv6 && candidate.policy.Mode == "enabled" &&
+		previous.policy.Mode == "disabled" &&
+		(p.ipv6ReadinessRevision != previous.revision || !time.Now().Before(p.ipv6ReadinessUntil)) {
+		return fmt.Errorf("current Guest IPv6 readiness is required before enabling outbound policy")
+	}
 	transition := previous
 	var nicErr tcpip.Error
 	if candidate.policy.Mode == "disabled" {
+		p.ipv6Ready.Store(false)
+		p.ipv6ReadinessRevision = ""
 		transition = candidate
 		p.publish(transition, "pending")
 		nicErr = p.nicOps.DisableNIC(p.nic)
@@ -147,10 +165,18 @@ func (p *outboundPolicyController) applySnapshot(candidate *outboundSnapshot) er
 		}
 	}
 	if nicErr != nil {
+		if previous.policy.Mode == "disabled" {
+			p.ipv6Ready.Store(false)
+			p.ipv6ReadinessRevision = ""
+		}
 		p.publish(transition, "uncertain")
 		return fmt.Errorf("change guest NIC state: %s", nicErr)
 	}
 	p.publish(candidate, "confirmed")
+	if candidate.policy.required.NativeIPv6 && candidate.policy.Mode == "enabled" && previous.policy.Mode == "disabled" {
+		p.ipv6Ready.Store(true)
+		p.ipv6ReadinessRevision = ""
+	}
 	return nil
 }
 

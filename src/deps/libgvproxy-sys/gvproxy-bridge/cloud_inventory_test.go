@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,49 @@ func testCloudInventory(resolvers []string) guardinventory.Document {
 			Node: []string{}, ControlPlane: []string{}, Metadata: []string{}, Services: []string{},
 		},
 		ResolverEndpoints: resolvers,
+	}
+}
+
+func TestDualStackCloudInventoryRequiresCoverage(t *testing.T) {
+	doc := testCloudInventory([]string{"127.0.0.1:53"})
+	doc.Version = 2
+	doc.TopologyDigest = strings.Repeat("b", 64)
+	host := []string{"2606:4700:1234::/48"}
+	translation := []string{}
+	doc.ProtectedNetworks.Host = &host
+	doc.ProtectedNetworks.Translation = &translation
+	doc.ProtectedNetworks.Node = []string{"10.0.0.0/8"}
+	doc.ProtectedNetworks.ControlPlane = []string{}
+	doc.ProtectedNetworks.Metadata = []string{"169.254.169.254/32"}
+	doc.ProtectedNetworks.Services = []string{}
+	doc.AbsentGroups = []string{"control_plane", "services", "translation"}
+	sample := func() (guardinventory.Observation, error) {
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return guardinventory.Parse(raw, time.Now(), []net.Addr{
+			&net.IPAddr{IP: net.ParseIP("2600:1900::2")},
+		})
+	}
+	observed, err := sample()
+	if err != nil || observed.Version != 2 || observed.TopologyDigest != doc.TopologyDigest {
+		t.Fatalf("valid v2 sample: %+v %v", observed, err)
+	}
+	guard := platformGuard{cloud: true, cloudNativeIPv6: true, protected: observed.Protected}
+	if !guard.denies(netip.MustParseAddr("2606:4700:1234::3")) ||
+		!guard.denies(netip.MustParseAddr("2600:1900::2")) ||
+		guard.denies(netip.MustParseAddr("2606:4700::1111")) {
+		t.Fatal("Cloud v2 native protection disagrees with the observed networks")
+	}
+	doc.AbsentGroups = []string{"control_plane", "services"}
+	if _, err := sample(); err == nil {
+		t.Fatal("accepted an empty translation group without attestation")
+	}
+	doc.AbsentGroups = []string{"control_plane", "services", "translation"}
+	doc.ProtectedNetworks.Translation = nil
+	if _, err := sample(); err == nil {
+		t.Fatal("accepted missing translation coverage")
 	}
 }
 

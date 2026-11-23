@@ -44,10 +44,23 @@ func newGvproxyNetwork(ctx context.Context, config *types.Configuration, startup
 				return policy != nil && guestTrafficAllowed(policy.guard, policy.active.Load)
 			},
 		}
+		if initial.complete != nil && initial.complete.IPv6 != nil {
+			guestMAC, err := net.ParseMAC(startup.GuestMac)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid Guest MAC for IPv6 link: %w", err)
+			}
+			linkConfig.IPv6Link.Guest = initial.complete.IPv6.Guest
+			linkConfig.IPv6Link.GuestMAC = guestMAC
+			linkConfig.IPv6Link.AllowData = func() bool {
+				policy := linkPolicy.Load()
+				return policy != nil && policy.ipv6Ready.Load() && guestTrafficAllowed(policy.guard, policy.active.Load)
+			}
+		}
 		config = &linkConfig
 	}
 	var vn *virtualnetwork.VirtualNetwork
 	var resolve resolveFunc
+	resolveFamily := hostResolver.LookupIP
 	var inventory guardinventory.Observation
 	var err error
 	if startup.guard.cloud {
@@ -55,18 +68,30 @@ func newGvproxyNetwork(ctx context.Context, config *types.Configuration, startup
 		if err != nil {
 			return nil, nil, err
 		}
-		if launch := startup.CloudGuard; launch != nil {
+		launch := startup.CloudGuard
+		if initial.required.NativeIPv6 && (inventory.Version != 2 || launch == nil) {
+			return nil, nil, fmt.Errorf("Guest IPv6 requires verified Cloud inventory v2")
+		}
+		if launch != nil {
 			if launch.Revision != inventory.Revision || launch.Digest != hex.EncodeToString(inventory.Digest[:]) {
 				return nil, nil, fmt.Errorf("Cloud inventory does not match the launch identity")
 			}
-			if err := launch.hostOperation(ctx, "check", nil); err != nil {
+			check := "check"
+			if inventory.Version == 2 {
+				check = "check_dual_stack"
+			}
+			if err := launch.hostOperation(ctx, check, nil); err != nil {
 				return nil, nil, err
 			}
+			startup.guard.cloudNativeIPv6 = inventory.Version == 2
+		} else if inventory.Version == 2 {
+			return nil, nil, fmt.Errorf("Cloud inventory v2 requires a verified host topology proof")
 		}
 		startup.guard.protected = append(append([]netip.Prefix(nil), startup.guard.protected...), inventory.Protected...)
 		startup.guard.epoch = newCloudGuardEpoch(ctx, inventory)
 		resolver := &cloudDNSResolver{endpoints: inventory.Resolvers, epoch: startup.guard.epoch}
 		resolve = resolver.lookupHost
+		resolveFamily = resolver.lookupFamily
 		network, err := virtualnetwork.NewWithDNSResolver(startup.guard.epoch.ctx, config, resolver)
 		if err != nil {
 			startup.guard.epoch.retire()
@@ -79,7 +104,7 @@ func newGvproxyNetwork(ctx context.Context, config *types.Configuration, startup
 			return nil, nil, fmt.Errorf("initialize virtual network: %w", err)
 		}
 	}
-	policy, err := newOutboundPolicyController(startup.guard.trafficContext(ctx), vn, config, startup, ca, secrets, initial, resolve)
+	policy, err := newOutboundPolicyController(startup.guard.trafficContext(ctx), vn, config, startup, ca, secrets, initial, resolve, resolveFamily)
 	if err != nil {
 		if startup.guard.epoch != nil {
 			startup.guard.epoch.retire()
@@ -95,7 +120,7 @@ func newGvproxyNetwork(ctx context.Context, config *types.Configuration, startup
 		}
 		policy.inventory = inventory
 		go func() {
-			startup.guard.epoch.watch(startup.cloudInventoryDirectory, inventory)
+			startup.guard.epoch.watch(startup.cloudInventoryDirectory, inventory, startup.CloudGuard)
 			if launch := startup.CloudGuard; launch != nil {
 				if err := launch.hostOperation(context.Background(), "revoke", nil); err != nil {
 					logrus.WithError(err).Warn("Cloud guard revocation notification failed")

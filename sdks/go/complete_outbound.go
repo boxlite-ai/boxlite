@@ -24,14 +24,22 @@ type EffectiveOutboundPolicy struct {
 type OutboundAdmission string
 
 const (
-	OutboundAdmissionLegacy       OutboundAdmission = "legacy"
-	OutboundAdmissionExtendedIPv4 OutboundAdmission = "extended_ipv4"
+	OutboundAdmissionLegacy            OutboundAdmission = "legacy"
+	OutboundAdmissionExtendedIPv4      OutboundAdmission = "extended_ipv4"
+	OutboundAdmissionExtendedDualStack OutboundAdmission = "extended_dual_stack"
 )
+
+type OutboundIPv6Link struct {
+	Interface string `json:"interface"`
+	Guest     string `json:"guest"`
+	Gateway   string `json:"gateway"`
+}
 
 type CompleteOutboundSnapshot struct {
 	Policy    EffectiveOutboundPolicy `json:"policy"`
 	Revision  string                  `json:"revision"`
 	Admission OutboundAdmission       `json:"admission"`
+	IPv6      *OutboundIPv6Link       `json:"ipv6,omitempty"`
 }
 
 // CompleteOutboundPolicy preserves a nil DenyNet as omitted and a non-nil

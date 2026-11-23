@@ -37,21 +37,23 @@ type request struct {
 }
 
 type response struct {
-	Instance  string `json:"instance,omitempty"`
-	Revision  string `json:"revision,omitempty"`
-	Digest    string `json:"digest,omitempty"`
-	Cgroup    uint64 `json:"cgroup_id,omitempty"`
-	Deadline  uint64 `json:"deadline_ns,omitempty"`
-	ShimPID   int32  `json:"shim_pid,omitempty"`
-	ShimStart uint64 `json:"shim_start,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Instance         string `json:"instance,omitempty"`
+	Revision         string `json:"revision,omitempty"`
+	Digest           string `json:"digest,omitempty"`
+	Cgroup           uint64 `json:"cgroup_id,omitempty"`
+	Deadline         uint64 `json:"deadline_ns,omitempty"`
+	ShimPID          int32  `json:"shim_pid,omitempty"`
+	ShimStart        uint64 `json:"shim_start,omitempty"`
+	InventoryVersion int    `json:"inventory_version,omitempty"`
+	TopologyDigest   string `json:"topology_sha256,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 func main() {
 	state := flag.String("state-dir", "/run/boxlite-platform-guard", "trusted host state directory")
 	m := &manager{
 		active: make(map[string]record), retired: make(map[string]struct{}), preparing: make(map[string]struct{}),
-		sampler: guardinventory.Sampler{RequireRoot: true},
+		sampler: guardinventory.Sampler{RequireRoot: true, CheckAppliedTopology: true},
 	}
 	flag.StringVar(&m.object, "bpf-object", "/usr/lib/boxlite/deadline.bpf.o", "trusted BPF object")
 	flag.StringVar(&m.pins, "pin-dir", "/sys/fs/bpf/boxlite_platform_guard", "BPF pin directory")
@@ -91,6 +93,11 @@ func run(ctx context.Context, state string, m *manager) error {
 	}
 	defer lock.Close()
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(filepath.Join(m.records, "topology-paused")); err == nil {
+		m.topologyPaused = true
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if err := m.recover(); err != nil {
@@ -165,7 +172,9 @@ func requestFrom(raw []byte) (request, error) {
 	if err := decoder.Decode(&result); err != nil || decoder.Decode(new(any)) != io.EOF {
 		return request{}, fmt.Errorf("invalid Cloud guard request")
 	}
-	if result.Operation == "ready" && result.Box == "" && result.Instance == "" && result.DataSocket == "" {
+	if (result.Operation == "ready" || result.Operation == "sample-topology" ||
+		result.Operation == "pause-topology" || result.Operation == "resume-topology") &&
+		result.Box == "" && result.Instance == "" && result.DataSocket == "" {
 		return result, nil
 	}
 	if !component.MatchString(result.Box) {
@@ -206,7 +215,21 @@ func (m *manager) runner(ctx context.Context, conn *net.UnixConn) response {
 		return response{Error: err.Error()}
 	}
 	if req.Operation == "ready" {
-		if err := m.checkReadiness(ctx); err != nil {
+		version, err := m.checkReadiness(ctx)
+		if err != nil {
+			return response{Error: err.Error()}
+		}
+		return response{InventoryVersion: version}
+	} else if req.Operation == "sample-topology" {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		digest, err := guardinventory.AppliedTopology(ctx)
+		if err != nil {
+			return response{Error: err.Error()}
+		}
+		return response{TopologyDigest: digest}
+	} else if req.Operation == "pause-topology" || req.Operation == "resume-topology" {
+		if err := m.setTopologyPaused(ctx, req.Operation == "pause-topology"); err != nil {
 			return response{Error: err.Error()}
 		}
 		return response{}
@@ -249,7 +272,7 @@ func proofResponse(stored record, deadline uint64) response {
 		Instance: stored.Instance,
 		Revision: stored.Revision, Digest: hex.EncodeToString(stored.Digest[:]),
 		Cgroup: stored.Kernel.CgroupID, Deadline: deadline,
-		ShimPID: stored.ShimPID, ShimStart: stored.ShimStart,
+		ShimPID: stored.ShimPID, ShimStart: stored.ShimStart, InventoryVersion: stored.InventoryVersion,
 	}
 }
 
@@ -289,8 +312,8 @@ func (m *manager) shim(conn *net.UnixConn) response {
 	}
 	pin := m.pinDir(req.Box)
 	switch req.Operation {
-	case "check":
-		if len(fds) == 0 {
+	case "check", "check_dual_stack":
+		if len(fds) == 0 && (req.Operation == "check" || stored.InventoryVersion == 2) {
 			if deadline, err := m.prove(stored); err == nil {
 				return proofResponse(stored, deadline)
 			}

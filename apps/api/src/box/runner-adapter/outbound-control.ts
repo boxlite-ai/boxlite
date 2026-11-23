@@ -1,4 +1,5 @@
 import { BadRequestException, HttpException, ServiceUnavailableException } from '@nestjs/common'
+import { isIPv6 } from 'node:net'
 import type { CreateBoxDTO, RecoverBoxDTO } from '@boxlite-ai/runner-api-client'
 import { Runner } from '../entities/runner.entity'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
@@ -16,7 +17,8 @@ export type OutboundStatus = {
 export type CompleteOutboundPolicy = OutboundPolicy & { deny_net?: string[] }
 export type CompleteOutboundSnapshot = {
   revision: string
-  admission: 'legacy' | 'extended_ipv4'
+  admission: 'legacy' | 'extended_ipv4' | 'extended_dual_stack'
+  ipv6?: { interface: 'eth0'; guest: string; gateway: string }
   policy: OutboundPolicy & { deny_net: string[] }
 }
 export type PreparedOutboundCreate = { snapshot: CompleteOutboundSnapshot; deny_present: boolean }
@@ -79,6 +81,9 @@ export function sameCompleteOutboundSnapshot(left: CompleteOutboundSnapshot, rig
   return (
     left.revision === right.revision &&
     left.admission === right.admission &&
+    left.ipv6?.interface === right.ipv6?.interface &&
+    left.ipv6?.guest === right.ipv6?.guest &&
+    left.ipv6?.gateway === right.ipv6?.gateway &&
     samePolicy(left.policy, right.policy) &&
     left.policy.deny_net.length === right.policy.deny_net.length &&
     left.policy.deny_net.every((rule, index) => rule === right.policy.deny_net[index])
@@ -137,16 +142,45 @@ export function validCompleteOutboundPolicy(value: unknown): value is CompleteOu
   )
 }
 
+function ulaSegments(address: unknown): number[] | undefined {
+  if (typeof address !== 'string' || !/^fd[0-9a-f]{2}:[0-9a-f:]+$/i.test(address) || !isIPv6(address)) {
+    return undefined
+  }
+  const [leading, trailing] = address.split('::')
+  const segments = leading.split(':').map((part) => Number.parseInt(part, 16))
+  if (trailing === undefined) return segments
+  const suffix = trailing === '' ? [] : trailing.split(':').map((part) => Number.parseInt(part, 16))
+  return [...segments, ...Array<number>(8 - segments.length - suffix.length).fill(0), ...suffix]
+}
+
+function validIpv6LinkPlan(plan: unknown): boolean {
+  if (!record(plan) || Object.keys(plan).length !== 3 || plan.interface !== 'eth0') return false
+  const guest = ulaSegments(plan.guest)
+  const gateway = ulaSegments(plan.gateway)
+  if (!guest || !gateway || !guest.slice(0, 4).every((segment, index) => segment === gateway[index])) return false
+  const guestHost = guest.slice(4)
+  const gatewayHost = gateway.slice(4)
+  return (
+    guestHost.some((segment) => segment !== 0) &&
+    gatewayHost.some((segment) => segment !== 0) &&
+    guestHost.some((segment, index) => segment !== gatewayHost[index])
+  )
+}
+
 export function validCompleteOutboundSnapshot(value: unknown): value is CompleteOutboundSnapshot {
   if (
     !record(value) ||
-    Object.keys(value).some((key) => !['revision', 'admission', 'policy'].includes(key)) ||
+    Object.keys(value).some((key) => !['revision', 'admission', 'policy', 'ipv6'].includes(key)) ||
     !validOutboundRevision(value.revision) ||
     !validCompleteOutboundPolicy(value.policy) ||
     !completeRuleList(value.policy.deny_net, true)
   ) {
     return false
   }
+  if (value.admission === 'extended_dual_stack') {
+    return validIpv6LinkPlan(value.ipv6) && completeRuleList(value.policy.allow_net, true)
+  }
+  if (value.ipv6 !== undefined) return false
   // Legacy snapshots retain their stored spelling. Runtime canonicalizes extended rules.
   if (value.admission === 'legacy') {
     return value.policy.deny_net.length === 0 && policy({ mode: value.policy.mode, allow_net: value.policy.allow_net })
@@ -155,7 +189,7 @@ export function validCompleteOutboundSnapshot(value: unknown): value is Complete
 }
 
 export function validPreparedOutboundCreate(value: unknown): value is PreparedOutboundCreate {
-  return validPreparedOutbound(value) && value.snapshot.admission === 'extended_ipv4'
+  return validPreparedOutbound(value) && value.snapshot.admission !== 'legacy'
 }
 
 export function validPreparedOutbound(value: unknown): value is PreparedOutboundCreate {
@@ -322,7 +356,7 @@ export class RunnerOutboundControl implements OutboundControl {
       !validCompleteOutboundSnapshot(body.snapshot) ||
       body.deny_present !== (request.deny_net !== undefined) ||
       body.snapshot.revision !== revision ||
-      body.snapshot.admission !== 'extended_ipv4' ||
+      body.snapshot.admission === 'legacy' ||
       body.snapshot.policy.mode !== request.mode ||
       body.snapshot.policy.allow_net.length !== request.allow_net.length ||
       body.snapshot.policy.deny_net.length !== (request.deny_net?.length ?? 0)

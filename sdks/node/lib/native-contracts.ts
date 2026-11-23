@@ -639,7 +639,8 @@ export interface CompleteOutboundPolicy {
 
 export interface CompleteOutboundSnapshot {
   revision: string;
-  admission: "legacy" | "extended_ipv4";
+  admission: "legacy" | "extended_ipv4" | "extended_dual_stack";
+  ipv6?: { interface: "eth0"; guest: string; gateway: string };
   policy: {
     mode: "enabled" | "disabled";
     allow_net: string[];

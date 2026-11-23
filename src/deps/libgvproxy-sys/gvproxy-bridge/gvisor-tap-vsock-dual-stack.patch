@@ -1,0 +1,299 @@
+diff --git a/pkg/services/dns/dns.go b/pkg/services/dns/dns.go
+index 5d5d529..949e7c0 100644
+--- a/pkg/services/dns/dns.go
++++ b/pkg/services/dns/dns.go
+@@ -8,6 +8,7 @@ import (
+ 	"net/http"
+ 	"strings"
+ 	"sync"
++	"time"
+ 
+ 	"github.com/containers/gvisor-tap-vsock/pkg/types"
+ 	"github.com/miekg/dns"
+@@ -22,6 +23,7 @@ type Resolver interface {
+ type dnsHandler struct {
+ 	ctx       context.Context
+ 	resolver  Resolver
++	allowAAAA func() bool
+ 	zones     []types.Zone
+ 	zonesLock sync.RWMutex
+ }
+@@ -99,10 +101,13 @@ func (h *dnsHandler) addAnswers(m *dns.Msg) {
+ 		if done := h.addLocalAnswers(m, q); done {
+ 			return
+ 		}
++		if q.Qtype == dns.TypeAAAA && (h.allowAAAA == nil || !h.allowAAAA()) {
++			continue
++		}
+ 
+ 		if h.resolver != nil {
+ 			switch q.Qtype {
+-			case dns.TypeA, dns.TypeCNAME, dns.TypeMX, dns.TypeNS, dns.TypeSRV, dns.TypeTXT:
++			case dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeMX, dns.TypeNS, dns.TypeSRV, dns.TypeTXT:
+ 				answers, rcode := h.resolver.ResolveDNS(h.ctx, q)
+ 				m.Answer = append(m.Answer, answers...)
+ 				m.Rcode = rcode
+@@ -137,6 +142,22 @@ func (h *dnsHandler) addAnswers(m *dns.Msg) {
+ 					A: ip.IP.To4(),
+ 				})
+ 			}
++		case dns.TypeAAAA:
++			ctx, cancel := context.WithTimeout(h.ctx, 4*time.Second)
++			ips, err := resolver.LookupIP(ctx, "ip6", q.Name)
++			cancel()
++			if err != nil {
++				m.Rcode = dns.RcodeServerFailure
++				return
++			}
++			for _, ip := range ips {
++				if ip.To4() == nil && ip.To16() != nil {
++					m.Answer = append(m.Answer, &dns.AAAA{
++						Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET},
++						AAAA: ip,
++					})
++				}
++			}
+ 		case dns.TypeCNAME:
+ 			cname, err := resolver.LookupCNAME(context.TODO(), q.Name)
+ 			if err != nil {
+@@ -233,11 +254,11 @@ type Server struct {
+ }
+ 
+ func New(udpConn net.PacketConn, tcpLn net.Listener, zones []types.Zone) (*Server, error) {
+-	return NewWithResolver(context.Background(), udpConn, tcpLn, zones, nil)
++	return NewWithResolver(context.Background(), udpConn, tcpLn, zones, nil, nil)
+ }
+ 
+-func NewWithResolver(ctx context.Context, udpConn net.PacketConn, tcpLn net.Listener, zones []types.Zone, resolver Resolver) (*Server, error) {
+-	handler := &dnsHandler{ctx: ctx, resolver: resolver, zones: zones}
++func NewWithResolver(ctx context.Context, udpConn net.PacketConn, tcpLn net.Listener, zones []types.Zone, resolver Resolver, allowAAAA func() bool) (*Server, error) {
++	handler := &dnsHandler{ctx: ctx, resolver: resolver, zones: zones, allowAAAA: allowAAAA}
+ 	return &Server{udpConn: udpConn, tcpLn: tcpLn, handler: handler}, nil
+ }
+ 
+diff --git a/pkg/tap/switch.go b/pkg/tap/switch.go
+index e8f547a..b40094f 100644
+--- a/pkg/tap/switch.go
++++ b/pkg/tap/switch.go
+@@ -49,8 +49,12 @@ type Switch struct {
+ 
+ 	gateway VirtualDevice
+ 
+-	ipv6Addresses []ipv6GatewayAddress
+-	allowIPv6     func() bool
++	ipv6Addresses  []ipv6GatewayAddress
++	allowIPv6      func() bool
++	allowIPv6Data  func() bool
++	ipv6Guest      tcpip.Address
++	ipv6GuestMAC   tcpip.LinkAddress
++	ipv6GuestLocal tcpip.Address
+ }
+ 
+ type ipv6GatewayAddress struct {
+@@ -83,14 +87,20 @@ func (e *Switch) Connect(ep VirtualDevice) {
+ }
+ 
+ // ConfigureIPv6 sets the link addresses and admission policy before accepting peers.
+-func (e *Switch) ConfigureIPv6(addresses []tcpip.AddressWithPrefix, allowTraffic func() bool) {
++func (e *Switch) ConfigureIPv6(addresses []tcpip.AddressWithPrefix, link *types.IPv6Link) {
+ 	for _, address := range addresses {
+ 		e.ipv6Addresses = append(e.ipv6Addresses, ipv6GatewayAddress{
+ 			address: address.Address, prefix: address.Subnet(),
+ 			solicitedNode: header.SolicitedNodeAddr(address.Address),
+ 		})
+ 	}
+-	e.allowIPv6 = allowTraffic
++	e.allowIPv6 = link.AllowTraffic
++	if link.Guest.IsValid() {
++		e.ipv6Guest = tcpip.AddrFrom16(link.Guest.As16())
++		e.ipv6GuestMAC = tcpip.LinkAddress(link.GuestMAC)
++		e.ipv6GuestLocal = header.LinkLocalAddr(e.ipv6GuestMAC)
++		e.allowIPv6Data = link.AllowData
++	}
+ }
+ 
+ func (e *Switch) DeliverNetworkPacket(_ tcpip.NetworkProtocolNumber, pkt *stack.PacketBuffer) {
+@@ -125,6 +135,10 @@ func (e *Switch) connect(conn protocolConn) (int, bool) {
+ 	e.connLock.Lock()
+ 	defer e.connLock.Unlock()
+ 
++	if e.ipv6Guest.Len() != 0 && len(e.conns) != 0 {
++		return 0, true
++	}
++
+ 	id := e.nextConnID
+ 	e.nextConnID++
+ 
+@@ -195,13 +209,31 @@ func (e *Switch) txPkt(pkt *stack.PacketBuffer) error {
+ }
+ 
+ func (e *Switch) txBuf(id int, conn protocolConn, buf []byte, ipv6 bool) (bool, error) {
++	var bootstrap bool
++	if ipv6 && e.allowIPv6Data != nil {
++		ip := header.IPv6(buf[header.EthernetMinimumSize:])
++		if ip.IsValid(len(ip)) && ip.HopLimit() == 255 &&
++			ip.TransportProtocol() == header.ICMPv6ProtocolNumber &&
++			ip.PayloadLength() >= header.ICMPv6NeighborAdvertMinimumSize {
++			icmp := header.ICMPv6(ip.Payload())
++			if icmp.Type() == header.ICMPv6NeighborAdvert && icmp.Code() == 0 &&
++				ip.DestinationAddress() == header.IPv6AllNodesMulticastAddress &&
++				header.Ethernet(buf).DestinationAddress() == header.EthernetAddressFromMulticastIPv6Address(ip.DestinationAddress()) {
++				advert := header.NDPNeighborAdvert(icmp.MessageBody())
++				target := advert.TargetAddress()
++				for _, address := range e.ipv6Addresses {
++					bootstrap = bootstrap || (!advert.SolicitedFlag() && target == address.address && ip.SourceAddress() == address.address)
++				}
++			}
++		}
++	}
+ 	if conn.protocolImpl.Stream() {
+ 		size := conn.protocolImpl.(streamProtocol).Buf()
+ 		conn.protocolImpl.(streamProtocol).Write(size, len(buf))
+ 		buf = append(size, buf...)
+ 	}
+ 	for {
+-		if ipv6 && !e.allowIPv6() {
++		if ipv6 && (!e.allowIPv6() || (e.allowIPv6Data != nil && !bootstrap && !e.allowIPv6Data())) {
+ 			return false, nil
+ 		}
+ 		n, err := conn.Write(buf)
+@@ -346,13 +378,36 @@ func (e *Switch) deliver(protocol tcpip.NetworkProtocolNumber, buf []byte) {
+ }
+ 
+ func (e *Switch) acceptsIPv6(eth header.Ethernet, ip header.IPv6) bool {
+-	if !ip.IsValid(len(ip)) || ip.TransportProtocol() != header.ICMPv6ProtocolNumber ||
+-		ip.PayloadLength() < header.ICMPv6MinimumSize {
++	if !ip.IsValid(len(ip)) {
++		return false
++	}
++	if e.allowIPv6Data != nil {
++		if eth.SourceAddress() != e.ipv6GuestMAC {
++			return false
++		}
++		source := ip.SourceAddress()
++		switch ip.TransportProtocol() {
++		case header.TCPProtocolNumber, header.UDPProtocolNumber:
++			return source == e.ipv6Guest && eth.DestinationAddress() == e.gateway.LinkAddress() && e.allowIPv6Data()
++		case header.ICMPv6ProtocolNumber:
++			if source != header.IPv6Any && source != e.ipv6Guest && source != e.ipv6GuestLocal {
++				return false
++			}
++			if source != header.IPv6Any && !e.allowIPv6Data() {
++				return false
++			}
++		}
++	}
++	if ip.TransportProtocol() != header.ICMPv6ProtocolNumber || ip.PayloadLength() < header.ICMPv6MinimumSize {
+ 		return false
+ 	}
+ 	icmp := header.ICMPv6(ip.Payload())
+ 	switch icmp.Type() {
+-	case header.ICMPv6NeighborSolicit, header.ICMPv6NeighborAdvert, header.ICMPv6EchoRequest, header.ICMPv6EchoReply:
++	case header.ICMPv6NeighborSolicit, header.ICMPv6NeighborAdvert:
++		if e.allowIPv6Data != nil && ip.HopLimit() != 255 {
++			return false
++		}
++	case header.ICMPv6EchoRequest, header.ICMPv6EchoReply:
+ 	default:
+ 		return false
+ 	}
+@@ -362,7 +417,17 @@ func (e *Switch) acceptsIPv6(eth header.Ethernet, ip header.IPv6) bool {
+ 		if icmp.Type() != header.ICMPv6NeighborSolicit || len(icmp) < header.ICMPv6NeighborSolicitMinimumSize {
+ 			return false
+ 		}
+-		target := header.NDPNeighborSolicit(icmp.MessageBody()).TargetAddress()
++		solicit := header.NDPNeighborSolicit(icmp.MessageBody())
++		if e.allowIPv6Data != nil && (icmp.Code() != 0 ||
++			icmp.Checksum() != header.ICMPv6Checksum(header.ICMPv6ChecksumParams{Header: icmp, Src: source, Dst: destination}) ||
++			!validDADOptions(solicit.Options())) {
++			return false
++		}
++		target := solicit.TargetAddress()
++		if e.allowIPv6Data != nil && (target == e.ipv6Guest || target == e.ipv6GuestLocal) {
++			return destination == header.SolicitedNodeAddr(target) &&
++				eth.DestinationAddress() == header.EthernetAddressFromMulticastIPv6Address(destination)
++		}
+ 		for _, gateway := range e.ipv6Addresses {
+ 			if target == gateway.address && destination == gateway.solicitedNode {
+ 				return eth.DestinationAddress() == header.EthernetAddressFromMulticastIPv6Address(destination)
+@@ -390,6 +455,21 @@ func (e *Switch) acceptsIPv6(eth header.Ethernet, ip header.IPv6) bool {
+ 	return false
+ }
+ 
++func validDADOptions(options header.NDPOptions) bool {
++	for len(options) != 0 {
++		if len(options) < 2 || options[0] == 1 {
++			// DAD cannot include a source link-layer address.
++			return false
++		}
++		size := int(options[1]) * 8
++		if size == 0 || size > len(options) {
++			return false
++		}
++		options = options[size:]
++	}
++	return true
++}
++
+ func protocolImplementation(protocol types.Protocol) protocol {
+ 	switch protocol {
+ 	case types.QemuProtocol:
+diff --git a/pkg/types/configuration.go b/pkg/types/configuration.go
+index 3a82fa0..ed2e626 100644
+--- a/pkg/types/configuration.go
++++ b/pkg/types/configuration.go
+@@ -9,6 +9,9 @@ import (
+ type IPv6Link struct {
+ 	Gateway      netip.Prefix
+ 	AllowTraffic func() bool
++	Guest        netip.Addr
++	GuestMAC     net.HardwareAddr
++	AllowData    func() bool
+ }
+ 
+ type Configuration struct {
+diff --git a/pkg/virtualnetwork/services.go b/pkg/virtualnetwork/services.go
+index 8867b0c..a2d5676 100644
+--- a/pkg/virtualnetwork/services.go
++++ b/pkg/virtualnetwork/services.go
+@@ -78,7 +78,11 @@ func dnsServer(ctx context.Context, configuration *types.Configuration, s *stack
+ 		return nil, err
+ 	}
+ 
+-	server, err := dns.NewWithResolver(ctx, udpConn, tcpLn, configuration.DNS, resolver)
++	var allowAAAA func() bool
++	if configuration.IPv6Link != nil {
++		allowAAAA = configuration.IPv6Link.AllowData
++	}
++	server, err := dns.NewWithResolver(ctx, udpConn, tcpLn, configuration.DNS, resolver, allowAAAA)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/pkg/virtualnetwork/virtualnetwork.go b/pkg/virtualnetwork/virtualnetwork.go
+index 3913be1..6dd6248 100644
+--- a/pkg/virtualnetwork/virtualnetwork.go
++++ b/pkg/virtualnetwork/virtualnetwork.go
+@@ -70,7 +70,7 @@ func newNetwork(ctx context.Context, configuration *types.Configuration, resolve
+ 		return nil, err
+ 	}
+ 	if configuration.IPv6Link != nil {
+-		networkSwitch.ConfigureIPv6(ipv6Addresses, configuration.IPv6Link.AllowTraffic)
++		networkSwitch.ConfigureIPv6(ipv6Addresses, configuration.IPv6Link)
+ 	}
+ 	tapEndpoint.Connect(networkSwitch)
+ 	networkSwitch.Connect(tapEndpoint)
+@@ -138,6 +138,14 @@ func configuredIPv6Addresses(configuration *types.Configuration, mac tcpip.LinkA
+ 	if configuration.MTU < header.IPv6MinimumMTU || link.AllowTraffic == nil {
+ 		return nil, errors.New("IPv6 link requires an MTU of at least 1280 and an admission policy")
+ 	}
++	if link.Guest.IsValid() && (!link.Guest.Is6() || link.Guest.Zone() != "" ||
++		!link.Gateway.Contains(link.Guest) || gateway == link.Guest ||
++		len(link.GuestMAC) != header.EthernetAddressSize || link.GuestMAC[0]&1 != 0 ||
++		tcpip.LinkAddress(link.GuestMAC) == mac ||
++		tcpip.LinkAddress(link.GuestMAC) == "\x00\x00\x00\x00\x00\x00" ||
++		link.AllowData == nil) {
++		return nil, errors.New("dual-stack requires a distinct guest address and MAC and a data gate")
++	}
+ 	return []tcpip.AddressWithPrefix{
+ 		{Address: tcpip.AddrFrom16(gateway.As16()), PrefixLen: 64},
+ 		{Address: header.LinkLocalAddr(mac), PrefixLen: 64},

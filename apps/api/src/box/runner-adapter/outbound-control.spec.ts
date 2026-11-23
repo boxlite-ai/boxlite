@@ -96,6 +96,28 @@ describe('revision-required outbound Runner HTTP boundary', () => {
     expect(requests).toHaveLength(1)
   })
 
+  it.each([
+    ['different prefixes', 'fd42:424f:584c:1::2', 'fd42:424f:584c:2::1'],
+    ['equal numeric addresses', 'fd42:424f:584c:1::2', 'fd42:424F:584c:0001:0:0:0:2'],
+    ['guest subnet-router anycast', 'fd42:424f:584c:1::', 'fd42:424f:584c:1::1'],
+    ['gateway subnet-router anycast', 'fd42:424f:584c:1::2', 'fd42:424f:584c:1::'],
+  ])('refuses a prepared IPv6 plan with %s', async (_label, guest, gateway) => {
+    const snapshot = { ...complete, admission: 'extended_dual_stack', ipv6: { interface: 'eth0', guest, gateway } }
+    reply(200, { snapshot, deny_present: true })
+    await expect(control.prepareCreate(complete.revision, complete.policy)).rejects.toMatchObject({ status: 503 })
+  })
+
+  it('accepts distinct prepared IPv6 addresses in the same /64', async () => {
+    const snapshot = {
+      ...complete,
+      admission: 'extended_dual_stack',
+      ipv6: { interface: 'eth0', guest: 'fd42::2', gateway: 'fd42:0:0:0:0:0:0:1' },
+    }
+    const prepared = { snapshot, deny_present: true }
+    reply(200, prepared)
+    await expect(control.prepareCreate(complete.revision, complete.policy)).resolves.toEqual(prepared)
+  })
+
   it('refuses an explicit null deny list before network I/O', async () => {
     const invalid = { ...complete.policy, deny_net: null } as unknown as typeof complete.policy
     await expect(control.prepareCreate(complete.revision, invalid)).rejects.toMatchObject({ status: 400 })
@@ -179,6 +201,26 @@ describe('revision-required outbound Runner HTTP boundary', () => {
     })
     await expect(control.completeStatus()).rejects.toMatchObject({ status: 503 })
     reply(200, { ...result, pending_revision: 'next-revision' })
+    await expect(control.completeStatus()).rejects.toMatchObject({ status: 503 })
+  })
+
+  it('checks the Guest IPv6 plan in confirmed complete status', async () => {
+    const ipv6 = { interface: 'eth0', guest: 'fd42:424f:584c:1::2', gateway: 'fd42:424f:584c:1::1' }
+    const snapshot = { ...complete, admission: 'extended_dual_stack', ipv6 }
+    const result = {
+      persisted: snapshot,
+      observed: { snapshot, application_state: 'confirmed' },
+      application_state: 'confirmed',
+    }
+    reply(200, result)
+    await expect(control.completeStatus()).resolves.toEqual(result)
+    reply(200, {
+      ...result,
+      observed: {
+        snapshot: { ...snapshot, ipv6: { ...ipv6, guest: 'fd42:424f:584c:1::3' } },
+        application_state: 'confirmed',
+      },
+    })
     await expect(control.completeStatus()).rejects.toMatchObject({ status: 503 })
   })
 

@@ -84,19 +84,21 @@ func (b *cloudBootstrap) hostOperation(ctx context.Context, operation string, gu
 		return fmt.Errorf("read Cloud guard service confirmation")
 	}
 	var proof struct {
-		Instance string `json:"instance"`
-		Revision string `json:"revision"`
-		Digest   string `json:"digest"`
-		Cgroup   uint64 `json:"cgroup_id"`
-		Deadline uint64 `json:"deadline_ns"`
-		Error    string `json:"error"`
+		Instance         string `json:"instance"`
+		Revision         string `json:"revision"`
+		Digest           string `json:"digest"`
+		Cgroup           uint64 `json:"cgroup_id"`
+		Deadline         uint64 `json:"deadline_ns"`
+		InventoryVersion int    `json:"inventory_version"`
+		Error            string `json:"error"`
 	}
 	if err := json.Unmarshal(reply[:size], &proof); err != nil || proof.Error != "" {
 		return fmt.Errorf("Cloud guard service rejected %s", operation)
 	}
-	if operation == "check" {
+	if operation == "check" || operation == "check_dual_stack" {
 		var clock unix.Timespec
 		if proof.Instance != b.Instance || proof.Revision != b.Revision || proof.Digest != b.Digest ||
+			(operation == "check_dual_stack" && proof.InventoryVersion != 2) ||
 			proof.Cgroup == 0 || unix.ClockGettime(unix.CLOCK_MONOTONIC, &clock) != nil ||
 			proof.Deadline <= uint64(clock.Sec)*1_000_000_000+uint64(clock.Nsec) {
 			return fmt.Errorf("Cloud guard service confirmation does not match the launch identity")

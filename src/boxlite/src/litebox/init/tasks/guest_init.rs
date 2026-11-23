@@ -43,6 +43,7 @@ pub struct GuestInitTask;
 struct GuestBootstrapConfig {
     guest: GuestInitConfig,
     container: ContainerInitConfig,
+    ipv6: Option<crate::net::Ipv6Readiness>,
 }
 
 #[async_trait]
@@ -74,16 +75,36 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 .take()
                 .ok_or_else(|| BoxliteError::Internal("vmm_spawn task must run first".into()))?;
 
+            let mut ipv6 = None;
+            if let Some(snapshot) = ctx
+                .complete_outbound
+                .as_ref()
+                .map(|bootstrap| &bootstrap.snapshot)
+                && let Some(plan) = &snapshot.ipv6
+            {
+                let backend = ctx.network_backend.as_deref().ok_or_else(|| {
+                    BoxliteError::Internal("Guest IPv6 requires a network backend".into())
+                })?;
+                let challenge = backend.ipv6_readiness().await?;
+                if challenge.plan != *plan || challenge.revision != snapshot.revision {
+                    return Err(BoxliteError::Network(
+                        "Guest IPv6 challenge differs from installed launch policy".into(),
+                    ));
+                }
+                ipv6 = Some(challenge);
+            }
             let network = match &ctx.config.options.network {
                 crate::runtime::options::NetworkSpec::Enabled { .. } => Some(NetworkInitConfig {
                     interface: GUEST_INTERFACE.to_string(),
                     ip: Some(GUEST_CIDR.to_string()),
                     gateway: Some(GATEWAY_IP.to_string()),
+                    ipv6: ipv6.as_ref().map(crate::net::Ipv6Readiness::guest_check),
                 }),
                 crate::runtime::options::NetworkSpec::Disabled => None,
             };
             let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
+                ipv6,
                 guest: GuestInitConfig {
                     volumes: if ctx.config.engine_kind == crate::vmm::VmmKind::Native {
                         volume_mgr
@@ -122,7 +143,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             )
         };
 
-        run_guest_init(guest_session.clone(), bootstrap)
+        run_guest_init(guest_session.clone(), bootstrap, &ctx)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
@@ -144,6 +165,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
 async fn run_guest_init(
     guest_session: GuestSession,
     bootstrap: GuestBootstrapConfig,
+    ctx: &InitCtx,
 ) -> BoxliteResult<()> {
     // Step 1: Guest Init (volumes + network)
     tracing::info!("Sending guest initialization request");
@@ -170,6 +192,13 @@ async fn run_guest_init(
             .await?;
     }
     guest_interface.init(bootstrap.guest).await?;
+    if let Some(readiness) = &bootstrap.ipv6 {
+        let guard = ctx.lock().await;
+        let backend = guard.network_backend.as_deref().ok_or_else(|| {
+            BoxliteError::Internal("Guest IPv6 backend disappeared before confirmation".into())
+        })?;
+        backend.confirm_ipv6_readiness(readiness).await?;
+    }
     tracing::info!("Guest initialized successfully");
 
     // Step 2: create the container (rootfs + image config + user mounts). This

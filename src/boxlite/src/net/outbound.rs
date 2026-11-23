@@ -1,5 +1,7 @@
 //! Versioned control values, separate from user outbound policy configuration.
 
+use std::net::Ipv6Addr;
+
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -39,6 +41,23 @@ impl CompleteOutboundPolicy {
         minimum: OutboundAdmission,
         revision: OutboundRevision,
     ) -> BoxliteResult<CompleteOutboundSnapshot> {
+        self.prepare_with_link(minimum, revision, None)
+    }
+
+    pub(crate) fn prepare_with_link(
+        &self,
+        minimum: OutboundAdmission,
+        revision: OutboundRevision,
+        ipv6: Option<Ipv6LinkPlan>,
+    ) -> BoxliteResult<CompleteOutboundSnapshot> {
+        if (minimum == OutboundAdmission::ExtendedDualStack) != ipv6.is_some() {
+            return Err(BoxliteError::InvalidArgument(
+                "IPv6 link plan and admission disagree".into(),
+            ));
+        }
+        if let Some(plan) = &ipv6 {
+            plan.validate()?;
+        }
         let deny = self.deny_net.as_deref().unwrap_or_default();
         if self.allow_net.len() > MAX_RULES || deny.len() > MAX_RULES {
             return Err(BoxliteError::InvalidArgument(format!(
@@ -51,13 +70,15 @@ impl CompleteOutboundPolicy {
             ));
         }
 
-        let allow = parse_rules(&self.allow_net)?;
-        let deny = parse_rules(deny)?;
+        let allow = parse_rules(&self.allow_net, ipv6.is_some())?;
+        let deny = parse_rules(deny, ipv6.is_some())?;
         let legacy = OutboundNetworkConfig {
             mode: self.mode.clone(),
             allow_net: self.allow_net.clone(),
         };
-        let admission = if minimum == OutboundAdmission::ExtendedIpv4
+        let admission = if ipv6.is_some() {
+            OutboundAdmission::ExtendedDualStack
+        } else if minimum == OutboundAdmission::ExtendedIpv4
             || allow.len() > LEGACY_RULES
             || !deny.is_empty()
             || legacy.validate().is_err()
@@ -69,6 +90,7 @@ impl CompleteOutboundPolicy {
         Ok(CompleteOutboundSnapshot {
             admission,
             revision,
+            ipv6,
             policy: EffectiveOutboundPolicy {
                 mode: self.mode.clone(),
                 allow_net: if admission == OutboundAdmission::Legacy {
@@ -82,12 +104,12 @@ impl CompleteOutboundPolicy {
     }
 }
 
-fn parse_rules(rules: &[String]) -> BoxliteResult<Vec<String>> {
+fn parse_rules(rules: &[String], native_ipv6: bool) -> BoxliteResult<Vec<String>> {
     let rules = rules
         .iter()
         .map(|rule| outbound_rules::parse(rule))
         .collect::<BoxliteResult<Vec<_>>>()?;
-    if rules.iter().any(|rule| rule.native_ipv6) {
+    if !native_ipv6 && rules.iter().any(|rule| rule.native_ipv6) {
         return Err(BoxliteError::Unsupported(
             "native IPv6 outbound rules are unavailable".into(),
         ));
@@ -111,6 +133,64 @@ pub enum OutboundAdmission {
     #[default]
     Legacy,
     ExtendedIpv4,
+    ExtendedDualStack,
+}
+
+/// The immutable guest and gateway addresses on a private ULA /64.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ipv6LinkPlan {
+    pub interface: String,
+    pub guest: Ipv6Addr,
+    pub gateway: Ipv6Addr,
+}
+
+/// A challenge scoped to the current backend instance and installed revision.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ipv6Readiness {
+    pub plan: Ipv6LinkPlan,
+    pub revision: OutboundRevision,
+    pub epoch: OutboundRevision,
+}
+
+impl Ipv6Readiness {
+    pub(crate) fn guest_check(&self) -> boxlite_shared::generated::GuestIpv6Check {
+        boxlite_shared::generated::GuestIpv6Check {
+            interface: self.plan.interface.clone(),
+            guest: self.plan.guest.to_string(),
+            gateway: self.plan.gateway.to_string(),
+            epoch: self.epoch.0.clone(),
+        }
+    }
+}
+
+impl Ipv6LinkPlan {
+    pub(crate) fn local() -> Self {
+        Self {
+            interface: crate::net::constants::GUEST_INTERFACE.into(),
+            guest: Ipv6Addr::new(0xfd42, 0x424f, 0x584c, 1, 0, 0, 0, 2),
+            gateway: Ipv6Addr::new(0xfd42, 0x424f, 0x584c, 1, 0, 0, 0, 1),
+        }
+    }
+
+    pub(crate) fn validate(&self) -> BoxliteResult<()> {
+        let guest = u128::from(self.guest);
+        let gateway = u128::from(self.gateway);
+        if self.interface != crate::net::constants::GUEST_INTERFACE
+            || guest >> 120 != 0xfd
+            || guest >> 64 != gateway >> 64
+            || guest as u64 == 0
+            || gateway as u64 == 0
+            || guest == gateway
+        {
+            return Err(BoxliteError::InvalidArgument(
+                "invalid Guest IPv6 link plan".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Effective rule lists and the forwarding behavior for one revision.
@@ -120,6 +200,8 @@ pub struct CompleteOutboundSnapshot {
     pub policy: EffectiveOutboundPolicy,
     pub revision: OutboundRevision,
     pub admission: OutboundAdmission,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv6: Option<Ipv6LinkPlan>,
 }
 
 /// Canonical create snapshot and the original presence of `deny_net`.
@@ -207,12 +289,26 @@ pub enum HostedOutboundReceipt {
 }
 
 impl PreparedOutboundCreate {
+    #[cfg(test)]
     pub(crate) fn new(
         policy: &CompleteOutboundPolicy,
         revision: OutboundRevision,
     ) -> BoxliteResult<Self> {
+        Self::with_link(policy, revision, None)
+    }
+
+    pub(crate) fn with_link(
+        policy: &CompleteOutboundPolicy,
+        revision: OutboundRevision,
+        plan: Option<Ipv6LinkPlan>,
+    ) -> BoxliteResult<Self> {
+        let admission = if plan.is_some() {
+            OutboundAdmission::ExtendedDualStack
+        } else {
+            OutboundAdmission::ExtendedIpv4
+        };
         Ok(Self {
-            snapshot: policy.prepare(OutboundAdmission::ExtendedIpv4, revision)?,
+            snapshot: policy.prepare_with_link(admission, revision, plan)?,
             deny_present: policy.deny_net.is_some(),
             rebuild_pin: None,
         })
@@ -234,6 +330,43 @@ impl PreparedOutboundCreate {
 #[cfg(test)]
 mod prepared_outbound_create_tests {
     use super::*;
+
+    #[test]
+    fn dual_stack_snapshot_preserves_plan_and_native_capability() {
+        let policy = CompleteOutboundPolicy {
+            allow_net: vec!["2606:4700::1111/128".into()],
+            ..Default::default()
+        };
+        let revision = OutboundRevision::fresh();
+        assert!(
+            policy
+                .prepare(OutboundAdmission::ExtendedIpv4, revision.clone())
+                .is_err()
+        );
+        let prepared =
+            PreparedOutboundCreate::with_link(&policy, revision, Some(Ipv6LinkPlan::local()))
+                .unwrap();
+        let wire = serde_json::to_string(&prepared.snapshot).unwrap();
+        let restored: CompleteOutboundSnapshot = serde_json::from_str(&wire).unwrap();
+        restored.validate_installed().unwrap();
+        assert_eq!(restored, prepared.snapshot);
+        assert!(restored.requirements().native_ipv6);
+        assert!(!restored.requirements().port);
+        let disabled = restored
+            .prepare_replacement(
+                &CompleteOutboundPolicy {
+                    mode: NetworkMode::Disabled,
+                    ..Default::default()
+                },
+                OutboundRevision::fresh(),
+            )
+            .unwrap();
+        assert_eq!(disabled.admission, OutboundAdmission::ExtendedDualStack);
+        assert_eq!(disabled.ipv6, restored.ipv6);
+        let mut invalid = restored;
+        invalid.ipv6.as_mut().unwrap().gateway = "fd00:dead::1".parse().unwrap();
+        assert!(invalid.validate_installed().is_err());
+    }
 
     #[test]
     fn prepared_outbound_create_preserves_deny_presence_and_snapshot() {
@@ -298,6 +431,12 @@ pub struct OutboundCapabilities {
     pub deny: bool,
     pub port: bool,
     pub capacity: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub native_ipv6: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 impl OutboundCapabilities {
@@ -308,6 +447,7 @@ impl OutboundCapabilities {
             deny: bits & 2 != 0,
             port: bits & 4 != 0,
             capacity: bits & 8 != 0,
+            native_ipv6: bits & 64 != 0,
         }
     }
 
@@ -317,6 +457,7 @@ impl OutboundCapabilities {
             deny: self.deny || other.deny,
             port: self.port || other.port,
             capacity: self.capacity || other.capacity,
+            native_ipv6: self.native_ipv6 || other.native_ipv6,
         }
     }
 
@@ -340,6 +481,14 @@ pub struct OutboundBootstrap {
 }
 
 impl CompleteOutboundSnapshot {
+    pub(crate) fn prepare_replacement(
+        &self,
+        policy: &CompleteOutboundPolicy,
+        revision: OutboundRevision,
+    ) -> BoxliteResult<Self> {
+        policy.prepare_with_link(self.admission, revision, self.ipv6.clone())
+    }
+
     pub(crate) fn encode_replacement(
         &self,
         deny_supplied: bool,
@@ -383,7 +532,7 @@ impl CompleteOutboundSnapshot {
             allow_net: self.policy.allow_net.clone(),
             deny_net: Some(self.policy.deny_net.clone()),
         };
-        let canonical = request.prepare(self.admission, self.revision.clone())?;
+        let canonical = self.prepare_replacement(&request, self.revision.clone())?;
         if canonical != *self {
             return Err(BoxliteError::InvalidArgument(
                 "complete outbound snapshot is not canonical".into(),
@@ -404,13 +553,17 @@ impl CompleteOutboundSnapshot {
                 .allow_net
                 .iter()
                 .chain(&policy.deny_net)
-                .any(|rule| rule.contains(':')),
+                .any(|rule| outbound_rules::outbound_rule_has_port(rule)),
             capacity: policy.allow_net.len() > LEGACY_RULES || policy.deny_net.len() > LEGACY_RULES,
+            native_ipv6: self.ipv6.is_some(),
         }
     }
 
     pub(crate) fn legacy(&self) -> BoxliteResult<OutboundSnapshot> {
-        if self.admission != OutboundAdmission::Legacy || !self.policy.deny_net.is_empty() {
+        if self.admission != OutboundAdmission::Legacy
+            || self.ipv6.is_some()
+            || !self.policy.deny_net.is_empty()
+        {
             return Err(BoxliteError::Unsupported(
                 "outbound policy requires the complete policy interface".into(),
             ));
@@ -430,6 +583,7 @@ impl From<OutboundSnapshot> for CompleteOutboundSnapshot {
         Self {
             revision: value.revision,
             admission: OutboundAdmission::Legacy,
+            ipv6: None,
             policy: EffectiveOutboundPolicy {
                 mode: value.policy.mode,
                 allow_net: value.policy.allow_net,

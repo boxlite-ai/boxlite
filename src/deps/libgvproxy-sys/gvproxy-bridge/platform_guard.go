@@ -12,10 +12,11 @@ import (
 
 // The platform guard is fixed by host startup and shared across Box revisions.
 type platformGuard struct {
-	protected []netip.Prefix
-	cloud     bool
-	guest     netip.Prefix
-	epoch     *cloudGuardEpoch
+	protected       []netip.Prefix
+	cloud           bool
+	cloudNativeIPv6 bool
+	guest           netip.Prefix
+	epoch           *cloudGuardEpoch
 }
 
 func compilePlatformGuard(values []string, cloud bool, subnet string) (platformGuard, error) {
@@ -117,6 +118,9 @@ func (guard platformGuard) denies(address netip.Addr) bool {
 	}
 	if !guard.cloud {
 		return false
+	}
+	if address.Is6() {
+		return !guard.cloudNativeIPv6
 	}
 	if !address.Is4() || guard.guest.Contains(address) {
 		return true

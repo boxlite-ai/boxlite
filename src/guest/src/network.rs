@@ -10,6 +10,9 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::stream::TryStreamExt;
 use std::net::Ipv4Addr;
 
+mod ipv6;
+pub(crate) use ipv6::confirm_ipv6;
+
 /// Localhost is required even when Guest.Init has no external network config.
 pub(crate) async fn configure_loopback() -> BoxliteResult<()> {
     let (connection, handle, _) = rtnetlink::new_connection()

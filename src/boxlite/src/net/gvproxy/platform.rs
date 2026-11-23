@@ -59,6 +59,7 @@ struct HostProof {
     deadline_ns: u64,
     shim_pid: u32,
     shim_start: u64,
+    inventory_version: u8,
     error: Option<String>,
 }
 
@@ -169,12 +170,27 @@ impl CloudGuardRuntime {
 
     #[cfg(target_os = "linux")]
     pub(crate) async fn check_readiness(&self) -> BoxliteResult<()> {
-        self.query_with_timeout(
-            serde_json::json!({"operation": "ready"}),
-            Duration::from_secs(6),
-        )
-        .await?;
+        self.inventory_version().await?;
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn inventory_version(&self) -> BoxliteResult<u8> {
+        let proof = self
+            .query_with_timeout(
+                serde_json::json!({"operation": "ready"}),
+                Duration::from_secs(6),
+            )
+            .await?;
+        Ok(proof.inventory_version)
+    }
+
+    pub(crate) async fn qualifies_ipv6() -> BoxliteResult<bool> {
+        #[cfg(target_os = "linux")]
+        if let Some(profile) = Self::from_host()? {
+            return Ok(profile.inventory_version().await? == 2);
+        }
+        Ok(false)
     }
 
     #[cfg(target_os = "linux")]
