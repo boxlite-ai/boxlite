@@ -34,6 +34,8 @@ import { MaintenanceMiddleware } from './common/middleware/maintenance.middlewar
 import { AuditModule } from './audit/audit.module'
 import { HealthModule } from './health/health.module'
 import { StatusSyncModule } from './status-sync/status-sync.module'
+import { AnalyticsService } from './analytics/services/analytics.service'
+import { OpenFeature } from '@openfeature/server-sdk'
 import { OpenFeatureModule } from '@openfeature/nestjs-sdk'
 import { OpenFeaturePostHogProvider } from './common/providers/openfeature-posthog.provider'
 import { LoggerModule } from 'nestjs-pino'
@@ -214,18 +216,31 @@ import { McpModule } from './mcp/mcp.module'
           organizationId: req.user?.organizationId,
         }
       },
-      defaultProvider: new OpenFeaturePostHogProvider({
-        clientOptions: {
-          host: process.env.POSTHOG_HOST,
-        },
-        apiKey: process.env.POSTHOG_API_KEY,
-      }),
     }),
   ],
   controllers: [],
   providers: [AppService],
 })
 export class AppModule implements NestModule {
+  constructor(analytics: AnalyticsService) {
+    OpenFeature.setProvider(
+      new OpenFeaturePostHogProvider({
+        apiKey: process.env.POSTHOG_API_KEY,
+        clientOptions: { host: process.env.POSTHOG_HOST },
+        reportExposure: (flag, value, userId, orgId) =>
+          analytics.capture(
+            {
+              event: '$feature_flag_called',
+              distinctId: userId,
+              groups: orgId ? { organization: orgId } : undefined,
+              properties: { $feature_flag: flag, $feature_flag_response: value },
+            },
+            { users: [userId], organizations: orgId ? [orgId] : [] },
+          ),
+      }),
+    )
+  }
+
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(VersionHeaderMiddleware).forRoutes({ path: '{*path}', method: RequestMethod.ALL })
     consumer.apply(FailedAuthRateLimitMiddleware).forRoutes({ path: '{*path}', method: RequestMethod.ALL })

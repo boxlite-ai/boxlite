@@ -265,6 +265,9 @@ describe('RegistrationGate', () => {
     await render()
     expect(businessMount).not.toHaveBeenCalled()
     expect(button('Create account').disabled).toBe(true)
+    expect(document.querySelector('a[href="https://boxlite.ai/legal/terms"]')?.textContent).toBe('Terms of Service')
+    expect(document.querySelector('a[href="https://boxlite.ai/legal/privacy"]')?.textContent).toBe('Privacy Policy')
+    expect(document.querySelector('input[type="checkbox"],[role="checkbox"]')).toBeNull()
     await click('Complete challenge')
     await act(async () => {
       button('Create account').click()

@@ -156,7 +156,7 @@ export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: (
             <AsciiButton type="button" onClick={onClose} disabled={create.isPending}>
               Cancel
             </AsciiButton>
-            <AsciiButton variant="primary" type="submit" disabled={!canSubmit}>
+            <AsciiButton data-console-action="create_checkpoint" variant="primary" type="submit" disabled={!canSubmit}>
               {create.isPending ? 'Creating…' : 'Create Checkpoint'}
             </AsciiButton>
           </FormDialogFooter>

@@ -347,7 +347,7 @@ export function ConnectsPanel() {
               <AsciiButton type="button" onClick={() => setEditing(null)} disabled={busy}>
                 Cancel
               </AsciiButton>
-              <AsciiButton variant="primary" type="submit" disabled={busy}>
+              <AsciiButton variant="primary" data-console-action="update_ci_connection" type="submit" disabled={busy}>
                 Update connection
               </AsciiButton>
             </DialogFooter>

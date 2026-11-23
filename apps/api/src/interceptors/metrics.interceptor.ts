@@ -122,10 +122,11 @@ export class MetricsInterceptor implements NestInterceptor {
             )
             break
           case '/api/organizations/invitations/:invitationId/accept':
-            this.captureAcceptInvitation(props, request.params.invitationId)
-            break
-          case '/api/organizations/invitations/:invitationId/decline':
-            this.captureDeclineInvitation(props, request.params.invitationId)
+            if (response.organizationId)
+              this.captureAcceptInvitation(
+                { ...props, organizationId: response.organizationId },
+                request.params.invitationId,
+              )
             break
           case '/api/organizations':
             this.captureCreateOrganization(props, request.body, response)
@@ -270,28 +271,24 @@ export class MetricsInterceptor implements NestInterceptor {
     })
   }
 
-  private captureDeclineInvitation(props: CommonCaptureProps, invitationId: string) {
-    this.capture('api_invitation_declined', props, 'api_invitation_decline_failed', {
-      invitation_id: invitationId,
-    })
-  }
-
   private captureCreateOrganization(
     props: CommonCaptureProps,
     request: CreateOrganizationDto,
     response: OrganizationDto,
   ) {
-    this.analytics.groupIdentify({
-      groupType: 'organization',
-      groupKey: response.id,
-      properties: {
-        name: request.name,
-        created_at: response.createdAt,
-        created_by: response.createdBy,
-        is_default_for_authenticated_user: response.isDefaultForAuthenticatedUser,
-        environment: this.configService.get('posthog.environment'),
+    this.analytics.groupIdentify(
+      {
+        groupType: 'organization',
+        groupKey: response.id,
+        properties: {
+          name: request.name,
+          created_at: response.createdAt,
+          is_default_for_authenticated_user: response.isDefaultForAuthenticatedUser,
+          environment: this.configService.get('posthog.environment'),
+        },
       },
-    })
+      props.distinctId === 'anonymous' ? [] : [props.distinctId],
+    )
 
     this.capture('api_organization_created', props, 'api_organization_creation_failed', {
       organization_id: response.id,
@@ -386,7 +383,6 @@ export class MetricsInterceptor implements NestInterceptor {
   ) {
     this.capture('api_organization_invitation_created', props, 'api_organization_invitation_creation_failed', {
       organization_id: organizationId,
-      organization_invitation_email: request.email,
       organization_invitation_role: request.role,
       organization_invitation_assigned_role_ids: request.assignedRoleIds,
       organization_invitation_expires_at: request.expiresAt,
@@ -452,12 +448,20 @@ export class MetricsInterceptor implements NestInterceptor {
   }
 
   private capture(event: string, props: CommonCaptureProps, errorEvent?: string, extraProps?: Record<string, any>) {
-    this.analytics.capture({
-      distinctId: props.distinctId,
-      event: props.error ? errorEvent || event : event,
-      groups: this.captureCommonGroups(props),
-      properties: { ...this.captureCommonProperties(props), ...extraProps },
-    })
+    if (props.distinctId === 'anonymous') return
+    const users = [props.distinctId]
+    if (extraProps?.organization_user_id) users.push(extraProps.organization_user_id)
+    const organizations = [props.organizationId, extraProps?.organization_id].filter((id): id is string => !!id)
+    if (!organizations.length) return
+    this.analytics.capture(
+      {
+        distinctId: props.distinctId,
+        event: props.error ? errorEvent || event : event,
+        groups: this.captureCommonGroups(props),
+        properties: { ...this.captureCommonProperties(props), ...extraProps },
+      },
+      { users, organizations },
+    )
   }
 
   private captureCommonProperties(props: CommonCaptureProps) {
@@ -465,7 +469,6 @@ export class MetricsInterceptor implements NestInterceptor {
       duration_ms: props.durationMs,
       status_code: props.statusCode,
       user_agent: props.userAgent,
-      error: props.error,
       source: props.source,
       sdk_version: props.sdkVersion,
       environment: props.environment,

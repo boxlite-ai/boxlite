@@ -5,31 +5,11 @@
  */
 
 import { useConfig } from '@/hooks/useConfig'
-import { usePrivacyConsentStore } from '@/hooks/usePrivacyConsent'
-import { usePostHog } from 'posthog-js/react'
 import { PostHogProvider } from 'posthog-js/react'
-import { FC, ReactNode, useEffect } from 'react'
+import { FC, ReactNode } from 'react'
 
 interface PostHogProviderWrapperProps {
   children: ReactNode
-}
-
-function PostHogConsentSync() {
-  const posthog = usePostHog()
-  const analytics = usePrivacyConsentStore((state) => state.preferences.analytics)
-  const hasConsented = usePrivacyConsentStore((state) => state.hasConsented)
-
-  useEffect(() => {
-    if (!posthog || !hasConsented) return
-
-    if (analytics) {
-      posthog.opt_in_capturing()
-    } else {
-      posthog.opt_out_capturing()
-    }
-  }, [posthog, analytics, hasConsented])
-
-  return null
 }
 
 export const PostHogProviderWrapper: FC<PostHogProviderWrapperProps> = ({ children }) => {
@@ -49,16 +29,23 @@ export const PostHogProviderWrapper: FC<PostHogProviderWrapperProps> = ({ childr
       apiKey={config.posthog.apiKey}
       options={{
         api_host: config.posthog.host,
-        opt_out_capturing_by_default: true,
-        cookieless_mode: 'on_reject',
-        persistence: 'localStorage',
-        person_profiles: 'always',
+        persistence: 'memory',
         autocapture: false,
         capture_pageview: false,
-        capture_pageleave: true,
+        capture_pageleave: false,
+        disable_session_recording: true,
+        capture_exceptions: false,
+        capture_performance: false,
+        disable_external_dependency_loading: true,
+        disable_surveys: true,
+        disable_product_tours: true,
+        disable_web_experiments: true,
+        save_referrer: false,
+        store_google: false,
+        // Flag evaluation uses this client. Console events use a separate HTTP sender.
+        before_send: () => null,
       }}
     >
-      <PostHogConsentSync />
       {children}
     </PostHogProvider>
   )

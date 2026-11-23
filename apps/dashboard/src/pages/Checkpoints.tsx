@@ -116,6 +116,7 @@ function CheckpointPage() {
               variant="primary"
               className="h-11 sm:h-9"
               disabled={!canWrite || !capabilities.data?.checkpoints_enabled}
+              data-console-action="new_checkpoint"
               onClick={() => setCreateOpen(true)}
             >
               <Plus className="size-3.5" strokeWidth={1.3} /> New Checkpoint

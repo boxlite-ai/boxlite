@@ -247,6 +247,7 @@ export function ImageCatalog() {
                     onClick={() =>
                       image.templateId ? openTemplate(image.templateId) : setNewBoxImage(imageStartRef(image))
                     }
+                    data-console-action="new_box"
                     title={`New Box from ${imageStartRef(image)}`}
                   >
                     New Box

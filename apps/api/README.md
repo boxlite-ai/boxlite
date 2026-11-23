@@ -754,7 +754,7 @@ accept this field before rolling out the added response property.
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
-The same sanitized attributes reach PostHog through the client shared with HTTP metrics.
+Eligible events send the same sanitized attributes through the consent-checked client shared with HTTP metrics.
 Activity does not require the optional logging ClickHouse instance.
 
 | Event                                               | Recorded by                                                                                                                                                                                                        | Outcomes                                                    |
@@ -960,7 +960,8 @@ flowchart LR
     CI[Managed CI execution] --> Event[Business event]
     Image[Started tenant image] --> Event
     Ingest --> Event
-    Event --> PH[PostHog]
+    Event --> Consent[Check personal and creator grants]
+    Consent -->|Eligible| PH[PostHog]
     Event --> OTLP[OTLP / HyperDX]
 ```
 
@@ -1010,11 +1011,9 @@ A timeout stays a timeout; a missing terminal remains unobserved.
 The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
 Cloud deployments set `POSTHOG_ENVIRONMENT` to the deployed stage name on both AWS and GCP.
 Without the key or host, analytics is disabled while business operations and operational logs continue.
-AnalyticsService owns disabled-source and capture-error handling; the interceptor skips request extraction
-when analytics is disabled.
-Delivery is queued and best effort; application shutdown waits up to five seconds for the shared client.
-SDK diagnostics are separate from the sanitized business-event payload. Retention follows the PostHog
-project; BoxLite does not provision a second store or guarantee 400 days of history.
+Product analytics requires a current, explicit personal grant. An organization inherits its recorded creator’s choice. An event that identifies both a person and an organization needs both grants. An unknown subject, an unavailable decision, or an event predating the most recent grant produces no PostHog event. Dashboard activity and Cloud metrics therefore describe the consenting population. Operational logging, metering and functional flag evaluation run independently.
+
+Eligible deliveries use a bounded in-memory queue and one HTTP attempt. Dispatch checks all relevant decisions under shared PostgreSQL row locks that cover the HTTP transfer. Withdrawal updates the same decision, so a successful withdrawal prevents further transfers until a new grant. Saturation and transport failures drop optional events. Retention follows the PostHog project.
 
 An Activity consumer needs the PostHog **API origin** (for example `https://us.posthog.com`, distinct
 from an ingestion origin such as `https://us.i.posthog.com`), project ID and a backend-only personal

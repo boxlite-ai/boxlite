@@ -17,6 +17,7 @@ import { JobType } from '../../box/enums/job-type.enum'
 import { ResourceType } from '../../box/enums/resource-type.enum'
 import { recordBoxJobOutcome } from '../../box/utils/box-business-event.util'
 import { TypedConfigService } from '../../config/typed-config.service'
+import { grantedAnalyticsConsent } from '../../../test/granted-analytics-consent'
 import { AnalyticsService } from './analytics.service'
 
 // Apply the production instrumentation hook inside Jest's module registry.
@@ -69,7 +70,10 @@ it('delivers historical job identity and occurrence time through real PostHog HT
       'posthog.host': 'http://127.0.0.1:' + (server.address() as AddressInfo).port,
       'posthog.environment': 'test',
     }
-    analytics = new AnalyticsService({ get: (key: string) => config[key] } as TypedConfigService)
+    analytics = new AnalyticsService(
+      { get: (key: string) => config[key] } as TypedConfigService,
+      grantedAnalyticsConsent,
+    )
     const job = new Job({
       id: 'job-1',
       type: JobType.START_BOX,

@@ -4,6 +4,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
+import { AnalyticsConsentService } from '../analytics/services/analytics-consent.service'
+import { ProductAnalyticsConsent1795420800000 } from '../migrations/pre-deploy/1795420800000-product-analytics-consent-migration'
 import type Redis from 'ioredis'
 import { DataSource } from 'typeorm'
 import { ApiKey } from '../api-key/api-key.entity'
@@ -44,7 +47,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
       entities: [User, Organization, OrganizationInvitation, OrganizationRole, OrganizationUser, ApiKey],
       namingStrategy: new CustomNamingStrategy(),
       synchronize: false,
-      extra: { options: `-c search_path=${schemaName},public` },
+      extra: { options: `-c search_path=${schemaName},public`, application_name: schemaName },
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     await dataSource.synchronize()
@@ -135,6 +138,56 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     )
     return rows.map((row) => row.roleId)
   }
+
+  it('changes the creator used for analytics only after an earlier transfer finishes', async () => {
+    await user(PRIMARY)
+    await user(SOCIAL)
+    const org = await organization(SOCIAL, 'Example')
+    const consent = new AnalyticsConsentService(dataSource)
+    const runner = dataSource.createQueryRunner()
+    const migration = new ProductAnalyticsConsent1795420800000()
+    try {
+      await migration.up(runner)
+      await consent.decide(SOCIAL, true)
+      await delay(3)
+      let unlock!: () => void
+      let started!: () => void
+      const held = new Promise<void>((r) => {
+        started = r
+      })
+      const barrier = new Promise<void>((r) => {
+        unlock = r
+      })
+      const subjects = { users: [], organizations: [org] }
+      const sending = consent.dispatch(subjects, new Date(), async () => {
+        started()
+        await barrier
+      })
+      await held
+      const adoption = service.adopt(PRIMARY, SOCIAL)
+      try {
+        let waiting = false
+        for (let i = 0; i < 60 && !waiting; i++) {
+          const [row] = await dataSource.query(
+            'SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND cardinality(pg_blocking_pids(pid))>0) AS waiting',
+            [schemaName],
+          )
+          waiting = row.waiting
+          if (!waiting) await delay(5)
+        }
+        expect(waiting).toBe(true)
+      } finally {
+        unlock()
+        await Promise.all([adoption, sending])
+      }
+      const send = jest.fn(async () => {})
+      expect(await consent.dispatch(subjects, new Date(), send)).toBe(false)
+      expect(send).not.toHaveBeenCalled()
+    } finally {
+      await migration.down(runner)
+      await runner.release()
+    }
+  })
 
   it('does nothing for a social identity BoxLite never saw', async () => {
     await user(PRIMARY)

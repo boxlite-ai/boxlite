@@ -316,7 +316,7 @@ export function RegistriesPanel() {
             disabled={inventory === undefined}
           />
           {canWrite && (
-            <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
+            <AsciiButton variant="primary" data-console-action="new_registry" onClick={() => setFormOpen(true)}>
               Connect a registry
             </AsciiButton>
           )}
@@ -513,7 +513,11 @@ export function RegistriesPanel() {
               <Button type="button" variant="outline" onClick={closeForm}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={saving || createRegistry.isPending || updateRegistry.isPending}>
+              <Button
+                data-console-action={editing ? 'update_registry' : 'connect_registry'}
+                type="submit"
+                disabled={saving || createRegistry.isPending || updateRegistry.isPending}
+              >
                 {editing ? 'Save changes' : 'Connect'}
               </Button>
             </DialogFooter>

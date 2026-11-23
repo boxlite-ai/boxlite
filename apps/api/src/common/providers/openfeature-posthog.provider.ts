@@ -14,6 +14,8 @@ export interface OpenFeaturePostHogProviderConfig {
   apiKey?: string
   /** Optional PostHog client options */
   clientOptions?: PostHogOptions
+  /** Route optional analytics through the consent-checked product analytics client. */
+  reportExposure?: (flag: string, value: string | boolean, userId: string, orgId?: string) => void
   /** Whether to evaluate flags locally (default: false) */
   evaluateLocally?: boolean
 }
@@ -27,7 +29,7 @@ export class OpenFeaturePostHogProvider implements Provider {
   private readonly evaluateLocally: boolean
   private readonly isConfigured: boolean
 
-  constructor(config: OpenFeaturePostHogProviderConfig = {}) {
+  constructor(private readonly config: OpenFeaturePostHogProviderConfig = {}) {
     this.evaluateLocally = config.evaluateLocally ?? false
     this.isConfigured = !!config.apiKey
 
@@ -115,7 +117,7 @@ export class OpenFeaturePostHogProvider implements Provider {
       const flagContext = this.buildFlagContext(context)
       const payload = await this.client.getFeatureFlagPayload(flagKey, targetingKey, undefined, {
         onlyEvaluateLocally: this.evaluateLocally,
-        sendFeatureFlagEvents: true,
+        sendFeatureFlagEvents: false,
         ...flagContext,
       })
 
@@ -171,7 +173,7 @@ export class OpenFeaturePostHogProvider implements Provider {
       const flagContext = this.buildFlagContext(context)
       const flagValue = await this.client.getFeatureFlag(flagKey, targetingKey, {
         onlyEvaluateLocally: this.evaluateLocally,
-        sendFeatureFlagEvents: true,
+        sendFeatureFlagEvents: false,
         ...flagContext,
       })
 
@@ -183,6 +185,7 @@ export class OpenFeaturePostHogProvider implements Provider {
         }
       }
 
+      this.config.reportExposure?.(flagKey, flagValue, targetingKey, flagContext.groups?.organization)
       return {
         value: flagValue,
         reason: StandardResolutionReasons.TARGETING_MATCH,

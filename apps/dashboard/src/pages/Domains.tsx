@@ -33,6 +33,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useState } from 'react'
 import { generatePath, Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { recordConsoleTabSelection } from '@/hooks/useConsoleAnalytics'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import CustomDomains from './CustomDomains'
 
@@ -80,8 +81,14 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </p>
       </div>
 
-      <Tabs defaultValue="managed" className="min-h-0 flex-1 gap-5">
-        <TabsList variant="underline" aria-label="Domain views">
+      <Tabs
+        defaultValue="managed"
+        onValueChange={(tab) =>
+          recordConsoleTabSelection(tab === 'custom' ? 'view_custom_domains' : 'view_managed_domains')
+        }
+        className="min-h-0 flex-1 gap-5"
+      >
+        <TabsList variant="underline" aria-label="Domain views" data-console-tab-selections>
           <TabsTrigger value="managed">Managed domain</TabsTrigger>
           <TabsTrigger value="custom">Custom domain</TabsTrigger>
         </TabsList>
@@ -98,6 +105,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
               variant="primary"
               className="h-11 shrink-0 justify-self-start sm:h-9 sm:justify-self-end"
               disabled={!canClaim}
+              data-console-action="new_managed_domain"
               onClick={openForm}
             >
               <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
@@ -324,7 +332,12 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
               <AsciiButton disabled={claim.isPending} onClick={() => setOpen(false)}>
                 Cancel
               </AsciiButton>
-              <AsciiButton type="submit" variant="primary" disabled={!canClaim || !nameValid || claim.isPending}>
+              <AsciiButton
+                data-console-action="request_managed_domain"
+                type="submit"
+                variant="primary"
+                disabled={!canClaim || !nameValid || claim.isPending}
+              >
                 {claim.isPending ? 'Requesting…' : 'Request domain'}
               </AsciiButton>
             </DialogFooter>

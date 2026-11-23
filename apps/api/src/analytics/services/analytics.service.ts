@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AnalyticsConsentService, AnalyticsSubjects } from './analytics-consent.service'
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../../box/constants/box-events.constants'
@@ -14,7 +15,8 @@ import { BoxInboundModeUpdatedEvent } from '../../box/events/box-inbound-mode-up
 import { BoxStartedEvent } from '../../box/events/box-started.event'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
 import { BoxStoppedEvent } from '../../box/events/box-stopped.event'
-import { PostHog } from 'posthog-node'
+import type { PostHog } from 'posthog-node'
+import { ConsentBoundPostHog } from './consent-bound-posthog'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { Organization } from '../../organization/entities/organization.entity'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
@@ -24,15 +26,25 @@ import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
 @Injectable()
 export class AnalyticsService implements OnApplicationShutdown {
   private readonly logger = new Logger(AnalyticsService.name)
-  private readonly posthog?: PostHog
+  private readonly posthog?: ConsentBoundPostHog
+  private readonly maxConcurrent: number
   private readonly unsubscribe?: () => void
+
+  private readonly pending = new Set<Promise<unknown>>()
+  private readonly queue: (() => Promise<unknown>)[] = []
+  private closing = false
 
   get enabled(): boolean {
     return !!this.posthog
   }
 
-  constructor(private readonly configService: TypedConfigService) {
-    if (!this.configService.get('posthog.apiKey')) {
+  constructor(
+    private readonly configService: TypedConfigService,
+    private readonly consent: AnalyticsConsentService,
+  ) {
+    const poolMax = this.configService.get('database.pool.max') ?? 10
+    this.maxConcurrent = Math.max(0, Math.min(2, poolMax - 1))
+    if (!this.maxConcurrent || !this.configService.get('posthog.apiKey')) {
       return
     }
 
@@ -41,49 +53,89 @@ export class AnalyticsService implements OnApplicationShutdown {
     }
 
     // Initialize PostHog client
-    this.posthog = new PostHog(this.configService.get('posthog.apiKey'), {
+    this.posthog = new ConsentBoundPostHog(this.configService.get('posthog.apiKey'), {
       host: this.configService.get('posthog.host'),
+      requestTimeout: 1200,
+      fetchRetryCount: 0,
     })
     this.posthog.on('error', () => this.logger.warn('PostHog analytics delivery failed'))
     this.unsubscribe = subscribeBusinessEvents((attributes) => {
-      const userId =
-        attributes['user.id'] ||
-        (attributes['event.name'].startsWith('user.') ? attributes['correlation.id'] : undefined)
+      const accountEvent = attributes['event.name'] === 'user.login' || attributes['event.name'] === 'user.registration'
+      const targetUser = accountEvent ? attributes['correlation.id'] : undefined
+      const userId = attributes['user.id'] || targetUser
       const organizationId = attributes['organization.id']
-      this.capture({
-        event: attributes['event.name'],
-        uuid: attributes['event.id'],
-        distinctId: userId || `${attributes['actor.kind'] || 'anonymous'}:${attributes['correlation.id']}`,
-        timestamp: new Date(attributes['event.timestamp']),
-        groups: organizationId ? { organization: organizationId } : undefined,
-        properties: {
-          ...attributes,
-          ...(attributes['event.name'].startsWith('cloud.') ? { cloud_metrics_schema: '1' } : { activity_schema: '1' }),
-          environment: this.configService.get('posthog.environment'),
-          $process_person_profile: !!userId,
+      if (!accountEvent && !organizationId) return
+      if (['user', 'admin'].includes(attributes['actor.kind']) && !attributes['user.id']) return
+      this.capture(
+        {
+          event: attributes['event.name'],
+          uuid: attributes['event.id'],
+          distinctId: userId || `${attributes['actor.kind'] || 'anonymous'}:${attributes['correlation.id']}`,
+          timestamp: new Date(attributes['event.timestamp']),
+          groups: organizationId ? { organization: organizationId } : undefined,
+          properties: {
+            ...attributes,
+            ...(attributes['event.name'].startsWith('cloud.')
+              ? { cloud_metrics_schema: '1' }
+              : { activity_schema: '1' }),
+            environment: this.configService.get('posthog.environment'),
+            $process_person_profile: !!userId,
+          },
         },
-      })
+        {
+          users: [...new Set([userId, targetUser].filter((id): id is string => !!id))],
+          organizations: organizationId ? [organizationId] : [],
+        },
+      )
     })
   }
 
-  capture(event: Parameters<PostHog['capture']>[0]): void {
-    try {
-      this.posthog?.capture(event)
-    } catch {
-      this.logger.warn('PostHog analytics capture failed')
-    }
+  capture(event: Parameters<PostHog['capture']>[0], subjects: AnalyticsSubjects): void {
+    const client = this.posthog
+    if (
+      !client ||
+      this.closing ||
+      this.queue.length >= 32 ||
+      (!subjects.users.length && !subjects.organizations.length)
+    )
+      return
+    const occurredAt = event.timestamp ?? new Date()
+    this.queue.push(() =>
+      this.consent
+        .dispatch(subjects, occurredAt, () => client.deliver({ ...event, timestamp: occurredAt }))
+        .catch(() => this.logger.warn('PostHog analytics capture failed')),
+    )
+    this.dispatchNext()
   }
 
-  groupIdentify(group: Parameters<PostHog['groupIdentify']>[0]): void {
-    try {
-      this.posthog?.groupIdentify(group)
-    } catch {
-      this.logger.warn('PostHog organization identification failed')
-    }
+  private dispatchNext(): void {
+    if (this.pending.size >= this.maxConcurrent) return
+    const next = this.queue.shift()
+    if (!next) return
+    const delivery = next()
+    this.pending.add(delivery)
+    void delivery.finally(() => {
+      this.pending.delete(delivery)
+      this.dispatchNext()
+    })
+  }
+
+  groupIdentify(group: Parameters<PostHog['groupIdentify']>[0], users: string[] = []): void {
+    if (!group.groupKey) return
+    this.capture(
+      {
+        event: '$groupidentify',
+        distinctId: group.distinctId || `$${group.groupType}_${group.groupKey}`,
+        properties: { $group_type: group.groupType, $group_key: group.groupKey, $group_set: group.properties },
+      },
+      { users, organizations: [group.groupKey] },
+    )
   }
 
   async onApplicationShutdown(): Promise<void> {
+    this.closing = true
     this.unsubscribe?.()
+    while (this.pending.size) await Promise.allSettled(this.pending)
     try {
       await this.posthog?.shutdown(5000)
     } catch {
@@ -140,7 +192,6 @@ export class AnalyticsService implements OnApplicationShutdown {
       properties: {
         name: payload.name,
         created_at: payload.createdAt,
-        created_by: payload.createdBy,
         is_default_for_creator: payload.users?.some(
           (user) => user.userId === payload.createdBy && user.isDefaultForUser,
         ),

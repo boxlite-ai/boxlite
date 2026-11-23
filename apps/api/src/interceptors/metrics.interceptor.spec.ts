@@ -4,11 +4,9 @@
  */
 
 const mockCapture = jest.fn()
-const mockGroupIdentify = jest.fn()
-jest.mock('posthog-node', () => ({
-  PostHog: jest.fn(() => ({
-    capture: mockCapture,
-    groupIdentify: mockGroupIdentify,
+jest.mock('../analytics/services/consent-bound-posthog', () => ({
+  ConsentBoundPostHog: jest.fn(() => ({
+    deliver: mockCapture,
     shutdown: jest.fn(),
     on: jest.fn(),
   })),
@@ -25,6 +23,8 @@ import { ImageController } from '../image/controllers/image.controller'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { MetricsInterceptor } from './metrics.interceptor'
+import { AnalyticsConsentService } from '../analytics/services/analytics-consent.service'
+import { grantedAnalyticsConsent } from '../../test/granted-analytics-consent'
 import { AnalyticsService } from '../analytics/services/analytics.service'
 import { AuthGuard } from '@nestjs/passport'
 import { of, lastValueFrom } from 'rxjs'
@@ -58,13 +58,13 @@ describe('MetricsInterceptor', () => {
 
   beforeEach(async () => {
     mockCapture.mockReset()
-    mockGroupIdentify.mockReset()
     catalog = { delete: jest.fn().mockResolvedValue(undefined) }
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ImageController, OrganizationController],
       providers: [
         AnalyticsService,
+        { provide: AnalyticsConsentService, useValue: grantedAnalyticsConsent },
         { provide: TypedConfigService, useValue: { get: (key: string) => CONFIG[key] } },
         { provide: ImageCatalogService, useValue: catalog },
         {
@@ -144,11 +144,14 @@ describe('MetricsInterceptor', () => {
       body: JSON.stringify({ name: 'Example' }),
     })
     expect(response.status).toBe(201)
-    expect(mockGroupIdentify).toHaveBeenCalledWith(
+    expect(mockCapture).toHaveBeenCalledWith(
       expect.objectContaining({
-        groupType: 'organization',
-        groupKey: 'new-org',
-        properties: expect.objectContaining({ name: 'Example', environment: 'test' }),
+        event: '$groupidentify',
+        properties: expect.objectContaining({
+          $group_type: 'organization',
+          $group_key: 'new-org',
+          $group_set: expect.objectContaining({ name: 'Example', environment: 'test' }),
+        }),
       }),
     )
     expect(mockCapture).toHaveBeenCalledWith(expect.objectContaining({ event: 'api_organization_created' }))
@@ -159,7 +162,7 @@ describe('MetricsInterceptor', () => {
       get: (key: string) => (key === missing ? undefined : CONFIG[key]),
       getOrThrow: (key: string) => CONFIG[key],
     }
-    const disabled = new AnalyticsService(config as never)
+    const disabled = new AnalyticsService(config as never, grantedAnalyticsConsent)
     const interceptor = new MetricsInterceptor(config as never, disabled)
     const next = { handle: jest.fn(() => of('response')) }
     const context = {
@@ -169,12 +172,11 @@ describe('MetricsInterceptor', () => {
     }
     expect(disabled.enabled).toBe(false)
     await expect(lastValueFrom(interceptor.intercept(context as never, next))).resolves.toBe('response')
-    disabled.capture({ event: 'ignored', distinctId: 'user-1' })
+    disabled.capture({ event: 'ignored', distinctId: 'user-1' }, { users: ['user-1'], organizations: [] })
     disabled.groupIdentify({ groupType: 'organization', groupKey: 'ignored' })
     await disabled.handleOrganizationCreatedEvent({ id: 'ignored' } as never)
     await disabled.onApplicationShutdown()
     expect(mockCapture).not.toHaveBeenCalled()
-    expect(mockGroupIdentify).not.toHaveBeenCalled()
   })
 
   it('captures a removed image under the reference the caller named', async () => {
@@ -200,13 +202,13 @@ describe('MetricsInterceptor', () => {
     const response = await deleteImage('quay.io%2Facme%2Fapp')
 
     expect(response.status).toBe(409)
+    expect(JSON.stringify(mockCapture.mock.calls)).not.toContain('still in use by box-1')
     expect(mockCapture).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'api_image_deletion_failed',
         properties: expect.objectContaining({
           image_id_or_ref: 'quay.io/acme/app',
           status_code: 409,
-          error: 'still in use by box-1',
         }),
       }),
     )

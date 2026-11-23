@@ -68,10 +68,14 @@ export class LinkedIdentityService {
       await this.ensurePrimaryUser(em, primaryUserId, secondary)
       const moved = await this.moveMemberships(em, primaryUserId, secondaryUserId)
       const keyHashes = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
-      await em.query(`UPDATE "organization" SET "createdBy" = $1 WHERE "createdBy" = $2`, [
-        primaryUserId,
-        secondaryUserId,
-      ])
+      // Creator changes serialize with in-flight consent checks. Ordinary organization
+      // updates remain compatible with the dispatcher's FOR KEY SHARE lock.
+      await em.query(
+        `UPDATE organization SET "createdBy" = $1 WHERE id IN (
+          SELECT id FROM organization WHERE "createdBy" = $2 ORDER BY id FOR UPDATE
+        )`,
+        [primaryUserId, secondaryUserId],
+      )
 
       this.logger.log(
         `Moved ${moved} membership(s) and ${keyHashes.length} API key(s) from ${secondaryUserId} to ${primaryUserId}`,
