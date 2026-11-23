@@ -591,8 +591,19 @@ stop()   → Stopped (VM terminated); a local runtime removes it unless auto_del
 Calling `stop()` on a local `Paused` box terminates the VM without thawing or
 attaching to the guest. Before signaling the shim and waiting for exit, `stop()`
 verifies the live process against the PID file's fingerprint and checks the PID
-against the database record. If either check fails and a candidate process may
-still be alive, `stop()` returns `InvalidState` and leaves the record intact.
+against the database record:
+
+- If the initial read of `shim.pid` fails (for an existing path) or its first
+  line cannot be parsed as a numeric PID, `stop()` returns
+  `BoxliteError::Storage` and leaves the record intact.
+- If the PID value is invalid (such as `0`), does not match the database
+  record, a live candidate process cannot be verified by fingerprint (including
+  a missing or unparseable fingerprint line), or re-verification before
+  `SIGKILL` fails, `stop()` returns `InvalidState` and leaves the record
+  intact.
+- If no live candidate process remains (including when a fingerprint mismatch
+  rules out the PID file record and no persisted PID is live), `stop()`
+  completes cleanup normally.
 
 Lifecycle paths treat a successful `stop()` return as the only evidence that
 the shim exited. The runtime has no independent liveness check for this

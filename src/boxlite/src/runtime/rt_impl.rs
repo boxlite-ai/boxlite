@@ -1038,6 +1038,10 @@ impl RuntimeImpl {
                 }
             };
             let frozen = matches!(state.status, BoxStatus::Paused | BoxStatus::Unknown);
+            if state.status == BoxStatus::Stopped {
+                self.try_remove_stopped_ephemeral_during_sync_shutdown(&config, &state);
+                continue;
+            }
             if !frozen && state.status != BoxStatus::Running {
                 continue;
             }
@@ -1141,6 +1145,26 @@ impl RuntimeImpl {
             if stopped_shim.is_some() && pid_reader.read_shim().ok() == stopped_shim {
                 let _ = std::fs::remove_file(pid_path);
             }
+
+            self.try_remove_stopped_ephemeral_during_sync_shutdown(&config, &state);
+        }
+    }
+
+    fn try_remove_stopped_ephemeral_during_sync_shutdown(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+    ) {
+        if config.options.removes_on_stop()
+            && state.status == BoxStatus::Stopped
+            && let Err(error) = self.remove_box_locked(&config.id, false)
+        {
+            self.sync_cleanup_pending.store(true, Ordering::Release);
+            tracing::warn!(
+                box_id = %config.id,
+                %error,
+                "Sync shutdown deferred: failed to remove stopped ephemeral box"
+            );
         }
     }
 
@@ -1686,8 +1710,19 @@ impl RuntimeImpl {
                     .layout
                     .box_layout(config.id.as_str(), false)?
                     .pid_file_path();
+                let mut persisted_pid = state.pid;
+                if persisted_pid.is_none()
+                    && let ShimPresence::Verified(shim) =
+                        PidFileReader::at(&pid_file).probe_presence(None, rebooted)
+                {
+                    let pid = shim.identity().pid;
+                    let mut adopted_state = state.clone();
+                    adopted_state.set_pid(Some(pid));
+                    self.box_manager.save_box(&config.id, &adopted_state)?;
+                    persisted_pid = Some(pid);
+                }
                 if let Err(error) =
-                    ShimHandler::stop_verified(&config.id, state.pid, &pid_file, rebooted)
+                    ShimHandler::stop_verified(&config.id, persisted_pid, &pid_file, rebooted)
                 {
                     tracing::warn!(box_id = %config.id, %error, "Ephemeral box cleanup deferred");
                     deferred_ephemeral.insert(config.id.clone());
@@ -1760,6 +1795,13 @@ impl RuntimeImpl {
             {
                 for entry in entries.flatten() {
                     if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        if entry
+                            .file_name()
+                            .to_str()
+                            .is_some_and(|name| deferred_ephemeral.contains(name))
+                        {
+                            continue;
+                        }
                         crate::litebox::local_snapshot::recover_pending_snapshot(&entry.path());
                     }
                 }
@@ -3612,6 +3654,135 @@ mod tests {
         assert_eq!(db_state.status, BoxStatus::Stopped);
     }
 
+    #[tokio::test]
+    async fn test_shutdown_sync_removes_stopped_ephemeral_and_preserves_regular_stopped_box() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Stopped ephemeral box (removes_on_stop = true)
+        let mut ephemeral_stopped_config = test_box_config_in_layout(false, &runtime);
+        ephemeral_stopped_config.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&ephemeral_stopped_config.box_home).unwrap();
+        let eph_stopped_lock_id = runtime.lock_manager.allocate().unwrap();
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(eph_stopped_lock_id)
+            .unwrap();
+        let mut ephemeral_stopped_state = BoxState::new();
+        ephemeral_stopped_state.mark_stop();
+        ephemeral_stopped_state.set_lock_id(eph_stopped_lock_id);
+        runtime
+            .box_manager
+            .add_box(&ephemeral_stopped_config, &ephemeral_stopped_state)
+            .unwrap();
+
+        // Running ephemeral box (removes_on_stop = true) that becomes Stopped during shutdown_sync
+        let (pid, mut child) = spawn_dummy_process();
+        let mut ephemeral_running_config = test_running_box_config(false, &runtime, pid);
+        ephemeral_running_config.options.auto_delete = Some(1);
+        let eph_running_lock_id = runtime.lock_manager.allocate().unwrap();
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(eph_running_lock_id)
+            .unwrap();
+        let mut ephemeral_running_state = running_state(pid);
+        ephemeral_running_state.set_lock_id(eph_running_lock_id);
+        runtime
+            .box_manager
+            .add_box(&ephemeral_running_config, &ephemeral_running_state)
+            .unwrap();
+
+        // Regular Stopped box (auto_delete = Some(0)) must be preserved
+        let regular_config = test_box_config_in_layout(false, &runtime);
+        std::fs::create_dir_all(&regular_config.box_home).unwrap();
+        let regular_lock_id = runtime.lock_manager.allocate().unwrap();
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(regular_lock_id)
+            .unwrap();
+        let mut regular_state = BoxState::new();
+        regular_state.mark_stop();
+        regular_state.set_lock_id(regular_lock_id);
+        runtime
+            .box_manager
+            .add_box(&regular_config, &regular_state)
+            .unwrap();
+
+        runtime.shutdown_sync();
+
+        assert!(
+            runtime
+                .box_manager
+                .box_by_id(&ephemeral_stopped_config.id)
+                .unwrap()
+                .is_none(),
+            "Stopped ephemeral box must be removed by shutdown_sync"
+        );
+        assert!(!ephemeral_stopped_config.box_home.exists());
+        assert!(
+            runtime
+                .box_manager
+                .box_by_id(&ephemeral_running_config.id)
+                .unwrap()
+                .is_none(),
+            "Running ephemeral box stopped during shutdown_sync must also be removed"
+        );
+        assert!(!ephemeral_running_config.box_home.exists());
+        assert!(!crate::util::is_process_alive(pid));
+
+        let (_, preserved_state) = runtime
+            .box_manager
+            .box_by_id(&regular_config.id)
+            .unwrap()
+            .expect("Regular stopped box must be preserved");
+        assert_eq!(preserved_state.status, BoxStatus::Stopped);
+        assert!(regular_config.box_home.exists());
+        assert!(!runtime.sync_cleanup_pending.load(Ordering::Acquire));
+        assert!(runtime.shutdown(None).await.is_ok());
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_sync_defers_blocked_stopped_ephemeral_box_and_retries() {
+        let (runtime, _dir) = create_test_runtime();
+
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&config.box_home).unwrap();
+        let lock_id = runtime.lock_manager.allocate().unwrap();
+        let disk_locker = runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
+        let mut state = BoxState::new();
+        state.mark_stop();
+        state.set_lock_id(lock_id);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        // Hold disk lock so removal is blocked during first shutdown_sync.
+        let disk_guard = LockGuard::try_new(disk_locker.as_ref()).unwrap();
+        runtime.shutdown_sync();
+
+        assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
+        assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_some());
+        assert!(config.box_home.exists());
+        // Subsequent async shutdown must not return Ok(()) while cleanup is pending.
+        assert!(matches!(
+            runtime.shutdown(None).await,
+            Err(BoxliteError::Internal(_))
+        ));
+        assert!(runtime.sync_cleanup_pending.load(Ordering::Acquire));
+
+        drop(disk_guard);
+        runtime.shutdown_sync();
+
+        assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
+        assert!(!config.box_home.exists());
+        assert!(!runtime.sync_cleanup_pending.load(Ordering::Acquire));
+        assert!(runtime.shutdown(None).await.is_ok());
+    }
+
     #[test]
     fn test_shutdown_sync_settles_dead_pid() {
         let (runtime, _dir) = create_test_runtime();
@@ -4829,10 +5000,10 @@ mod tests {
     #[test]
     fn test_recovery_blocks_start_for_deferred_ephemeral_box() {
         let (runtime, _dir) = create_test_runtime();
-        let (pid, child) = spawn_dummy_process();
-        let _child = ChildGuard(child);
-        let mut config = test_running_box_config(false, &runtime, pid);
+        let mut config = test_box_config_in_layout(false, &runtime);
         config.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&config.box_home).unwrap();
+        std::fs::write(config.box_home.join("shim.pid"), b"invalid PID").unwrap();
         let mut state = BoxState::new();
         state.started_at = Some(Utc::now());
         assert_eq!(state.status, BoxStatus::Configured);
@@ -4846,6 +5017,141 @@ mod tests {
         assert!(!recovered.status.can_start());
         assert!(recovered.started_at.is_none());
         assert!(recovered.lock_id.is_some());
+    }
+
+    #[test]
+    fn test_recovery_adopts_stops_and_removes_configured_ephemeral_with_verified_shim() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, _child) = spawn_dummy_process();
+        let mut config = test_running_box_config(false, &runtime, pid);
+        config.options.auto_delete = Some(1);
+        let state = BoxState::new();
+        assert_eq!(state.status, BoxStatus::Configured);
+        assert!(state.pid.is_none());
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
+        assert!(!config.box_home.exists());
+        assert!(!pid_may_be_alive(pid));
+    }
+
+    #[test]
+    fn test_recovery_persists_adopted_pid_when_ephemeral_stop_fails() {
+        use std::io::Read;
+
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.options.auto_delete = Some(1);
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .unwrap();
+        let pid_file = layout.pid_file_path();
+        std::fs::create_dir_all(layout.root()).unwrap();
+        let mut child = ChildGuard(
+            std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    "trap 'rm -f \"$1\"; exec sleep 300' TERM; printf x; while :; do sleep 0.05; done",
+                    "sh",
+                ])
+                .arg(&pid_file)
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        child.0.stdout.take().unwrap().read_exact(&mut [0]).unwrap();
+        let pid = child.0.id();
+        write_pid_file_with_fingerprint(&pid_file, pid);
+
+        let mut state = BoxState::new();
+        state.started_at = Some(Utc::now());
+        assert_eq!(state.status, BoxStatus::Configured);
+        assert!(state.pid.is_none());
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        assert!(!pid_file.exists(), "stand-in did not handle SIGTERM");
+        assert!(child.0.try_wait().unwrap().is_none());
+        let recovered = runtime.box_manager.update_box(&config.id).unwrap();
+        assert_eq!(recovered.status, BoxStatus::Unknown);
+        assert_eq!(recovered.pid, Some(pid));
+        assert!(recovered.started_at.is_none());
+        assert!(recovered.lock_id.is_some());
+    }
+
+    #[test]
+    fn test_recovery_skips_pending_snapshot_for_deferred_ephemeral_box() {
+        use crate::disk::constants::filenames as disk_filenames;
+
+        let (runtime, _dir) = create_test_runtime();
+
+        // Box A: deferred ephemeral box with pending snapshot journal
+        let mut deferred_config = test_box_config_in_layout(false, &runtime);
+        deferred_config.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&deferred_config.box_home).unwrap();
+        std::fs::write(deferred_config.box_home.join("shim.pid"), b"invalid PID").unwrap();
+
+        let deferred_snap_dir = deferred_config.box_home.join("snapshots").join("snap-1");
+        let deferred_disks_dir = deferred_config.box_home.join("disks");
+        std::fs::create_dir_all(&deferred_snap_dir).unwrap();
+        std::fs::create_dir_all(&deferred_disks_dir).unwrap();
+        let deferred_container = deferred_disks_dir.join(disk_filenames::CONTAINER_DISK);
+        let deferred_snap_container = deferred_snap_dir.join(disk_filenames::CONTAINER_DISK);
+        std::fs::write(&deferred_snap_container, b"deferred-disk").unwrap();
+        let deferred_marker = serde_json::json!({
+            "snapshot_dir": deferred_snap_dir.to_string_lossy(),
+            "container_disk": deferred_container.to_string_lossy(),
+        });
+        std::fs::write(
+            deferred_config.box_home.join(".snapshot_pending"),
+            deferred_marker.to_string(),
+        )
+        .unwrap();
+        runtime
+            .box_manager
+            .add_box(&deferred_config, &BoxState::new())
+            .unwrap();
+
+        // Box B: regular Stopped box with pending snapshot journal
+        let regular_config = test_box_config_in_layout(false, &runtime);
+        let regular_snap_dir = regular_config.box_home.join("snapshots").join("snap-1");
+        let regular_disks_dir = regular_config.box_home.join("disks");
+        std::fs::create_dir_all(&regular_snap_dir).unwrap();
+        std::fs::create_dir_all(&regular_disks_dir).unwrap();
+        let regular_container = regular_disks_dir.join(disk_filenames::CONTAINER_DISK);
+        let regular_snap_container = regular_snap_dir.join(disk_filenames::CONTAINER_DISK);
+        std::fs::write(&regular_snap_container, b"regular-disk").unwrap();
+        let regular_marker = serde_json::json!({
+            "snapshot_dir": regular_snap_dir.to_string_lossy(),
+            "container_disk": regular_container.to_string_lossy(),
+        });
+        std::fs::write(
+            regular_config.box_home.join(".snapshot_pending"),
+            regular_marker.to_string(),
+        )
+        .unwrap();
+        let mut regular_state = BoxState::new();
+        regular_state.mark_stop();
+        runtime
+            .box_manager
+            .add_box(&regular_config, &regular_state)
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        // Deferred ephemeral box's snapshot journal and files must remain untouched.
+        assert!(deferred_config.box_home.join(".snapshot_pending").exists());
+        assert!(deferred_snap_container.exists());
+        assert!(!deferred_container.exists());
+
+        // Regular box's pending snapshot must recover normally.
+        assert!(!regular_config.box_home.join(".snapshot_pending").exists());
+        assert!(!regular_snap_dir.exists());
+        assert_eq!(std::fs::read(&regular_container).unwrap(), b"regular-disk");
     }
 
     #[test]
