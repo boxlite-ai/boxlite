@@ -18,6 +18,8 @@ type CheckpointKind string
 const (
 	CheckpointKindDisk CheckpointKind = "disk"
 	CheckpointKindFull CheckpointKind = "full"
+	// CheckpointKindUnknown represents a server-reported kind the SDK does not recognize.
+	CheckpointKindUnknown CheckpointKind = "unknown"
 )
 
 // CheckpointOptions selects the archive kind. An empty Kind selects disk.

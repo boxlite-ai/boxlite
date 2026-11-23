@@ -82,9 +82,10 @@ export class CheckpointService {
           String(box.state) !== String(box.desiredState) ||
           box.state !== BoxState.STOPPED
         ) {
-          throw new ConflictException(
-            'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint',
-          )
+          throw new ConflictException({
+            message: 'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint',
+            code: 'invalid_state',
+          })
         }
         if (box.volumes?.length || box.secrets?.length)
           throw new BadRequestException('Checkpoints with volumes or secrets are not supported')

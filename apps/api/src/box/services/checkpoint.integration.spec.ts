@@ -385,7 +385,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   it('requires a stopped source before accepting checkpoint capture', async () => {
     const box = await source()
     await boxes.update(box.id, { state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED })
-    await expect(service.create(organizationId, box.id, 'running-source')).rejects.toMatchObject({ status: 409 })
+    await expect(service.create(organizationId, box.id, 'running-source')).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'invalid_state' }),
+    })
     expect(await checkpoints.count()).toBe(0)
     expect(await jobs.count()).toBe(0)
     expect(await states.count()).toBe(0)

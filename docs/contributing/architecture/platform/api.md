@@ -674,7 +674,7 @@ organization membership.
 
 | Method | Path | What it does |
 | ------ | ---- | ------------ |
-| `POST` | `/v1[/{prefix}]/checkpoints` | Captures an independent disk archive from `source_box_id`, with an optional `name`; returns `201`. |
+| `POST` | `/v1[/{prefix}]/checkpoints` | Takes `source_box_id`, optional `name`, and optional `kind` (defaults to `disk`). Returns `201` for accepted disk capture, `409` with `code: "invalid_state"` for a source state mismatch, or `400` with `code: "unsupported"` for `full`. |
 | `GET` | `/v1[/{prefix}]/checkpoints` | Lists organization checkpoints; accepts `pageToken` or `page_token`, and returns `next_page_token`. |
 | `GET` | `/v1[/{prefix}]/checkpoints/{key}` | Gets checkpoint metadata by ID or name, including state and optional `error_reason`. |
 | `DELETE` | `/v1[/{prefix}]/checkpoints/{key}` | Deletes an unused checkpoint; `force=true` tolerates an already absent checkpoint, but active capture/use returns `409`; returns `204`. |
@@ -686,9 +686,11 @@ creates a Box that inherits the saved settings. `checkpoint_id` excludes `image`
 `/boxes/import` route on the hosted service and no way to replace an existing Box
 from a checkpoint.
 
-Capture requires a stopped, idle source; callers stop the Box and wait for
-`stopped` first. Other states return `409`; capture never automatically stops a Box.
-The runner checks again under its source-operation lock before native export.
+Disk capture requires a stopped, idle source. Callers stop the Box and wait for
+`stopped` before requesting capture. A source state mismatch returns HTTP 409
+with `code: "invalid_state"`. The runner checks again under its source-operation
+lock before native export. A `kind: "full"` request returns HTTP 400 with
+`code: "unsupported"` before admission.
 
 Capture, creation from a checkpoint, and deletion require `write:boxes`; reads require
 organization membership. Turning off checkpoint admission leaves reads, deletion, and

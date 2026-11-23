@@ -127,7 +127,11 @@ impl CheckpointHandle {
             .await
     }
 
-    /// Create a checkpoint with the requested options. REST supports disk capture.
+    /// Create a checkpoint with the requested options.
+    ///
+    /// REST sends the legacy request without `kind` for disk capture. For full
+    /// capture, it checks the server's live capability before posting and
+    /// requires the response to confirm `kind: full`.
     pub async fn create_with_options(
         &self,
         source: &str,

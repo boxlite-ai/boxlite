@@ -602,9 +602,12 @@ mod tests {
                         .into_owned()
                 };
                 format!(
-                    "{}:{}:{reason}",
+                    "{}:{}:{reason}:{}:{}:{}",
                     std::ffi::CStr::from_ptr((*info).id).to_string_lossy(),
                     std::ffi::CStr::from_ptr((*info).state).to_string_lossy(),
+                    std::ffi::CStr::from_ptr((*info).kind).to_string_lossy(),
+                    (*info).has_memory_size_bytes,
+                    (*info).memory_size_bytes,
                 )
             }
         };
@@ -666,7 +669,8 @@ mod tests {
         std::thread::scope(|scope| {
             let server = scope.spawn(move || {
                 let mut requests = Vec::new();
-                while requests.len() < 11 {
+                let mut memory_checkpoints_enabled = false;
+                while requests.len() < 12 {
                     let deadline = Instant::now() + Duration::from_secs(5);
                     let (mut stream, _) = loop {
                         match listener.accept() {
@@ -704,13 +708,16 @@ mod tests {
                     let mut info = serde_json::json!({"id":"checkpoint-1","name":"base","source_box_id":"source-1","created_at":"2026-11-06T00:00:00Z","size_bytes":4096,"state":"ready"});
                     if body["kind"] == "full" {
                         info["kind"] = "full".into();
+                        info["memory_size_bytes"] = 0.into();
                     }
                     let (status, response) = if path.ends_with("/missing") {
                         (404, serde_json::json!({"message":"Checkpoint not found"}))
                     } else if path == "/v1/boxes" {
                         (200, serde_json::json!({"box_id":"target-1","name":"worker","status":"stopped","created_at":"2026-11-06T00:00:00Z","updated_at":"2026-11-06T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}))
                     } else if path == "/v1/config" {
-                        (200, serde_json::json!({"capabilities":{"memory_checkpoints_enabled":true}}))
+                        let response = serde_json::json!({"capabilities":{"memory_checkpoints_enabled":memory_checkpoints_enabled}});
+                        memory_checkpoints_enabled = true;
+                        (200, response)
                     } else if method == "GET" && path == "/v1/checkpoints" {
                         (200, serde_json::json!({"checkpoints":[info]}))
                     } else if method == "GET" {
@@ -768,7 +775,7 @@ mod tests {
                     );
                     assert_eq!(
                         drain(&mut runtime),
-                        (BoxliteErrorCode::Ok, "checkpoint-1:ready:".into())
+                        (BoxliteErrorCode::Ok, "checkpoint-1:ready::disk:0:0".into())
                     );
                 }
                 assert_eq!(
@@ -785,7 +792,7 @@ mod tests {
                     drain(&mut runtime),
                     (
                         BoxliteErrorCode::Ok,
-                        "checkpoint-1:failed:upload failed".into()
+                        "checkpoint-1:failed:upload failed:disk:0:0".into()
                     )
                 );
                 assert_eq!(
@@ -847,7 +854,24 @@ mod tests {
                     drain(&mut runtime),
                     (BoxliteErrorCode::NotFound, String::new())
                 );
-                for kind in [ptr::null(), c"disk".as_ptr(), c"full".as_ptr()] {
+                for (kind, code, metadata) in [
+                    (
+                        ptr::null(),
+                        BoxliteErrorCode::Ok,
+                        "checkpoint-1:ready::disk:0:0",
+                    ),
+                    (
+                        c"disk".as_ptr(),
+                        BoxliteErrorCode::Ok,
+                        "checkpoint-1:ready::disk:0:0",
+                    ),
+                    (c"full".as_ptr(), BoxliteErrorCode::Unsupported, ""),
+                    (
+                        c"full".as_ptr(),
+                        BoxliteErrorCode::Ok,
+                        "checkpoint-1:ready::full:1:0",
+                    ),
+                ] {
                     assert_eq!(
                         boxlite_checkpoint_create_with_options(
                             &mut runtime,
@@ -860,10 +884,7 @@ mod tests {
                         ),
                         BoxliteErrorCode::Ok
                     );
-                    assert_eq!(
-                        drain(&mut runtime),
-                        (BoxliteErrorCode::Ok, "checkpoint-1:ready:".into())
-                    );
+                    assert_eq!(drain(&mut runtime), (code, metadata.into()));
                 }
             }
             let requests = server.join().unwrap();
@@ -886,12 +907,14 @@ mod tests {
                 assert_eq!(request.1, "/v1/checkpoints");
                 assert_eq!(request.2, requests[1].2);
             }
-            assert_eq!(requests[9].0, "GET");
-            assert_eq!(requests[9].1, "/v1/config");
-            assert_eq!(requests[10].0, "POST");
-            assert_eq!(requests[10].1, "/v1/checkpoints");
+            for request in &requests[9..11] {
+                assert_eq!(request.0, "GET");
+                assert_eq!(request.1, "/v1/config");
+            }
+            assert_eq!(requests[11].0, "POST");
+            assert_eq!(requests[11].1, "/v1/checkpoints");
             assert_eq!(
-                requests[10].2,
+                requests[11].2,
                 serde_json::json!({"source_box_id":"source-1","kind":"full"})
             );
         });

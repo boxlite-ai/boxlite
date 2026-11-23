@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -21,6 +22,10 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	var mu sync.Mutex
 	var requests []request
 	info := map[string]any{"id": "checkpoint-1", "name": "base", "source_box_id": "source-1", "created_at": "2026-11-06T00:00:00Z", "size_bytes": 4096, "state": "ready"}
+	full := maps.Clone(info)
+	full["id"], full["kind"], full["memory_size_bytes"] = "checkpoint-2", "full", 0
+	future := maps.Clone(info)
+	future["id"], future["kind"], future["memory_size_bytes"] = "checkpoint-3", "future", 4096
 	box := map[string]any{"box_id": "target-1", "name": "worker", "status": "stopped", "image": "alpine:latest", "cpus": 2, "memory_mib": 512, "created_at": info["created_at"], "updated_at": info["created_at"]}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -41,7 +46,7 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/v1/boxes") {
 			response = box
 		} else if r.Method == http.MethodGet && r.URL.Path == "/v1/checkpoints" {
-			response = map[string]any{"checkpoints": []any{info}}
+			response = map[string]any{"checkpoints": []any{info, full, future}}
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/v1/checkpoints/checkpoint-1" {
 			failed := make(map[string]any, len(info)+1)
@@ -74,8 +79,17 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 		t.Fatalf("disk metadata: %+v", captured)
 	}
 	list, err := checkpoints.List(ctx)
-	if err != nil || len(list) != 1 || list[0].SourceBoxID != "source-1" {
+	if err != nil || len(list) != 3 {
 		t.Fatalf("list: %+v %v", list, err)
+	}
+	if disk := list[0]; disk.ID != "checkpoint-1" || disk.SourceBoxID != "source-1" || disk.Kind != CheckpointKindDisk || disk.MemorySizeBytes != nil {
+		t.Fatalf("disk list metadata: %+v", disk)
+	}
+	if full := list[1]; full.ID != "checkpoint-2" || full.Kind != CheckpointKindFull || full.MemorySizeBytes == nil || *full.MemorySizeBytes != 0 {
+		t.Fatalf("full list metadata: %+v", full)
+	}
+	if future := list[2]; future.ID != "checkpoint-3" || future.Kind != CheckpointKindUnknown || future.MemorySizeBytes == nil || *future.MemorySizeBytes != 4096 {
+		t.Fatalf("unknown list metadata: %+v", future)
 	}
 	detail, err := checkpoints.Get(ctx, "checkpoint-1")
 	if err != nil || detail.ID != captured.ID || detail.State != "failed" || detail.ErrorReason != "archive upload failed" {
@@ -147,7 +161,7 @@ func TestCheckpointCreateWithOptions(t *testing.T) {
 		{"full zero", CheckpointKindFull, true, `,"kind":"full","memory_size_bytes":0`, CheckpointKindFull, &zero, []string{config, post}},
 		{"full nonzero", CheckpointKindFull, true, `,"kind":"full","memory_size_bytes":4096`, CheckpointKindFull, &used, []string{config, post}},
 		{"full disabled", CheckpointKindFull, false, "", "", nil, []string{config}},
-		{"unknown response", "", false, `,"kind":"future"`, "unknown", nil, []string{post}},
+		{"unknown response", "", false, `,"kind":"future"`, CheckpointKindUnknown, nil, []string{post}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -195,7 +209,7 @@ func TestCheckpointCreateWithOptions(t *testing.T) {
 func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) {
 	ctx := context.Background()
 	checkpoints := (&Runtime{}).Checkpoints()
-	for _, kind := range []CheckpointKind{"bogus", "unknown", "full\x00"} {
+	for _, kind := range []CheckpointKind{"bogus", CheckpointKindUnknown, "full\x00"} {
 		if _, err := checkpoints.CreateWithOptions(ctx, "source-1", "base", CheckpointOptions{Kind: kind}); !IsInvalidArgument(err) {
 			t.Fatalf("create with kind %q: %v", kind, err)
 		}

@@ -108,39 +108,25 @@ pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
                 for info in infos {
                     println!("{}", info.id);
                 }
-            } else if format == OutputFormat::Json {
-                let checkpoints: Vec<_> = infos.iter().map(CheckpointJson::from).collect();
-                writeln!(
-                    std::io::stdout().lock(),
-                    "{}",
-                    formatter::format_json(&checkpoints)?
-                )?;
             } else {
+                let output: Vec<_> = infos.iter().map(CheckpointJson::from).collect();
                 formatter::print_output(
                     &mut std::io::stdout().lock(),
-                    &infos,
+                    &output,
                     format,
-                    |writer, infos| table(writer, infos),
+                    |writer, _| table(writer, &infos),
                 )?;
             }
         }
         CheckpointCommand::Get(args) => {
             let format = OutputFormat::from_str(&args.format)?;
             let info = checkpoints.get(&args.checkpoint).await?;
-            if format == OutputFormat::Json {
-                writeln!(
-                    std::io::stdout().lock(),
-                    "{}",
-                    formatter::format_json(&CheckpointJson::from(&info))?
-                )?;
-            } else {
-                formatter::print_output(
-                    &mut std::io::stdout().lock(),
-                    &info,
-                    format,
-                    |writer, info| table(writer, std::slice::from_ref(info)),
-                )?;
-            }
+            formatter::print_output(
+                &mut std::io::stdout().lock(),
+                &CheckpointJson::from(&info),
+                format,
+                |writer, _| table(writer, std::slice::from_ref(&info)),
+            )?;
         }
         CheckpointCommand::Delete(args) => {
             for key in args.checkpoints {

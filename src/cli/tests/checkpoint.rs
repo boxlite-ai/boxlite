@@ -265,7 +265,9 @@ async fn checkpoint_list_and_get_render_kind_and_memory_metadata() {
     let mut zero = full.clone();
     zero["id"] = json!("checkpoint-3");
     zero["memory_size_bytes"] = json!(0);
-    let mut expected = [info("checkpoint-1"), full, zero];
+    let mut future = info("checkpoint-4");
+    future["kind"] = json!("future");
+    let mut expected = [info("checkpoint-1"), full, zero, future];
     let responses = expected.clone();
     let server = Server::start(move |request| {
         let body = if request.path.ends_with("/checkpoints") {
@@ -287,16 +289,23 @@ async fn checkpoint_list_and_get_render_kind_and_memory_metadata() {
         .success()
         .stdout(contains("KIND"))
         .stdout(contains(" disk "))
-        .stdout(contains(" full "));
-    let list = cli(&home, &server)
-        .args(["checkpoint", "list", "--format", "json"])
-        .assert()
-        .success();
+        .stdout(contains(" full "))
+        .stdout(contains(" unknown "));
     expected[0]["kind"] = json!("disk");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&list.get_output().stdout).unwrap(),
-        json!(expected)
-    );
+    expected[3]["kind"] = json!("unknown");
+    for format in ["json", "yaml"] {
+        let list = cli(&home, &server)
+            .args(["checkpoint", "list", "--format", format])
+            .assert()
+            .success();
+        let stdout = &list.get_output().stdout;
+        let actual: Value = if format == "json" {
+            serde_json::from_slice(stdout).unwrap()
+        } else {
+            serde_yaml::from_slice(stdout).unwrap()
+        };
+        assert_eq!(actual, json!(expected), "list --format {format}");
+    }
     for checkpoint in expected {
         let id = checkpoint["id"].as_str().unwrap();
         let kind = checkpoint["kind"].as_str().unwrap();
@@ -318,6 +327,15 @@ async fn checkpoint_list_and_get_render_kind_and_memory_metadata() {
         assert_eq!(
             serde_json::from_slice::<Value>(&get.get_output().stdout).unwrap(),
             checkpoint
+        );
+        let get = cli(&home, &server)
+            .args(["checkpoint", "get", id, "--format", "yaml"])
+            .assert()
+            .success();
+        assert_eq!(
+            serde_yaml::from_slice::<Value>(&get.get_output().stdout).unwrap(),
+            checkpoint,
+            "get {id} --format yaml"
         );
     }
 }
