@@ -212,3 +212,44 @@ async fn idle_stream_yields_one_network_error() {
     assert!(stream.next().await.is_none());
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn heartbeats_keep_an_idle_subscription_open() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(socket.read_u8().await.unwrap());
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+            .await
+            .unwrap();
+        socket
+    });
+    let client = ApiClient::new(&crate::BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+    let mut stream = open(&client, "/agents/a", "a", None, &Default::default())
+        .await
+        .unwrap();
+    let mut socket = server.await.unwrap();
+    for _ in 0..2 {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        socket.write_all(b": heartbeat\n\n").await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    socket
+        .write_all(b"event: agent\ndata: {\"agent_id\":\"a\",\"kind\":\"message\",\"data\":{}}\n\n")
+        .await
+        .unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(event.kind, "message");
+}

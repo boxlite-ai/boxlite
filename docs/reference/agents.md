@@ -205,7 +205,8 @@ After 30 seconds without stream data (two heartbeat intervals), the client repor
 a network error and closes the subscription. Dropping the stream releases the
 connection without cancelling the turn. Agent writes return redirects as errors
 and make one attempt. A turn result is valid for `wait()` only when its status
-matches the terminal turn snapshot.
+matches a `completed`, `failed`, or `cancelled` turn snapshot. An `unknown`
+turn returns `InvalidState` even when the server includes a result.
 Server handlers are unavailable.
 
 ### Go JSON mapping

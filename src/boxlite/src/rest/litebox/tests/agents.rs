@@ -414,7 +414,11 @@ async fn remote_handles_reject_responses_for_other_resources() {
 
 #[tokio::test]
 async fn wait_requires_matching_terminal_status() {
-    for status in ["running", "failed"] {
+    for (status, result_status) in [
+        ("running", "completed"),
+        ("failed", "completed"),
+        ("unknown", "unknown"),
+    ] {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let sandbox = Arc::new(rest_box_for(listener.local_addr().unwrap().port(), "box"));
         let server = tokio::spawn(async move {
@@ -432,7 +436,7 @@ async fn wait_requires_matching_terminal_status() {
             let mut snapshot: serde_json::Value = serde_json::from_str(TURN).unwrap();
             snapshot["status"] = serde_json::json!(status);
             snapshot["result"] =
-                serde_json::json!({"turn_id":"msg_test","status":"completed","artifacts":[]});
+                serde_json::json!({"turn_id":"msg_test","status":result_status,"artifacts":[]});
             agent_exchange(
                 &listener,
                 path,

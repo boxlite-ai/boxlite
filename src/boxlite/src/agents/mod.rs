@@ -346,15 +346,14 @@ impl AgentTurn {
         let observe = async {
             loop {
                 let state = self.backend.turn(&self.state.id).await?;
-                let terminal = matches!(
+                let has_known_outcome = matches!(
                     state.status,
                     AgentTurnStatus::Completed
                         | AgentTurnStatus::Cancelled
                         | AgentTurnStatus::Failed
-                        | AgentTurnStatus::Unknown
                 );
                 if let Some(result) = state.result {
-                    if terminal && state.status == result.status {
+                    if has_known_outcome && state.status == result.status {
                         return Ok(result);
                     }
                     return Err(BoxliteError::InvalidState(format!(
@@ -362,7 +361,7 @@ impl AgentTurn {
                         self.state.id, state.status, result.status
                     )));
                 }
-                if terminal {
+                if has_known_outcome || state.status == AgentTurnStatus::Unknown {
                     return Err(BoxliteError::InvalidState(format!(
                         "turn {} ended without a recorded outcome",
                         self.state.id
