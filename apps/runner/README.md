@@ -624,7 +624,10 @@ and rejects Filestore `subpath` instead of silently ignoring it.
   and instance IDs plus the mount error. Logs do not include box environment
   variables, secrets, authorization headers, or job payloads.
 - Destroy unbinds only: the data directory and its data survive, exactly as a
-  bucket survives a destroy — reachable again through the volume id.
+  bucket survives a destroy — reachable again through the volume id. A stopped
+  Filestore Box waiting for a restart can be deleted without resolving its
+  configured instance; deletion cancels the waiting start intent and proceeds
+  with runner cleanup without removing the NFS data.
 - Volume removal follows the same async path as bucket volumes — in-use
   refusal, then PENDING_DELETE until the manager lands the row DELETED (the
   name is released by the same `name-deleted` rename). The NFS data
@@ -640,8 +643,14 @@ upgrade a filestore volume can only land on an upgraded runner. Upgrade order
 that keeps filestore creates working: runners first, API second — an upgraded
 runner with the old API is idle for filestore (the old API never creates
 filestore volumes), while the reverse order would put filestore creates on
-runners the API does not yet trust. The dispatch check re-reads the runner row
-instead of trusting an API replica's lookup cache. A rejection logs the Box ID,
+runners the API does not yet trust. Before replaying start metadata, an upgraded
+runner also checks the Box's persisted mount record. If an old API replica omits
+the Filestore reference, Start fails with `FILESTORE_VOLUME_REFERENCE_MISSING`
+before trying the object-storage fallback or starting the Box. This guard uses
+only the local record, not a GCP lookup or a rollout feature flag. Rolling back
+the runner to a binary without Filestore support remains unsupported while
+Filestore Boxes exist. The dispatch check re-reads the runner row instead of
+trusting an API replica's lookup cache. A rejection logs the Box ID,
 runner ID, runner version, declared capabilities and
 `FILESTORE_CAPABILITY_MISSING`; the create response carries the reason, Box ID
 and `BOX_STATE_TRANSITION_FAILED`, which the Dashboard displays with the HTTP
@@ -651,8 +660,10 @@ age, and confirms that no create job was dispatched. A runner-side prepare
 failure adds `FILESTORE_VOLUME_PREPARE_FAILED`,
 Box/Volume/instance IDs and, when available, the mount process exit code. API
 job-insert failures similarly log `job.create.failed` with the job, runner,
-resource and database error code. Logs do not include Box environment
-variables, secrets, authorization headers or job payloads.
+resource and database error code. Final reconciliation failures log
+`box.sync.failed` with the Box ID, error name and database code. Both events
+omit the raw database error, so logs do not include Box environment variables,
+secrets, authorization headers, SQL parameters or job payloads.
 
 ### Troubleshooting
 

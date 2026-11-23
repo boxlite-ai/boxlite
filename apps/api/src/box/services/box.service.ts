@@ -1064,7 +1064,11 @@ export class BoxService {
       selected.organizationId,
     )
 
-    if (box.pending && !checkpointState?.activeJobId) {
+    const waitingFilestoreRestart =
+      box.state === BoxState.STOPPED &&
+      box.desiredState === BoxDesiredState.STARTED &&
+      box.volumes?.some((volume) => volume.filestore)
+    if (box.pending && !checkpointState?.activeJobId && !waitingFilestoreRestart) {
       throw new BoxError('Box state change in progress')
     }
 

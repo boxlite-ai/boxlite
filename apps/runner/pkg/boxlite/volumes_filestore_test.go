@@ -1451,6 +1451,40 @@ func TestStartReturnsFilestorePreparationFailureBeforeBoxLookup(t *testing.T) {
 	}
 }
 
+func TestStartRejectsRecordedFilestoreWithoutReference(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	var nativeCalls atomic.Int32
+	c := checkpointRESTClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		nativeCalls.Add(1)
+		http.Error(w, "native box lookup reached", http.StatusInternalServerError)
+	})
+	if err := c.recordBoxVolumeMounts(context.Background(), "abc123def456", []volumeMount{{
+		rootPath:          filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch"),
+		dataDir:           filestoreDataDir(filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch"), "vol-a"),
+		backend:           volumeBackendFilestore,
+		filestoreInstance: "ml-scratch",
+	}}); err != nil {
+		t.Fatalf("recordBoxVolumeMounts failed: %v", err)
+	}
+	c.testProbeRunner = func(context.Context, string) (bool, error) {
+		return false, errors.New("object-storage fallback must not run")
+	}
+	metadata := map[string]string{
+		"volumes": `[{"volumeId":"vol-a","mountPath":"/data"}]`,
+	}
+
+	_, err := c.Start(context.Background(), "abc123def456", nil, metadata)
+	if err == nil || !strings.Contains(err.Error(), "FILESTORE_VOLUME_REFERENCE_MISSING") {
+		t.Fatalf("Start returned %v, want a missing Filestore reference error", err)
+	}
+	if !isFilestoreVolumePreparationError(err) {
+		t.Fatalf("Start returned an untyped error: %v", err)
+	}
+	if got := nativeCalls.Load(); got != 0 {
+		t.Fatalf("Start made %d native box calls after the missing Filestore reference", got)
+	}
+}
+
 func TestStartPreservesObjectStorageMountFallback(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	var nativeCalls atomic.Int32
