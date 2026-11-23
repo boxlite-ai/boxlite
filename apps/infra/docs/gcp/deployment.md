@@ -80,6 +80,11 @@ the fleet necessarily converges. Check gcloud and ADC identity separately for cr
 Use [networking](networking.md) for private routes/firewalls and [ClickHouse](clickhouse.md) for ingestion failures.
 For locks, refresh or removal, follow [shared recovery](../deployment.md#recovery-and-teardown).
 
+New Cloud SQL instances start with `log_connections=on`. Operators manage the full flag list after creation.
+Refresh the Pulumi checkpoint before the first update to an existing instance and after changing flags outside Pulumi.
+
+Subsequent updates reuse the flags recorded in that checkpoint.
+
 ## Customer domain HTTPS
 
 The GCP deployment automatically supplies the certificate project and the existing proxy certificate map to the API.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Startup script for the e2e-local GCP VM (ci-gha-e2e-1): registers the
+# Startup script for each e2e-local GCP VM: registers the
 # GitHub Actions runner on every boot.
 #
 # The VM has no service account. e2e-local.yml's start-runner job writes a
@@ -11,10 +11,13 @@
 # `startup-script` metadata. After editing, update it with:
 #   gcloud compute instances add-metadata ci-gha-e2e-1 --project boxlite-dev-project \
 #     --zone us-east5-a --metadata-from-file startup-script=scripts/ci/gcp-e2e-startup.sh
+#   gcloud compute instances add-metadata ci-gha-e2e-2 --project boxlite-dev-project \
+#     --zone us-east4-a --metadata-from-file startup-script=scripts/ci/gcp-e2e-startup.sh
 set -euo pipefail
 
 RUNNER_VERSION=2.338.1
-RUNNER_NAME=ci-gha-e2e-1
+RUNNER_NAME=$(curl -fsS -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/instance/name)
 RUNNER_LABELS=gcp-e2e
 REPO_URL=https://github.com/boxlite-ai/boxlite
 DIR=/opt/actions-runner
@@ -53,7 +56,7 @@ RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
     --url "$REPO_URL" \
     --token "$TOKEN" \
     --name "$RUNNER_NAME" \
-    --labels "$RUNNER_LABELS" \
+    --labels "$RUNNER_LABELS,$RUNNER_NAME" \
     --unattended \
     --replace
 ./svc.sh install root

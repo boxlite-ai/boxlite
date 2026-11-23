@@ -22,6 +22,9 @@ pub mod dirs {
     /// Subdirectory for running boxes
     pub const BOXES_DIR: &str = "boxes";
 
+    /// Subdirectory for managed local volumes
+    pub const VOLUMES_DIR: &str = "volumes";
+
     /// Subdirectory for Unix domain sockets
     pub const SOCKETS_DIR: &str = "sockets";
 
@@ -108,6 +111,8 @@ impl FsLayoutConfig {
 /// ├── bases/                               # Flat backing files (nanoid-named)
 /// │   ├── {nanoid}.qcow2                       # Snapshot / clone base container disk
 /// │   └── {nanoid}.ext4                        # Guest rootfs cache
+/// ├── volumes/                             # Managed local volumes and legacy anonymous binds
+/// │   └── {volume_id}/                         # .metadata.json + _data/
 /// ├── locks/                               # Per-entity lock files
 /// ├── logs/                                # Home-level logs
 /// └── tmp/                                 # Transient temp files (same-fs for rename)
@@ -165,6 +170,11 @@ impl FilesystemLayout {
         self.home_dir.join(dirs::BOXES_DIR)
     }
 
+    /// Root directory for managed local volumes: ~/.boxlite/volumes
+    pub fn volumes_dir(&self) -> PathBuf {
+        self.home_dir.join(dirs::VOLUMES_DIR)
+    }
+
     /// Bases directory: ~/.boxlite/bases
     ///
     /// Flat directory of immutable backing files (snapshots, clone bases, rootfs cache).
@@ -179,6 +189,11 @@ impl FilesystemLayout {
     /// locking of individual entities (boxes, volumes, etc.).
     pub fn locks_dir(&self) -> PathBuf {
         self.home_dir.join(dirs::LOCKS_DIR)
+    }
+
+    /// Disk-operation locks, separate from lifecycle admission.
+    pub fn disk_locks_dir(&self) -> PathBuf {
+        self.locks_dir().join("disk")
     }
 
     /// Temporary directory for transient files: ~/.boxlite/tmp

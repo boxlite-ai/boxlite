@@ -106,6 +106,7 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { SecretServerClient } from './secret-server-client'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
@@ -131,6 +132,8 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  /** Authenticated creator, supplied by the caller rather than the request DTO. */
+  createdBy?: string
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
@@ -223,6 +226,7 @@ export class BoxService {
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
+    private readonly secretServerClient: SecretServerClient,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -418,7 +422,6 @@ export class BoxService {
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
-      box.secrets = createBoxDto.secrets || []
       box.labels = createBoxDto.labels || {}
 
       box.image = image
@@ -456,6 +459,15 @@ export class BoxService {
       }
 
       box.pending = true
+
+      // Complete local validation before transferring values. Only references
+      // may reach insertion, transactional callbacks, or creation events.
+      box.secrets = await this.secretServerClient.storeBoxSecrets(
+        box.id,
+        organization.id,
+        options.createdBy,
+        createBoxDto.secrets || [],
+      )
 
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org

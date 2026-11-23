@@ -4,9 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Panel, SectionTitle } from '@/components/ascii'
+import { Panel } from '@/components/ascii'
 import { CycleOverview } from '@/components/billing/CycleOverview'
-import { CustomPlanCard, PlanCards, PlanCardsSkeleton } from '@/components/billing/PlanCards'
 import { Button } from '@/components/ui/button'
 import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
@@ -15,29 +14,23 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { RefreshCcw } from '@/components/ui/icon'
 
-const ALL_PLANS_ANCHOR = 'all-plans'
-
-export function PlanSection() {
+export function PlanSection({ onViewPlans }: { onViewPlans?: () => void }) {
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
   const organizationPlanQuery = useOwnerPlanQuery()
   const walletQuery = useOwnerWalletQuery()
   const plansQuery = usePlansQuery()
 
   const organizationPlan = organizationPlanQuery.data
-  // Commerce returns the public catalog in display order. Keep that order so
-  // T1/T2/T3 stay presentation labels rather than a second ranking contract.
-  // Non-self-serve entries stay out of switching; the grid ends with one
-  // static contact-sales card instead.
+  // Use the catalogue to resolve the current account's price.
   const plans = plansQuery.data?.filter((plan) => plan.selfServe)
   const wallet = walletQuery.data
   const activeCatalogIndex = plans?.findIndex((plan) => plan.id === organizationPlan?.planId) ?? -1
   const activeCatalogPlan = activeCatalogIndex >= 0 ? plans?.[activeCatalogIndex] : undefined
 
   const config = useConfig()
-  // usePlansQuery is gated only on config.billingApiUrl, so plan switching is gated here.
+  // Account figures are owner-only; public plan comparisons live in Plans.
   const isOwner = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
 
-  const isLoading = organizationPlanQuery.isLoading || plansQuery.isLoading || walletQuery.isLoading
   const isError = organizationPlanQuery.isError || plansQuery.isError || walletQuery.isError
 
   const handleRetry = () => {
@@ -68,31 +61,20 @@ export function PlanSection() {
               // not one the organization could have picked itself.
               catalog={plansQuery.data}
               organizationId={selectedOrganization?.id}
-              plansAnchorId={ALL_PLANS_ANCHOR}
             />
           )}
 
-          {config.billingApiUrl && isOwner && selectedOrganization && (
-            <section id={ALL_PLANS_ANCHOR} className="scroll-mt-6">
-              <SectionTitle title="All Plans" count={plans ? `${plans.length + 1} tiers` : undefined} />
-              {isLoading ? (
-                <PlanCardsSkeleton count={4} />
-              ) : (
-                <PlanCards plans={plans || []} organizationPlan={organizationPlan} />
-              )}
-            </section>
-          )}
-
-          {/* The old contact-sales row was available to every member. Owners see
-              Custom in the plan grid; other members keep the same contact path. */}
-          {!isOwner && (
-            <section>
-              <SectionTitle title="Custom Plan" />
-              <div className="grid grid-cols-1 gap-[14px] md:grid-cols-2 xl:grid-cols-4">
-                <CustomPlanCard />
-              </div>
-            </section>
-          )}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-5">
+            <div>
+              <h2 className="text-em font-medium">Find the right plan</h2>
+              <p className="mt-1 text-body text-muted-foreground">
+                Compare resource limits, data retention and capabilities.
+              </p>
+            </div>
+            <Button variant="outline" onClick={onViewPlans}>
+              View plans →
+            </Button>
+          </div>
         </div>
       )}
     </div>

@@ -13,7 +13,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Create creates an isolated database and registers its cleanup.
+// databaseURL selects the temporary database even if the original URL has database parameters.
+func databaseURL(dsn, name string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", err
+	}
+	u.Path = "/" + name
+	query := u.Query()
+	query.Del("dbname")
+	query.Del("database")
+	u.RawQuery = query.Encode()
+	return u.String(), nil
+}
+
+// Create creates and verifies an isolated database and registers its cleanup.
 func Create(t *testing.T, ctx context.Context, admin *pgxpool.Pool, dsn string, ascii bool) (string, string) {
 	t.Helper()
 	var nonce [8]byte
@@ -35,10 +49,25 @@ func Create(t *testing.T, ctx context.Context, admin *pgxpool.Pool, dsn string, 
 			t.Errorf("drop test database: %v", err)
 		}
 	})
-	u, err := url.Parse(dsn)
+	temporaryURL, err := databaseURL(dsn, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	u.Path = "/" + name
-	return name, u.String()
+	config, err := pgxpool.ParseConfig(temporaryURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.ConnectConfig(ctx, config.ConnConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	var actual string
+	if err := conn.QueryRow(ctx, "SELECT current_database()").Scan(&actual); err != nil {
+		t.Fatal(err)
+	}
+	if actual != name {
+		t.Fatalf("connected to database %q; want %q", actual, name)
+	}
+	return name, temporaryURL
 }

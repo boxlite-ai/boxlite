@@ -23,7 +23,7 @@ mod state;
 mod watcher;
 
 pub use attach::AttachOptions;
-pub use copy::{CopyOptions, CopySourceKind};
+pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
 pub use exec::{
     BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
@@ -50,7 +50,7 @@ use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use boxlite_shared::errors::BoxliteResult;
 pub use config::BoxConfig;
 
 /// LiteBox - Handle to a box.
@@ -178,62 +178,38 @@ impl LiteBox {
             .await
     }
 
-    /// Stream opaque transfer bytes into the container at `container_dst`.
-    ///
-    /// `source` is the archive shape (directory tree vs single file);
-    /// [`CopySourceKind::Unknown`] when the caller cannot tell. The guest
-    /// lands the archive by its first entry whatever it says. Only the local
-    /// backend supports this.
+    /// Stream tar bytes into the container at `container_dst`, landed by the
+    /// archive's first entry, through either the local or REST backend.
+    /// REST uploads reject `overwrite=false` before consuming the stream.
     ///
     /// Returns a `BoxFuture` (rather than being an `async fn`) so the future
-    /// owns the downcast backend and never borrows `&self` across an await —
+    /// owns the backend and never borrows `&self` across an await —
     /// which avoids an HRTB `Send` bound on `&LiteBox`.
     pub fn copy_in_stream<S>(
         &self,
         stream: S,
         container_dst: &str,
-        source: copy::CopySourceKind,
         opts: copy::CopyOptions,
     ) -> futures::future::BoxFuture<'static, BoxliteResult<()>>
     where
         S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
     {
-        let backend = self
-            .box_backend
-            .clone()
-            .as_any_arc()
-            .downcast::<box_impl::BoxImpl>();
+        let backend = self.box_backend.clone();
         let dst = container_dst.to_string();
-        Box::pin(async move {
-            let backend = backend.map_err(|_| {
-                BoxliteError::Unsupported("streaming copy-in requires the local backend".into())
-            })?;
-            backend.copy_in_stream(stream, dst, source, opts).await
-        })
+        Box::pin(async move { backend.copy_in_stream(Box::pin(stream), dst, opts).await })
     }
 
-    /// Download `container_src` as a byte stream plus its source shape. Only
-    /// the local backend supports this.
+    /// Download `container_src` as a tar byte stream through either backend.
+    /// REST downloads use the server's copy options; local downloads honor
+    /// `opts.follow_symlinks`.
     pub fn copy_out_stream(
         &self,
         container_src: &str,
         opts: copy::CopyOptions,
-    ) -> futures::future::BoxFuture<
-        'static,
-        BoxliteResult<(boxlite_shared::BoxByteStream, copy::CopySourceKind)>,
-    > {
-        let backend = self
-            .box_backend
-            .clone()
-            .as_any_arc()
-            .downcast::<box_impl::BoxImpl>();
+    ) -> futures::future::BoxFuture<'static, BoxliteResult<boxlite_shared::BoxByteStream>> {
+        let backend = self.box_backend.clone();
         let src = container_src.to_string();
-        Box::pin(async move {
-            let backend = backend.map_err(|_| {
-                BoxliteError::Unsupported("streaming copy-out requires the local backend".into())
-            })?;
-            backend.copy_out_stream(src, opts).await
-        })
+        Box::pin(async move { backend.copy_out_stream(src, opts).await })
     }
 
     /// Get the agent namespace without starting the Box.

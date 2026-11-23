@@ -9,7 +9,8 @@ import { useAuth } from 'react-oidc-context'
 import { RegistrationEmailError, RegistrationError } from '@/api/errors'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
-import { SetupLayout, SetupPending } from './SetupLayout'
+import { SetupLayout } from './SetupLayout'
+import LoadingFallback from './LoadingFallback'
 import { Turnstile } from './Turnstile'
 import { Button } from './ui/button'
 
@@ -72,8 +73,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   if (account.error instanceof RegistrationEmailError) throw account.error
   // Background revalidation must not tear down live terminals for an admitted identity.
   if (admitted && !needsRegistration) return children
-  if (!account.isFetchedAfterMount || account.isPending || account.isFetching)
-    return <SetupPending title={submitting ? 'Confirming your account' : 'Checking account'} />
+  if (!account.isFetchedAfterMount || account.isPending || account.isFetching) return <LoadingFallback />
   if (account.isSuccess) return children
 
   return (

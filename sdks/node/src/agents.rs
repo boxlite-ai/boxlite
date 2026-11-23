@@ -1,180 +1,434 @@
 //! Native bindings for agents and turns.
 
+use boxlite::agents::{
+    AgentControlOptions, AgentCreateOptions, AgentEventStream, AgentEventsOptions, AgentSendMode,
+    AgentSendOptions, AgentWaitOptions, records,
+};
+use futures::StreamExt;
 use napi::Result;
 use napi_derive::napi;
 use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::{Mutex, watch};
 
 use crate::util::map_err;
 
+#[cfg(test)]
+#[path = "agents/tests/forwarding.rs"]
+mod forwarding_tests;
+
 #[napi(js_name = "Agents")]
 #[derive(Debug, Default)]
-pub struct JsAgents {}
+pub struct JsAgents {
+    agents: Option<boxlite::Agents>,
+}
 
 #[napi(js_name = "Agent")]
 #[derive(Debug)]
-pub struct JsAgent {}
+pub struct JsAgent {
+    agent: boxlite::Agent,
+}
 
 #[napi(js_name = "AgentTurn")]
 #[derive(Debug)]
-pub struct JsAgentTurn {}
+pub struct JsAgentTurn {
+    turn: boxlite::AgentTurn,
+}
+
+#[derive(Clone)]
+enum StreamState {
+    Opening,
+    Open,
+    Failed(String),
+    Closed,
+}
+
+#[napi]
+pub struct JsAgentEventStream {
+    stream: Arc<Mutex<Option<AgentEventStream>>>,
+    state: watch::Sender<StreamState>,
+    closed: watch::Sender<bool>,
+}
+
+impl JsAgentEventStream {
+    fn start(
+        future: impl std::future::Future<Output = boxlite::BoxliteResult<AgentEventStream>>
+        + Send
+        + 'static,
+    ) -> Self {
+        let stream = Arc::new(Mutex::new(None));
+        let (state, _) = watch::channel(StreamState::Opening);
+        let (closed, mut close_receiver) = watch::channel(false);
+        let target = Arc::clone(&stream);
+        let state_sender = state.clone();
+        napi::bindgen_prelude::spawn(async move {
+            tokio::select! {
+                result = future => match result {
+                    Ok(value) => {
+                        let mut guard = target.lock().await;
+                        if !*close_receiver.borrow() {
+                            *guard = Some(value);
+                            state_sender.send_replace(StreamState::Open);
+                        }
+                    },
+                    Err(error) => {
+                        let _guard = target.lock().await;
+                        if !*close_receiver.borrow() {
+                            state_sender.send_replace(StreamState::Failed(error.to_string()));
+                        }
+                    },
+                },
+                _ = close_receiver.changed() => { state_sender.send_replace(StreamState::Closed); },
+            }
+        });
+        Self {
+            stream,
+            state,
+            closed,
+        }
+    }
+
+    async fn ready(&self) -> Result<bool> {
+        let mut receiver = self.state.subscribe();
+        loop {
+            let current = receiver.borrow_and_update().clone();
+            match current {
+                StreamState::Open => return Ok(true),
+                StreamState::Closed => return Ok(false),
+                StreamState::Failed(error) => return Err(napi::Error::from_reason(error)),
+                StreamState::Opening => receiver
+                    .changed()
+                    .await
+                    .map_err(|_| invalid("event stream closed"))?,
+            }
+        }
+    }
+}
+
+impl Drop for JsAgentEventStream {
+    fn drop(&mut self) {
+        self.closed.send_replace(true);
+    }
+}
+
+#[napi]
+impl JsAgentEventStream {
+    #[napi]
+    pub async fn opened(&self) -> Result<()> {
+        if self.ready().await? {
+            Ok(())
+        } else {
+            Err(invalid("event stream closed"))
+        }
+    }
+
+    #[napi]
+    pub async fn next_event(&self) -> Result<Option<Value>> {
+        if !self.ready().await? {
+            return Ok(None);
+        }
+        let mut closed = self.closed.subscribe();
+        let mut guard = self.stream.lock().await;
+        if *closed.borrow() {
+            return Ok(None);
+        }
+        let Some(stream) = guard.as_mut() else {
+            return Ok(None);
+        };
+        tokio::select! {
+            item = stream.next() => match item {
+                Some(Ok(event)) => Ok(Some(records::event(&event))),
+                Some(Err(error)) => { *guard = None; Err(map_err(error)) },
+                None => { *guard = None; Ok(None) },
+            },
+            _ = closed.changed() => { *guard = None; Ok(None) },
+        }
+    }
+
+    #[napi]
+    pub async fn close(&self) {
+        self.closed.send_replace(true);
+        *self.stream.lock().await = None;
+        self.state.send_replace(StreamState::Closed);
+    }
+}
 
 #[napi]
 impl JsAgents {
     /// Create a namespace without starting agent work.
     #[napi(constructor)]
     pub fn new() -> Self {
-        Self {}
+        Self { agents: None }
     }
 
     #[napi]
-    pub async fn create(&self, _agent: String, _options: Option<Value>) -> Result<JsAgent> {
-        not_implemented("agents.create")
+    pub async fn create(&self, agent: String, options: Option<Value>) -> Result<JsAgent> {
+        let Some(agents) = &self.agents else {
+            return Err(invalid("agent namespace requires a Box"));
+        };
+        let options = create_options(options)?;
+        let agent = agents.create(&agent, options).await.map_err(map_err)?;
+        Ok(JsAgent { agent })
     }
 
     #[napi]
-    pub async fn get(&self, _agent_id: String) -> Result<JsAgent> {
-        not_implemented("agents.get")
+    pub async fn get(&self, agent_id: String) -> Result<JsAgent> {
+        let Some(agents) = &self.agents else {
+            return Err(invalid("agent namespace requires a Box"));
+        };
+        let agent = agents.get(&agent_id).await.map_err(map_err)?;
+        Ok(JsAgent { agent })
+    }
+}
+
+impl JsAgents {
+    pub(crate) fn from_core(agents: boxlite::Agents) -> Self {
+        Self {
+            agents: Some(agents),
+        }
+    }
+}
+
+fn create_options(options: Option<Value>) -> Result<AgentCreateOptions> {
+    let mut object = match options {
+        None | Some(Value::Null) => serde_json::Map::new(),
+        Some(Value::Object(object)) => object,
+        Some(_) => {
+            return Err(map_err(boxlite::BoxliteError::InvalidArgument(
+                "agent create options must be an object".into(),
+            )));
+        }
+    };
+    let cwd = optional_string(object.remove("cwd"), "cwd")?;
+    let idempotency_key = optional_string(object.remove("idempotencyKey"), "idempotencyKey")?;
+    let config = object
+        .remove("config")
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !object.is_empty() {
+        return Err(map_err(boxlite::BoxliteError::InvalidArgument(
+            "unknown agent create option".into(),
+        )));
+    }
+    let config = records::parse_config(config).map_err(map_err)?;
+    Ok(AgentCreateOptions {
+        cwd,
+        config,
+        idempotency_key,
+    })
+}
+
+fn optional_string(value: Option<Value>, name: &str) -> Result<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        _ => Err(map_err(boxlite::BoxliteError::InvalidArgument(format!(
+            "{name} must be a string"
+        )))),
     }
 }
 
 #[napi]
 impl JsAgent {
     #[napi]
-    pub async fn close(&self, _options: Option<Value>) -> Result<()> {
-        not_implemented("agent.close")
+    pub async fn close(&self, options: Option<Value>) -> Result<()> {
+        self.agent
+            .close(control_options(options)?)
+            .await
+            .map_err(map_err)
     }
 
     #[napi]
-    pub async fn send(&self, _text: String, _options: Option<Value>) -> Result<JsAgentTurn> {
-        not_implemented("agent.send")
+    pub async fn send(&self, text: String, options: Option<Value>) -> Result<JsAgentTurn> {
+        let mut options = object(options)?;
+        let mode = match optional_string(options.remove("mode"), "mode")?.as_deref() {
+            None | Some("queue") => AgentSendMode::Queue,
+            Some("reject") => AgentSendMode::Reject,
+            Some(_) => return Err(invalid("unknown send mode")),
+        };
+        let data = options.remove("data").filter(|value| !value.is_null());
+        let idempotency_key = optional_string(options.remove("idempotencyKey"), "idempotencyKey")?;
+        no_unknown(options)?;
+        let turn = self
+            .agent
+            .send(
+                &text,
+                AgentSendOptions {
+                    mode,
+                    data,
+                    idempotency_key,
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(JsAgentTurn { turn })
     }
 
     #[napi]
-    pub async fn get_turn(&self, _turn_id: String) -> Result<JsAgentTurn> {
-        not_implemented("agent.get_turn")
+    pub async fn get_turn(&self, turn_id: String) -> Result<JsAgentTurn> {
+        Ok(JsAgentTurn {
+            turn: self.agent.get_turn(&turn_id).await.map_err(map_err)?,
+        })
     }
 
     /// Open the agent's events, after an opaque cursor where the adapter supports it.
     #[napi]
-    pub fn events(&self, _options: Option<Value>) -> Result<Value> {
-        not_implemented("agent.events")
+    pub fn events(&self, options: Option<Value>) -> Result<JsAgentEventStream> {
+        let options = event_options(options)?;
+        let agent = self.agent.clone();
+        Ok(JsAgentEventStream::start(async move {
+            agent.events(options).await
+        }))
     }
 
     #[napi]
     pub async fn requests(&self) -> Result<Vec<Value>> {
-        not_implemented("agent.requests")
+        let requests = self.agent.requests().await.map_err(map_err)?;
+        Ok(records::requests(&requests)
+            .as_array()
+            .cloned()
+            .unwrap_or_default())
     }
 
     #[napi]
     pub async fn respond(
         &self,
-        _request_id: String,
-        _response: Value,
-        _options: Option<Value>,
+        request_id: String,
+        response: Value,
+        options: Option<Value>,
     ) -> Result<JsAgentTurn> {
-        not_implemented("agent.respond")
+        let response = records::parse_response(response).map_err(map_err)?;
+        let turn = self
+            .agent
+            .respond(&request_id, response, control_options(options)?)
+            .await
+            .map_err(map_err)?;
+        Ok(JsAgentTurn { turn })
     }
 
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
-        not_implemented("agent.state")
+        Ok(records::agent_state(&self.agent.state().map_err(map_err)?))
     }
 
     #[napi(getter)]
     pub fn config(&self) -> Result<Value> {
-        not_implemented("agent.config")
+        Ok(records::config(&self.agent.config().map_err(map_err)?))
     }
 
     #[napi(getter)]
     pub fn capabilities(&self) -> Result<Value> {
-        not_implemented("agent.capabilities")
+        Ok(records::capabilities(
+            &self.agent.capabilities().map_err(map_err)?,
+        ))
     }
 }
 
 #[napi]
 impl JsAgentTurn {
     #[napi]
-    pub async fn wait(&self, _options: Option<Value>) -> Result<Value> {
-        not_implemented("turn.wait")
+    pub async fn wait(&self, options: Option<Value>) -> Result<Value> {
+        let mut options = object(options)?;
+        let timeout = match options.remove("timeoutSeconds") {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(value)) => Some(
+                std::time::Duration::try_from_secs_f64(
+                    value.as_f64().ok_or_else(|| invalid("invalid timeout"))?,
+                )
+                .map_err(|_| invalid("invalid timeout"))?,
+            ),
+            _ => return Err(invalid("invalid timeout")),
+        };
+        no_unknown(options)?;
+        Ok(records::result(
+            &self
+                .turn
+                .wait(AgentWaitOptions { timeout })
+                .await
+                .map_err(map_err)?,
+        ))
     }
 
     #[napi]
-    pub fn events(&self, _options: Option<Value>) -> Result<Value> {
-        not_implemented("turn.events")
+    pub fn events(&self, options: Option<Value>) -> Result<JsAgentEventStream> {
+        let options = event_options(options)?;
+        let turn = self.turn.clone();
+        Ok(JsAgentEventStream::start(async move {
+            turn.events(options).await
+        }))
     }
 
     #[napi]
-    pub async fn steer(&self, _text: String, _options: Option<Value>) -> Result<Value> {
-        not_implemented("turn.steer")
+    pub async fn steer(&self, text: String, options: Option<Value>) -> Result<Value> {
+        Ok(records::receipt(
+            &self
+                .turn
+                .steer(&text, control_options(options)?)
+                .await
+                .map_err(map_err)?,
+        ))
     }
 
     #[napi]
-    pub async fn interrupt(&self, _options: Option<Value>) -> Result<()> {
-        not_implemented("turn.interrupt")
+    pub async fn interrupt(&self, options: Option<Value>) -> Result<()> {
+        self.turn
+            .interrupt(control_options(options)?)
+            .await
+            .map_err(map_err)
     }
 
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
-        not_implemented("turn.state")
+        Ok(records::turn_state(&self.turn.state().map_err(map_err)?))
     }
 }
 
-fn not_implemented<T>(operation: &str) -> Result<T> {
-    Err(map_err(boxlite::BoxliteError::Unsupported(format!(
-        "{operation} is not implemented"
-    ))))
+fn invalid(message: &str) -> napi::Error {
+    map_err(boxlite::BoxliteError::InvalidArgument(message.into()))
+}
+
+fn object(value: Option<Value>) -> Result<serde_json::Map<String, Value>> {
+    match value {
+        None | Some(Value::Null) => Ok(serde_json::Map::new()),
+        Some(Value::Object(value)) => Ok(value),
+        _ => Err(invalid("options must be an object")),
+    }
+}
+
+fn no_unknown(options: serde_json::Map<String, Value>) -> Result<()> {
+    if options.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid("unknown option"))
+    }
+}
+
+fn control_options(value: Option<Value>) -> Result<AgentControlOptions> {
+    let mut options = object(value)?;
+    let idempotency_key = optional_string(options.remove("idempotencyKey"), "idempotencyKey")?;
+    no_unknown(options)?;
+    Ok(AgentControlOptions { idempotency_key })
+}
+
+fn event_options(value: Option<Value>) -> Result<AgentEventsOptions> {
+    let mut options = object(value)?;
+    let after = optional_string(options.remove("after"), "after")?;
+    no_unknown(options)?;
+    Ok(AgentEventsOptions { after })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn unsupported<T>(result: Result<T>, operation: &str) {
-        let error = result.err().expect("operation must return Unsupported");
-        assert!(
-            error
-                .reason
-                .ends_with(&format!("{operation} is not implemented")),
-            "{error}"
-        );
-    }
-
-    #[tokio::test]
-    async fn agents_return_unsupported() {
-        let agents = JsAgents::new();
-        unsupported(agents.create("agent".into(), None).await, "agents.create");
-        unsupported(agents.get("agent".into()).await, "agents.get");
-        let agent = JsAgent {};
-        unsupported(agent.close(None).await, "agent.close");
-        unsupported(agent.send("task".into(), None).await, "agent.send");
-        unsupported(agent.get_turn("turn".into()).await, "agent.get_turn");
-        unsupported(
-            agent.events(Some(serde_json::json!({"after": "cursor"}))),
-            "agent.events",
-        );
-        unsupported(agent.requests().await, "agent.requests");
-        unsupported(
-            agent
-                .respond(
-                    "request".into(),
-                    serde_json::json!({"type": "permission", "approved": false}),
-                    None,
-                )
-                .await,
-            "agent.respond",
-        );
-        unsupported(agent.state(), "agent.state");
-        unsupported(agent.config(), "agent.config");
-        unsupported(agent.capabilities(), "agent.capabilities");
-        let turn = JsAgentTurn {};
-        unsupported(
-            turn.wait(Some(serde_json::json!({"timeoutSeconds": 1.0})))
-                .await,
-            "turn.wait",
-        );
-        unsupported(turn.events(None), "turn.events");
-        unsupported(turn.steer("direction".into(), None).await, "turn.steer");
-        unsupported(turn.interrupt(None).await, "turn.interrupt");
-        unsupported(turn.state(), "turn.state");
+    #[test]
+    fn create_options_validate_fields() {
+        let options = create_options(Some(
+            serde_json::json!({"cwd": "/work", "config": {"model": "provider/model"}}),
+        ))
+        .unwrap();
+        assert_eq!(options.cwd.as_deref(), Some("/work"));
+        assert_eq!(options.config.model.as_deref(), Some("provider/model"));
+        assert!(create_options(Some(serde_json::json!({"unknown": true}))).is_err());
+        assert!(create_options(Some(serde_json::json!({"cwd": 7}))).is_err());
     }
 }

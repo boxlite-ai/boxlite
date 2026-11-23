@@ -31,7 +31,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (user) {
       if (!apiRef.current) {
         // On a 401 the stored token is invalid (expired, or signed by a rotated
-        // Dex key). Clearing the user flips isAuthenticated false, which the
+        // Rauthy key). Clearing the user flips isAuthenticated false, which the
         // effect below turns into a redirect to a fresh login (preserving
         // returnTo). Return the removeUser promise (don't void it) so the 401
         // handler can tell a started recovery (suspend) from a failed one

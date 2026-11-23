@@ -6,6 +6,11 @@ mdeploy selects the stage's cloud engine, validates its inputs, and applies one 
 
 [Infrastructure index](../README.md) · [Deployment walkthrough](../docs/deployment.md) · [Architecture](../docs/architecture.md)
 
+mdeploy derives API runtime IAM from explicit capabilities. Read
+[API runtime IAM capabilities](../docs/api-runtime-iam.md) before adding an API permission,
+diagnosing Filestore lookup permissions, or deciding whether deployment grants a role
+automatically.
+
 ## Execution path
 
 ```text
@@ -165,10 +170,10 @@ These declarations leave revision labels and all other environments unchanged. S
 GCP workload service accounts keep the `<appShort>-<stage>-<artifact>-run` identity format and the 30-character limit.
 For `stage`, two artifact segments use shorter names:
 
-| Workload | Service account ID | Characters |
-| --- | --- | --- |
-| Collector | `bl-app-stage-otel-run` | 21 |
-| Registry Proxy | `bl-app-stage-registry-run` | 25 |
+| Workload       | Service account ID          | Characters |
+| -------------- | --------------------------- | ---------- |
+| Collector      | `bl-app-stage-otel-run`     | 21         |
+| Registry Proxy | `bl-app-stage-registry-run` | 25         |
 
 Other roles and environments retain their existing IDs. Logical resource names, workload roles and IAM references remain attached to the same account resources.
 Do not rename existing dev/prod accounts: changing an account ID replaces the identity.
@@ -186,15 +191,37 @@ exist in GHCR; the workflow imports their digests into the target stage's AR/ECR
 enforces that stage's scan policy before deployment. Missing GHCR images stop the run and print
 a manual `mbuild-release` dispatch command. Deployment never starts a release build.
 GCP imports and scans use `GCP_IMAGE_PUBLISHER`; the job restores `GCP_DEPLOYER` before image verification and apply.
-Its `components` input
-selects artifact preparation; it is not a promise that the resource graph targets only those services.
+It is the public rollout entrypoint; the internal CLI receives the same `components` selection for preview and apply.
+
+| Selection | GCP deployment scope |
+| --- | --- |
+| `api` | Existing Cloud Run `Api` service and API Secret Manager read grants; image/env changes create a new revision |
+| `runner` | Existing Runner OS Policy assignments and artifact-read grant; retains canary-before-fleet rollout and waits |
+| `api+runner` (default) | Full infrastructure graph, including shared resources and topology changes |
+
+AWS/SST supports only `api+runner`; individual API/Runner selection fails before artifact preparation.
+GCP scoped updates require an existing workload and do not bootstrap a new stack.
+Runner selection refuses changed host counts, labels or policy membership; reconcile those through a full deployment.
+Component routing handles each selection explicitly and checks exhaustiveness at compile time.
+Adding a scoped component requires its own target mapping; unknown runtime selections are rejected.
+VMs, disks, proxy, database and other shared resources are outside the individual component targets.
+The API and Runner keep their existing environment groups and assembly; changing a store value alone does not update a running workload.
+For a configuration-only change, select its component and reuse the deployed artifact ref.
+
+Pulumi still evaluates the full inline program and validates its inputs, using recorded outputs for untargeted dependencies.
+New API secret references and a Runner release-to-build transition include their required read grants, even when absent from old state.
+Shared infrastructure changes require a full deployment; scoped updates skip the unrelated DNS/certificate preflight.
+Runner-only runs skip container-image verification; API-only release runs require a published release but not Runner attachments.
+Local provider/target tests do not prove live Cloud Run health or OS Config host compliance.
 
 A commit or open PR merge commit is accepted for `dev` and `stage`; both may use candidate workflow branches.
 `prod` requires a published release; release dispatches run from `main`.
 Stage resolves stable tags to their commits and uses SHA-tagged images and a commit Runner build.
 Dev/prod release deployments import the existing version-qualified images from GHCR.
-The commit image workflow and runner build job bind the stage's
-GitHub Environment. Check actual environment reviewers and branch protections separately: source
+Commit images and Runner artifacts each have a parallel plan/build matrix leg with isolated checkout and cloud credentials.
+Review both pending preparation jobs as one target Environment batch; commit deployment requires a separate approval.
+Published releases verify, import and deploy within one protected job, requiring one approval.
+The shared image and deployment actions preserve the same artifact and apply checks. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.
 
 Use the [deployment walkthrough](../docs/deployment.md#deploy-through-github-actions) for commands and the
@@ -217,6 +244,7 @@ npm run mdeploy -- --stage dev --refresh
 | `--refresh`          | Reconcile deployment state with the cloud; protected stages require `--confirm` |
 | `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage               |
 | `--local-env`        | Read ambient environment instead of the encrypted stage store                   |
+| `--components`       | Internal workflow selection: `api+runner` by default; GCP `api`/`runner` accept preview/apply only |
 
 `--diff`, `--refresh`, and `--remove` are mutually exclusive. All intents check the selected
 stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary

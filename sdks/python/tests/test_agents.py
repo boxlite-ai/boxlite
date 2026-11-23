@@ -1,96 +1,26 @@
 """Check agent errors and namespace access across Python and native bindings."""
 
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 import boxlite
 from boxlite.agents import (
     Agent,
     AgentAnswer,
+    AgentControlOptions,
     AgentCreateOptions,
-    AgentEventsOptions,
     Agents,
-    AgentSendOptions,
-    AgentTurn,
-    AgentWaitOptions,
 )
-from boxlite.errors import UnsupportedError
+from boxlite.errors import NotFoundError, UnsupportedError
 from boxlite.simplebox import SimpleBox
 from boxlite.sync_api import (
-    SyncAgent,
     SyncAgents,
-    SyncAgentTurn,
     SyncBox,
     SyncSimpleBox,
 )
-
-ASYNC_CALLS = [
-    lambda: Agents().create("agent", AgentCreateOptions(config={"model": "model"})),
-    lambda: Agents().get("agent"),
-    lambda: Agent().close(),
-    lambda: Agent().send("task"),
-    lambda: Agent().send("task", AgentSendOptions(mode="reject", data={"key": 1})),
-    lambda: Agent().get_turn("turn"),
-    lambda: Agent().requests(),
-    lambda: Agent().respond("request", {"type": "permission", "approved": False}),
-    lambda: AgentTurn().wait(AgentWaitOptions(timeout=1)),
-    lambda: AgentTurn().steer("new direction"),
-    lambda: AgentTurn().interrupt(),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("call", ASYNC_CALLS)
-async def test_agents_async_operations_raise_unsupported(call):
-    with pytest.raises(UnsupportedError, match="is not implemented"):
-        await call()
-
-
-@pytest.mark.parametrize("handle", [Agent(), AgentTurn()])
-def test_agents_event_opening_fails_immediately(handle):
-    with pytest.raises(UnsupportedError, match="events is not implemented"):
-        handle.events(AgentEventsOptions(after="cursor"))
-
-
-@pytest.mark.parametrize(
-    "handle,field",
-    [
-        (Agent(), "state"),
-        (Agent(), "config"),
-        (Agent(), "capabilities"),
-        (AgentTurn(), "state"),
-        (SyncAgent(), "state"),
-        (SyncAgent(), "config"),
-        (SyncAgent(), "capabilities"),
-        (SyncAgentTurn(), "state"),
-    ],
-)
-def test_agents_getters_do_not_fabricate_state(handle, field):
-    with pytest.raises(UnsupportedError, match=f"{field} is not implemented"):
-        getattr(handle, field)
-
-
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda: SyncAgents().create("agent"),
-        lambda: SyncAgents().get("agent"),
-        lambda: SyncAgent().close(),
-        lambda: SyncAgent().send("task"),
-        lambda: SyncAgent().get_turn("turn"),
-        lambda: SyncAgent().events(),
-        lambda: SyncAgent().requests(),
-        lambda: SyncAgent().respond(
-            "request", {"type": "answer", "text": "ok", "data": None}
-        ),
-        lambda: SyncAgentTurn().wait(),
-        lambda: SyncAgentTurn().events(),
-        lambda: SyncAgentTurn().steer("direction"),
-        lambda: SyncAgentTurn().interrupt(),
-    ],
-)
-def test_agents_sync_operations_raise_unsupported(call):
-    with pytest.raises(UnsupportedError, match="is not implemented"):
-        call()
 
 
 def test_agents_simple_namespace_needs_no_runtime_initialization():
@@ -98,6 +28,34 @@ def test_agents_simple_namespace_needs_no_runtime_initialization():
     box = object.__new__(SimpleBox)
     assert isinstance(box.agents, Agents)
     assert boxlite.Agent is Agent
+
+
+@pytest.mark.asyncio
+async def test_simplebox_agent_calls_require_started_box():
+    box = object.__new__(SimpleBox)
+    box._started = False
+    with pytest.raises(RuntimeError, match="Box not started"):
+        await box.agents.create("opencode")
+
+
+@pytest.mark.asyncio
+async def test_retained_agents_reject_calls_after_context_exit():
+    box = object.__new__(SimpleBox)
+    box._started = True
+    box._box = type("Box", (), {})()
+    box._box.__aexit__ = AsyncMock(return_value=True)
+    native_create = AsyncMock()
+    box._box.agents = SimpleNamespace(_native=SimpleNamespace(create=native_create))
+    agents = box.agents
+    assert await box.__aexit__(None, None, None) is True
+    with pytest.raises(RuntimeError, match="Box not started"):
+        await agents.create("opencode")
+    native_create.assert_not_awaited()
+    box._started = True
+    box._box.__aexit__ = AsyncMock(side_effect=RuntimeError("cleanup failed"))
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await box.__aexit__(None, None, None)
+    assert box._started
 
 
 @pytest.mark.parametrize("box_type", [SyncBox, SyncSimpleBox])
@@ -111,11 +69,44 @@ def test_agents_sync_namespace_needs_no_runtime_initialization(box_type):
 async def test_agents_native_box_namespace(tmp_path):
     runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
     box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
-    with pytest.raises(UnsupportedError, match="agents.create is not implemented"):
+    with pytest.raises(UnsupportedError, match="supported: opencode"):
         await box.agents.create("agent")
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_agents_native_box_lookup(tmp_path):
+    runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    with pytest.raises(NotFoundError, match="agent missing not found"):
+        await box.agents.get("missing")
 
 
 def test_agents_text_answer_data_is_optional():
     assert AgentAnswer.__required_keys__ == {"type", "text"}
     assert "data" in AgentAnswer.__optional_keys__
     assert boxlite.AgentCreateOptions is AgentCreateOptions
+
+
+@pytest.mark.asyncio
+async def test_requests_and_response_cross_the_python_wrapper():
+    payload = {"turn_id": "inside", "value": None}
+    request = {
+        "id": "r",
+        "turn_id": "t",
+        "kind": {"type": "question", "text": "?", "schema": payload},
+    }
+    native_turn = object()
+    native = type("NativeAgent", (), {})()
+    native.requests = AsyncMock(return_value=json.dumps([request]))
+    native.respond = AsyncMock(return_value=native_turn)
+    agent = Agent(native)
+    assert await agent.requests() == [request]
+    response = {"type": "answer", "text": "yes", "data": payload}
+    turn = await agent.respond(
+        "r", response, AgentControlOptions(idempotency_key="key")
+    )
+    request_id, encoded, key = native.respond.await_args.args
+    assert (request_id, key) == ("r", "key")
+    assert json.loads(encoded) == response
+    assert turn._native is native_turn

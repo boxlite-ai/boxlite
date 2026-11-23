@@ -171,3 +171,13 @@ describe('account recovery failure boundaries', () => {
     expect(client.getQueryData(['boxes'])).toBeUndefined()
   })
 })
+
+it.each(['/logout', '/logout?switch=1'])('uses only branded loading during %s', async (path) => {
+  auth.signoutRedirect.mockReturnValue(new Promise(() => undefined))
+  auth.signinRedirect.mockReturnValue(new Promise(() => undefined))
+  await mount(path)
+  expect(container.textContent).toContain('Loading')
+  expect(container.textContent).not.toContain('Signing out of BoxLite')
+  expect(container.textContent).not.toContain('Switching accounts')
+  expect(container.querySelector('h1, button')).toBeNull()
+})

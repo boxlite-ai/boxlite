@@ -96,7 +96,7 @@ async function renderStep() {
   })
 }
 
-async function mount(expectedButton = 'Verify card & claim $100') {
+async function mount(expectedButton = 'Verify card') {
   await renderStep()
   await eventually(() => expect(button(expectedButton)?.disabled).toBe(false))
 }
@@ -122,7 +122,7 @@ async function focusWindow() {
 
 it('shows the card offer, promo input and an Explore exit before any payment action', async () => {
   await mount()
-  expect(button('Verify card & claim $100')).toBeDefined()
+  expect(button('Verify card')).toBeDefined()
   expect(promoInput()).not.toBeNull()
   expect(button('Explore with BoxLite')).toBeDefined()
   expect(billingApi.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
@@ -135,7 +135,7 @@ it('lets a member explore without reading or changing organization billing', asy
   membership.role = 'member'
   await mount('Explore with BoxLite')
   expect(host.textContent).toContain('Only organization owners can manage billing.')
-  expect(button('Verify card & claim $100')).toBeUndefined()
+  expect(button('Verify card')).toBeUndefined()
   expect(promoInput()).toBeNull()
   await focusWindow()
   await click('Explore with BoxLite')
@@ -167,17 +167,6 @@ it('hides cached card details when the owner becomes a member', async () => {
   expect(billingApi.listAllPaymentMethods).toHaveBeenCalledTimes(methodReads)
 })
 
-it('exposes the complete offer amount as text outside aria-hidden artwork', async () => {
-  await mount()
-  const amount = [...host.querySelectorAll('p')].find((paragraph) =>
-    [...paragraph.querySelectorAll('span')].some((span) => span.textContent?.trim() === '100'),
-  )!
-  const readableAmount = amount.cloneNode(true) as HTMLElement
-  readableAmount.querySelectorAll('[aria-hidden="true"]').forEach((node) => node.remove())
-  expect(readableAmount.textContent?.trim()).toBe('$100')
-  expect(amount.hasAttribute('aria-label')).toBe(false)
-})
-
 it('shows the existing default card instead of the first saved payment method', async () => {
   billingApi.getOrganizationWallet.mockResolvedValue({ ...wallet, creditCardConnected: true })
   billingApi.listAllPaymentMethods.mockResolvedValue([
@@ -200,7 +189,7 @@ it('shows the existing default card instead of the first saved payment method', 
   expect(host.textContent).toContain('Card connected')
   expect(host.textContent).toContain('visa ending in 4242')
   expect(host.textContent).not.toContain('mastercard ending in 4444')
-  expect(button('Verify card & claim $100')).toBeUndefined()
+  expect(button('Verify card')).toBeUndefined()
   expect(billingApi.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
   await click('Start quickstart')
   expect(onContinue).toHaveBeenCalledTimes(1)
@@ -214,7 +203,7 @@ it('uses hosted checkout and confirms a connected card from a fresh wallet read 
     }),
   )
   await mount()
-  await click('Verify card & claim $100')
+  await click('Verify card')
   expect(window.open).toHaveBeenCalledWith('', '_blank')
   expect(checkoutWindow.location.href).toBe('')
   expect(host.querySelector('[role="dialog"]')).toBeNull()
@@ -246,7 +235,7 @@ it('uses hosted checkout and confirms a connected card from a fresh wallet read 
 
 it('offers a card-status retry after a failed return read without treating checkout as success', async () => {
   await mount()
-  await click('Verify card & claim $100')
+  await click('Verify card')
   await eventually(() => expect(checkoutWindow.location.href).toBe(checkoutUrl))
   billingApi.getOrganizationWallet.mockRejectedValueOnce(new Error('Wallet status unavailable'))
   await focusWindow()

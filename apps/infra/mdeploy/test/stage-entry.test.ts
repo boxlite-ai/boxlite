@@ -56,7 +56,7 @@ test('stage admits SHA, PR and stable tags while prod admission remains', () => 
 
 test('stage shares dev branch access and keeps the existing branch containment action', () => {
   assert.deepEqual(deployment.on.workflow_dispatch.inputs.stage.options, ['dev', 'stage', 'prod'])
-  for (const name of ['resolve', 'plan', 'build-runner', 'deploy']) {
+  for (const name of ['resolve', 'plan', 'deploy']) {
     assert.match(
       deployment.jobs[name].if,
       /github.ref == 'refs\/heads\/main' \|\| inputs.stage == 'dev' \|\| inputs.stage == 'stage'/,
@@ -66,7 +66,7 @@ test('stage shares dev branch access and keeps the existing branch containment a
   const resolve = step(deployment.jobs.resolve, 'ref')
   assert.equal(resolve.uses, './.github/actions/resolve-ref')
   assert.equal(resolve.with.branch, '${{ github.ref_name }}')
-  assert.equal(deployment.jobs['build-images'].with.stage, '${{ inputs.stage }}')
+  assert.equal(deployment.jobs.plan.steps.find((candidate: any) => candidate.uses === './.github/actions/mbuild').with.stage, '${{ inputs.stage }}')
 })
 
 test('caller and reusable image jobs admit stage candidate branches without admitting prod', () => {
@@ -129,6 +129,7 @@ test('missing stage commit images build while dev and prod import existing relea
       writeFileSync(output, '')
       const addressed = run(step(deployment.jobs.resolve, 'tag').run, {
         VERSION: fields.version,
+        COMPONENTS: deployment.on.workflow_dispatch.inputs.components.default,
         RESOLVED: 'a'.repeat(40),
         GITHUB_OUTPUT: output,
       })

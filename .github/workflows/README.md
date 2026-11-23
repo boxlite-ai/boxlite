@@ -26,14 +26,17 @@ SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go 
                                         build-runner-binary ──▶ build-c ──▶ Runner link
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
-                                        mbuild-release-on-release ──▶ mbuild-release (images, GHCR)
+                                        mbuild-release-on-release ──▶ mbuild-release
+                                          GHCR images + required release assets ready
+                                            ──▶ mdeploy-all (dev) ──▶ e2e-cloud (dev, release tag)
+                                            ──▶ mdeploy-all (prod, awaiting approval) ──▶ Slack report
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
                                                       ├─▶ build-c ──▶ build-runner-binary
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
-DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
+DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ parallel plan/build legs (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
                                                      └─▶ GHCR import    (release tag ──▶ dev/prod AR/ECR, no build)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
@@ -64,11 +67,11 @@ own.
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
-| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the main suite and identity lane on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
+| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
-| `mbuild.yml` | `workflow_call` | call-only | Commit images for dev/stage, using the caller's selected stage; nobody publishes a commit by hand |
-| `mbuild-release.yml` | dispatch | — | Publishes `v<X.Y.Z>-<sha>` images to GHCR, one job per declared artifact. Reuses existing images when recovering partial releases |
-| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images to GHCR |
+| `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes it in its image preparation leg |
+| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, dispatches dev deployment/E2E, creates a prod approval request, and reports to Slack; `build-only=true` selects publication only |
+| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` using its default full pipeline |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
@@ -76,11 +79,22 @@ own.
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
+The [release runbook](../../apps/infra/docs/release.md) documents fixed child inputs, timeouts, and recovery.
+
+Full releases require reviewers on the `prod` Environment. A full release can send #release a dev approval link before polling, then the E2E result and prod approval link.
+
+Deployment applies can also notify #dev_deployment for dev or #release for prod before each approval batch. Each button opens the corresponding GitHub run.
+
+Release deployments need one target Environment approval; commit deployments use two batches: parallel artifact preparation, then deploy.
+Wait until both preparation legs are awaiting review before approving their shared Environment; queued or later jobs can require another review.
+
 Cloud E2E accepts an optional release-client `tag`; see the
 [suite guide](../../apps/e2e/README.md) for downloaded clients and remaining dev driver builds.
 Cloud dev E2E also requires the three-profile [identity configuration](../../apps/e2e/README.md#the-cloud-legs-ci).
 Its separate identity step verifies cross-organization isolation and same-organization
-read-only access; missing or mis-scoped credentials fail setup. Prod keeps its single-key smoke suite.
+read-only access; missing or mis-scoped credentials fail setup. The catalog lane uses
+p2's independent image quota and requires image read/delete scopes on its key.
+Prod keeps its single-key smoke suite.
 The p1 dev suite reads `BOXLITE_E2E_DOMAIN` from repository Actions Variables
 for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 
@@ -268,8 +282,21 @@ state. A new commit or editing/deleting the only acknowledgment returns the PR t
 In [`.github/actions/`](../actions). Each replaces a step bundle that was previously copied into
 every consumer.
 
+Deployment composites receive stage configuration and cloud identity settings through explicit inputs.
+The calling job binds the target Environment, reads its `vars`, and supplies those values with `with`;
+for example, `gcp-deployer: ${{ vars.GCP_DEPLOYER }}` becomes `${{ inputs.gcp-deployer }}` inside the action.
+Composite action manifests have a narrower context set than workflows and cannot reference `vars` directly.
+
+The reusable image workflow carries the promotion source declaration separately through `stage-config-from`.
+
+The mdeploy tests parse composite-step input expressions against the Runner's supported contexts and check every caller's configuration bindings.
+Run them with `make test:apps:mdeploy`; workflow lint alone does not exercise loading a local action manifest.
+
 | Action | Sites | Used by |
 | --- | --- | --- |
+| `mbuild` | 2 | mdeploy-all image preparation and the reusable mbuild workflow |
+| `build-staged-runner` | 1 | mdeploy-all Runner preparation |
+| `mdeploy` | 2 | mdeploy-all release apply and commit deploy |
 | `ci-config` | 3 | config, lint, test |
 | `setup-rust` | 10 | build-c, build-node, build-runtime ×2, build-wheels, lint ×2, test ×3 |
 | `sccache` | 7 | build-c, build-node, build-runtime, build-wheels, lint, test ×2 |
@@ -279,6 +306,12 @@ every consumer.
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
 | `setup-python` | 5 | lint ×2, test ×3 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
+
+`setup-infra` saves an exact dependency-cache miss immediately after `npm ci`,
+using the key recorded by its restore step. Callers may then change their checkout.
+The deployment action saves a generated SST platform after use, before returning to its caller.
+
+Both caches use `v2` namespaces and exact keys; stage state and configuration stay outside their paths.
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
 `build-guest` and `run-in-manylinux` run after both. They are separate actions rather than one
@@ -428,3 +461,18 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 - `PYPI_API_TOKEN` — PyPI, for the wheels
 - `NPM_TOKEN` — npm, for the Node packages
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
+- `SLACK_WEBHOOK_URL` — optional #release webhook for release dev approvals, final reports and prod apply approvals
+- `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for dev apply approvals. An empty secret skips that channel.
+
+## Plugin release artifacts
+
+The build workflow validates the Codex and Claude packages and saves five files for previews and publication. [Build workflow](build-plugins.yml)
+
+The publishing workflow verifies the tag from `main` and publishes one versioned GHCR artifact. [Publishing workflow](publish-plugins.yml)
+
+The publisher downloads the exact artifact ID for the validated build attempt. A main-only environment supplies the registry credential.
+
+Same-version runs serialize. An identical digest can resume attestation, and a conflicting digest stops publication.
+
+The [plugin publishing guide](../../scripts/plugins/README.md#publish-versioned-packages-to-ghcr) covers migration, registry access, retries, and downloads.
+Run `make test:apps:infra` to exercise the workflow guards with real plugin packages.

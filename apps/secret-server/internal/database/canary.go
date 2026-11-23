@@ -54,6 +54,7 @@ func VerifyKey(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Ciphe
 		if err != nil {
 			return fmt.Errorf("insert key canary: %w", err)
 		}
+		err = tx.QueryRow(ctx, "SELECT ciphertext, encrypted_dek, key_id FROM key_verification_canary WHERE id = 1").Scan(&envelope.Ciphertext, &envelope.WrappedDEK.Ciphertext, &envelope.WrappedDEK.KeyID)
 	}
 	if err != nil {
 		return fmt.Errorf("read key canary: %w", err)

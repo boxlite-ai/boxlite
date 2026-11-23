@@ -83,7 +83,7 @@ coverage\:vmm\:kvm: _ensure-kvm
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
 # CI runs it only when the vmm path filter matches.
 coverage\:vmm\:boot: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
-coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) vmm\:guest-mount-init
+coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) vmm\:guest-mount-init
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
@@ -175,3 +175,12 @@ coverage\:integration: $(if $(SETUP_DONE),,runtime\:debug)
 	$(MAKE) coverage:report || rc=$$?; \
 	exit $$rc
 	@echo "✅ Combined coverage report: target/coverage/html/index.html"
+
+# Exercise file-copy entry points with a real guest and retain the unit profiles.
+# The serve regression is explicitly ignored by the non-VM unit pass.
+coverage\:copy\:vm: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite --features krun,gvproxy,native --test copy --test copy_ownership
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite-cli --bin boxlite --run-ignored only -E 'test(upload_duplicate_entries_return_conflict)'
+	@$(MAKE) coverage:report

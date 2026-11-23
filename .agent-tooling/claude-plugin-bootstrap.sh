@@ -22,7 +22,7 @@ if ! runtime_path; then
     printf 'agent-tooling: automatic tooling installation failed\n' >&2
     exit 1
   fi
-  runtime_path || { printf 'agent-tooling: bootstrap requires tooling 0.1.35 or newer; keep the matching bootstrap for an older hold\n' >&2; exit 1; }
+  runtime_path || { printf 'agent-tooling: adopted release has no host bootstrap; rerun ./.agent-tooling/install.sh\n' >&2; exit 1; }
   exec bash "$runtime" "$@" <<< "$hook_input"
 fi
 exec bash "$runtime" "$@"

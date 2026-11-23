@@ -135,11 +135,17 @@ describe('Box API JSON Schema nullability', () => {
         domains: [
           {
             hostname: 'demo1.app.test',
+            kind: 'platform',
             url: 'https://demo1.app.test',
             target: { type: 'box', box: 'box-1', port: 3000 },
           },
-          { hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
-          { hostname: 'shop.app.test', url: 'https://shop.app.test', target: { type: 'app', app: 'shop' } },
+          { hostname: 'spare.app.test', kind: 'platform', url: 'https://spare.app.test', target: null },
+          {
+            hostname: 'shop.app.test',
+            kind: 'platform',
+            url: 'https://shop.app.test',
+            target: { type: 'app', app: 'shop' },
+          },
         ],
         limit: 3,
         used: 3,

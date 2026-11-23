@@ -195,9 +195,11 @@ describe('DomainService.listHeld', () => {
     expect(held.domains).toHaveLength(limit + 1)
     expect(held.domains[0]).toEqual({
       hostname: 'app.customer.example',
+      kind: 'custom',
       url: 'https://app.customer.example',
       target: null,
     })
+    if (limit) expect(held.domains[1]).toMatchObject({ kind: 'platform' })
   })
 })
 

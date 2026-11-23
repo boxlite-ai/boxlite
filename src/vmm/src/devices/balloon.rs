@@ -118,6 +118,7 @@ impl VirtioDevice for VirtioBalloon {
             return Err(DeviceError::NeedsReset("balloon queues"));
         }
         self.control_count = 0;
+        let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
         for range in ctx.queues.control_ranges() {
             let slot = self
                 .control_ranges
@@ -128,9 +129,8 @@ impl VirtioDevice for VirtioBalloon {
                     "balloon queue control range overflow",
                 ));
             }
-            let slice =
-                vm_memory::GuestMemoryBackend::get_slice(ctx.memory.as_ref(), range.0, range.1)
-                    .map_err(|_| DeviceError::NeedsReset("balloon queue control region"))?;
+            let slice = vm_memory::GuestMemoryBackend::get_slice(&*snapshot, range.0, range.1)
+                .map_err(|_| DeviceError::NeedsReset("balloon queue control region"))?;
             let host = slice.ptr_guard().as_ptr() as usize;
             host.checked_add(range.1).ok_or(DeviceError::NeedsReset(
                 "balloon queue control host overflow",
@@ -138,6 +138,7 @@ impl VirtioDevice for VirtioBalloon {
             *slot = (range.0, range.1, host);
             self.control_count += 1;
         }
+        drop(snapshot);
         self.context = Some(ctx);
         Ok(())
     }
@@ -170,7 +171,8 @@ impl VirtioDevice for VirtioBalloon {
             })?,
             2 => {
                 let controls = &self.control_ranges[..self.control_count];
-                let memory = ctx.memory.as_ref();
+                let snapshot = vm_memory::GuestAddressSpace::memory(&ctx.memory);
+                let memory: &GuestMemoryMmap = &snapshot;
                 let page_size = self.page_size;
                 let reclaim = self.reclaim;
                 ctx.queues.drain(2, |chain| {

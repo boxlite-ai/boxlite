@@ -174,6 +174,26 @@ if err != nil {
 defer restored.Close()
 ```
 
+### Streaming file uploads
+
+`CopyInStream` accepts a raw tar reader and defaults to replacing existing files.
+Pass `WithCopyOverwrite(false)` to add only new entries:
+
+```go
+err := box.CopyInStream(ctx, "/app", tarReader,
+    boxlite.WithCopyOverwrite(false))
+```
+
+Existing directories are reused. A conflicting file, symlink or incompatible
+file/directory entry returns `ErrAlreadyExists` and retains existing contents.
+Entries written before a conflict can remain; there is no archive rollback.
+The existing call without an option retains `overwrite=true`.
+
+Directory metadata is retained only for directories that existed before the
+upload. A directory created by an earlier archive entry still receives its own
+later header's permissions. Go `CopyOut` currently has no overwrite option and
+cannot request protected downloads.
+
 A local runtime treats the archive as trusted because local applications own
 both the runtime and archive. A REST runtime uploads the file and relies on the
 server's untrusted-upload policy.
@@ -442,6 +462,16 @@ runtime's lifetime.
 
 See the [SSH guide](../../docs/guides/ssh.md) for listener behavior,
 authentication rules, and the HTTP contract.
+
+## Threading
+
+A `Box` is safe for concurrent use by multiple goroutines. Each native call
+holds a shared lock on the box handle for the duration of its synchronous C
+submission; `Close` takes the exclusive lock, waits for those submissions to
+finish, then frees the handle exactly once. `Close` is idempotent. Methods
+called after `Close` — or racing a finishing `Close` — return an
+`ErrInvalidState` error ("box is closed"). Closing does not destroy the box;
+the box keeps running in the runtime.
 
 ## Development
 

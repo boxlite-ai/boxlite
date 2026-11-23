@@ -199,9 +199,7 @@ export function BoxTunnelDialog({ api, organizationId, box, onClose, onEnableInb
                   <span className="min-w-0 flex-1 break-all font-mono text-meta">{result.uri}</span>
                   <CopyButton type="button" value={result.uri} tooltipText="Copy URL" size="icon-sm" />
                 </div>
-                <p className="text-meta text-muted-foreground">
-                  Anyone with the URL can access this port.
-                </p>
+                <p className="text-meta text-muted-foreground">Anyone with the URL can access this port.</p>
                 {box.state !== BoxState.STARTED && box.autoResume && (
                   <p className="text-meta text-muted-foreground">The Box starts when accessed.</p>
                 )}

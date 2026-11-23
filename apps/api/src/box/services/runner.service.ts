@@ -375,6 +375,7 @@ export class RunnerService {
       signal?: AbortSignal
       infoFailed?: boolean
       nestedVirtualizationEnabled?: boolean
+      capabilities?: string[]
     },
     dataDiskRef?: RunnerDataDiskRef,
   ): Promise<void> {
@@ -399,6 +400,11 @@ export class RunnerService {
     if (!context?.infoFailed) {
       updateData.supportsPrivileged = supportsPrivileged === true
       updateData.nestedVirtualizationEnabled = context?.nestedVirtualizationEnabled === true
+      // The binary's own declaration, not accumulated state: a runner that
+      // stops reporting a capability (downgrade, or a binary predating the
+      // field) loses it on the next heartbeat, so dispatch can never trust a
+      // capability the running binary no longer has.
+      updateData.capabilities = context?.capabilities ?? null
     }
 
     if (domain) {
@@ -456,12 +462,15 @@ export class RunnerService {
 
       const diskUsage = updateData.currentDiskUsagePercentage ?? 0
       if (diskUsage >= RUNNER_DISK_CRITICAL_THRESHOLD) {
-        this.logger.warn({
-          'event.name': 'runner.disk_pressure',
-          'disk.pressure_level': 'critical',
-          runnerId,
-          diskUsagePercentage: diskUsage,
-        }, `Runner ${runnerId} is at critical data-disk usage (${diskUsage}%)`)
+        this.logger.warn(
+          {
+            'event.name': 'runner.disk_pressure',
+            'disk.pressure_level': 'critical',
+            runnerId,
+            diskUsagePercentage: diskUsage,
+          },
+          `Runner ${runnerId} is at critical data-disk usage (${diskUsage}%)`,
+        )
       }
 
       updateData.availabilityScore = this.calculateAvailabilityScore(runnerId, {
@@ -482,7 +491,16 @@ export class RunnerService {
     if (!(await this.updateRunnerUnlessDecommissioned(runnerId, updateData))) {
       return
     }
-    this.logger.debug(`Updated health for runner ${runnerId}`)
+    this.logger.debug(
+      {
+        event: 'runner.health.persisted',
+        runnerId,
+        appVersion: appVersion ?? runner.appVersion,
+        capabilities: context?.capabilities ?? [],
+        infoFailed: context?.infoFailed === true,
+      },
+      'Runner health persisted',
+    )
 
     this.eventEmitter.emit(
       RunnerEvents.STATE_UPDATED,

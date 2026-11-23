@@ -8,7 +8,7 @@ export interface HeldDomain {
 }
 
 export interface DomainList {
-  domains: HeldDomain[]
+  domains: (HeldDomain & { kind: 'platform' | 'custom' })[]
   limit: number
   used: number
   remaining: number

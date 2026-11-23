@@ -15,7 +15,6 @@ import { useAuth } from 'react-oidc-context'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import LoadingFallback from './components/LoadingFallback'
-import { SetupPending } from './components/SetupLayout'
 import { RegistrationGate } from './components/RegistrationGate'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
@@ -25,6 +24,7 @@ import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
 import Boxes from './pages/Boxes'
+import Redeem from './pages/Redeem'
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
 import { BoxSessionProvider } from './providers/BoxSessionProvider'
@@ -138,6 +138,7 @@ function App() {
         }
       />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
+      <Route path={RoutePath.REDEEM} element={<Redeem />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
       <Route
@@ -147,7 +148,7 @@ function App() {
       <Route
         path={RoutePath.DASHBOARD}
         element={
-          <Suspense fallback={<SetupPending />}>
+          <Suspense fallback={<LoadingFallback />}>
             <ApiProvider>
               <RegistrationGate key={user?.profile.sub}>
                 <OrganizationsProvider>

@@ -24,7 +24,7 @@ func run(ctx context.Context, args []string) error {
 	defer cancel()
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
-		return fmt.Errorf("configure database: %w", err)
+		return fmt.Errorf("configure database: invalid DATABASE_URL")
 	}
 	defer pool.Close()
 	return database.Migrate(ctx, pool)

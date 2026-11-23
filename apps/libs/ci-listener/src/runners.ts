@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { GitHubCredential } from './github-app'
+import { GitHubRequestError } from './github'
 import { decodeRepository, GitHubRepository } from './jobs'
 import { WorkerExecutor } from './worker'
 import { parseResourceLabels } from './resource-labels'
@@ -240,6 +241,27 @@ export class GitHubRunners {
       signal,
     })
     if (await this.lookup(identity, signal)) throw new Error('GitHub runner deletion is not yet confirmed')
+  }
+  /** Uses the classic REST busy-refusal contract; missing runners cannot prove safe retirement. */
+  async retireIdle(identity: RunnerIdentity, signal?: AbortSignal): Promise<boolean> {
+    identity = { ...identity }
+    if (!positive(identity.id) || !workerName(identity.name)) throw new Error('Known original runner required')
+    const current = (await this.list(signal)).find((runner) => runner.id === identity.id)
+    if (current && current.name !== identity.name) throw new Error('Original runner identity changed')
+    if (!current || current.status !== 'online' || current.busy) return false
+    await this.beforeMutation({ kind: 'remove', ...identity })
+    try {
+      await this.credential.request(`${this.route}/actions/runners/${identity.id}`, {
+        method: 'DELETE',
+        response: 'no-content',
+        signal,
+      })
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 422) return false
+      throw error
+    }
+    if (await this.lookup(identity, signal)) throw new Error('Idle runner retirement is not yet confirmed')
+    return true
   }
   private async inventory(route: string, field: 'runners' | 'repositories', signal?: AbortSignal): Promise<unknown[]> {
     const result: unknown[] = [],

@@ -87,20 +87,16 @@ export const EXPANSION_ERROR = {
 
 let expansionCounter: Counter | undefined
 function resultCounter(): Counter {
-  return (expansionCounter ??= metrics
-    .getMeter('')
-    .createCounter('runner_disk_expansion_total', {
-      description: 'Runner data-disk expansion attempts by outcome',
-    }))
+  return (expansionCounter ??= metrics.getMeter('').createCounter('runner_disk_expansion_total', {
+    description: 'Runner data-disk expansion attempts by outcome',
+  }))
 }
 
 let perfCeilingCounterValue: Counter | undefined
 function perfCeilingCounter(): Counter {
-  return (perfCeilingCounterValue ??= metrics
-    .getMeter('')
-    .createCounter('runner_disk_perf_ceiling_total', {
-      description: 'Runner data-disk performance targets clipped to the per-disk ceiling, by field',
-    }))
+  return (perfCeilingCounterValue ??= metrics.getMeter('').createCounter('runner_disk_perf_ceiling_total', {
+    description: 'Runner data-disk performance targets clipped to the per-disk ceiling, by field',
+  }))
 }
 
 export interface GrowthSample {
@@ -239,7 +235,10 @@ export const BASELINE_READ_DEADLINE_MS = 5_000
 function raceDeadline<T>(promise: Promise<T>): Promise<T> {
   let timer!: ReturnType<typeof setTimeout>
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`baseline read exceeded ${BASELINE_READ_DEADLINE_MS}ms`)), BASELINE_READ_DEADLINE_MS)
+    timer = setTimeout(
+      () => reject(new Error(`baseline read exceeded ${BASELINE_READ_DEADLINE_MS}ms`)),
+      BASELINE_READ_DEADLINE_MS,
+    )
     timer.unref?.()
   })
   timeout.catch(() => {})
@@ -319,7 +318,7 @@ export function performanceTarget(
 
   const iopsClipped = iopsUpped > iopsMax
   const tputClipped = tputUpped > tputMax
-  const ceilingFields = [...(iopsClipped ? ['iops'] as const : []), ...(tputClipped ? ['throughput'] as const : [])]
+  const ceilingFields = [...(iopsClipped ? (['iops'] as const) : []), ...(tputClipped ? (['throughput'] as const) : [])]
   return {
     ...(iopsTarget !== iops ? { iops: String(iopsTarget) } : {}),
     ...(tputTarget !== tput ? { throughput: String(tputTarget) } : {}),
@@ -353,7 +352,7 @@ export function sampleBucketAt(now: Date, intervalMinutes: number): Date {
  * lifts itself once usage drops, budget frees up, and the cap has room again.
  * A single Redis lease keeps multiple API instances from running the round.
  *
- * Everything is dormant while RUNNER_DISK_EXPANSION_ENABLED is off (default):
+ * Everything is dormant while RUNNER_DISK_EXPANSION_ENABLED is false:
  * no sampling, no marks, no GCP calls.
  */
 @Injectable()
@@ -379,8 +378,10 @@ export class RunnerDiskExpansionService {
     const meter = metrics.getMeter('')
     const gauge = (name: string, description: string, read: () => number) =>
       meter.createObservableGauge(name, { description }).addCallback((observation) => observation.observe(read()))
-    gauge('runner_disk_expansion_pending', 'Runners with a data-disk expansion awaiting confirmation', () =>
-      this.gaugeValues.pending,
+    gauge(
+      'runner_disk_expansion_pending',
+      'Runners with a data-disk expansion awaiting confirmation',
+      () => this.gaugeValues.pending,
     )
     gauge(
       'runner_disk_expand_exhausted_runners',
@@ -592,7 +593,11 @@ export class RunnerDiskExpansionService {
     // Lift and cap gates share the effective cap: explicit cap, admission
     // limit, or the per-runner relative default anchored to the disk's first
     // attempt — never an undefined dead end.
-    const cap = resolveEffectiveCapGiB(expansion.capGiB, expandLimitGiB, await this.capBaselineGiB(runner.id, runner.diskGiB))
+    const cap = resolveEffectiveCapGiB(
+      expansion.capGiB,
+      expandLimitGiB,
+      await this.capBaselineGiB(runner.id, runner.diskGiB),
+    )
 
     // 0) Lift first, ahead of every skip: a recovered runner returns to the
     // pool as soon as usage, budget, and cap allow, even if this round will
@@ -728,8 +733,7 @@ export class RunnerDiskExpansionService {
       // tripped, so if the throttle was actually capacity-caused, the next
       // round's size-only attempt hits it again and records its own
       // rate_limited then; the ambiguity costs at most one extra attempt.
-      const errorKey =
-        rateLimited && !performance?.fields ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED
+      const errorKey = rateLimited && !performance?.fields ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED
       // Both exits mark performanceUpdated when the PATCH actually carried
       // performance fields: GCP budgets performance changes once per 4h per
       // disk and a rejected attempt also starts that cooldown, so the next
@@ -794,10 +798,13 @@ export class RunnerDiskExpansionService {
       // A transient DB failure in this gate must not park the capacity
       // expansion in the 10-minute unconfirmed lot: degrade to size-only —
       // performance lags at most one 4h window; capacity never waits.
-      this.logger.warn(`Runner ${runner.id} performance cooldown gate query failed, expanding size only: ${errorMessage(e)}`, {
-        ...expansionLogBase(runner, ref),
-        'disk.expansion_result': 'perf_gate_query_failed',
-      })
+      this.logger.warn(
+        `Runner ${runner.id} performance cooldown gate query failed, expanding size only: ${errorMessage(e)}`,
+        {
+          ...expansionLogBase(runner, ref),
+          'disk.expansion_result': 'perf_gate_query_failed',
+        },
+      )
       return { fields: undefined, attributes: {} }
     }
     if (perfCooldownActive) {

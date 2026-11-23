@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   api: {
     getCiRepositories: vi.fn(),
     getCiSettings: vi.fn(),
+    getCiConnect: vi.fn(),
     setCiCapacity: vi.fn(),
     getCiConnectConfiguration: vi.fn(),
     startCiConnect: vi.fn(),
@@ -66,6 +67,7 @@ describe('CI connects panel', () => {
     mocks.api.deleteCiConnection.mockReset().mockResolvedValue(undefined)
     mocks.api.updateCiConnection.mockReset().mockResolvedValue(undefined)
     mocks.selection.authenticatedUserOrganizationMember.role = 'owner'
+    mocks.selection.selectedOrganization.id = 'account-id'
     mocks.api.getCiSettings.mockResolvedValue(settings)
     mocks.api.getCiConnectConfiguration.mockResolvedValue({
       web_connect_available: true,
@@ -90,7 +92,7 @@ describe('CI connects panel', () => {
     cache.clear()
     document.body.innerHTML = ''
   })
-  async function render() {
+  async function render(path = '/dashboard/ci/connects') {
     const node = document.createElement('div')
     document.body.append(node)
     await act(async () => {
@@ -98,7 +100,7 @@ describe('CI connects panel', () => {
       root.render(
         <StrictMode>
           <QueryClientProvider client={cache}>
-            <MemoryRouter>
+            <MemoryRouter initialEntries={[path]}>
               <ConnectsPanel />
             </MemoryRouter>
           </QueryClientProvider>
@@ -246,6 +248,61 @@ describe('CI connects panel', () => {
     expect(link).not.toBeNull()
     expect(link?.textContent).toContain('Install app for repos')
     expect(mocks.api.deleteCiConnection).not.toHaveBeenCalled()
+  })
+  it.each([
+    { total: 0, selection: 'selected', label: 'Selected repositories' },
+    { total: 126, selection: 'selected', label: 'Selected repositories' },
+    { total: 126, selection: 'all', label: 'All repositories' },
+  ])('summarizes $selection repositories with total $total in Update', async ({ total, selection, label }) => {
+    mocks.api.getCiRepositories.mockResolvedValue({
+      repositories: total ? [{ id: 21, name: 'web', private: false, owner: { id: 7, login: 'alice' } }] : [],
+      total,
+      page: 1,
+      next_page: total ? 2 : null,
+      repository_selection: selection,
+    })
+    await render()
+    await act(async () => button('Update').click())
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="dialog"]')?.textContent).toContain(`${label} · ${total}`),
+      )
+    })
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.querySelector('ul')).toBeNull()
+    expect(dialog.textContent).not.toContain('alice/web')
+    expect(dialog.querySelector('[aria-label="Next"]')).toBeNull()
+    expect(dialog.querySelector('[aria-label="Previous"]')).toBeNull()
+    expect(dialog.textContent).not.toContain('Page 1')
+    expect(button('Update connection').disabled).toBe(false)
+    await act(async () => button('Cancel').click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Repositories for alice"]')!.click())
+    await act(async () => {
+      await vi.waitFor(() => expect(document.querySelector('tbody ul')).not.toBeNull())
+    })
+    if (total) {
+      expect(document.querySelector('tbody')?.textContent).toContain('alice/web')
+      expect(document.querySelector('tbody [aria-label="Next"]')).not.toBeNull()
+    }
+  })
+  it('clears completed connection guidance only after deletion succeeds', async () => {
+    const id = pendingAttempt()
+    mocks.selection.selectedOrganization.id = '12345678-1234-4234-8234-123456789def'
+    mocks.api.getCiConnect.mockResolvedValue({ id, status: 'connected', listener_status: 'ready' })
+    await render('/dashboard/ci/connects?connect=' + id)
+    expect(button('Set up a job')).toBeDefined()
+    mocks.api.deleteCiConnection.mockRejectedValueOnce(Error('offline'))
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Delete connection to alice"]')!.click(),
+    )
+    await act(async () => button('Delete connection').click())
+    expect(button('Set up a job')).toBeDefined()
+    mocks.api.getCiSettings.mockResolvedValue({ ...settings, connections: [] })
+    await act(async () => button('Delete connection').click())
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    expect(document.body.textContent).toContain('Connection deleted.')
+    expect(button('Set up a job')).toBeUndefined()
+    expect(document.body.textContent).not.toContain('GitHub connected.')
   })
   it('confirms deletion, keeps cancellation local and suppresses duplicate requests', async () => {
     let finish!: () => void

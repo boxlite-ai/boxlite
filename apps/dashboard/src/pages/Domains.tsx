@@ -61,7 +61,8 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   const nameValid = SHORT_NAME.test(shortName) && shortName.length >= (data?.min_length ?? 1) && shortName.length <= 63
   const canClaim = canManage && !!data?.domain_suffix && data.remaining > 0
   const needle = filter.trim().toLowerCase()
-  const rows = (data?.domains ?? []).filter((domain) => {
+  const managedDomains = (data?.domains ?? []).filter((domain) => domain.kind === 'platform')
+  const rows = managedDomains.filter((domain) => {
     const target = domain.target?.type === 'box' ? domain.target.box : domain.target?.app
     return `${domain.hostname} ${target ?? ''}`.toLowerCase().includes(needle)
   })
@@ -79,12 +80,12 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </p>
       </div>
 
-      <Tabs defaultValue="all" className="min-h-0 flex-1 gap-5">
-        <TabsList variant="segmented" aria-label="Domain views">
-          <TabsTrigger value="all">All domains</TabsTrigger>
-          <TabsTrigger value="custom">Custom domains</TabsTrigger>
+      <Tabs defaultValue="managed" className="min-h-0 flex-1 gap-5">
+        <TabsList variant="underline" aria-label="Domain views">
+          <TabsTrigger value="managed">Managed domain</TabsTrigger>
+          <TabsTrigger value="custom">Custom domain</TabsTrigger>
         </TabsList>
-        <TabsContent value="all" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
+        <TabsContent value="managed" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
           <div className="grid min-h-9 shrink-0 grid-cols-1 items-start gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] [&_.resource-filter]:max-w-full">
             <ResourceFilter
               label="Filter domains"
@@ -146,7 +147,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                     onRetry={() => void query.refetch()}
                   />
                 )}
-                {data.domains.length === 0 ? (
+                {managedDomains.length === 0 ? (
                   <ResourceEmptyState
                     title="No Domains yet."
                     icon={<Globe className="size-6" />}

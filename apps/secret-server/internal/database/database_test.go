@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
+	urlpkg "net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -77,7 +77,6 @@ func TestIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
-
 	t.Run("upgrade populated version one", func(t *testing.T) {
 		_, dsn := testdb.Create(t, ctx, admin, url, false)
 		legacyPool, err := pgxpool.New(ctx, dsn)
@@ -112,6 +111,84 @@ func TestIntegration(t *testing.T) {
 			if _, err = legacyPool.Exec(ctx, "INSERT INTO secret_access_log(result) VALUES ($1)", result); err != nil {
 				t.Fatal(err)
 			}
+		}
+	})
+	t.Run("temporary database URL supports pool options", func(t *testing.T) {
+		parsed, err := urlpkg.Parse(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := parsed.Query()
+		query.Set("pool_max_conns", "8")
+		parsed.RawQuery = query.Encode()
+		name, dsn := testdb.Create(t, ctx, admin, parsed.String(), false)
+		pool, err := pgxpool.New(ctx, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		var actual string
+		if err := pool.QueryRow(ctx, "SELECT current_database()").Scan(&actual); err != nil || actual != name {
+			t.Fatalf("connected to %q, %v; want temporary database %q", actual, err, name)
+		}
+		if pool.Config().MaxConns != 8 {
+			t.Fatalf("maximum pool connections = %d; want 8", pool.Config().MaxConns)
+		}
+	})
+	t.Run("temporary database URL ignores conflicting query parameters", func(t *testing.T) {
+		for _, param := range []string{"dbname", "database"} {
+			t.Run(param, func(t *testing.T) {
+				parsed, err := urlpkg.Parse(url)
+				if err != nil {
+					t.Fatal(err)
+				}
+				query := parsed.Query()
+				query.Set(param, config.ConnConfig.Database)
+				parsed.RawQuery = query.Encode()
+				name, dsn := testdb.Create(t, ctx, admin, parsed.String(), false)
+				connection, err := pgxpool.New(ctx, dsn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer connection.Close()
+				var actual string
+				if err := connection.QueryRow(ctx, "SELECT current_database()").Scan(&actual); err != nil {
+					t.Fatal(err)
+				}
+				if actual != name {
+					t.Fatalf("connected to %q; want temporary database %q", actual, name)
+				}
+			})
+		}
+	})
+	t.Run("canary enrollment verifies persisted value", func(t *testing.T) {
+		for _, action := range []string{"skip", "corrupt"} {
+			t.Run(action, func(t *testing.T) {
+				_, dsn := testdb.Create(t, ctx, admin, url, false)
+				p, err := pgxpool.New(ctx, dsn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer p.Close()
+				if err := Migrate(ctx, p); err != nil {
+					t.Fatal(err)
+				}
+				body := "RETURN NULL;"
+				if action == "corrupt" {
+					body = "NEW.ciphertext := decode('00','hex'); RETURN NEW;"
+				}
+				_, err = p.Exec(ctx, "CREATE FUNCTION alter_canary() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "+body+" END $$; CREATE TRIGGER alter_canary BEFORE INSERT ON key_verification_canary FOR EACH ROW EXECUTE FUNCTION alter_canary()")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := VerifyKey(ctx, p, testCipher(t, 1)); err == nil {
+					t.Fatal("enrollment succeeded without a valid persisted canary")
+				}
+				var count int
+				if err := p.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 0 {
+					t.Fatalf("canary after failed enrollment = %d, %v; want 0", count, err)
+				}
+			})
 		}
 	})
 	t.Run("rollback and unlock cleanup are bounded", func(t *testing.T) {
@@ -204,9 +281,18 @@ func TestIntegration(t *testing.T) {
 	}
 
 	if !t.Run("concurrent migrations and newer schema", func(t *testing.T) {
-		databaseURL, err := testDatabaseURL(url, name)
+		_, databaseURL := testdb.Create(t, ctx, admin, url, false)
+		concurrentPool, err := pgxpool.New(ctx, databaseURL)
 		if err != nil {
 			t.Fatal(err)
+		}
+		defer concurrentPool.Close()
+		var existing *string
+		if err := concurrentPool.QueryRow(ctx, "SELECT to_regclass('goose_db_version')::text").Scan(&existing); err != nil {
+			t.Fatal(err)
+		}
+		if existing != nil {
+			t.Fatal("concurrent initialization did not start with an empty database")
 		}
 		var processes [2]*exec.Cmd
 		var output [2]bytes.Buffer
@@ -230,6 +316,13 @@ func TestIntegration(t *testing.T) {
 			if err := process.Wait(); err != nil {
 				t.Errorf("migration process %d: %v\n%s", i, err, output[i].String())
 			}
+		}
+		if t.Failed() {
+			return
+		}
+		var count int
+		if err := concurrentPool.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 1 {
+			t.Fatalf("concurrent initialization canary count = %d, %v; want 1", count, err)
 		}
 		if err := Migrate(ctx, pool); err != nil {
 			t.Fatal(err)
@@ -629,15 +722,6 @@ func testCipher(t *testing.T, key byte) *encryption.Cipher {
 }
 
 func bytesOf(value byte, n int) []byte { return []byte(strings.Repeat(string([]byte{value}), n)) }
-
-func testDatabaseURL(raw, name string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	u.Path = "/" + name
-	return u.String(), nil
-}
 
 func TestMigrationProcess(t *testing.T) {
 	dsn := os.Getenv("SECRET_MIGRATION_PROCESS_URL")

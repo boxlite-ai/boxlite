@@ -14,6 +14,14 @@
  * `includedQuotaCents`/`quotaRemainingCents` of null mean unlimited (a
  * negotiated deal), not zero.
  */
+export type TrialInfo = {
+  startedAt: Date
+  endsAt: Date
+  conversionAmountCents: number
+  currency: 'USD'
+  conversionState: 'not_attempted' | 'pending' | 'failed' | 'succeeded'
+}
+
 export type OrganizationPlan = {
   planId: string
   planName: string
@@ -28,6 +36,7 @@ export type OrganizationPlan = {
   includedQuotaCents: number | null
   quotaConsumedCents: number
   quotaRemainingCents: number | null
+  trial?: TrialInfo
   /** Set when a downgrade is queued for the next cycle roll. */
   pendingPlanId?: string
   /** Set while a cancel is scheduled and the paid cycle is still running. */

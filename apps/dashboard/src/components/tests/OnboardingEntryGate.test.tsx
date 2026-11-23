@@ -147,7 +147,7 @@ it('setup entry does not admit Console just because Welcome was opened', async (
     await router.navigate('/dashboard/boxes')
   })
   expect(document.querySelector('nav')).toBeNull()
-  expect(document.body.textContent).toContain('Preparing your organization')
+  expect(document.body.textContent).toContain('Loading')
 })
 
 it.each(['/dashboard/welcome/', '/DASHBOARD/WELCOME'])('setup entry keeps the Welcome header for %s', async (path) => {

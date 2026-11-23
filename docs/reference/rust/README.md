@@ -104,6 +104,10 @@ let runtime = BoxliteRuntime::default_runtime();
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
 
+Local `remove()` returns `InvalidState` while a disk operation is busy or the disk
+lock file is missing. Retry busy removal after the operation finishes. For a
+missing lock, restore it or restart the runtime for recovery before retrying.
+
 On a REST runtime, `list_info()` follows every continuation page and returns the
 combined boxes in server order. It sends each `next_page_token` as the next
 request's `pageToken`; an absent, null, or empty token ends the list. A repeated
@@ -1301,6 +1305,10 @@ pub struct ResourceLimits {
     pub max_cpu_time: Option<u64>,
 }
 ```
+
+When `max_file_size` is `None`, the shim inherits the host launcher's
+`RLIMIT_FSIZE` soft and hard limits.
+See [resource-limit enforcement](../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 
 ---
 

@@ -55,7 +55,7 @@ export class RegistryCredential {
   secretVersion: string
 
   // The user's id, which is their identity provider's subject — `auth0|…`,
-  // or whatever Dex issues locally — not a uuid, as on every other table.
+  // or whatever Rauthy issues locally — not a uuid, as on every other table.
   @Column({ type: 'varchar', nullable: true })
   createdBy: string | null
 

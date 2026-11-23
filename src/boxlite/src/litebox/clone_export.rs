@@ -48,7 +48,7 @@ impl BoxImpl {
     /// Three-phase flow (snapshot-as-base):
     ///   A. Inside quiesce bracket (VM paused): create disk layer (rename + COW child).
     ///   B. Outside quiesce bracket (VM resumed): create N thin overlay headers.
-    ///   C. Provision each clone and increment layer ref count.
+    ///   C. Provision each clone atomically with its layer dependency.
     pub(crate) async fn clone_boxes(
         &self,
         _options: crate::runtime::options::CloneOptions,
@@ -68,124 +68,108 @@ impl BoxImpl {
         }
 
         let t0 = Instant::now();
-        let _lock = self.disk_ops.lock().await;
+        let source_admission =
+            Arc::new(crate::lock::OwnedLockGuard::new_async(self.disk_locker()?).await);
+        self.ensure_box_exists()?;
+        (async {
+            let rt = Arc::clone(&self.runtime);
+            let src_disks = self.config.box_home.join("disks");
+            let src_container = src_disks.join(disk_filenames::CONTAINER_DISK);
 
-        let rt = Arc::clone(&self.runtime);
-        let src_disks = self.config.box_home.join("disks");
-        let src_container = src_disks.join(disk_filenames::CONTAINER_DISK);
-
-        if !src_container.exists() {
-            return Err(BoxliteError::Storage(format!(
-                "Container disk not found at {}",
-                src_container.display()
-            )));
-        }
-
-        // Phase A: Create shared base layer inside quiesce bracket (VM paused).
-        // This is the same operation as snapshot creation: rename + COW child.
-        let source_box_id = self.id().to_string();
-        let layer = {
-            let src_disks = src_disks.clone();
-            let source_box_id = source_box_id.clone();
-
-            self.with_quiesce_async(async {
-                rt.base_disk_mgr.create_base_disk(
-                    &src_disks,
-                    BaseDiskKind::CloneBase,
-                    None,
-                    &source_box_id,
-                )
-            })
-            .await?
-        };
-
-        // base_path is a flat file (e.g., bases/{nanoid}.qcow2)
-        let shared_container = layer.disk_info.to_path_buf();
-
-        // Read virtual size from the shared base for overlay creation.
-        let container_vsize = Qcow2Helper::qcow2_virtual_size(&shared_container)?;
-
-        // Phase B: Create N container overlay headers (VM is resumed, fast).
-        // Guest rootfs is NOT cloned — each clone creates its own on first start.
-        let mut staging_dirs = Vec::with_capacity(count);
-        for _ in 0..count {
-            let temp = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
-                BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
-            })?;
-            #[allow(deprecated)]
-            let staging = temp.into_path();
-
-            let staging_disks = staging.join("disks");
-            std::fs::create_dir_all(&staging_disks).map_err(|e| {
-                BoxliteError::Storage(format!("Failed to create staging disks dir: {}", e))
-            })?;
-
-            // Container overlay → shared base (qcow2 backing qcow2)
-            // leak() prevents the Disk RAII guard from deleting the file on drop —
-            // the child is the clone's persistent disk and must outlive this function.
-            Qcow2Helper::create_cow_child_disk(
-                &shared_container,
-                BackingFormat::Qcow2,
-                &staging_disks.join(disk_filenames::CONTAINER_DISK),
-                container_vsize,
-            )?
-            .leak();
-
-            staging_dirs.push(staging);
-        }
-
-        // Phase C: Provision each clone and record base disk refs.
-        // Each clone's disk is a copy of this one, so it runs the same build.
-        // Read before the loop: the guard must not be held across an await.
-        let resolved_image = self.state.read().resolved_image.clone();
-        let copy_options = self.options_for_copy()?;
-        let mut clones = Vec::with_capacity(count);
-        for (i, staging) in staging_dirs.into_iter().enumerate() {
-            let litebox = match rt
-                .provision_box(
-                    staging.clone(),
-                    names.get(i).cloned(),
-                    copy_options.clone(),
-                    BoxStatus::Stopped,
-                    resolved_image.clone(),
-                )
-                .await
-            {
-                Ok(lb) => lb,
-                Err(e) => {
-                    // Cleanup remaining staging dirs on failure.
-                    let _ = std::fs::remove_dir_all(&staging);
-                    // Don't clean up already-provisioned clones; they're valid boxes.
-                    return Err(e);
-                }
-            };
-
-            // Record that this clone depends on the shared base disk.
-            if let Err(e) = rt
-                .base_disk_mgr
-                .store()
-                .add_ref(&layer.id, litebox.id().as_ref())
-            {
-                tracing::warn!(
-                    clone_id = %litebox.id(),
-                    base_disk_id = %layer.id,
-                    error = %e,
-                    "Failed to record base disk ref for clone"
-                );
+            if !src_container.exists() {
+                return Err(BoxliteError::Storage(format!(
+                    "Container disk not found at {}",
+                    src_container.display()
+                )));
             }
 
-            clones.push(litebox);
-        }
+            // Phase A: Create shared base layer inside quiesce bracket (VM paused).
+            // This is the same operation as snapshot creation: rename + COW child.
+            let source_box_id = self.id().to_string();
+            let layer = {
+                let src_disks = src_disks.clone();
+                let source_box_id = source_box_id.clone();
 
-        tracing::info!(
-            source_id = %self.id(),
-            base_disk_id = %layer.id,
-            count = clones.len(),
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Batch cloned boxes (shared base disk)"
-        );
+                self.with_quiesce_async(async {
+                    rt.base_disk_mgr.create_base_disk(
+                        &src_disks,
+                        BaseDiskKind::CloneBase,
+                        None,
+                        &source_box_id,
+                    )
+                })
+                .await?
+            };
 
-        Ok(clones)
+            // base_path is a flat file (e.g., bases/{nanoid}.qcow2)
+            let shared_container = layer.disk_info.to_path_buf();
+
+            // Read virtual size from the shared base for overlay creation.
+            let container_vsize = Qcow2Helper::qcow2_virtual_size(&shared_container)?;
+
+            // Phase B: Create N container overlay headers (VM is resumed, fast).
+            // Guest rootfs is NOT cloned — each clone creates its own on first start.
+            let mut staging_dirs = Vec::with_capacity(count);
+            for _ in 0..count {
+                let temp = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
+                    BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
+                })?;
+                let staging_disks = temp.path().join("disks");
+                std::fs::create_dir_all(&staging_disks).map_err(|e| {
+                    BoxliteError::Storage(format!("Failed to create staging disks dir: {}", e))
+                })?;
+
+                // Container overlay → shared base (qcow2 backing qcow2)
+                // leak() prevents the Disk RAII guard from deleting the file on drop —
+                // the child is the clone's persistent disk and must outlive this function.
+                Qcow2Helper::create_cow_child_disk(
+                    &shared_container,
+                    BackingFormat::Qcow2,
+                    &staging_disks.join(disk_filenames::CONTAINER_DISK),
+                    container_vsize,
+                )?
+                .leak();
+
+                staging_dirs.push(temp);
+            }
+
+            // Phase C: Provision each clone and record base disk refs.
+            // Each clone's disk is a copy of this one, so it runs the same build.
+            // Read before the loop: the state lock must not be held across an await.
+            let resolved_image = self.state.read().resolved_image.clone();
+            let copy_options = self.options_for_copy()?;
+            let mut clones = Vec::with_capacity(count);
+            for (i, staging) in staging_dirs.into_iter().enumerate() {
+                // Keep the TempDir alive until provisioning moves it to the final box home.
+                // On failure, it and all remaining staging dirs are cleaned up on drop.
+                let litebox = rt
+                    .provision_box(
+                        staging.path().to_path_buf(),
+                        names.get(i).cloned(),
+                        copy_options.clone(),
+                        BoxStatus::Stopped,
+                        resolved_image.clone(),
+                        Some(crate::runtime::rt_impl::CloneDependency {
+                            base_disk_id: layer.id.clone(),
+                            source_admission: Arc::clone(&source_admission),
+                        }),
+                    )
+                    .await?;
+
+                clones.push(litebox);
+            }
+
+            tracing::info!(
+                source_id = %self.id(),
+                base_disk_id = %layer.id,
+                count = clones.len(),
+                elapsed_ms = t0.elapsed().as_millis() as u64,
+                "Batch cloned boxes (shared base disk)"
+            );
+
+            Ok(clones)
+        })
+        .await
     }
 
     pub(crate) async fn export_box(
@@ -194,52 +178,53 @@ impl BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
-        let _lock = self.disk_ops.lock().await;
+        self.with_disk_admission(async {
+            let box_home = self.config.box_home.clone();
+            let runtime_layout = self.runtime.layout.clone();
 
-        let box_home = self.config.box_home.clone();
-        let runtime_layout = self.runtime.layout.clone();
+            // Phase 1: Flatten disks inside quiesce bracket (VM paused only for this).
+            // Flatten reads live qcow2 chains and must see consistent disk state.
+            let flatten_result = self
+                .with_quiesce_async(async {
+                    let bh = box_home.clone();
+                    let rl = runtime_layout.clone();
+                    tokio::task::spawn_blocking(move || do_export_flatten(&bh, &rl))
+                        .await
+                        .map_err(|e| {
+                            BoxliteError::Internal(format!("Export flatten task panicked: {}", e))
+                        })?
+                })
+                .await?;
 
-        // Phase 1: Flatten disks inside quiesce bracket (VM paused only for this).
-        // Flatten reads live qcow2 chains and must see consistent disk state.
-        let flatten_result = self
-            .with_quiesce_async(async {
-                let bh = box_home.clone();
-                let rl = runtime_layout.clone();
-                tokio::task::spawn_blocking(move || do_export_flatten(&bh, &rl))
-                    .await
-                    .map_err(|e| {
-                        BoxliteError::Internal(format!("Export flatten task panicked: {}", e))
-                    })?
+            // Phase 2: Checksum + manifest + archive run with VM resumed.
+            // These only read static temp files, no disk consistency needed.
+            let config_name = self.config.name.clone();
+            let config_options = self.options_for_copy()?;
+            let box_id_str = self.id().to_string();
+            let dest = dest.to_path_buf();
+
+            let result = tokio::task::spawn_blocking(move || {
+                do_export_finalize(
+                    flatten_result,
+                    config_name.as_deref(),
+                    &config_options,
+                    &box_id_str,
+                    &dest,
+                )
             })
-            .await?;
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("Export finalize task panicked: {}", e)))?;
 
-        // Phase 2: Checksum + manifest + archive run with VM resumed.
-        // These only read static temp files, no disk consistency needed.
-        let config_name = self.config.name.clone();
-        let config_options = self.options_for_copy()?;
-        let box_id_str = self.id().to_string();
-        let dest = dest.to_path_buf();
+            tracing::info!(
+                box_id = %self.config.id,
+                elapsed_ms = t0.elapsed().as_millis() as u64,
+                ok = result.is_ok(),
+                "export_box completed"
+            );
 
-        let result = tokio::task::spawn_blocking(move || {
-            do_export_finalize(
-                flatten_result,
-                config_name.as_deref(),
-                &config_options,
-                &box_id_str,
-                &dest,
-            )
+            result
         })
         .await
-        .map_err(|e| BoxliteError::Internal(format!("Export finalize task panicked: {}", e)))?;
-
-        tracing::info!(
-            box_id = %self.config.id,
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            ok = result.is_ok(),
-            "export_box completed"
-        );
-
-        result
     }
 }
 

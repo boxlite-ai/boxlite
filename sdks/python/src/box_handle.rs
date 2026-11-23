@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::agents::PyAgents;
 use crate::exec::PyExecution;
 use crate::executions::PyExecutions;
 use crate::info::PyBoxInfo;
@@ -22,7 +23,10 @@ impl PyBox {
     /// Get the agent namespace without starting the Box.
     #[getter]
     fn agents<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        py.import("boxlite.agents")?.getattr("Agents")?.call0()
+        let native = Py::new(py, PyAgents::new(self.handle.agents()))?;
+        py.import("boxlite.agents")?
+            .getattr("Agents")?
+            .call1((native,))
     }
 
     #[getter]

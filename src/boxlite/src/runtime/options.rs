@@ -9,10 +9,8 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
 use crate::runtime::constants::vm_defaults::MAX_CPUS;
-use crate::runtime::types::Bytes;
 use std::fmt;
 
 // ============================================================================
@@ -851,6 +849,12 @@ impl BoxOptions {
             port.validate_publishable()?;
         }
 
+        if !self.volumes.is_empty() && !self.mounts.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "volumes and mounts cannot both be non-empty".into(),
+            ));
+        }
+
         for volume in &self.volumes {
             volume.validate()?;
         }
@@ -972,27 +976,6 @@ impl BoxOptions {
             kernel.sanitize()?;
         }
 
-        // The jailed shim is the sole writer of this box's qcow2 disks, so its
-        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
-        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
-        // pick that number — it runs for a box that does not exist yet and
-        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
-        // up contradicting every larger disk (#1152). Derive it here, next to
-        // the size it comes from.
-        //
-        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
-        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
-        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
-        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
-        self.advanced.security.resource_limits.max_file_size = Some(
-            Bytes::from_gib(
-                self.disk_size_gb
-                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
-                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
-            )
-            .as_bytes(),
-        );
-
         Ok(())
     }
 
@@ -1066,8 +1049,8 @@ pub struct VolumeSpec {
     /// Managed volume to mount, addressed by its server-assigned id **or** by
     /// its name — the server resolves either.
     ///
-    /// Managed volumes need a REST runtime, since the local runtime has no
-    /// volume backend to resolve a reference against.
+    /// LocalRuntime resolves references through `LocalVolumeStore`; a REST
+    /// runtime resolves them on the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_volume: Option<String>,
 
@@ -1143,8 +1126,7 @@ impl VolumeSpec {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MountType {
-    /// A managed volume, by server-assigned id or by name. REST runtimes only:
-    /// the local runtime has no volume backend to resolve one against.
+    /// A managed volume, addressed by runtime-assigned id or by name.
     Volume,
     /// A host directory or file. Local runtime only: over REST the path would
     /// name the server's filesystem, not the caller's.
@@ -1701,7 +1683,6 @@ mod tests {
     use crate::runtime::advanced_options::{
         ContainerCapabilities, NetworkRateLimit, SecurityOptions, SecurityOptionsBuilder,
     };
-    use crate::runtime::types::Bytes;
 
     /// The type decides whose storage `source` names, so only the two exact
     /// spellings parse; a near miss is an error naming what is accepted.
@@ -3007,6 +2988,27 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_preserves_configured_file_size_limit() {
+        let mut options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+        options.sanitize().unwrap();
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            None
+        );
+
+        let configured_limit = 32 << 30;
+        options.advanced.security.resource_limits.max_file_size = Some(configured_limit);
+        options.sanitize().unwrap();
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(configured_limit)
+        );
+    }
+
+    #[test]
     fn test_security_builder_env_allowlist() {
         let opts = SecurityOptionsBuilder::new()
             .env_allowlist(vec!["FOO".to_string()])
@@ -3347,37 +3349,6 @@ mod tests {
         // Only opts2 should have max_processes
         assert!(opts1.resource_limits.max_processes.is_none());
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
-    }
-
-    /// The whole point of #1152: the ceiling has to follow the box's own
-    /// `--disk-size`, not a constant picked before the box existed.
-    #[test]
-    fn sanitize_scales_fsize_with_the_requested_disk() {
-        let mut options = BoxOptions {
-            disk_size_gb: Some(20),
-            ..BoxOptions::default()
-        };
-        options.sanitize().unwrap();
-
-        assert_eq!(
-            options.advanced.security.resource_limits.max_file_size,
-            Some(Bytes::from_gib(40).as_bytes()),
-            "a 20 GiB box gets a 40 GiB ceiling"
-        );
-    }
-
-    /// No explicit size: the disk is created at `DEFAULT_DISK_SIZE_GB`, so the
-    /// ceiling tracks that.
-    #[test]
-    fn sanitize_falls_back_to_the_default_disk_size() {
-        let mut options = BoxOptions::default();
-        options.sanitize().unwrap();
-
-        assert_eq!(
-            options.advanced.security.resource_limits.max_file_size,
-            Some(Bytes::from_gib(20).as_bytes()),
-            "the default 10 GiB disk gets a 20 GiB ceiling"
-        );
     }
 
     #[test]

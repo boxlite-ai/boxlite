@@ -9,8 +9,10 @@ The shared controller lives in [`../libs/ci-listener`](../libs/ci-listener/READM
 Its [label-capacity scheduler](../libs/ci-listener/README.md#label-capacity-scheduling)
 also runs in this image. A runner taking another matching job no longer blocks
 replenishment for its trigger job. Independent resources advance concurrently
-within `CI_WORKER_MAX` and the organization's actual quota, without another fixed
-management concurrency ceiling. PAT mode rebuilds counts when busy supply lacks
+within `CI_WORKER_MAX` and the organization's actual quota. The shared Listener
+uses eight scope planners and 32 allocation consumers, with bounded keyed queues;
+these I/O budgets do not increase worker quota. A committed reservation can start
+execution before other reservations or JIT deliveries complete. PAT mode rebuilds counts when busy supply lacks
 webhook observations.
 
 The hosted API imports the same controller and supplies native PostgreSQL/BoxService
@@ -265,10 +267,15 @@ GitHub runner group independently of the workflow label.
 
 ## Dispatch and recovery
 
+Worker Boxes request guest privilege and prepare a local Docker daemon before
+the GitHub runner accepts jobs. See the [shared Docker startup contract](../libs/ci-listener/README.md#docker-startup)
+for image requirements, the preparation deadline and failure diagnostics.
+
 1. A signed `workflow_job.queued` event stores a receipt and exact job identity,
    then wakes the shared controller; it does not assign the job itself.
-2. The controller verifies the installation/repository, reads the current job,
-   checks labels and durable account/tenant capacity, and records allocation intent.
+2. The controller verifies the installation/repository, rebuilds the complete
+   current GitHub queue before changing capacity, checks labels and durable
+   account/tenant limits, and records allocation intent.
 3. The REST adapter creates a Box and durably records the returned original ID
    before boot/JIT work. It does not adopt a same-name Box after an unknown create.
 4. GitHub creates JIT configuration with a purpose-limited runner credential.
@@ -280,14 +287,33 @@ GitHub runner group independently of the workflow label.
    and confirms its absence before returning physical Box capacity; runner
    cleanup and the allocation record remain until runner absence is confirmed.
 
-A completed notification alone does not stop a running worker. A successful
-runner DELETE is not evidence that its Box was idle. Unknown Box creation and
+A completed notification alone does not stop a running worker. Surplus online
+idle runners receive a 300-second registration grace, then use the shared
+[confirmed retirement protocol](../libs/ci-listener/README.md#surplus-idle-retirement).
+Uncertain unregistering never authorizes stopping a possibly assigned Box, including
+after restart. Its new persisted effect requires upgrading all state readers;
+the shared section also documents rollback and external busy-refusal assumptions.
+Unknown Box creation and
 uncertain delivery to a still-present Box remain reserved. A single 404 is not an absence proof: the REST adapter
 requires its original-ID ledger, unchanged principal and complete Box inventory.
 The host ledger must also match an ID already confirmed by the shared allocation;
 a conflicting record cannot redirect stop/delete/JIT operations to another Box.
 An HTTP 408 from a Box mutation can follow server-side creation and is therefore
 an uncertain outcome, not permission to retry the create or return its quota.
+
+For `POST /boxes`, a complete, bounded HTTP 408 JSON response may identify the
+original resource in `boxId`. The REST adapter validates and persists that ID
+with its original dispatch before any further network read. Recovery queries
+that exact ID and verifies its allocation name; it never adopts a same-name Box.
+An unfinished original create can resume boot after a failed read, lost start
+response or Listener restart, with admission, principal and lease checks before
+starting. Known allocations and closing allocations are observed without starting.
+Unknown or stopping states keep creation recovery pending and retain capacity.
+
+Missing or malformed timeout IDs, a completely lost response, failed ID persistence
+and historical records without an original ID remain uncertain. A server response
+whose state is `unknown` also remains pending; this includes failures projected as
+unknown by the server. These cases do not authorize another create or quota release.
 
 Admission or repository-read failure before dispatch records a definitive rejection
 for the original create operation, allowing the controller to release its slot.

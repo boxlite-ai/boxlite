@@ -5,6 +5,8 @@
  */
 
 import { OnboardingController } from './controllers/onboarding.controller'
+import { CouponClaimsController } from './controllers/coupon-claims.controller'
+import { CouponClaimsService } from './services/coupon-claims.service'
 import { OnboardingService } from './services/onboarding.service'
 import { QuickstartPromptDraft, QuickstartPromptHandoff } from './entities/quickstart-prompt.entity'
 import { Module } from '@nestjs/common'
@@ -54,6 +56,7 @@ import { UsageController } from '../usage/controllers/usage.controller'
     UsageModule,
   ],
   controllers: [
+    CouponClaimsController,
     OnboardingController,
     OrganizationController,
     OrganizationRoleController,
@@ -63,6 +66,7 @@ import { UsageController } from '../usage/controllers/usage.controller'
     UsageController,
   ],
   providers: [
+    CouponClaimsService,
     OnboardingService,
     OrganizationBoxLimitsService,
     OrganizationService,

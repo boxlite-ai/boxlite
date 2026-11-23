@@ -99,7 +99,7 @@ describe('audit targets at HTTP boundaries', () => {
       const writes = JSON.stringify([audit.createLog.mock.calls, audit.updateLog.mock.calls])
       expect(writes).not.toContain('private-command-marker')
       expect(writes).not.toContain('private-entrypoint-marker')
-      expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ statusCode: res.status }))
+      expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ statusCode: res.status }), 5000)
       if (outcome === 'invalid') {
         expect(boxes.create).not.toHaveBeenCalled()
       } else {
@@ -124,6 +124,7 @@ describe('audit targets at HTTP boundaries', () => {
     expect(audit.updateLog).toHaveBeenCalledWith(
       'audit',
       expect.objectContaining({ statusCode: 408, targetId: box.id }),
+      5000,
     )
   })
   it('retains the created Box audit target if response conversion fails', async () => {
@@ -143,6 +144,7 @@ describe('audit targets at HTTP boundaries', () => {
     expect(audit.updateLog).toHaveBeenCalledWith(
       'audit',
       expect.objectContaining({ statusCode: 500, targetId: box.id }),
+      5000,
     )
     expect(waitForStarted).not.toHaveBeenCalled()
   })
@@ -161,6 +163,7 @@ describe('audit targets at HTTP boundaries', () => {
     expect(audit.updateLog).toHaveBeenCalledWith(
       'audit',
       expect.objectContaining({ statusCode: 408, targetId: box.id }),
+      5000,
     )
   })
 
@@ -192,7 +195,7 @@ describe('audit targets at HTTP boundaries', () => {
       } else {
         expect(updateWhere).not.toHaveBeenCalled()
       }
-      expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ targetId: box.id }))
+      expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ targetId: box.id }), 5000)
     },
   )
 
@@ -208,6 +211,7 @@ describe('audit targets at HTTP boundaries', () => {
     expect(audit.updateLog).toHaveBeenCalledWith(
       'audit',
       expect.objectContaining({ statusCode: 400, targetId: box.id, errorMessage: 'startup failed' }),
+      5000,
     )
   })
 
@@ -216,7 +220,7 @@ describe('audit targets at HTTP boundaries', () => {
     const res = await fetch(base + '/v1/boxes/friendly-name/start', { method: 'POST' })
     expect(res.status).toBe(400)
     expect(waitForStarted).not.toHaveBeenCalled()
-    expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ targetId: box.id }))
+    expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ targetId: box.id }), 5000)
   })
 
   it('does not invent a resolved ID when the authorized lookup fails', async () => {
@@ -224,8 +228,11 @@ describe('audit targets at HTTP boundaries', () => {
     const res = await fetch(base + '/v1/boxes/friendly-name/start', { method: 'POST' })
     expect(res.status).toBe(404)
     expect(boxes.start).not.toHaveBeenCalled()
-    expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ targetId: 'friendly-name' }))
-    expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ statusCode: 404 }))
+    expect(audit.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: 'friendly-name' }),
+      expect.any(Number),
+    )
+    expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ statusCode: 404 }), 5000)
     expect(JSON.stringify(audit.updateLog.mock.calls)).not.toContain(box.id)
   })
 })

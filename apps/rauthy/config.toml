@@ -1,0 +1,57 @@
+# Rauthy, the development-only OIDC provider for the local stacks:
+# apps/infra-local and the apps/e2e local stack.
+# Each launcher mounts this directory at /rauthy and sets through the
+# environment what differs per stack or must not be committed:
+#   PUB_URL, RP_ORIGIN               issuer host:port the browser reaches
+#   ENC_KEYS, ENC_KEY_ACTIVE         random per Box
+#   HQL_SECRET_RAFT, HQL_SECRET_API  random per Box
+# Rauthy reads bootstrap/*.json only while its database is empty, so
+# recreate the Box after changing them.
+# Reference: https://github.com/sebadob/rauthy/blob/v0.37.2/config.toml
+
+[access]
+# Plain HTTP on localhost; Rauthy's default cookie mode needs HTTPS.
+cookie_mode = 'danger-insecure'
+# MCP clients redirect to a loopback port chosen at runtime (RFC 8252 §7.3).
+rfc_8252_enable = true
+
+[bootstrap]
+bootstrap_dir = '/rauthy/bootstrap'
+
+[cluster]
+node_id = 1
+nodes = ['1 localhost:8100 localhost:8200']
+# Report health only once the node is up, not during a startup grace period.
+health_check_delay = '0s'
+
+[server]
+scheme = 'http'
+port_http = 8080
+http_workers = 1
+
+[webauthn]
+rp_id = 'localhost'
+rp_name = 'BoxLite Local'
+
+# MCP clients sign in without pre-registration, by client ID metadata
+# document (ephemeral clients) or dynamic registration. They may request the
+# MCP scopes (apps/api/src/mcp/mcp-oauth-policy.ts) for the MCP endpoint.
+[ephemeral_clients]
+enable = true
+allowed_scopes = [
+  'openid', 'profile', 'email',
+  'write:boxes', 'delete:boxes', 'read:volumes', 'write:volumes', 'delete:volumes',
+  'read:images', 'write:images', 'delete:images', 'write:templates', 'delete:templates',
+]
+allowed_resources = ['http://localhost:3001/mcp']
+
+[dynamic_clients]
+enable = true
+# Rauthy defaults to one registration per IP per hour.
+rate_limit_reg = '1s'
+allowed_scopes = [
+  'openid', 'profile', 'email',
+  'write:boxes', 'delete:boxes', 'read:volumes', 'write:volumes', 'delete:volumes',
+  'read:images', 'write:images', 'delete:images', 'write:templates', 'delete:templates',
+]
+allowed_resources = ['http://localhost:3001/mcp']

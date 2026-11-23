@@ -11,13 +11,18 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { Sidebar } from './Sidebar'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 
+vi.mock('./billing/SidebarBalance', () => ({ SidebarBalance: () => null }))
+
 vi.mock('posthog-js/react', () => ({
   usePostHog: () => ({ capture: vi.fn(), reset: vi.fn() }),
 }))
 
+const authState = vi.hoisted(() => ({
+  profile: { sub: 'user-a', name: 'BoxLite User', email: 'user@example.com', picture: '' },
+}))
 vi.mock('react-oidc-context', () => ({
   useAuth: () => ({
-    user: { profile: { name: 'BoxLite User', email: 'user@example.com' } },
+    user: { profile: authState.profile },
     signoutRedirect: vi.fn(),
   }),
 }))
@@ -65,7 +70,10 @@ describe('Sidebar primary navigation', () => {
       .mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })
   })
 
-  beforeEach(() => localStorage.clear())
+  beforeEach(() => {
+    localStorage.clear()
+    authState.profile = { sub: 'user-a', name: 'BoxLite User', email: 'user@example.com', picture: '' }
+  })
 
   afterEach(() => {
     act(() => root?.unmount())
@@ -88,6 +96,85 @@ describe('Sidebar primary navigation', () => {
       )
     })
   }
+
+  function profileAvatar() {
+    return document.querySelector('[aria-label="Open profile menu"] > span')!
+  }
+
+  function rerenderProfile() {
+    act(() =>
+      root!.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes']}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      ),
+    )
+  }
+
+  it('keeps avatar initials visible while loading and replaces them only after success', () => {
+    authState.profile.picture = 'https://images.example/avatar.png'
+    renderRoute('/dashboard/boxes')
+    const avatar = profileAvatar()
+    const image = avatar.querySelector('img')!
+    expect(avatar.textContent).toBe('BU')
+    expect(image.classList.contains('invisible')).toBe(true)
+    act(() => image.dispatchEvent(new Event('load')))
+    expect(profileAvatar().textContent).toBe('')
+    expect(image.classList.contains('invisible')).toBe(false)
+    expect(image.alt).toBe('')
+  })
+
+  it('removes a failed avatar image and retains initials without retrying', () => {
+    authState.profile.picture = 'https://images.example/broken.png'
+    renderRoute('/dashboard/boxes')
+    const image = profileAvatar().querySelector('img')!
+    act(() => image.dispatchEvent(new Event('error')))
+    expect(profileAvatar().querySelector('img')).toBeNull()
+    expect(profileAvatar().textContent).toBe('BU')
+    rerenderProfile()
+    expect(profileAvatar().querySelector('img')).toBeNull()
+  })
+
+  it('resets avatar failures when the URL changes and ignores events from the old image', () => {
+    authState.profile.picture = 'https://images.example/broken.png'
+    renderRoute('/dashboard/boxes')
+    const oldImage = profileAvatar().querySelector('img')!
+    act(() => oldImage.dispatchEvent(new Event('error')))
+    authState.profile.picture = 'https://images.example/new.png'
+    rerenderProfile()
+    const newImage = profileAvatar().querySelector('img')!
+    expect(newImage.src).toBe(authState.profile.picture)
+    act(() => oldImage.dispatchEvent(new Event('load')))
+    expect(profileAvatar().textContent).toBe('BU')
+    act(() => newImage.dispatchEvent(new Event('load')))
+    expect(newImage.classList.contains('invisible')).toBe(false)
+  })
+
+  it('resets the avatar for another account even when its URL is unchanged', () => {
+    authState.profile.picture = 'https://images.example/shared.png'
+    renderRoute('/dashboard/boxes')
+    const oldImage = profileAvatar().querySelector('img')!
+    act(() => oldImage.dispatchEvent(new Event('load')))
+    authState.profile = { ...authState.profile, sub: 'user-b', name: 'Next Account' }
+    rerenderProfile()
+    const newImage = profileAvatar().querySelector('img')!
+    expect(newImage).not.toBe(oldImage)
+    expect(profileAvatar().textContent).toBe('NA')
+    expect(newImage.classList.contains('invisible')).toBe(true)
+  })
+
+  it.each([
+    ['  BoxLite   User  ', 'user@example.com', 'BU'],
+    ['  ', ' user@example.com ', 'U'],
+    ['', '', ''],
+  ])('uses a stable avatar fallback for name %j and email %j', (name, email, initials) => {
+    authState.profile = { ...authState.profile, name, email, picture: '  ' }
+    renderRoute('/dashboard/boxes')
+    expect(profileAvatar().querySelector('img')).toBeNull()
+    expect(profileAvatar().textContent).toBe(initials)
+    expect(!!profileAvatar().querySelector('svg')).toBe(!initials)
+    expect(profileAvatar().getAttribute('aria-hidden')).toBe('true')
+  })
 
   it('expands without changing the active route and restores the saved preference', () => {
     renderRoute('/dashboard/boxes/example')
@@ -396,13 +483,14 @@ describe('Sidebar primary navigation', () => {
     ])
     expect(infrastructure.querySelector('[aria-label="Toggle Management navigation"]')).toBeNull()
   })
-  it('shows Applications CI navigation with Runners and Connects for a direct route', () => {
+  it('keeps a single active CI destination on the connections route', () => {
     localStorage.setItem('boxlite-navigation-expanded', 'true')
     renderRoute('/dashboard/ci/connects')
     const applications = document.querySelector('[role="group"][aria-label="Applications"]')
     expect(applications).not.toBeNull()
-    expect(applications?.querySelector('a[href="/dashboard/ci/connects"]')?.getAttribute('aria-current')).toBe('page')
-    expect(applications?.textContent).toContain('Runners')
+    expect(applications?.querySelector('a[href="/dashboard/ci"]')?.getAttribute('aria-current')).toBe('page')
+    expect(applications?.querySelectorAll('a')).toHaveLength(1)
+    expect(applications?.querySelector('[aria-label="Toggle CI navigation"]')).toBeNull()
   })
 
   it('keeps Volumes in primary navigation', () => {

@@ -139,13 +139,13 @@ impl Guest {
             .collect();
         self.device
             .activate(ActivationContext {
-                memory: Arc::clone(&self.memory),
+                memory: Arc::clone(&self.memory).into(),
                 queues: VirtQueues::prepare(
                     queues,
                     &[SIZE, SIZE],
                     event_idx,
                     false,
-                    Arc::clone(&self.memory),
+                    Arc::clone(&self.memory).into(),
                 )
                 .unwrap(),
                 interrupt: self.interrupt.clone(),
@@ -809,9 +809,15 @@ fn fs_device_rejects_each_missing_queue_without_partial_activation() {
             })
             .collect();
         let context = ActivationContext {
-            memory: guest.memory.clone(),
-            queues: VirtQueues::prepare(queues, &[SIZE, SIZE], false, false, guest.memory.clone())
-                .unwrap(),
+            memory: guest.memory.clone().into(),
+            queues: VirtQueues::prepare(
+                queues,
+                &[SIZE, SIZE],
+                false,
+                false,
+                guest.memory.clone().into(),
+            )
+            .unwrap(),
             interrupt: guest.interrupt.clone(),
             events: Arc::new(Registrar),
             waker: Arc::new(|| {}),

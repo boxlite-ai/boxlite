@@ -8,7 +8,7 @@ The SSH dialog is static guidance for direct CLI login: install, run `boxlite au
 
 **Connect via SSH**, beside start/stop, opens three instruction sections with copyable commands. No preparation confirmation, status-dependent steps, mutations, downloads, key-path inputs, browser key generation or reset workflow. Guidance remains readable for stopped Boxes and read-only users; actual prerequisites are explained rather than simulated.
 
-The dialog uses the shared constrained layout, divided fixed header, compact monospace text, square code surfaces and `AsciiButton` copy actions. The browser terminal stays mounted. Existing Network controls remain independent.
+The dialog uses the shared constrained layout, divided fixed header, compact sans-serif interface text and monospace commands, square code surfaces and `AsciiButton` copy actions. The browser terminal stays mounted. Existing Network controls remain independent.
 
 ## Connection contract
 
@@ -33,7 +33,7 @@ Direct cloud login requires SSH control, tunnel support and inbound access. Exit
 
 The guide deliberately shows bare login and direct SSH, without endpoint or organization pinning, a dedicated context, shell quoting or environment cleanup. Only the Box ID is interpolated, and it must match `/^[A-Za-z0-9_][A-Za-z0-9_-]*$/`.
 
-Bare login targets the CLI default endpoint (`https://api.boxlite.ai`) in a fresh setup, does not prompt for an endpoint and writes the selected context. Successful API-key login saves the organization's routing prefix, so the connect command needs no explicit prefix. The tradeoff is intentional: an unrelated selected context, exported `BOXLITE_*` variables or a non-production/self-hosted deployment can change the effective destination or credentials. The guide does not detect or handle these minority cases. One muted line directs users with self-hosted endpoints, other organizations or an existing CLI setup to the existing [SSH guide](https://docs.boxlite.ai/cloud/ssh).
+Bare login targets the CLI default endpoint (`https://api.boxlite.ai`) in a fresh setup, does not prompt for an endpoint and writes the selected context. Successful API-key login saves the organization's routing prefix, so the connect command needs no explicit prefix. The tradeoff is intentional: an unrelated selected context, exported `BOXLITE_*` variables or a non-production/self-hosted deployment can change the effective destination or credentials. The guide does not detect or handle these minority cases. One muted line directs users working with other organizations or an existing CLI setup to the existing [SSH guide](https://docs.boxlite.ai/cloud/ssh).
 
 ## Existing controls
 

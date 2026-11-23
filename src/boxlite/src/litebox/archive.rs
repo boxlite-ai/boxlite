@@ -37,16 +37,27 @@ pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 /// Older importers must refuse fractional CPUs they cannot enforce.
 pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 6;
 
+/// Managed and typed mounts require a local volume-capable importer.
+pub(crate) const MANAGED_MOUNTS_ARCHIVE_VERSION: u32 = 7;
+
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = FRACTIONAL_CPUS_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = MANAGED_MOUNTS_ARCHIVE_VERSION;
 
 /// Pick the archive format an exported box needs.
 ///
 /// Use the oldest format that can represent all configured policies.
 /// An explicitly empty capability policy still requires v4; ports require v5,
-/// and fractional CPUs require v6 so older readers cannot silently discard them.
+/// fractional CPUs require v6, and managed/typed mounts require v7 so older
+/// readers cannot silently discard or defer them until boot fails.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
-    if options
+    if !options.mounts.is_empty()
+        || options
+            .volumes
+            .iter()
+            .any(|mount| mount.managed_volume.is_some())
+    {
+        MANAGED_MOUNTS_ARCHIVE_VERSION
+    } else if options
         .cpu_count()
         .is_ok_and(|cpu| cpu.is_some_and(|cpu| cpu.is_fractional()))
     {
@@ -68,9 +79,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v4: `box_options.advanced` carries a custom capability policy
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
 /// v6: fractional `box_options.cpus` requires host CPU bandwidth enforcement
+/// v7: managed/typed mounts require local volume-capable resolution
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 6).
+    /// Archive format version (1 through 7).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -406,6 +418,28 @@ mod tests {
                 archive_version_for_options(&published),
                 PUBLISHED_PORTS_ARCHIVE_VERSION
             );
+        }
+    }
+
+    #[test]
+    fn managed_mounts_require_archive_v7() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        let legacy = crate::runtime::options::BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("workspace", "/workspace")],
+            ..Default::default()
+        };
+        assert_eq!(archive_version_for_options(&legacy), 7);
+
+        for mount in [
+            MountSpec::volume_mount("workspace", "/workspace"),
+            MountSpec::bind_mount("/srv/data", "/data"),
+        ] {
+            let options = crate::runtime::options::BoxOptions {
+                mounts: vec![mount],
+                ..Default::default()
+            };
+            assert_eq!(archive_version_for_options(&options), 7);
         }
     }
 

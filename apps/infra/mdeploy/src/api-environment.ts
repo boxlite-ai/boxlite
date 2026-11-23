@@ -24,6 +24,7 @@ import { API_GROUP, serviceSecretsFrom, splitServiceChannels, type Environment, 
 import { API_PORT, publicHostsFor, type PublicHosts } from '../stack/api.ts'
 import { SECRET_GROUP } from 'mstage/secret-address'
 import type { Cloud } from 'mstage/config'
+import { FilestoreConfigurationError, parseFilestoreInstances } from '../../../shared/filestore-instances.ts'
 
 export class ApiEnvironmentError extends Error {
   constructor(message: string) {
@@ -321,6 +322,19 @@ const runnerDiskExpansionFrom = (environment: Environment): Record<string, strin
   }
 }
 
+function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {
+  if (home !== 'gcp' || !raw) return []
+
+  try {
+    return [...new Set(parseFilestoreInstances({ FILESTORE_INSTANCES: raw }).map((entry) => entry.projectId))].sort()
+  } catch (error) {
+    if (error instanceof FilestoreConfigurationError) {
+      throw new ApiEnvironmentError(error.message)
+    }
+    throw error
+  }
+}
+
 /**
  * The two channels the API reads, assembled from one stage's configuration.
  *
@@ -341,7 +355,7 @@ export const apiEnvironmentFrom = ({
   region: string
   stage: string
   home: Cloud
-}): { environment: Record<string, string>; secrets: Record<string, string> } => {
+}): { environment: Record<string, string>; secrets: Record<string, string>; filestoreProjects: string[] } => {
   const domain = optional(environment, 'STACK_DOMAIN')
   if (!domain) throw new ApiEnvironmentError('STACK_DOMAIN is required — every URL the API composes starts with it')
   const hosts = publicHostsFor({ domain, dashboardDomain: optional(environment, 'DASHBOARD_DOMAIN') })
@@ -361,8 +375,16 @@ export const apiEnvironmentFrom = ({
   }
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
   validateCiChannels(values, addresses)
+  const configuredFilestoreInstances = environment.FILESTORE_INSTANCES?.trim()
+  const filestoreInstances = configuredFilestoreInstances ?? (home === 'gcp' ? '[]' : undefined)
+  const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home)
+  const apiValues =
+    home === 'gcp'
+      ? values
+      : Object.fromEntries(Object.entries(values).filter(([key]) => key !== 'FILESTORE_INSTANCES'))
 
   return {
+    filestoreProjects,
     environment: {
       // Constant on every deployed stage. The per-stage identity is the stage
       // name, which is what the status sync's dedup prefix uses.
@@ -404,6 +426,8 @@ export const apiEnvironmentFrom = ({
        * it, and every file a box touches becomes a cross-region read.
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
+      FILESTORE_SUPPORTED: home === 'gcp' ? 'true' : 'false',
+      ...(home === 'gcp' && filestoreInstances !== undefined ? { FILESTORE_INSTANCES: filestoreInstances } : {}),
       // On unless the stage says otherwise, and it says so through the api
       // group's own `OTEL_ENABLED`, which `...values` below lets win. There is
       // no second switch: an inverted one read here would come from whatever
@@ -446,7 +470,7 @@ export const apiEnvironmentFrom = ({
       // The API's own group, as values. Last, so a name the store holds wins
       // over a default composed above — and `stack/index.ts` refuses any name
       // that a module also decides.
-      ...values,
+      ...apiValues,
     },
     secrets: addresses,
   }

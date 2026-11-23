@@ -63,6 +63,41 @@ class PostgresTransaction implements StateTransaction {
     )
     return rows[0] ? decode(rows[0]) : undefined
   }
+  async getMany(keys: readonly string[]): Promise<StateRecord[]> {
+    if (!keys.length) return []
+    return (
+      await this.rows('SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key=ANY($2::text[])', [
+        this.namespace,
+        keys,
+      ])
+    ).map(decode)
+  }
+  async getShared(key: string): Promise<StateRecord | undefined> {
+    const rows = await this.rows('SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key=$2 FOR SHARE', [
+      this.namespace,
+      key,
+    ])
+    return rows[0] ? decode(rows[0]) : undefined
+  }
+  async insertMany(records: readonly StateRecord[]): Promise<boolean> {
+    if (!records.length || records.length > 100 || records.some((row) => row.key.startsWith('@')))
+      throw new Error('Invalid ordinary state insert batch')
+    const input = records.map((row) => ({
+      record_key: row.key,
+      record_version: row.version,
+      schema_version: row.schema,
+      payload: row.payload,
+    }))
+    const rows = await this.rows(
+      `INSERT INTO ci_listener_state(namespace,record_key,record_version,schema_version,payload)
+       SELECT $1,record_key,record_version,schema_version,coalesce(payload,'null'::jsonb)
+       FROM jsonb_to_recordset($2::jsonb)
+         AS incoming(record_key text,record_version uuid,schema_version integer,payload jsonb)
+       ORDER BY record_key COLLATE "C" ON CONFLICT DO NOTHING RETURNING record_key`,
+      [this.namespace, JSON.stringify(input)],
+    )
+    return rows.length === records.length
+  }
   async page(after: string, limit: number, prefix = '', lock?: 'skip-locked'): Promise<StateRecord[]> {
     return (
       await this.rows(

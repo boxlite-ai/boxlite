@@ -299,18 +299,18 @@ behavior; it does not measure physical storage throughput or tail latency.
 
 Injected `pread64` delay tests separately exercise successful reset, failed stop,
 shutdown retry and RAM `Arc` retention. An expired gate watchdog fails the test.
-A concurrent producer uses four independent request/reply chains, refills only
-completed slots and stays live during reset. Reset has a separate one-second
-bound; the producer's five-second watchdog is a failure. Initial runs passed,
-but subsequent isolated runs reproducibly timed out with transport status 15
-instead of 0. The unchanged regression therefore exposes a sustained-load stop
-failure: the shared drain can remain inside the callback while requests keep
-arriving. Earlier passes do not qualify bounded progress. Resolving this requires
-a public queue budget/continuation decision, which the current design assigns to
-common scheduling work; it cannot be solved by cancelling a host syscall.
-The current delivery accepts this recorded limitation and defers sustained-load
-stop progress to that follow-up. The failing test remains unchanged and runs
-in the ordinary unit target; no clean full-suite result is claimed.
+The fixed-batch reset test submits 128 LOOKUP requests through four independent
+request/reply chains, refilling a slot only after its used entry. The producer
+joins after the final submission; up to four requests can still be outstanding
+when transport reset starts. Reset must finish within one second, clear the
+transport status and emit no device-failure event. The producer has a five-second
+progress watchdog. This test covers reset after finite input; it does not require
+reset to complete while a producer keeps submitting requests.
+
+Continuous replenishment can keep the shared drain inside one callback and
+cause a reset stop timeout. Bounded progress under sustained load remains an
+unresolved common-scheduling limitation: it needs a queue budget and continuation
+mechanism, and cannot be solved by cancelling a host syscall.
 Joint VM/Fs lifecycle tests now run production FUSE READ on the VM's registered
 RAM through the shared worker, with an injected `pread64` gate and a mock
 hypervisor registration log. A timed-out shutdown keeps the registration and
@@ -359,10 +359,10 @@ with `make vmm:boot:host BOOT_JOBS=16`; its effective configuration includes
 
 | Check on the integrated worktree | Result and boundary |
 | --- | --- |
-| `make test:unit:vmm` | Earlier full run: 371 VMM and 16 hypervisor pass, 25 and 8 ignored. The subsequent isolated sustained-producer failure below means this is not a stable final green result |
+| `make test:unit:vmm` | Historical full run: 371 VMM and 16 hypervisor pass, 25 and 8 ignored. A later sustained-producer case exposed a reset timeout; finite-input coverage does not qualify sustained-load stop progress |
 | `make clippy:vmm` | Passes |
 | `make test:integration:vmm:linux` with the merged-config kernel | All 15 tests pass, including upstream block boots and the three existing fs boots |
-| `make test:unit:vmm FILTER=worker_tests` | Earlier seven-test run passed; later isolated four-chain producer runs fail reset with status 15 instead of 0. This supersedes the earlier clean lifecycle qualification. The failing assertion is retained |
+| `make test:unit:vmm FILTER=virtio::fs::worker_tests` | Current run: all nine tests pass; the fixed 128-LOOKUP reset test also passes 20/20 isolated runs. Continuous-producer stop progress remains unqualified |
 | `make test:integration:vmm:mounts` | Passes after rebuilding the static init from the final guest source; uses the merged-config kernel and cached musl libseccomp 2.6.1 through the existing build helper |
 | Construction and session fd tests | Isolated real EMFILE at root/auxiliary-fd open, later-export ENOENT rollback, populated reset/destroy/drop and recovery pass with exact fd baselines |
 
@@ -404,10 +404,9 @@ release archive builds were not run.
 
 Private mmap was checked for initial data access only; visibility of later host
 changes through an existing private mapping is not guaranteed by this direct-I/O
-contract. The producer workload has exposed a reproducible reset timeout under
-concurrent replenishment. Sustained-load shutdown is an explicitly deferred
-common-framework optimization and does not block this functional delivery.
-The failure remains reproducible, rather than being counted as a pass.
+contract. Continuous replenishment can cause a reset timeout; the fixed-batch
+test covers finite input only. Sustained-load stop progress remains an unresolved
+common-framework limitation and is outside this functional delivery's acceptance.
 At this earlier verification stage, whole-Box Guest.Init and lifecycle integration
 had not been exercised. The
 [native engine guide](../../../guides/native-vmm.md#linux-x86_64-m2-and-m3-matrices)
@@ -434,7 +433,7 @@ These are open acceptance items, not passing results.
 | B05 | Separate lookup/open/inflight ownership, FORGET/PLUS and real fd reclamation | IDs are not reused within a session |
 | B06 | DIRECT_IO and zero-timeout contract; coordinated host rewrite through the same guest fd; initial MAP_PRIVATE faults and MAP_SHARED ENODEV | Later changes are not guaranteed visible through an existing private mmap |
 | B08–B09 | Segmentation, direction, capacity, common frozen descriptors, indirect descriptors, dual queues, notifications and activation/reset | Follows common queue and transport boundaries |
-| B10 | Real lease-blocked OPEN, delays to other Fs devices, reset timeout/success, injected gates and RAM Arc checks pass; replenishment over four chains ultimately reproduces a reset timeout failure | Follow-up common-framework optimization: drain stop progress under continuous replenishment; known failure retained without blocking this functional delivery; joint real Fs read callback and mock VM registration/release tests added |
+| B10 | Real lease-blocked OPEN, delays to other Fs devices, reset timeout/success, injected gates, RAM Arc checks and reset after a fixed 128-request batch | Continuous replenishment exposed a reset timeout; finite-input coverage does not qualify sustained-load stop progress; joint real Fs read callback and mock VM registration/release tests cover ownership |
 | B11 | EMFILE on root/auxiliary fds, second-export failure, injected ENOSPC/short writes and repeated populated reset/destroy/drop | Injected errors and real disk exhaustion are identified separately |
 | B13–B14 | Configuration, mounts, a minimal real guest and legacy-engine preparation regressions | Full Box, exit.json, independent copy RPC and dual-engine execution await external integration |
 

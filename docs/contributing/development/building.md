@@ -125,3 +125,7 @@ scripts/
 ├── package/            # Packaging scripts
 └── common.sh           # Shared utilities
 ```
+
+The Build Runtime workflow packages Cargo's runtime in the build environment,
+including inside manylinux on Linux. It resolves links there and leaves a
+`boxlite-runtime-v<version>-<target>.tar.gz` archive for the runner to upload.

@@ -56,7 +56,8 @@ Stage also accepts stable tags as commit references: it resolves the tag once, t
 It does not require a GitHub Release or use its published Runner assets.
 Dev/prod published stable releases still run from `main`; RC inputs remain refused.
 Dev/prod import existing release images from GHCR; stage is an independent deployment target.
-Production still requires a stable release on main, its published Runner assets and protected apply confirmation.
+Production requires a stable release on main and protected apply confirmation.
+Selections that include Runner also require its published tarball and checksum.
 Example stage preview after its prerequisites and artifacts are prepared:
 
 ```bash
@@ -64,13 +65,54 @@ gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='<full-main-sha
 gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f components=api+runner -f apply=false
 ```
 
-Run a preview of the chosen ref first. `components=api` or `runner` narrows artifact preparation,
-not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
+Run a preview of the chosen ref first. On GCP, `components=api` deploys the API image and its existing API environment
+through a new Cloud Run revision; `components=runner` converges the binary and Runner environment through OS Policies.
+Both include the workload's required read grants and leave unrelated infrastructure outside the targets.
+The default `api+runner` retains full-stack deployment; AWS/SST supports only that selection for now.
+Individual selection requires existing workloads; Runner fleet changes require a full deployment.
+Existing stage protection, configuration checks and per-stage queuing still apply; do not cancel a healthy apply to start another.
+
+Use the same public workflow for individual previews, after preparing the stage declaration:
+
+```bash
+gh workflow run mdeploy-all.yml --ref main -f stage=dev -f ref='<full-main-sha>' -f components=api -f apply=false
+gh workflow run mdeploy-all.yml --ref main -f stage=dev -f ref='<full-main-sha>' -f components=runner -f apply=false
+```
+
+For environment changes alone, reuse the deployed component's ref; its existing env group remains the configuration source.
+The internal CLI receives `--components` from the workflow; no separate public deployment workflow is introduced.
+
 Image releases are published to GHCR through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 Release deployment imports these existing images into the target stage's AR/ECR repository,
 verifies manifest digests and enforces the target scan policy. It never starts a release build.
 Missing GHCR images stop planning and print the manual publication command; authentication and
 network failures remain registry errors. See the [release runbook](release.md).
+
+
+### Approval rounds
+
+When the target Environment has required reviewers:
+
+| Path | Protected work | Approval rounds |
+| --- | --- | --- |
+| Commit or PR to dev/stage | Parallel per-artifact plan/build jobs, then a separate deploy job | 2 batches |
+| Published release to dev/prod | Verify release artifacts, import GHCR images and deploy in one job | 1 |
+| Stable tag to stage | Resolve as a commit and follow the commit path | 2 |
+
+Ref validation runs before either protected path.
+Both paths retain stage concurrency, image verification, scan policy, configuration fingerprint and protected-stage confirmation.
+The shared deployment action owns the apply checks; the shared image action also backs the reusable `mbuild` workflow.
+
+Commit image and Runner preparation run in separate matrix jobs, each checking only its selected artifact.
+Both jobs bind the target Environment; approve the preparation batch after both are awaiting review, then approve deployment separately.
+Approval covers jobs currently waiting: a queued or later job can require another review.
+
+The matrix permits two concurrent legs with separate artifact locks and keeps a successful sibling running when another fails.
+Deploy waits for the complete preparation matrix to succeed; commit routes do not depend on matrix output ordering.
+Rerunning a preparation leg repeats its checks and reuses existing artifacts.
+A failed import or build stops deployment.
+Apply is never automatically retried; inspect failed applies and any retained state lock before rerunning.
+The release pipeline's separate E2E workflow retains its own Environment gate.
 
 ### Caller attribution
 
