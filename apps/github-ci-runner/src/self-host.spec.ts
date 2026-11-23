@@ -1023,6 +1023,10 @@ describe('Standalone ENV configuration', () => {
     const config = loadConfig(base)
     expect(config.max).toBe(1)
     expect(config.worker).toMatchObject({ cpus: 2, memoryMiB: 2048 })
+    expect(config.worker.image).toBe('ghcr.io/boxlite-ai/boxlite-jitbox:latest')
+    expect(loadConfig({ ...base, CI_WORKER_IMAGE: 'registry.example/worker:v2' }).worker.image).toBe(
+      'registry.example/worker:v2',
+    )
     expect(config.listen).toEqual({ host: '0.0.0.0', port: 8080 })
     expect(config.allowPublic).toBe(false)
     expect(JSON.stringify(config)).not.toContain('private-api-key')

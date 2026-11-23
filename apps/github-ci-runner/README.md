@@ -116,7 +116,7 @@ App webhook handler.
 | `CI_LISTEN_ADDR`                | `0.0.0.0:8080`                          | Health/webhook HTTP listener                                              |
 | `CI_ALLOW_PUBLIC_REPOSITORIES`  | `false`                                 | Include public repositories whose workflows you intend to run             |
 | `CI_WORKER_GROUP_NAME`          | `boxlite-ci-runner`                     | Selected organization runner group                                        |
-| `CI_WORKER_IMAGE`               | `ghcr.io/actions/actions-runner:latest` | Image containing the official GitHub runner                               |
+| `CI_WORKER_IMAGE`               | `ghcr.io/boxlite-ai/boxlite-jitbox:latest` | Linux x86-64 worker with the GitHub Actions runner and GNU Make            |
 | `CI_WORKER_MAX`                 | `1`                                     | Total concurrency across all installations and repositories, from 1 to 16 |
 | `CI_WORKER_CPUS`                | `2`                                     | CPUs per CI Box, from 1 to 16                                             |
 | `CI_WORKER_MEMORY_GB`           | `2`                                     | Memory per CI Box; one GB converts to 1024 MiB and must yield whole MiB   |

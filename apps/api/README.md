@@ -1525,8 +1525,12 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 | `CI_GITHUB_ORG_APP_CLIENT_SECRET`                                | Optional Organization App OAuth secret reference for legacy browser grants                                                     |
 | `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                              |
 | `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
-| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
+| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/boxlite-ai/boxlite-jitbox:latest` / `boxlite-ci-runner`. Set `CI_WORKER_IMAGE` to select a different image. |
 | `CI_SCHEDULER_GENERATION`                                        | Positive deployment generation; mdeploy uses `GITHUB_RUN_ID` or an explicit per-deploy override, never process startup time    |
+
+The default JitBox image includes GNU Make for Linux x86-64 jobs. After an
+organization first boots the tag, its image catalog pins the digest. To adopt a
+later build published under the same tag, update the organization's catalog tag.
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. Use the
 `boxlite` workflow label for configured defaults, or
