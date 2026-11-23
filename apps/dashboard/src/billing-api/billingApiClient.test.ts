@@ -107,6 +107,24 @@ describe('getOrganizationPlan', () => {
   })
 })
 
+describe('plan trial eligibility', () => {
+  it.each([
+    { plans: [] },
+    {
+      plans: [
+        { name: 'Go', eligible: true, durationSeconds: 5400 },
+        { name: 'Team', eligible: false, durationSeconds: 0 },
+      ],
+    },
+  ])('reads the organization offer list in one GET', async ({ plans }) => {
+    const api = serve({ plans })
+    expect(await api.getPlanTrialEligibility('org-1')).toEqual(plans)
+    expect(requestedUrls).toEqual(['http://billing.test/api/billing/organization/org-1/plan/trial-eligibility'])
+    expect(requestedMethod).toBe('get')
+    expect(requestedData).toBeUndefined()
+  })
+})
+
 describe('upgradePlan', () => {
   it('returns the checkout URL when a first subscribe needs one', async () => {
     const api = serve({ url: 'https://checkout.stripe.com/pay/cs_test_123' })

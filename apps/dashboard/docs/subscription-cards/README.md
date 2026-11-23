@@ -29,8 +29,6 @@ the user can contact support. A Go or Starter catalogue price of 500 cents match
 the existing confirmation route. Any differing price retains the contact
 fallback; the UI does not round or rewrite a server charge. Existing plan IDs
 remain unchanged.
-The table does not activate trials or upcoming features. Trial eligibility is
-presented as documented (3 days with card verification), not an activation CTA.
 Hosted secrets and key management are the same capability per product clarification,
 shown once as Hosted secrets. Undefined
 Funder support and Region support are omitted pending product clarification.
@@ -42,14 +40,25 @@ Browser back/forward and direct links restore the selected tab. Owners can use
 existing current/scheduled/upgrade/downgrade actions. Other members can compare
 public plans but are directed to their organization owner to change a plan.
 For owners with confirmed subscription data, accounts without a live subscription show the zero-priced PAYG tier as current,
-matching Overview, and cannot enter subscription checkout for that tier. Existing
-APIs, charge calculations and paid-plan confirmation routes are unchanged.
+matching Overview, and cannot enter subscription checkout for that tier.
+The upgrade action uses the catalogue plan ID and the existing confirmation route.
 Loading uses a status message; unspecified values include screen-reader text.
 
 Retention is split into its reference point and maximum time after that point:
 PAYG uses overdue time; paid tiers use subscription end. All apply only when
 payment is overdue. These are maximum periods, not guarantees. Log retention
 has no documented duration and is kept separate.
+
+### Free trial offers
+
+Owners see a gold ribbon beside the action on plans with a free trial, for example **Free Trial 3 Days**.
+It fits inside the existing button row and wraps in narrow columns. The **Trial eligibility** row shows
+the full duration. Owners can retry from Plans if offers are temporarily unavailable. Checkout confirms
+the current offer.
+
+| Plan actions | With a three-day trial |
+| --- | --- |
+| ![Starter and Team plan actions](trial-header-before.png) | ![Trial ribbons beside the same actions](trial-header.png) |
 
 ## Validation
 
@@ -92,13 +101,15 @@ and [light theme: final row and Custom column](../../../../docs/contributing/inv
 uses the existing mock catalogue matching the supplied screenshot. No real
 checkout or payment is performed by this preview.
 
+Use `/dashboard/billing?preview=trial-eligible&tab=plans` in the mock dashboard to see the Starter
+and Team ribbons for an owner with a default card and no subscription.
+
 ## Source audit (2026-11-17)
 
 - Names: PAYG is the display name replacing for Notion Free; Starter and
   Team use the document names. Prices are 5 and 100, with no inferred period.
 - Bonuses: 20 and 400, no inferred issue frequency, expiry or credit type.
-- Trials: 3 days with card verification on the two paid tiers; no trial activation
-  behavior is added.
+- Trial availability and duration are shown per plan.
 - Box limits: 20/40/1000 total Boxes, 1C·2G·10G / 2C·4G·20G / 16C·32G·100G,
   and 2/4/1000 maximum runtime concurrency. CI sharing is a table row, not a footer.
 - Retention: overdue-only, with the reference point and maximum offset separated.
