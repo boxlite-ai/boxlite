@@ -486,9 +486,9 @@ engine adapter calls it from
 `VmmInstance::enter`:
 
 ```rust
-let mut vm = Vm::new(config, console)?; // validate, create the host VM, map RAM, load the kernel, build devices
-let stop = vm.stop_handle();   // Clone + Send; the shim's SIGTERM path calls stop.stop()
-let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopRequested
+let mut vm = Vm::new(config, console)?;
+let control = vm.control(); // Clone for lifecycle or disk operations.
+let exit = vm.run()?;       // Blocks on the thread that owns the VM.
 ```
 
 `run` returns once: a second call fails with `AlreadyRan`, since a VM never
@@ -496,6 +496,29 @@ restarts. `console` is a `Box<dyn Write + Send>` that receives the guest's
 serial output through a bounded queue; `run` waits up to one second for the
 sink to take the rest, and bytes it never takes are counted as dropped and
 logged.
+
+The driver holds exclusive access to `Vm` throughout `run`. The backend-independent
+`VmControl` shares lifecycle state and disk senders. External threads use
+`status()`, `stop()`, and `resize_disk()` without holding the VM itself.
+`StopHandle::stop` uses the same latch.
+
+`VmStatus` starts at `Created`, advances to `Running` as the driver starts,
+and becomes `Stopping` on a stop request or when the driver processes a
+terminal event. A stop in `Created` goes directly to `Stopping`, so the
+first `run` skips vCPU creation and takes the usual cleanup path.
+The first terminal event determines the outcome of an active run.
+
+On teardown, the driver joins all scoped vCPUs, shuts down virtio workers,
+finishes the console, and publishes `Exited`. A worker join timeout leaves
+the VM in `Stopping` until drop. The VM owns the RAM mappings until drop,
+which also publishes `Exited` if the VM was never run.
+
+Linux x86_64 also supports `Vm::new_device_less(config)`, which shares KVM
+preflight, RAM registration, and kernel and initramfs loading with `Vm::new`.
+It builds an empty chipset and starts no console worker. Configuring disks,
+filesystem, vsock, network, virtio console, or `hotplug_mib` (virtio-mem)
+returns `Error::Control` with `ControlReason::UnsupportedDevice` before KVM
+setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
 
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED
@@ -531,10 +554,8 @@ logged.
   - `create_engine` reports an engine missing from the build as
     `BoxliteError::Unsupported`, so a shim built without the `native` feature
     fails a native box the same typed way.
-- **The stop handle is not wired to SIGTERM yet.** The shim's SIGTERM handler
-  asks the guest to shut down over gRPC and re-raises the signal, which ends the
-  process with the VM inside it; `StopHandle::stop` joins that path once the
-  guest agent can answer.
+- **SIGTERM.** The shim asks the guest to shut down over gRPC and re-raises
+  the signal to end the process.
 
 ### Where the engine plugs in (M2)
 
@@ -557,7 +578,7 @@ logged.
 - **Runtime control.** The host-only `vmm.sock` handles disk resize and
   [directory delivery](../../../../src/vmm/README.md#host-directory-delivery)
   through a serial control thread. The shim routes resize requests by `block_id`
-  through [`VmControl`](../../../../src/vmm/README.md#virtio-block-device).
+  through [`VmControl::resize_disk`](../../../../src/vmm/README.md#virtio-block-device).
   The `box.sock` listener forwards guest RPCs, including Mount and Detach.
 - **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
   The host kernel enforces the shim's configured or inherited

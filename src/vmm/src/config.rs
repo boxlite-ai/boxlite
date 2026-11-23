@@ -108,6 +108,23 @@ pub struct NetConfig {
 }
 
 impl VmConfig {
+    #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+    pub(crate) fn validate_device_less(&self) -> Result<()> {
+        if !self.disks.is_empty()
+            || self.filesystem.is_some()
+            || self.vsock.is_some()
+            || self.network.is_some()
+            || self.virtio_console
+            || self.hotplug_mib > 0
+        {
+            return Err(Error::Control {
+                operation: "new_device_less",
+                reason: crate::ControlReason::UnsupportedDevice,
+            });
+        }
+        self.validate()
+    }
+
     /// Checks static configuration without calling the host. VM creation
     /// checks host and boot address limits before allocating RAM. The budget
     /// for the `virtio_mmio.device=` arguments that `devices::add_all` prepends is

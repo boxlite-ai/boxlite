@@ -221,7 +221,9 @@ fn a_timed_out_control_command_can_still_publish_its_target() {
     let memory = HotplugMemory::new(Arc::new(MockVm::new()), view.clone(), window);
     let mut registry = crate::control::ControlRegistry::default();
     let mut mem = VirtioMem::new(memory, registry.register_memory().unwrap());
-    let control = registry.finish();
+    let control = registry.finish(Arc::new(crate::lifecycle::Lifecycle::new(
+        crate::events::EventLoop::new().unwrap().sender(),
+    )));
     let sources = Arc::new(Sources::default());
     let interrupt = Arc::new(Interrupt::default());
     let mut context = context(&view, interrupt.clone());
