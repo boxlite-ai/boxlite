@@ -1831,7 +1831,7 @@ fn rtc_coexists_with_max_disks_balloon_and_aggregate_filesystem() {
         configuration,
         || Ok(MockVm::new()),
         |ram, config| crate::boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
-        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer, None),
     )
     .expect("real RTC and all configured virtio devices must compose without conflicts");
 

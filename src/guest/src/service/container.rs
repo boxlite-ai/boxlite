@@ -12,10 +12,9 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::{
     container_init_response, container_start_response, rootfs_init, BindMount, BindMountKind,
     Container as ContainerService, ContainerDetachRequest, ContainerDetachResponse,
-    ContainerInitError, ContainerInitErrorKind,
-    ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess, ContainerMountRequest,
-    ContainerMountResponse, ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess,
-    Filesystem, RootfsInit,
+    ContainerInitError, ContainerInitErrorKind, ContainerInitRequest, ContainerInitResponse,
+    ContainerInitSuccess, ContainerMountRequest, ContainerMountResponse, ContainerStartRequest,
+    ContainerStartResponse, ContainerStartSuccess, Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};

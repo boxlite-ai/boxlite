@@ -520,11 +520,19 @@ mod tests {
         init_error: Option<ContainerInitErrorKind>,
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
     ) -> ContainerInterface {
-        interface_delivering(start_reply, seen_init, Arc::default(), Arc::default()).await
+        interface_delivering(
+            start_reply,
+            init_error,
+            seen_init,
+            Arc::default(),
+            Arc::default(),
+        )
+        .await
     }
 
     async fn interface_delivering(
         start_reply: StartReply,
+        init_error: Option<ContainerInitErrorKind>,
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
         seen_mounts: Arc<Mutex<Vec<boxlite_shared::ContainerMountRequest>>>,
         seen_detaches: Arc<Mutex<Vec<boxlite_shared::ContainerDetachRequest>>>,
@@ -572,6 +580,7 @@ mod tests {
         let detaches = Arc::new(Mutex::new(Vec::new()));
         let mut iface = interface_delivering(
             StartReply::Success,
+            None,
             Arc::default(),
             Arc::clone(&mounts),
             Arc::clone(&detaches),

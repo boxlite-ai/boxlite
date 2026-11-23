@@ -507,7 +507,7 @@ fn the_guest_sees_a_disk_grown_while_it_runs() {
         format: DiskFormat::Qcow2,
         read_only: false,
     }];
-    let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
+    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).expect("create the VM");
     let control = vm.control();
     assert_eq!(
         control
