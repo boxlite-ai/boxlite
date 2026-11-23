@@ -105,6 +105,33 @@ describe('billing surface contracts', () => {
     expect(row('Key management')).toBeUndefined()
     expect(row('Enterprise SSO').textContent).toContain('Coming soon')
   })
+  it.each([
+    [1, '1 Second'],
+    [3600, '1 Hour'],
+    [5400, '1h 30m'],
+    [86401, '1d 1s'],
+  ])('shows the exact %i-second offer alongside the regular price', (durationSeconds, label) => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison
+          plans={[
+            { ...catalog[1], name: 'Starter', priceMonthlyCents: 500 },
+            { ...catalog[2], name: 'Team', priceMonthlyCents: 10000 },
+          ]}
+          trialOffers={[
+            { name: 'Team', eligible: true, durationSeconds },
+            { name: 'Starter', eligible: true, durationSeconds: 259200 },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    const [, starter, team] = host.querySelectorAll('thead th')
+    expect(starter.textContent).toContain('Free Trial 3 Days')
+    expect(team.textContent).toContain('Team$100')
+    expect(team.textContent).toContain(`Free Trial ${label}`)
+    const row = [...host.querySelectorAll('tr')].find((tr) => tr.cells[0].textContent === 'Trial eligibility')!
+    expect(row.cells[2].textContent).toBe(`${String(label).toLowerCase()} · card verification required`)
+  })
   it('keeps documented benefits attached to named tiers when the catalogue is reordered or incomplete', () => {
     const host = render(
       <MemoryRouter>
