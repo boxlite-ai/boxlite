@@ -118,8 +118,12 @@ func (p *outboundPolicyController) serveStatus(w http.ResponseWriter, r *http.Re
 	}
 	snapshot := p.active.Load()
 	var binding *managedProxyBinding
+	var diagnostic *proxyFailure
 	if snapshot.proxyDNS != nil {
 		binding = snapshot.proxyDNS.binding
+		if binding != nil && snapshot.state == "confirmed" && !snapshot.ingressClosed() && snapshot.dialer.diagnostic != nil {
+			diagnostic = snapshot.dialer.diagnostic.Load()
+		}
 	}
 	capabilities := []string{"revision-v1"}
 	if snapshot.managed {
@@ -133,7 +137,8 @@ func (p *outboundPolicyController) serveStatus(w http.ResponseWriter, r *http.Re
 		Capabilities []string             `json:"capabilities"`
 		Binding      *managedProxyBinding `json:"binding,omitempty"`
 		RecoveryGate *recoveryGate        `json:"recovery_gate,omitempty"`
-	}{snapshot.policy, snapshot.revision, snapshot.state, capabilities, binding, snapshot.recoveryGate})
+		Diagnostic   *proxyFailure        `json:"proxy_diagnostic,omitempty"`
+	}{snapshot.policy, snapshot.revision, snapshot.state, capabilities, binding, snapshot.recoveryGate, diagnostic})
 }
 
 func outboundETag(revision string) string { return strconv.Quote(revision) }

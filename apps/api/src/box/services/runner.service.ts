@@ -45,6 +45,7 @@ import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/r
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
+import { ProxyPlacementDiagnostic, ProxyPlacementError } from '../errors/proxy-placement.error'
 
 /** Disk usage at or above this percentage is logged as critical pressure. */
 const RUNNER_DISK_CRITICAL_THRESHOLD = 90
@@ -312,23 +313,36 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    const eligible = params.requiresProtectedProxyBootstrap
-      ? (
-          await Promise.all(
-            runners.map(async (runner) => ((await this.canBootstrapProtectedBox(runner)) ? runner : undefined)),
-          )
-        ).filter((runner): runner is Runner => runner !== undefined)
-      : runners
+    const eligible = params.requiresProtectedProxyBootstrap ? await this.proxyCapableRunners(runners) : runners
     return eligible.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
   }
 
-  private async canBootstrapProtectedBox(runner: Runner): Promise<boolean> {
-    if (runner.apiVersion !== '0') return false
+  private async proxyCapableRunners(runners: Runner[]): Promise<Runner[]> {
+    const assessed = await Promise.all(
+      runners.map(async (runner) => ({ runner, capability: await this.proxyBootstrapCapability(runner) })),
+    )
+    const eligible = assessed.filter(({ capability }) => capability === 'supported').map(({ runner }) => runner)
+    if (!eligible.length && assessed.length && assessed.every(({ capability }) => capability !== 'unverified')) {
+      const requiresTls = assessed.some(({ capability }) => capability === 'runner_proxy_tls_unsupported')
+      throw new ProxyPlacementError(requiresTls ? 'runner_proxy_tls_unsupported' : 'runner_proxy_unsupported', 'create')
+    }
+    return eligible
+  }
+
+  private async proxyBootstrapCapability(
+    runner: Runner,
+  ): Promise<'supported' | 'unverified' | ProxyPlacementDiagnostic> {
+    if (runner.apiVersion === '2') return 'runner_proxy_unsupported'
+    if (runner.apiVersion !== '0' || !runner.apiUrl) return 'unverified'
     try {
+      const protocol = new URL(runner.apiUrl).protocol
+      if (protocol === 'http:') return 'runner_proxy_tls_unsupported'
+      if (protocol !== 'https:') return 'unverified'
       const adapter = await this.runnerAdapterFactory.create(runner)
-      return (await adapter.supportsProtectedBootstrap?.(true)) === true
+      const capability = await adapter.protectedBootstrapCapability?.(true)
+      return capability === 'unsupported' ? 'runner_proxy_unsupported' : (capability ?? 'unverified')
     } catch {
-      return false
+      return 'unverified'
     }
   }
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -24,6 +25,8 @@ func TestProxyConnector_AddressPolicy(t *testing.T) {
 		{name: "connection-loopback", connectionIP: "::ffff:127.0.0.1"},
 		{name: "no-ipv6-business-target", connectionIP: "2400::1234"},
 		{name: "private-proxy", endpoint: "10.0.0.2"},
+		{name: "private-policy-target", policyIP: "10.88.0.42"},
+		{name: "private-connection-target", connectionIP: "10.88.0.42"},
 		{name: "pcp-longest-match", endpoint: "192.0.0.9", dials: 1},
 		{name: "pcp-exception-protected", endpoint: "192.0.0.9", protected: "192.0.0.0/24"},
 		{name: "neighbor-denied", endpoint: "192.0.0.8"},
@@ -293,12 +296,64 @@ func TestProxyConnector_StopBetweenCandidates(t *testing.T) {
 				}
 				return conn, err
 			})
+			dialer.diagnostic = new(atomic.Pointer[proxyFailure])
 			conn, err := dialer.DialHost(caller, proxyTestTarget(proxyTestFirstIP))
 			requireProxyFailure(t, conn, err, want)
+			code := dialer.diagnostic.Load()
+			if expire && (code == nil || *code != proxyUnreachable) || !expire && code != nil {
+				t.Fatalf("unexpected diagnostic after interrupted retry: %v", code)
+			}
 			if dials != 1 || *direct != 0 {
 				t.Fatalf("proxy dials=%d, direct dials=%d", dials, *direct)
 			}
 			peer.check(t)
+		})
+	}
+}
+
+func TestProxyConnector_DiagnosticAfterRemoteRefusal(t *testing.T) {
+	for _, scenario := range []string{"all-refused", "local-skip", "second-dial-timeout"} {
+		t.Run(scenario, func(t *testing.T) {
+			cfg := proxyTestConfig("socks5")
+			reject := []byte{5, 4, 0, 1, 0, 0, 0, 0, 0, 0}
+			peers := []proxyTestPeer{proxyTestSOCKSPeer(t, 34, reject, false)}
+			switch scenario {
+			case "all-refused":
+				peers = append(peers, proxyTestSOCKSPeer(t, 35, reject, false))
+			case "local-skip":
+				cfg.protected = []netip.Prefix{netip.PrefixFrom(proxyTestSecondIP, 32)}
+			}
+			var dials int
+			connect := mustProxyConnector(t, cfg, func(ctx context.Context, network, address string) (net.Conn, error) {
+				dials++
+				if dials == 2 && scenario == "second-dial-timeout" {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				if dials > len(peers) {
+					t.Fatalf("unexpected proxy dial %d", dials)
+				}
+				return proxyTestDial(peers[dials-1], cfg.endpoint)(ctx, network, address)
+			})
+			dialer, direct := proxyTestByName(t, connect)
+			dialer.diagnostic = new(atomic.Pointer[proxyFailure])
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			conn, err := dialer.DialHost(ctx, proxyTestTarget(proxyTestFirstIP))
+			wantLegacy, wantDiagnostic, wantDials := proxyHandshakeFailed, proxyUnreachable, len(peers)
+			if scenario == "second-dial-timeout" {
+				wantLegacy, wantDiagnostic, wantDials = proxyTimeout, proxyTimeout, 2
+			}
+			requireProxyFailure(t, conn, err, wantLegacy)
+			if code := dialer.diagnostic.Load(); code == nil || *code != wantDiagnostic {
+				t.Fatalf("proxy diagnostic = %v, want %s", code, wantDiagnostic)
+			}
+			if dials != wantDials || *direct != 0 {
+				t.Fatalf("proxy dials=%d, direct dials=%d", dials, *direct)
+			}
+			for _, peer := range peers {
+				peer.check(t)
+			}
 		})
 	}
 }

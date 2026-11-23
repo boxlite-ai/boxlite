@@ -126,6 +126,7 @@ export class ManagedOutboundCoordinator {
       receipt.unbind_settlement === null &&
       installedProxy !== undefined &&
       this.confirms(receipt, { snapshot, binding: managed.binding })
+    const diagnostic = confirmed && receipt ? await this.readDiagnostic(id, org, receipt) : undefined
     return {
       persisted: snapshot,
       runtime_persisted: receipt?.durable.snapshot ?? snapshot,
@@ -142,8 +143,39 @@ export class ManagedOutboundCoordinator {
             ? { policy_revision: installed.snapshot.revision, proxy: installedProxy }
             : null,
         runtime_readback: receipt ? 'authenticated' : 'unknown',
+        ...(diagnostic ? { diagnostic: { code: diagnostic } } : {}),
       },
     }
+  }
+
+  private async readDiagnostic(id: string, org: string, receipt: ManagedReceipt) {
+    if (!receipt.proxy_diagnostic) return undefined
+    const box = await this.store.readForDiagnostic(id, org)
+    if (
+      !box ||
+      box.runnerId !== receipt.runner_id ||
+      box.prevRunnerId ||
+      box.pending ||
+      box.state !== BoxState.STARTED ||
+      box.desiredState !== BoxDesiredState.STARTED
+    )
+      return undefined
+    const record = outboundRecord(box)
+    const managed = record.managed
+    if (
+      record.bootstrap ||
+      record.pending ||
+      !managed?.binding ||
+      managed.runnerId !== receipt.runner_id ||
+      managed.epoch !== receipt.epoch ||
+      managed.pending ||
+      managed.restoration ||
+      managed.retirement ||
+      managed.unbindRelease ||
+      !this.confirms(receipt, { snapshot: persistedOutbound(box), binding: managed.binding })
+    )
+      return undefined
+    return receipt.proxy_diagnostic
   }
 
   private view(id: string, org: string) {

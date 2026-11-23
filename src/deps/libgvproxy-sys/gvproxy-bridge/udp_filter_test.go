@@ -237,6 +237,7 @@ func (g *guestTap) answerARP(frame []byte) bool {
 	var size [4]byte
 	binary.BigEndian.PutUint32(size[:], uint32(len(reply)))
 	_ = g.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	defer g.conn.SetWriteDeadline(time.Time{})
 	_, _ = g.conn.Write(append(size[:], reply...))
 	return true
 }
@@ -260,6 +261,8 @@ func (g *guestTap) send(t *testing.T, frame []byte) {
 	if err := g.conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("SetWriteDeadline: %v", err)
 	}
+	// A later guest stack write uses the same framed connection.
+	defer g.conn.SetWriteDeadline(time.Time{})
 	if _, err := g.conn.Write(append(size[:], frame...)); err != nil {
 		t.Fatalf("write frame: %v", err)
 	}
@@ -315,6 +318,10 @@ func ipv4Frame(t *testing.T, src, dst tcpip.Address, proto tcpip.TransportProtoc
 }
 
 func udpFrame(t *testing.T, dstIP string, dstPort uint16, payload []byte) []byte {
+	return udpFrameFrom(t, dstIP, guestSrcPort, dstPort, payload)
+}
+
+func udpFrameFrom(t *testing.T, dstIP string, srcPort, dstPort uint16, payload []byte) []byte {
 	t.Helper()
 	cfg := testGvproxyConfig()
 	src, dst := addr(t, cfg.GuestIP), addr(t, dstIP)
@@ -322,7 +329,7 @@ func udpFrame(t *testing.T, dstIP string, dstPort uint16, payload []byte) []byte
 	length := header.UDPMinimumSize + len(payload)
 	segment := header.UDP(make([]byte, length))
 	segment.Encode(&header.UDPFields{
-		SrcPort: guestSrcPort,
+		SrcPort: srcPort,
 		DstPort: dstPort,
 		Length:  uint16(length),
 	})

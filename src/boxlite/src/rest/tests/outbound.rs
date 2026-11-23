@@ -404,6 +404,13 @@ async fn managed_proxy_create_preserves_admission_and_optional_box_id() {
             None,
         ),
         (
+            Some("build-egress"),
+            503,
+            r#"{"code":"outbound_create_rejected","diagnostic":{"code":"runner_proxy_tls_unsupported"}}"#,
+            ManagedCreateAdmission::Rejected,
+            None,
+        ),
+        (
             None,
             408,
             r#"{"code":"outbound_create_admitted","boxId":"admitted-box"}"#,

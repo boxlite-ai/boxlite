@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -11,10 +12,65 @@ import (
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
+
+func TestManagedNetworkReportsBusinessProxyFailureOnInstalledRoute(t *testing.T) {
+	var dials int
+	var route *proxyDNSResolver
+	tap := startNetworkWithSeams(t, testGvproxyConfig(), networkSeams{beforeAttach: func(ctx context.Context, p *outboundPolicyController) {
+		route = &proxyDNSResolver{
+			work:    newDNSLookupWork(ctx),
+			binding: &managedProxyBinding{RegistrationID: "fixture-proxy", RegistrationRevision: "1", Epoch: "fixture-epoch"},
+			connect: mustProxyConnector(t, proxyTestConfig("http"), func(ctx context.Context, network, addr string) (net.Conn, error) {
+				dials++
+				return refuseDial(ctx, network, addr)
+			}),
+		}
+		gateway, err := p.installManagedNetwork(ctx, route.work, route, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(gateway.server.close)
+	}})
+	readStatus := func() map[string]any {
+		t.Helper()
+		response := httptest.NewRecorder()
+		tap.policy.ServeHTTP(response, httptest.NewRequest(http.MethodGet, outboundStatusPath, nil))
+		var body map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusOK {
+			t.Fatalf("status %d: %s (error %v)", response.Code, response.Body, err)
+		}
+		return body
+	}
+	if status := readStatus(); status["proxy_diagnostic"] != nil {
+		t.Fatalf("new installation already has a diagnostic: %v", status)
+	}
+	old := tap.policy.active.Load()
+	target := proxyTestTarget(proxyTestFirstIP)
+	conn, err := old.dialer.byAddress(target)(context.Background())
+	requireProxyFailure(t, conn, err, proxyUnreachable)
+	if status := readStatus(); status["proxy_diagnostic"] != "proxy_unreachable" || dials != 1 {
+		t.Fatalf("refused proxy dial did not publish a diagnostic: %v, dials %d", status, dials)
+	}
+	target.Port = 0
+	conn, err = old.dialer.byAddress(target)(context.Background())
+	requireProxyFailure(t, conn, err, proxyHandshakeFailed)
+	if status := readStatus(); status["proxy_diagnostic"] != "proxy_unreachable" || dials != 1 {
+		t.Fatalf("local policy refusal changed the diagnostic: %v, dials %d", status, dials)
+	}
+	if err := replaceManagedRouteForTest(tap.policy, context.Background(), outboundPolicy{Mode: "enabled"}, "replacement", route); err != nil {
+		t.Fatal(err)
+	}
+	conn, err = old.dialer.byAddress(proxyTestTarget(proxyTestFirstIP))(context.Background())
+	requireProxyFailure(t, conn, err, proxyUnreachable)
+	if status := readStatus(); status["revision"] != "replacement" || status["proxy_diagnostic"] != nil || dials != 2 {
+		t.Fatalf("old work leaked a diagnostic into replacement: %v, dials %d", status, dials)
+	}
+}
 
 func TestManagedNetworkClosesOldUDPBeforeBinding(t *testing.T) {
 	route, _ := startProxyDNSFixture(t, http.NotFoundHandler())
@@ -31,8 +87,10 @@ func TestManagedNetworkClosesOldUDPBeforeBinding(t *testing.T) {
 		LocalAddress: addr(t, unlistedIP), LocalPort: port,
 		RemoteAddress: addr(t, cfg.GuestIP), RemotePort: guestSrcPort,
 	}
-	endpointPresent := func() bool {
-		return tap.policy.stack.FindTransportEndpoint(ipv4.ProtocolNumber, udp.ProtocolNumber, id, tap.policy.nic) != nil
+	endpointPresent := func(guestPort uint16) bool {
+		endpoint := id
+		endpoint.RemotePort = guestPort
+		return tap.policy.stack.FindTransportEndpoint(ipv4.ProtocolNumber, udp.ProtocolNumber, endpoint, tap.policy.nic) != nil
 	}
 
 	receive := func(want string) net.Addr {
@@ -48,8 +106,14 @@ func TestManagedNetworkClosesOldUDPBeforeBinding(t *testing.T) {
 	tap.send(t, udpFrame(t, unlistedIP, port, []byte("before bind")))
 	oldPeer := receive("before bind")
 	oldRelay := tap.policy.active.Load().udpRelay
-	if oldRelay == nil || !endpointPresent() {
+	if oldRelay == nil || !endpointPresent(guestSrcPort) {
 		t.Fatal("unbound managed relay did not register a Guest endpoint")
+	}
+	if _, err := upstream.WriteTo([]byte("old control reply"), oldPeer); err != nil {
+		t.Fatalf("send old control reply: %v", err)
+	}
+	if payload, ok := readManagedGuestUDP(tap, port, guestSrcPort); !ok || payload != "old control reply" {
+		t.Fatalf("old Guest port did not receive its control reply: %q", payload)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), forwardWindow)
@@ -57,7 +121,7 @@ func TestManagedNetworkClosesOldUDPBeforeBinding(t *testing.T) {
 	if err := replaceManagedRouteForTest(tap.policy, ctx, outboundPolicy{Mode: "enabled"}, "bound", route); err != nil {
 		t.Fatal(err)
 	}
-	if !oldRelay.generation.isSealed() || oldRelay.ctx.Err() == nil || endpointPresent() {
+	if !oldRelay.generation.isSealed() || oldRelay.ctx.Err() == nil || endpointPresent(guestSrcPort) {
 		t.Fatal("binding succeeded while the old UDP endpoint was live")
 	}
 	_, _ = upstream.WriteTo([]byte("late reply"), oldPeer)
@@ -69,10 +133,98 @@ func TestManagedNetworkClosesOldUDPBeforeBinding(t *testing.T) {
 	if err := replaceManagedRouteForTest(tap.policy, nextCtx, outboundPolicy{Mode: "enabled", AllowNet: []string{unlistedIP}}, "unbound-again", nil); err != nil {
 		t.Fatal(err)
 	}
-	tap.send(t, udpFrame(t, unlistedIP, port, []byte("after unbind")))
-	receive("after unbind")
-	if snapshot := tap.policy.active.Load(); snapshot.udpRelay == oldRelay || !endpointPresent() {
+	if _, err := upstream.WriteTo([]byte("late reply after unbind"), oldPeer); err != nil {
+		t.Fatalf("send delayed reply after unbind: %v", err)
+	}
+	if payload, ok := readManagedGuestUDP(tap, port, guestSrcPort); ok {
+		t.Fatalf("old Guest port received a packet after unbind: %q", payload)
+	}
+	const freshGuestPort = guestSrcPort + 1
+	tap.send(t, udpFrameFrom(t, unlistedIP, freshGuestPort, port, []byte("after unbind")))
+	freshPeer := receive("after unbind")
+	if snapshot := tap.policy.active.Load(); snapshot.udpRelay == oldRelay || endpointPresent(guestSrcPort) || !endpointPresent(freshGuestPort) {
 		t.Fatal("unbind did not create a fresh managed UDP endpoint")
+	}
+	if _, err := upstream.WriteTo([]byte("fresh reply after unbind"), freshPeer); err != nil {
+		t.Fatalf("send fresh reply after unbind: %v", err)
+	}
+	if payload, ok := readManagedGuestUDP(tap, port, freshGuestPort); !ok || payload != "fresh reply after unbind" {
+		t.Fatalf("fresh Guest port did not receive its reply: %q", payload)
+	}
+}
+
+func TestManagedNetworkPreservesDHCPWhileBlockingExternalUDP(t *testing.T) {
+	route, _ := startProxyDNSFixture(t, http.NotFoundHandler())
+	cfg := testGvproxyConfig()
+	tap := startNetworkWithSeams(t, cfg, networkSeams{beforeAttach: func(ctx context.Context, policy *outboundPolicyController) {
+		gateway, err := policy.installManagedNetwork(ctx, route.work, route, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(gateway.server.close)
+	}})
+
+	const xid = uint32(0x01234567)
+	request := make([]byte, 240)
+	request[0], request[1], request[2] = 1, 1, 6 // BOOTREQUEST, Ethernet, six-byte MAC.
+	binary.BigEndian.PutUint32(request[4:8], xid)
+	copy(request[12:16], net.ParseIP(cfg.GuestIP).To4())
+	copy(request[28:34], mac(t, cfg.GuestMac))
+	copy(request[236:240], []byte{99, 130, 83, 99})
+	request = append(request, 53, 1, 3, 255) // DHCPREQUEST and end option.
+	tap.send(t, udpFrameFrom(t, cfg.GatewayIP, 68, 67, request))
+	ack, received := readManagedGuestUDP(tap, 67, 68)
+	if !received || len(ack) < 240 || ack[0] != 2 || binary.BigEndian.Uint32([]byte(ack[4:8])) != xid ||
+		ack[28:34] != string(mac(t, cfg.GuestMac)) || net.IP(ack[16:20]).String() != cfg.GuestIP ||
+		ack[236:240] != string(request[236:240]) {
+		t.Fatal("the bound guest missed the lease reply for its DHCP transaction")
+	}
+	var gotAck, gotServer bool
+	for options := []byte(ack[240:]); len(options) > 0 && options[0] != 255; {
+		if options[0] == 0 {
+			options = options[1:]
+			continue
+		}
+		if len(options) < 2 || len(options) < 2+int(options[1]) {
+			t.Fatal("malformed DHCP reply option")
+		}
+		value := options[2 : 2+int(options[1])]
+		switch options[0] {
+		case 53:
+			gotAck = len(value) == 1 && value[0] == 5
+		case 54:
+			gotServer = net.IP(value).String() == cfg.GatewayIP
+		}
+		options = options[2+len(value):]
+	}
+	if !gotAck || !gotServer {
+		t.Fatal("the matching DHCP reply was not an ACK from the gateway")
+	}
+	upstream, port := listenUDP(t)
+	tap.send(t, udpFrame(t, unlistedIP, port, []byte("external while bound")))
+	assertDatagramDropped(t, upstream, "bound DHCP control allowed external UDP")
+}
+
+func readManagedGuestUDP(tap *guestTap, srcPort, dstPort uint16) (string, bool) {
+	deadline := time.NewTimer(forwardWindow)
+	defer deadline.Stop()
+	for {
+		select {
+		case frame := <-tap.frames:
+			if len(frame) < header.EthernetMinimumSize+header.IPv4MinimumSize || header.Ethernet(frame).Type() != header.IPv4ProtocolNumber {
+				continue
+			}
+			ip := header.IPv4(frame[header.EthernetMinimumSize:])
+			if ip.TransportProtocol() != header.UDPProtocolNumber || len(ip.Payload()) < header.UDPMinimumSize {
+				continue
+			}
+			packet := header.UDP(ip.Payload())
+			if packet.SourcePort() == srcPort && packet.DestinationPort() == dstPort {
+				return string(packet.Payload()), true
+			}
+		case <-deadline.C:
+			return "", false
+		}
 	}
 }
 

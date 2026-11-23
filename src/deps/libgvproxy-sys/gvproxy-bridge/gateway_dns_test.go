@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -94,7 +95,7 @@ func TestGatewayDNSStalledTCPWritesReleaseSessionSlots(t *testing.T) {
 			t.Fatalf("stalled client still has readable output: %v", err)
 		}
 	}
-	if reply := gatewayTCPQuery(t, open(), query); reply.Rcode != dns.RcodeSuccess {
+	if reply := gatewayTCPQuery(t, open(), query, forwardWindow); reply.Rcode != dns.RcodeSuccess {
 		t.Fatalf("fresh TCP DNS session rejected: %v", reply)
 	}
 }
@@ -125,7 +126,7 @@ func TestGatewayDNSUsesCapturedProxyOnBothPort53Listeners(t *testing.T) {
 		t.Cleanup(gateway.server.close)
 	}})
 	query := new(dns.Msg).SetQuestion("service.example.net.", dns.TypeA)
-	requireGatewayDNSAddress(t, gatewayUDPQuery(t, tap, cfg.GatewayIP, query), "93.184.216.34")
+	requireGatewayDNSAddress(t, gatewayUDPQuery(t, tap, cfg.GatewayIP, query, forwardWindow), "93.184.216.34")
 
 	update := httptest.NewRecorder()
 	gateway.ServeHTTP(update, httptest.NewRequest(http.MethodPost, "/services/dns/add", strings.NewReader(`{"name":"local.example.net.","defaultIP":"192.0.2.5"}`)))
@@ -133,25 +134,25 @@ func TestGatewayDNSUsesCapturedProxyOnBothPort53Listeners(t *testing.T) {
 		t.Fatalf("add DNS zone: %s", update.Body.String())
 	}
 	local := new(dns.Msg).SetQuestion("missing.local.example.net.", dns.TypeA)
-	requireGatewayDNSAddress(t, gatewayUDPQuery(t, tap, cfg.GatewayIP, local), "192.0.2.5")
+	requireGatewayDNSAddress(t, gatewayUDPQuery(t, tap, cfg.GatewayIP, local, forwardWindow), "192.0.2.5")
 	conn, err := startGuestStack(t, tap, cfg)(cfg.GatewayIP, 53)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	tcp := &dns.Conn{Conn: conn}
-	requireGatewayDNSAddress(t, gatewayTCPQuery(t, tcp, query), "93.184.216.34")
-	requireGatewayDNSAddress(t, gatewayTCPQuery(t, tcp, local), "192.0.2.5")
+	requireGatewayDNSAddress(t, gatewayTCPQuery(t, tcp, query, forwardWindow), "93.184.216.34")
+	requireGatewayDNSAddress(t, gatewayTCPQuery(t, tcp, local, forwardWindow), "192.0.2.5")
 	if tunnels.Load() != 2 {
 		t.Fatalf("two external port 53 queries opened %d tunnels", tunnels.Load())
 	}
 
 	snapshot := *tap.policy.active.Load()
 	tap.policy.publish(&snapshot, "pending")
-	if reply := gatewayTCPQuery(t, tcp, query); reply.Rcode != dns.RcodeServerFailure {
+	if reply := gatewayTCPQuery(t, tcp, query, forwardWindow); reply.Rcode != dns.RcodeServerFailure {
 		t.Fatalf("external query during cutover: %v", reply)
 	}
-	requireGatewayDNSAddress(t, gatewayTCPQuery(t, tcp, local), "192.0.2.5")
+	requireGatewayDNSAddress(t, gatewayTCPQuery(t, tcp, local, forwardWindow), "192.0.2.5")
 	ips, err := snapshot.dialer.resolve(context.Background(), "service.example.net")
 	if err != nil || len(ips) != 1 || ips[0].String() != "93.184.216.34" {
 		t.Fatalf("captured business route resolved %v, error %v", ips, err)
@@ -161,6 +162,155 @@ func TestGatewayDNSUsesCapturedProxyOnBothPort53Listeners(t *testing.T) {
 	tap.policy.publish(&snapshot, "confirmed")
 	if reply := gateway.answer(context.Background(), query); reply != nil || tunnels.Load() != 4 {
 		t.Fatalf("buffered DNS after disable: reply=%v, tunnels=%d", reply, tunnels.Load())
+	}
+}
+
+func TestManagedDNSFaultsFailClosedWithoutChangingRoute(t *testing.T) {
+	for _, fault := range []string{"proxy-stall", "resolver-stall", "invalid-resolver-response"} {
+		t.Run(fault, func(t *testing.T) {
+			t.Parallel()
+			const budget = proxyDNSLookupTimeout + 2*time.Second
+			const wantIPv4 = "93.184.216.34"
+			const wantIPv6 = "2001:db8::34"
+			var inject atomic.Bool
+			var attempts, requests, directLookups, directDials atomic.Int32
+			resolver, tunnels := startProxyDNSFixtureWithConnect(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				query := readFixtureDNSRequest(w, r)
+				if query == nil {
+					return
+				}
+				requests.Add(1)
+				if inject.Load() && fault == "resolver-stall" {
+					<-r.Context().Done()
+					return
+				}
+				reply := new(dns.Msg).SetReply(query)
+				question := query.Question[0]
+				switch question.Qtype {
+				case dns.TypeA:
+					reply.Answer = []dns.RR{&dns.A{Hdr: fixtureDNSHeader(question.Name, dns.TypeA), A: net.ParseIP(wantIPv4)}}
+				case dns.TypeAAAA:
+					reply.Answer = []dns.RR{&dns.AAAA{Hdr: fixtureDNSHeader(question.Name, dns.TypeAAAA), AAAA: net.ParseIP(wantIPv6)}}
+				}
+				if inject.Load() && fault == "invalid-resolver-response" {
+					reply.Id++
+				}
+				writeFixtureDNSReply(w, reply)
+			}), func(r *http.Request) bool {
+				attempts.Add(1)
+				if inject.Load() && fault == "proxy-stall" {
+					<-r.Context().Done()
+					return false
+				}
+				return true
+			})
+
+			cfg := testGvproxyConfig()
+			fallback := new(gatewayTestSystemResolver)
+			tap := startNetworkWithSeams(t, cfg, networkSeams{
+				resolve: func(ctx context.Context, host string) ([]net.IP, error) {
+					directLookups.Add(1)
+					return refuseResolve(ctx, host)
+				},
+				dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					directDials.Add(1)
+					return refuseDial(ctx, network, address)
+				},
+				beforeAttach: func(ctx context.Context, policy *outboundPolicyController) {
+					gateway, err := policy.installManagedNetwork(ctx, resolver.work, resolver, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					gateway.resolver = fallback
+					t.Cleanup(gateway.server.close)
+				},
+			})
+			installed := tap.policy.active.Load()
+			// The TCP guest stack consumes the tap's received frames, so send
+			// the hand-built UDP queries before attaching it.
+			for _, entry := range []string{"gateway-udp", "gateway-tcp", "business-host"} {
+				var tcp *dns.Conn
+				if entry == "gateway-tcp" {
+					conn, err := startGuestStack(t, tap, cfg)(cfg.GatewayIP, 53)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = conn.Close() })
+					tcp = &dns.Conn{Conn: conn}
+				}
+				probe := func(phase string, succeed bool) {
+					t.Helper()
+					name := phase + "." + entry + ".example.net."
+					var query, reply *dns.Msg
+					start := time.Now()
+					switch entry {
+					case "gateway-udp":
+						query = new(dns.Msg).SetQuestion(name, dns.TypeA)
+						reply = gatewayUDPQuery(t, tap, cfg.GatewayIP, query, budget)
+					case "gateway-tcp":
+						query = new(dns.Msg).SetQuestion(name, dns.TypeAAAA)
+						reply = gatewayTCPQuery(t, tcp, query, budget)
+					case "business-host":
+						ctx, cancel := context.WithTimeout(context.Background(), budget)
+						defer cancel()
+						addresses, err := tap.policy.active.Load().dialer.resolve(ctx, name)
+						if succeed {
+							if err != nil || len(addresses) != 2 || addresses[0].String() != wantIPv4 || addresses[1].String() != wantIPv6 {
+								t.Fatalf("%s: resolved %v, error %v", entry, addresses, err)
+							}
+						} else if len(addresses) != 0 || err == nil || (fault != "invalid-resolver-response" && !errors.Is(err, context.DeadlineExceeded)) {
+							t.Fatalf("%s: fault %s yielded %v, error %v", entry, fault, addresses, err)
+						}
+					}
+					elapsed := time.Since(start)
+					if !succeed {
+						t.Logf("%s: %s completed in %s", entry, fault, elapsed)
+						if fault != "invalid-resolver-response" && (elapsed < proxyDNSLookupTimeout || elapsed > budget) {
+							t.Fatalf("%s: %s completed in %s outside the DNS budget", entry, fault, elapsed)
+						}
+					}
+					if reply == nil {
+						return // The business lookup checked its returned addresses above.
+					}
+					if reply.Id != query.Id || len(reply.Question) != 1 || reply.Question[0] != query.Question[0] {
+						t.Fatalf("%s: mismatched DNS response: %v", entry, reply)
+					}
+					if !succeed {
+						if reply.Rcode != dns.RcodeServerFailure || len(reply.Answer) != 0 {
+							t.Fatalf("%s: expected SERVFAIL without answers, got %v", entry, reply)
+						}
+						return
+					}
+					if query.Question[0].Qtype == dns.TypeA {
+						requireGatewayDNSAddress(t, reply, wantIPv4)
+					} else if reply.Rcode != dns.RcodeSuccess || len(reply.Answer) != 1 ||
+						reply.Answer[0].Header().Rrtype != dns.TypeAAAA || reply.Answer[0].(*dns.AAAA).AAAA.String() != wantIPv6 {
+						t.Fatalf("%s: unexpected AAAA response: %v", entry, reply)
+					}
+				}
+
+				probe("before", true)
+				attemptBefore, tunnelBefore, requestBefore := attempts.Load(), tunnels.Load(), requests.Load()
+				inject.Store(true)
+				probe("fault", false)
+				inject.Store(false)
+				wantEstablished := int32(1)
+				if fault == "proxy-stall" {
+					wantEstablished = 0
+				}
+				if attempts.Load()-attemptBefore != 1 || tunnels.Load()-tunnelBefore != wantEstablished || requests.Load()-requestBefore != wantEstablished {
+					t.Fatalf("%s: fault %s reached wrong boundary: CONNECT=%d, tunnels=%d, DoH=%d", entry, fault,
+						attempts.Load()-attemptBefore, tunnels.Load()-tunnelBefore, requests.Load()-requestBefore)
+				}
+				probe("after", true)
+			}
+			if fallback.calls.Load()+directLookups.Load()+directDials.Load() != 0 {
+				t.Fatal("managed DNS probed a direct resolver or socket")
+			}
+			if tap.policy.active.Load() != installed || installed.state != "confirmed" || installed.proxyDNS != resolver {
+				t.Fatal("managed DNS fault changed the confirmed route")
+			}
+		})
 	}
 }
 
@@ -186,26 +336,26 @@ func TestGatewayDNSUnboundUsesSystemResolverOnBothListeners(t *testing.T) {
 		t.Cleanup(gateway.server.close)
 	}})
 	query := new(dns.Msg).SetQuestion("service.example.net.", dns.TypeA)
-	requireGatewayDNSAddress(t, gatewayUDPQuery(t, tap, cfg.GatewayIP, query), "192.0.2.31")
+	requireGatewayDNSAddress(t, gatewayUDPQuery(t, tap, cfg.GatewayIP, query, forwardWindow), "192.0.2.31")
 	conn, err := startGuestStack(t, tap, cfg)(cfg.GatewayIP, 53)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	requireGatewayDNSAddress(t, gatewayTCPQuery(t, &dns.Conn{Conn: conn}, query), "192.0.2.31")
+	requireGatewayDNSAddress(t, gatewayTCPQuery(t, &dns.Conn{Conn: conn}, query, forwardWindow), "192.0.2.31")
 	if got := resolver.calls.Load(); got != 2 {
 		t.Fatalf("unbound queries resolved %d times", got)
 	}
 }
 
-func gatewayUDPQuery(t *testing.T, tap *guestTap, gateway string, query *dns.Msg) *dns.Msg {
+func gatewayUDPQuery(t *testing.T, tap *guestTap, gateway string, query *dns.Msg, timeout time.Duration) *dns.Msg {
 	t.Helper()
 	wire, err := query.Pack()
 	if err != nil {
 		t.Fatal(err)
 	}
 	tap.send(t, udpFrame(t, gateway, 53, wire))
-	timer := time.NewTimer(forwardWindow)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		select {
@@ -228,9 +378,9 @@ func gatewayUDPQuery(t *testing.T, tap *guestTap, gateway string, query *dns.Msg
 	}
 }
 
-func gatewayTCPQuery(t *testing.T, conn *dns.Conn, query *dns.Msg) *dns.Msg {
+func gatewayTCPQuery(t *testing.T, conn *dns.Conn, query *dns.Msg, timeout time.Duration) *dns.Msg {
 	t.Helper()
-	_ = conn.SetDeadline(time.Now().Add(forwardWindow))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := conn.WriteMsg(query); err != nil {
 		t.Fatal(err)
 	}

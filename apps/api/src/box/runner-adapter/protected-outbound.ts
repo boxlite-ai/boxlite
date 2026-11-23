@@ -9,6 +9,11 @@ import type { ProtectedBootRoute } from './protected-runner'
 export type ManagedBinding = { epoch: string; registration_id: string; registration_revision: string }
 export type ManagedSnapshot = { snapshot: OutboundSnapshot; binding: ManagedBinding | null }
 export type ManagedUpdate = { attempt_id: string; predecessor: ManagedSnapshot; candidate: ManagedSnapshot }
+export type ProxyConnectionDiagnostic =
+  | 'proxy_auth_failed'
+  | 'proxy_unreachable'
+  | 'proxy_timeout'
+  | 'proxy_handshake_failed'
 
 type ManagedMaterial = ProtectedBootRoute & { binding: ManagedBinding }
 
@@ -25,6 +30,7 @@ export type ManagedReceipt = {
   epoch: string
   durable: ManagedSnapshot
   installed: ManagedSnapshot | null
+  proxy_diagnostic?: ProxyConnectionDiagnostic
   pending_attempt: string | null
   unbind_settlement: string | null
   rollback: { failed: ManagedUpdate; restored: ManagedSnapshot } | null
@@ -173,11 +179,18 @@ export function checkedManagedReceipt(value: unknown, boxId: string, runnerId: s
   const wrapper = record(value)
   const receipt = record(wrapper?.receipt)
   if (wrapper?.box_id !== boxId || receipt?.runner_id !== runnerId || receipt.epoch !== epoch) throw invalid()
+  const code = receipt.proxy_diagnostic
+  const knownDiagnostic =
+    code === 'proxy_auth_failed' ||
+    code === 'proxy_unreachable' ||
+    code === 'proxy_timeout' ||
+    code === 'proxy_handshake_failed'
   return {
     runner_id: runnerId,
     epoch,
     durable: checkedManagedSnapshot(receipt.durable, epoch),
     installed: receipt.installed === null ? null : checkedManagedSnapshot(receipt.installed, epoch),
+    ...(knownDiagnostic ? { proxy_diagnostic: code } : {}),
     pending_attempt: token(receipt.pending_attempt),
     unbind_settlement: token(receipt.unbind_settlement),
     rollback: rollbackEvidence(receipt.rollback, epoch),

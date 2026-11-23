@@ -41,13 +41,14 @@ func TestIntegrationCreateBoxIdempotentOnReplay(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	createDto := dto.CreateBoxDTO{
-		Id:           "replay-idempotency-box",
-		Image:        "alpine:latest",
-		OsUser:       "root",
-		CpuQuota:     cpuQuota(1),
-		MemoryQuota:  1,
-		StorageQuota: 1,
-		SkipStart:    boolPtr(true),
+		Id:              "replay-idempotency-box",
+		Image:           "alpine:latest",
+		OsUser:          "root",
+		CpuQuota:        cpuQuota(1),
+		MemoryQuota:     1,
+		StorageQuota:    1,
+		OutboundEnabled: boolPtr(false),
+		SkipStart:       boolPtr(true),
 	}
 
 	firstID, _, err := client.Create(ctx, createDto)

@@ -400,6 +400,43 @@ describe('BoxService inbound defaults', () => {
     return { service, boxRepository, runnerService, warmPoolService }
   }
 
+  it('creates a fresh protected Box even when a matching warm Box is ready', async () => {
+    const feature = jest.replaceProperty(process, 'env', { ...process.env, OUTBOUND_PROXY_REGISTRY_ENABLED: 'true' })
+    try {
+      const seed = jest.fn()
+      const spendColdPullBudget = jest.fn()
+      const { service, boxRepository, runnerService, warmPoolService } = makeCreateService({
+        imageResolverService: { resolve: jest.fn().mockResolvedValue({ ref: 'ubuntu:22.04', isOrgOwned: false }) },
+        imageAdmissionService: { assert: jest.fn(), spendColdPullBudget },
+        outboundBootstrap: { resolveName: jest.fn().mockResolvedValue({ credential_configured: false }), seed },
+        redis: { exists: jest.fn().mockResolvedValue(0) },
+      })
+      warmPoolService.fetchWarmPoolBox.mockResolvedValue({ id: 'warm-box-ready' })
+      const transaction = { query: jest.fn() }
+      boxRepository.insert.mockImplementation(async (box, _limit, onPersist) => {
+        await onPersist(transaction, box)
+        return box
+      })
+      const box = await service.create(
+        { image: 'ubuntu:22.04', name: 'bound-fresh' },
+        { id: 'org-1' } as any,
+        Context.user(),
+        { outboundProxy: 'registered-proxy' },
+      )
+      expect(box.id).not.toBe('warm-box-ready')
+      expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+      expect(runnerService.getRandomAvailableRunner).toHaveBeenCalledWith(
+        expect.objectContaining({ requiresProtectedProxyBootstrap: true }),
+      )
+      expect(boxRepository.insert).toHaveBeenCalledTimes(1)
+      expect(seed).toHaveBeenCalledTimes(1)
+      expect(seed).toHaveBeenCalledWith(transaction, expect.objectContaining({ id: box.id }), 'registered-proxy')
+      expect(spendColdPullBudget).toHaveBeenCalledTimes(1)
+    } finally {
+      feature.restore()
+    }
+  })
+
   it('CI platform ownership forces fresh creation and forwards the transaction callback', async () => {
     const { service, boxRepository, warmPoolService } = makeCreateService({
       imageResolverService: { resolve: jest.fn().mockResolvedValue({ ref: 'ubuntu:22.04', isOrgOwned: false }) },

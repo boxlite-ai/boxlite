@@ -277,11 +277,24 @@ destructive recovery likewise refuses before destruction unless the exact assign
 epoch are clear of binding and recovery state. Clear unbound Boxes use the existing controls.
 
 The outbound status resource separates desired, committed, pending, and installed identities.
-It reports redacted diagnostics such as `proxy_unreachable`, `proxy_auth_failed`,
-`proxy_handshake_failed`, and `proxy_timeout`.
+For the current confirmed installation, `proxy.diagnostic.code` can report the last
+terminal business TCP proxy failure as `proxy_unreachable`, `proxy_auth_failed`,
+`proxy_handshake_failed`, or `proxy_timeout`.
 
-Ineligible placements report `runner_proxy_unsupported` or `runner_proxy_tls_unsupported`.
-Guest applications receive native network failures.
+DNS-only failures and locally refused destinations leave the sample intact.
+A replacement starts with an empty sample.
+If state is changing or the Box row cannot be read without waiting, ordinary status
+remains available and omits the diagnostic.
+
+When every placement candidate is known incompatible, a bound create returns HTTP 503
+with `code: outbound_create_rejected` and no Box ID. Its `diagnostic.code` is
+`runner_proxy_tls_unsupported` if an HTTP V0 candidate exists and
+`runner_proxy_unsupported` otherwise. Inconclusive capability checks retain the
+generic capacity response.
+
+A stopped bound Box on V2 returns the unsupported diagnostic before writing
+start intent. Proxy-triggered auto-resume uses the same guard before writing
+the intent. Guest applications receive native network failures.
 
 ## Protected Runner bootstrap
 

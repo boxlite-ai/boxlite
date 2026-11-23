@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common'
 import { ThrottlerException } from '@nestjs/throttler'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
+import { ProxyPlacementError } from '../box/errors/proxy-placement.error'
 
 const ADMIN_ERRORS: Record<number, [string, string]> = {
   400: ['InvalidArgumentError', 'invalid_argument'],
@@ -130,6 +131,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       ...(code ? { code } : {}),
       ...(boxId ? { boxId } : {}),
       ...(progress ? { progress } : {}),
+      ...(exception instanceof ProxyPlacementError ? { diagnostic: { code: exception.diagnostic } } : {}),
     })
   }
 }
