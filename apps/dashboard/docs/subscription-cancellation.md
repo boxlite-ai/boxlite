@@ -20,23 +20,23 @@ The fixed footer remains reachable while the body scrolls, using the shared Form
 
 ## Persistence and failure handling
 
-The billing service must support the cancellation receipt and feedback APIs before this Console feature is released. GET plan supplies an optional subscriptionId; an older backend without it renders an unavailable cancellation action with guidance, rather than sending an unbound request.
+The Console calls the existing `POST /api/billing/organization/:organizationId/plan/downgrade` with `{ "planId": null }`. The current plan requires no subscription identifier extension, and the billing service needs no changes.
 
-The Console posts operationId, subscriptionId, cycleTo, trialConversionState and feedbackExpected to `POST /api/billing/organization/:organizationId/plan/cancellations`. The required server contract rejects changed confirmation details and returns a committed, idempotent receipt.
+Before sending, the Console reads the plan and compares its plan ID, cycle end and trial conversion state with the dialog. Changed terms require another explicit confirmation. This read does not atomically condition the subsequent POST: another tab can change the plan between them.
 
-The server remains authoritative for subscription policy. Historical retries return their receipt without re-canceling a subsequently restored subscription.
+Only refreshed cancellation state confirms cancellation. A lost response or failed/empty refresh keeps the answers and offers Check status; this button only reads state. An active plan then requires explicit confirmation again, with the refreshed terms.
 
+Cancellation and status requests have finite deadlines. Confirmation is shown before waiting for optional feedback, so feedback failure does not delay the cancellation result.
 
-A lost response is reconciled through `GET …/cancellations/:operationId`. Feedback is sent separately to `POST …/cancellations/:operationId/feedback`, with version 1, stable reason IDs, nullable intent and custom note.
+The optional answers go to `PUT /api/organizations/:organizationId/cancellation-feedback` in the main API. Its successful 204 response means the organization row update completed. The nullable JSONB field `cancellationFeedback` stores reasons, nullable intent, note, and server-owned submittedBy/submittedAt.
 
-Only a committed backend response is described as saved. An independent retry queue survives Billing tab changes and plan disappearance, is scoped to the organization, and does not block further cancellation.
+This is the latest accepted feedback, not a cancellation receipt or history. A new submission replaces the previous value; no answers means no write. Separate tabs use database write order, not click time.
 
-Unconfirmed requests retain the same operation ID; definite rejection allows a new confirmation against refreshed plan details. Current plan data is refetched after cancellation, and confirmation text does not continue claiming renewal is off after Keep.
+A feedback failure keeps one draft in the shared Billing controller for Retry feedback. This retry only writes the organization field, without another cancellation request. A later confirmed cancellation supersedes the old unsaved draft, including when no new answers were supplied.
 
+Changing organization, leaving Billing or reloading discards unaccepted drafts. Late responses from an old controller cannot submit further requests or change the new organization's UI. No feedback text is placed in URL parameters, analytics or application logs.
 
-The server must persist accepted feedback with the authenticated actor and subscription association. The client never supplies another user identity or treats browser state as proof of durable acceptance.
-
-Unaccepted answers remain an in-memory draft while Billing is open. Leaving the page, changing organization or reloading can discard these drafts; they are never represented as durable or saved. No feedback text is placed in URL parameters, analytics or application logs.
+The feedback endpoint requires an authenticated current organization owner and rejects API keys. The field is excluded from ordinary organization queries and responses. See [API persistence and rollout](../../api/README.md#organization-cancellation-feedback).
 
 ## Local UI review
 
@@ -52,14 +52,14 @@ The dedicated MSW handlers use the production client endpoints. They model `scen
 
 Mock state resets on reload. This review mode makes no production billing calls and is not evidence of database durability.
 
-Durability must be validated in the billing service deployment separately from this UI preview.
+Real PostgreSQL and authenticated HTTP tests validate organization persistence separately from this in-memory UI preview.
 
 
 ## Verification
 
 `make build:apps:dashboard` validates the production bundle and types. `make test:apps:dashboard` covers the client contract and shared dialog along with the existing dashboard suite.
 
-New cancellation contracts are tested through request mapping and rendered UI: empty feedback, custom selection, retry, lost-response reconciliation, and feedback independence. Trial recovery is an existing-behavior fix: its regression assertion fails against the complete base checkout (Keep Pro instead of null), then passes with the fix.
+Request-mapping and rendered UI tests cover the new cancellation and organization-feedback contract. Cases include no answers, custom text, status-only checks, changed terms, feedback-only retry, superseded drafts and organization switching. Trial recovery is an existing-behavior fix: its regression assertion fails against the complete base checkout (Keep Pro instead of null), then passes with the fix.
 
 
 The design reuses [WAI dialog guidance](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/) through the existing Radix/FormDialog primitives. Browser review verifies actual Console entry placement, fixed footer, custom text, success state and feedback retry.
@@ -69,22 +69,22 @@ The design reuses [WAI dialog guidance](https://www.w3.org/WAI/ARIA/apg/patterns
 ```mermaid
 sequenceDiagram
     participant Owner
-    participant Billing as Shared Billing controller
-    participant API as Billing API
-    Owner->>Billing: Open either cancellation entry
-    Billing-->>Owner: Current plan and optional feedback
-    Owner->>Billing: Confirm
-    Billing->>API: Cancel with operation ID and captured plan boundary
-    alt Response is ambiguous
-        Billing->>API: Read the original operation receipt
+    participant Console
+    participant Billing as Existing billing API
+    participant API as Organization API
+    participant DB as PostgreSQL
+    Owner->>Console: Confirm with optional feedback
+    Console->>Billing: Read latest plan
+    Console->>Billing: downgradePlan(org, null)
+    Console->>Billing: Refresh cancellation state
+    Console-->>Owner: Confirmed result or Check status
+    opt Cancellation confirmed and answers provided
+        Console->>API: PUT cancellation-feedback
+        API->>DB: UPDATE organization JSONB
+        DB-->>API: Committed
+        API-->>Console: 204 or separate save failure
     end
-    API-->>Billing: Committed receipt or explicit rejection
-    opt Feedback was provided and cancellation confirmed
-        Billing->>API: Save feedback for the operation
-        API-->>Billing: Saved or retryable failure
-    end
-    Billing->>API: Refresh current plan
-    Billing-->>Owner: Current plan and separate feedback result
+    Note over Console,API: Retry feedback never repeats cancellation
 ```
 
 ## UI review examples

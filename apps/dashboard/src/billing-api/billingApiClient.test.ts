@@ -379,26 +379,11 @@ describe('saved card actions', () => {
 })
 
 describe('subscription cancellation API', () => {
-  it('sends the captured subscription boundary and keeps feedback on its own endpoint', async () => {
-    const api = serve({ operationId: 'operation', feedbackState: 'awaiting' })
-    const input = {
-      operationId: 'operation',
-      subscriptionId: 'subscription',
-      cycleTo: '2026-12-23T00:00:00.000Z',
-      trialConversionState: null,
-      feedbackExpected: true,
-    }
-    await api.cancelSubscription('org-1', input)
-    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/plan/cancellations')
+  it('reuses downgrade with a null plan and bounds the cancellation request', async () => {
+    const api = serve(undefined)
+    await api.downgradePlan('org-1', null, 15_000)
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/plan/downgrade')
     expect(requestedMethod).toBe('post')
-    expect(JSON.parse(requestedData as string)).toEqual(input)
-    await api.getCancellation('org-1', 'operation')
-    expect(requestedMethod).toBe('get')
-    expect(requestedUrl.endsWith('/plan/cancellations/operation')).toBe(true)
-    const feedback = { version: 1 as const, reasons: ['other'], intent: null, note: '自定义原因' }
-    await api.saveCancellationFeedback('org-1', 'operation', feedback)
-    expect(requestedMethod).toBe('post')
-    expect(requestedUrl.endsWith('/plan/cancellations/operation/feedback')).toBe(true)
-    expect(JSON.parse(requestedData as string)).toEqual(feedback)
+    expect(JSON.parse(requestedData as string)).toEqual({ planId: null })
   })
 })

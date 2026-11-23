@@ -23,7 +23,6 @@ export type TrialInfo = {
 }
 
 export type OrganizationPlan = {
-  subscriptionId?: string
   planId: string
   planName: string
   /**

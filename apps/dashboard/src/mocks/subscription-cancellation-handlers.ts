@@ -9,9 +9,7 @@ let cancellationFailedOnce = false
 
 let canceled = cancellationScenario === 'scheduled'
 let feedbackFailedOnce = false
-const receipts = new Map<string, Record<string, unknown>>()
 const feedback = new Map<string, unknown>()
-const subscriptionId = '20332033-2033-4033-8033-203320332033'
 
 export function subscriptionCancellationHandlers(apiUrl: string, billingUrl: string) {
   if (!enabled) return []
@@ -30,7 +28,6 @@ export function subscriptionCancellationHandlers(apiUrl: string, billingUrl: str
       const cycleTo = trial ? '2026-11-26T00:00:00Z' : '2026-12-23T00:00:00Z'
       return HttpResponse.json({
         plan: {
-          subscriptionId,
           planId: 'pro',
           planName: 'Pro',
           status: 'active',
@@ -54,42 +51,30 @@ export function subscriptionCancellationHandlers(apiUrl: string, billingUrl: str
         },
       })
     }),
-    http.post(`${billingUrl}/organization/:organizationId/plan/cancellations`, async ({ request }) => {
+    http.post(`${billingUrl}/organization/:organizationId/plan/downgrade`, async ({ request }) => {
       if (['readonly', 'none'].includes(cancellationScenario)) return new HttpResponse(null, { status: 403 })
-      const body = (await request.json()) as Record<string, unknown>
-      const id = String(body.operationId)
-      if (receipts.has(id)) return HttpResponse.json(receipts.get(id))
+      const body = (await request.json()) as { planId: string | null }
+      if (body.planId !== null) return new HttpResponse(null, { status: 400 })
       if (parameters.get('failure') === 'cancel' && !cancellationFailedOnce) {
         cancellationFailedOnce = true
-        return HttpResponse.json({ message: 'Cancellation was not confirmed' }, { status: 503 })
+        return new HttpResponse(null, { status: 503 })
       }
       canceled = true
-      const receipt = {
-        ...body,
-        endsAt: body.cycleTo,
-        feedbackState: body.feedbackExpected ? 'awaiting' : 'not_requested',
-      }
-      receipts.set(id, receipt)
-      return HttpResponse.json(receipt)
+      return new HttpResponse(null, { status: 204 })
     }),
-    http.get(`${billingUrl}/organization/:organizationId/plan/cancellations/:operationId`, ({ params }) =>
-      receipts.has(String(params.operationId))
-        ? HttpResponse.json(receipts.get(String(params.operationId)))
-        : new HttpResponse(null, { status: 404 }),
-    ),
-    http.post(
-      `${billingUrl}/organization/:organizationId/plan/cancellations/:operationId/feedback`,
-      async ({ request, params }) => {
-        const id = String(params.operationId)
-        if (!receipts.has(id)) return new HttpResponse(null, { status: 404 })
-        if (parameters.get('failure') === 'feedback' && !feedbackFailedOnce) {
-          feedbackFailedOnce = true
-          return new HttpResponse(null, { status: 503 })
-        }
-        feedback.set(id, await request.json())
-        return HttpResponse.json({ saved: true, savedAt: new Date().toISOString() })
-      },
-    ),
+    http.put(`${apiUrl}/organizations/:organizationId/cancellation-feedback`, async ({ request, params }) => {
+      if (cancellationScenario === 'readonly') return new HttpResponse(null, { status: 403 })
+      if (parameters.get('failure') === 'feedback' && !feedbackFailedOnce) {
+        feedbackFailedOnce = true
+        return new HttpResponse(null, { status: 503 })
+      }
+      feedback.set(String(params.organizationId), {
+        ...((await request.json()) as object),
+        submittedBy: MOCK_ORGANIZATION_MEMBER.userId,
+        submittedAt: new Date().toISOString(),
+      })
+      return new HttpResponse(null, { status: 204 })
+    }),
     http.post(`${billingUrl}/organization/:organizationId/plan/upgrade`, async () => {
       if (cancellationScenario === 'trial') return new HttpResponse(null, { status: 409 })
       canceled = false

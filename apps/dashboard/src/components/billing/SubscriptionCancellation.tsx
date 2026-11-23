@@ -5,7 +5,8 @@ import { useApi } from '@/hooks/useApi'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { format } from 'date-fns'
-import { isRejectedBillingRequest, type OrganizationPlan } from '@/billing-api'
+import type { OrganizationPlan } from '@/billing-api'
+import type { CancellationFeedbackInput } from '@/api/apiClient'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -36,7 +37,6 @@ const intents = [
   ['explore', 'Explore without a specific task'],
   ['unsure', 'Other / not sure'],
 ]
-type Feedback = { operationId: string; reasons: string[]; intent: string; note: string }
 
 const CancellationContext = createContext<((plan: OrganizationPlan) => void) | null>(null)
 
@@ -54,7 +54,8 @@ export function SubscriptionCancellationProvider({ children }: { children: React
 
 function CancellationController({ organizationId, children }: { organizationId: string; children: ReactNode }) {
   const { selectedOrganization } = useSelectedOrganization()
-  const { billingApi } = useApi()
+  const api = useApi()
+  const { billingApi } = api
   const queryClient = useQueryClient()
   const [plan, setPlan] = useState<OrganizationPlan | null>(null)
   const [open, setOpen] = useState(false)
@@ -63,12 +64,10 @@ function CancellationController({ organizationId, children }: { organizationId: 
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
-  const [unsaved, setUnsaved] = useState<Feedback[]>([])
+  const [unsaved, setUnsaved] = useState<CancellationFeedbackInput | null>(null)
   const [saved, setSaved] = useState(false)
   const mounted = useRef(true)
   const busy = useRef(false)
-  const operationId = useRef('')
-  const request = useRef<Parameters<typeof billingApi.cancelSubscription>[1] | null>(null)
   const [attempted, setAttempted] = useState(false)
   const [confirmation, setConfirmation] = useState('')
   useEffect(() => {
@@ -82,113 +81,104 @@ function CancellationController({ organizationId, children }: { organizationId: 
   const ends = plan ? format(plan.cycleTo, 'MMM d, yyyy') : ''
 
   async function refresh() {
-    const current = await billingApi.getOrganizationPlan(organizationId)
+    const current = await billingApi.getOrganizationPlan(organizationId, 10_000)
     queryClient.setQueryData(queryKeys.organization.plan(organizationId), current)
     void queryClient.invalidateQueries({ queryKey: queryKeys.organization.detail(organizationId) })
     void queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) })
     void queryClient.invalidateQueries({ queryKey: queryKeys.billing.invoices(organizationId) })
     return current
   }
-  async function saveFeedback(feedback: Feedback) {
-    const accepted = await billingApi.saveCancellationFeedback(organizationId, feedback.operationId, {
-      version: 1,
-      reasons: feedback.reasons,
-      intent: feedback.intent || null,
-      note: feedback.note,
-    })
-    if (!accepted.saved) throw new Error('Feedback was not accepted')
+  function canceled(current: OrganizationPlan) {
+    return current.cancelAtPeriodEnd || current.status === 'canceled'
   }
-  async function submit() {
-    if (busy.current || !plan?.subscriptionId) return
-    busy.current = true
-    setPending(true)
-    setAttempted(true)
-    setError('')
+  function sameTerms(current: OrganizationPlan) {
+    return (
+      plan !== null &&
+      current.planId === plan.planId &&
+      current.cycleTo.getTime() === plan.cycleTo.getTime() &&
+      current.trial?.conversionState === plan.trial?.conversionState
+    )
+  }
+  async function complete() {
+    if (!mounted.current) return
     const feedback = {
-      operationId: operationId.current,
       reasons: selectedReasons,
-      intent,
+      intent: intent || null,
       note: selectedReasons.includes('other') ? note.trim() : '',
     }
-    request.current ??= {
-      operationId: operationId.current,
-      subscriptionId: plan.subscriptionId,
-      cycleTo: plan.cycleTo.toISOString(),
-      trialConversionState: plan.trial?.conversionState ?? null,
-      feedbackExpected: Boolean(feedback.reasons.length || feedback.intent || feedback.note),
-    }
+    setConfirmation('Cancellation confirmed. Your plan shows the latest renewal status.')
+    setOpen(false)
+    setAttempted(false)
+    setUnsaved(null)
+    setSaved(false)
+    if (!feedback.reasons.length && !feedback.intent && !feedback.note) return
     try {
+      await api.saveCancellationFeedback(organizationId, feedback)
+      if (mounted.current) setSaved(true)
+    } catch {
+      if (mounted.current) setUnsaved(feedback)
+    }
+  }
+  async function submit() {
+    if (busy.current || !plan) return
+    busy.current = true
+    setPending(true)
+    setError('')
+    try {
+      const current = await refresh()
+      if (!mounted.current) return
+      if (!current) throw new Error('Plan status unavailable')
+      if (!sameTerms(current)) {
+        setPlan(current)
+        setAttempted(false)
+        setError('Your plan changed. Review the updated details before confirming again.')
+        return
+      }
+      if (canceled(current)) {
+        await complete()
+        return
+      }
+      if (attempted) {
+        setAttempted(false)
+        setPlan(current)
+        setError('Renewal is still on. Review your plan and confirm again to cancel.')
+        return
+      }
+      setAttempted(true)
       try {
-        await billingApi.cancelSubscription(organizationId, request.current)
-      } catch (error) {
-        if (isRejectedBillingRequest(error)) throw error
-        // A lost POST response is ambiguous. Only the committed receipt proves acceptance.
-        try {
-          await billingApi.getCancellation(organizationId, request.current.operationId)
-        } catch {
-          throw error
-        }
+        await billingApi.downgradePlan(organizationId, null, 15_000)
+      } catch {
+        // A lost response can still mean success. Read state; never replay this POST automatically.
       }
-      if (request.current.feedbackExpected) {
-        try {
-          await saveFeedback(feedback)
-          if (mounted.current) {
-            setSaved(true)
-            setUnsaved((previous) => previous.filter((item) => item.operationId !== feedback.operationId))
-          }
-        } catch {
-          if (mounted.current)
-            setUnsaved((previous) => [
-              ...previous.filter((item) => item.operationId !== feedback.operationId),
-              feedback,
-            ])
-        }
-      }
-      const current = await refresh().catch(() => undefined)
-      if (mounted.current) {
-        setConfirmation(
-          current === undefined
-            ? 'Cancellation recorded. Refresh billing to check the latest plan status.'
-            : 'Cancellation recorded. Your plan shows the latest renewal status.',
-        )
-        setAttempted(false)
-        request.current = null
-        setOpen(false)
-      }
-    } catch (error) {
-      const current = await refresh().catch(() => undefined)
-      if (mounted.current && isRejectedBillingRequest(error)) {
-        request.current = null
-        operationId.current = crypto.randomUUID()
-        setAttempted(false)
-        if (current) setPlan(current)
-      }
+      if (!mounted.current) return
+      const updated = await refresh()
+      if (!mounted.current) return
+      if (updated && sameTerms(updated) && canceled(updated)) await complete()
+      else setError('Cancellation could not be confirmed. Your answers are kept. Check status before trying again.')
+    } catch {
       if (mounted.current)
-        setError(
-          'Cancellation could not be confirmed. Your answers are kept. Retry this request, or close and review the latest plan before starting again.',
-        )
+        setError('Cancellation could not be confirmed. Your answers are kept. Try checking the plan again.')
     } finally {
       busy.current = false
       if (mounted.current) setPending(false)
     }
   }
   async function retryFeedback() {
-    if (!unsaved.length || busy.current) return
+    if (!unsaved || busy.current) return
     busy.current = true
     setPending(true)
-    for (const feedback of unsaved) {
-      try {
-        await saveFeedback(feedback)
-        if (mounted.current) {
-          setUnsaved((previous) => previous.filter((item) => item.operationId !== feedback.operationId))
-          setSaved(true)
-        }
-      } catch {
-        /* Leave the unaccepted feedback available for retry. */
+    try {
+      await api.saveCancellationFeedback(organizationId, unsaved)
+      if (mounted.current) {
+        setUnsaved(null)
+        setSaved(true)
       }
+    } catch {
+      /* Keep the latest unaccepted feedback available for retry. */
+    } finally {
+      busy.current = false
+      if (mounted.current) setPending(false)
     }
-    busy.current = false
-    if (mounted.current) setPending(false)
   }
   function start(current: OrganizationPlan) {
     if (busy.current) return
@@ -197,15 +187,12 @@ function CancellationController({ organizationId, children }: { organizationId: 
       return
     }
     setPlan(current)
-    request.current = null
-    setAttempted(false)
     setConfirmation('')
     setReasons([])
     setIntent('')
     setNote('')
     setError('')
     setSaved(false)
-    operationId.current = crypto.randomUUID()
     setOpen(true)
   }
   return (
@@ -223,14 +210,14 @@ function CancellationController({ organizationId, children }: { organizationId: 
           </Button>
         </div>
       )}
-      {(unsaved.length > 0 || saved) && (
+      {(unsaved || saved) && (
         <div role="status" className="page-container flex flex-wrap items-center justify-between gap-3 py-4">
           <p className="text-body">
-            {unsaved.length > 0
+            {unsaved
               ? 'Cancellation confirmed. Your feedback wasn’t saved.'
               : 'Your cancellation feedback has been saved.'}
           </p>
-          {unsaved.length > 0 && (
+          {unsaved && (
             <Button variant="outline" disabled={pending} onClick={retryFeedback}>
               {pending && <Spinner />}Retry feedback
             </Button>
@@ -292,6 +279,7 @@ function CancellationController({ organizationId, children }: { organizationId: 
                     {reasons.map(([id, label]) => (
                       <label key={id} className="flex cursor-pointer items-start gap-2 text-body">
                         <Checkbox
+                          aria-label={label}
                           className="mt-0.5"
                           checked={selectedReasons.includes(id)}
                           onCheckedChange={(checked) =>
@@ -331,7 +319,7 @@ function CancellationController({ organizationId, children }: { organizationId: 
                   >
                     {intents.map(([id, label]) => (
                       <label key={id} className="flex cursor-pointer items-center gap-2 text-body">
-                        <RadioGroupItem value={id} />
+                        <RadioGroupItem value={id} aria-label={label} />
                         {label}
                       </label>
                     ))}
@@ -361,7 +349,8 @@ function CancellationController({ organizationId, children }: { organizationId: 
                 {attempted ? 'Close' : 'Keep subscription'}
               </Button>
               <Button variant="destructive" disabled={pending} onClick={submit}>
-                {pending && <Spinner className="size-4" />}Confirm cancellation
+                {pending && <Spinner className="size-4" />}
+                {attempted ? 'Check status' : 'Confirm cancellation'}
               </Button>
             </FormDialogFooter>
           </FormDialogContent>
@@ -428,19 +417,9 @@ export function SubscriptionCancellationAction({
           {trial ? 'Trial ends' : 'Renews'} {ends}. Manage automatic renewal here.
         </p>
       )}
-      <Button
-        variant="quiet"
-        disabled={!plan.subscriptionId}
-        className={compact ? 'h-auto min-h-7 px-0' : undefined}
-        onClick={() => start(plan)}
-      >
+      <Button variant="quiet" className={compact ? 'h-auto min-h-7 px-0' : undefined} onClick={() => start(plan)}>
         Cancel subscription
       </Button>
-      {!plan.subscriptionId && (
-        <p className="text-meta text-muted-foreground">
-          Cancellation is temporarily unavailable. Refresh billing or contact support.
-        </p>
-      )}
     </div>
   )
 }
