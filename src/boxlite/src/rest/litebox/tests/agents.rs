@@ -187,3 +187,227 @@ async fn remote_agent_send_preserves_optional_request_values() {
             .contains("idempotency-key: retry-1\r\n")
     );
 }
+
+const RESOURCE: &str = r#"{"id":"ses_test","agent":"opencode","config":{"tools":[],"mcp":[]},"capabilities":{"operations":["agent.respond"],"input_kinds":["text"],"idempotency_retention_seconds":0.5}}"#;
+const TURN: &str =
+    r#"{"id":"msg_test","agent_id":"ses_test","status":"queued","requests":[],"steering":[]}"#;
+
+async fn agent_exchange(
+    listener: &TcpListener,
+    expected: &str,
+    expected_body: Option<serde_json::Value>,
+    content_type: &str,
+    status: &str,
+    body: &str,
+) {
+    let (mut socket, _) = listener.accept().await.unwrap();
+    let mut header = Vec::new();
+    while !header.ends_with(b"\r\n\r\n") {
+        header.push(socket.read_u8().await.unwrap());
+    }
+    let header = String::from_utf8(header).unwrap();
+    assert_eq!(
+        header.lines().next().unwrap(),
+        format!("{expected} HTTP/1.1")
+    );
+    if let Some(expected_body) = expected_body {
+        let length = header
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        let mut bytes = vec![0; length];
+        socket.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            expected_body
+        );
+    }
+    let reply = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    socket.write_all(reply.as_bytes()).await.unwrap();
+}
+
+#[tokio::test]
+async fn remote_controls_forward_typed_responses_and_confirm_shutdown() {
+    use crate::agents::{AgentResponse, AgentSteeringStatus};
+    use serde_json::json;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let sandbox = Arc::new(rest_box_for(listener.local_addr().unwrap().port(), "box"));
+    let server = tokio::spawn(async move {
+        let base = "/v1/boxes/box/agents/ses_test";
+        agent_exchange(
+            &listener,
+            &format!("GET {base}"),
+            None,
+            "application/json",
+            "200 OK",
+            RESOURCE,
+        )
+        .await;
+        for (path, body, reply) in [
+            (
+                "requests/question/respond",
+                json!({"response":{"type":"answer","text":"yes","data":42}}),
+                TURN,
+            ),
+            (
+                "requests/permission/respond",
+                json!({"response":{"type":"permission","approved":false}}),
+                TURN,
+            ),
+            (
+                "turns/msg_test/steer",
+                json!({"text":"stop editing"}),
+                r#"{"id":"receipt","turn_id":"msg_test","status":"accepted"}"#,
+            ),
+            ("turns/msg_test/interrupt", json!({}), ""),
+            ("close", json!({}), ""),
+        ] {
+            let status = if reply.is_empty() {
+                "204 No Content"
+            } else {
+                "200 OK"
+            };
+            agent_exchange(
+                &listener,
+                &format!("POST {base}/{path}"),
+                Some(body),
+                "application/json",
+                status,
+                reply,
+            )
+            .await;
+        }
+    });
+    let agent = crate::Agents::new(sandbox.clone(), sandbox)
+        .get("ses_test")
+        .await
+        .unwrap();
+    let answer = AgentResponse::Answer {
+        text: "yes".into(),
+        data: Some(json!(42)),
+    };
+    let turn = agent
+        .respond("question", answer, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(turn.state().unwrap().id, "msg_test");
+    let turn = agent
+        .respond(
+            "permission",
+            AgentResponse::Permission { approved: false },
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let receipt = turn
+        .steer("stop editing", Default::default())
+        .await
+        .unwrap();
+    assert_eq!(receipt.status, AgentSteeringStatus::Accepted);
+    turn.interrupt(Default::default()).await.unwrap();
+    agent.close(Default::default()).await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn remote_turn_events_reject_wrong_parent_and_report_disconnect() {
+    use futures::StreamExt;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let sandbox = Arc::new(rest_box_for(listener.local_addr().unwrap().port(), "box"));
+    let server = tokio::spawn(async move {
+        let base = "/v1/boxes/box/agents/ses_test";
+        agent_exchange(
+            &listener,
+            &format!("GET {base}"),
+            None,
+            "application/json",
+            "200 OK",
+            RESOURCE,
+        )
+        .await;
+        agent_exchange(
+            &listener,
+            &format!("GET {base}/turns/msg_test"),
+            None,
+            "application/json",
+            "200 OK",
+            TURN,
+        )
+        .await;
+        agent_exchange(&listener, &format!("GET {base}/events?turn_id=msg_test"), None, "text/event-stream", "200 OK",
+            "data: {\"agent_id\":\"ses_test\",\"turn_id\":\"other\",\"kind\":\"message\",\"data\":{}}\n\n").await;
+        agent_exchange(
+            &listener,
+            &format!("GET {base}/events"),
+            None,
+            "text/event-stream",
+            "200 OK",
+            ": heartbeat\n\n",
+        )
+        .await;
+    });
+    let agent = crate::Agents::new(sandbox.clone(), sandbox)
+        .get("ses_test")
+        .await
+        .unwrap();
+    let turn = agent.get_turn("msg_test").await.unwrap();
+    let mut stream = turn.events(Default::default()).await.unwrap();
+    assert!(
+        matches!(stream.next().await, Some(Err(BoxliteError::Internal(message))) if message.contains("wrong parent"))
+    );
+    assert!(stream.next().await.is_none());
+    let mut stream = agent.events(Default::default()).await.unwrap();
+    assert!(
+        matches!(stream.next().await, Some(Err(BoxliteError::Network(message))) if message.contains("ended"))
+    );
+    assert!(stream.next().await.is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn remote_handles_reject_responses_for_other_resources() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let sandbox = Arc::new(rest_box_for(listener.local_addr().unwrap().port(), "box"));
+    let server = tokio::spawn(async move {
+        for (path, body) in [
+            ("other", RESOURCE.to_owned()),
+            ("ses_test", RESOURCE.to_owned()),
+            ("ses_test/turns/other", TURN.to_owned()),
+            ("ses_test/turns/msg_test", TURN.replace("ses_test", "other")),
+        ] {
+            agent_exchange(
+                &listener,
+                &format!("GET /v1/boxes/box/agents/{path}"),
+                None,
+                "application/json",
+                "200 OK",
+                &body,
+            )
+            .await;
+        }
+    });
+    let agents = crate::Agents::new(sandbox.clone(), sandbox);
+    assert!(matches!(
+        agents.get("..").await,
+        Err(BoxliteError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        agents.get("other").await,
+        Err(BoxliteError::Internal(_))
+    ));
+    let agent = agents.get("ses_test").await.unwrap();
+    for id in ["other", "msg_test"] {
+        assert!(matches!(
+            agent.get_turn(id).await,
+            Err(BoxliteError::Internal(_))
+        ));
+    }
+    server.await.unwrap();
+}

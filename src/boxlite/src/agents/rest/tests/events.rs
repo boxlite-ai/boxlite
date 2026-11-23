@@ -149,3 +149,35 @@ async fn dropping_stream_closes_the_http_connection() {
         0
     );
 }
+
+#[tokio::test]
+async fn malformed_event_streams_report_one_terminal_error() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let cases = [
+        ("data: not-json\n\n", false, "invalid agent event"),
+        ("data: partial", true, "agent event stream failed"),
+    ];
+    let server = tokio::spawn(async move {
+        for (body, truncated, _) in cases {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                header.push(socket.read_u8().await.unwrap());
+            }
+            let length = body.len() + usize::from(truncated);
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}").as_bytes()).await.unwrap();
+        }
+    });
+    let client = ApiClient::new(&crate::BoxliteRestOptions::new(format!("http://{addr}"))).unwrap();
+    for (_, _, expected) in cases {
+        let mut stream = open(&client, "/boxes/b/agents/a", "a", None, &Default::default())
+            .await
+            .unwrap();
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(stream.next().await.is_none());
+    }
+    server.await.unwrap();
+}
