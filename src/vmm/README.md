@@ -29,7 +29,7 @@ boxlite-vmm
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig`: CPU, boot RAM, hotplug capacity, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console. The RAM layout must pass host and boot address checks. |
+| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `hotplug` | `HotplugMemory` places a window after boot RAM, plugs 2 MiB blocks and maps 128 MiB slots |
@@ -39,7 +39,7 @@ boxlite-vmm
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory view and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, virtio-mem, and on x86_64 the 8250 UART at COM1, the CMOS RTC and the i8042 reset, with `add_legacy_devices` |
+| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1, the CMOS RTC and the i8042 reset, with `add_legacy_devices` |
 | `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it after the disks, so it never renumbers them |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
@@ -279,66 +279,25 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
 
 ### Virtio-mem device and control
 
-With `VmConfig.hotplug_mib` set, `devices::add_all` appends a virtio-mem
-device (ID 24, one request queue) after the other devices. Its host operations
-use the `VmControl` returned by `vm.control()` and run on the virtio worker.
+On Linux x86_64, set `VmConfig.hotplug_mib` to the extra capacity above boot
+RAM (`0` disables virtio-mem). `Vm::new` checks the window before building the VM.
 
-`Vm::new` runs the x86 boot preflight before allocating RAM or creating the
-host VM. The preflight checks the boot layout and plans the optional hotplug
-window from the same boot RAM ranges and KVM guest physical address limit.
+BoxLite appends `memhp_default_state=online` and
+`memory_hotplug.online_policy=auto-movable` to the guest command line. Omit a
+standalone `--` so Linux sees those settings.
 
-It deducts the slots occupied by boot RAM, including any region split across
-multiple KVM slots. Device construction receives the checked window.
+`vm.control().set_memory_target_mib(256, timeout)` publishes a target of 256 MiB
+above boot RAM and notifies the guest, which plugs or unplugs blocks afterward.
+Targets are multiples of 128 MiB up to the configured capacity.
 
-Use a kernel command line without a standalone `--` separator when enabling
-online resize, so the appended memory policy arguments reach the kernel.
+Use `memory_status(timeout)` to read the capacity, target, plugged and mapped
+MiB. Shrinking is best effort, so the plugged size may stay above the target.
 
-- `control.set_memory_target_mib(added_mib, timeout)` sets the target above boot RAM: a
-  multiple of 128 MiB up to the capacity. A lower target shrinks. It
-  publishes `requested_size`, raises a configuration interrupt and returns.
-- `control.memory_status(timeout)` reports the capacity, target, plugged and mapped
-  MiB. Shrinking is best effort, so `plugged_mib` can stay above the target.
-- The device offers only `VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE` and refuses
-  activation without it. `region_size` and `usable_region_size` equal the
-  capacity.
+`WouldBlock` means the device is inactive or the control queue is full. An
+accepted command can still run after the caller times out.
 
-For example, request `256` and poll status until `plugged_mib` reaches
-`256`.
-
-Commands return `WouldBlock` while the device is inactive or the control
-queue is full. A timeout leaves an admitted command eligible to run in its
-current activation.
-
-Reset drops commands still queued for that activation. Once the VM has
-exited, both operations return `BrokenPipe` for an enabled memory device.
-
-| Request | Response |
-| --- | --- |
-| PLUG within the target, blocks unplugged | Plug, then ACK; BUSY if a slot fails to map |
-| PLUG above the target | NACK, never ERROR, which Linux treats as fatal |
-| UNPLUG, blocks plugged | Unplug, then ACK |
-| UNPLUG_ALL | Unplug everything, then ACK; the target stays |
-| STATE | ACK with plugged 0, unplugged 1 or mixed 2 |
-| Misaligned, out of range, empty or wrong state | ERROR |
-
-A device reset keeps plugged blocks: a reprobing Linux driver sends
-UNPLUG_ALL first. The `mem` and `hotplug` tests use the recording backend.
-
-With a hotplug capacity, `add_all` also appends `memhp_default_state=online
-memory_hotplug.online_policy=auto-movable` to the guest command line. New
-blocks come online at once. As many as the default 301% ratio allows land in
-ZONE_MOVABLE, where the guest can empty them again for unplug.
-
-`boot::tests::hotplug` runs both 512 MiB and 6 GiB boot configurations
-through `Vm::new` on KVM. Both have 1024 MiB of hotplug capacity, grow by
-1024 MiB, write 640 MiB and shrink the target to 256 MiB. The 6 GiB
-configuration puts the hotplug window after high boot RAM at 7 GiB.
-
-| Step | Guest `totalram` | Host `memory_status()` |
-| --- | --- | --- |
-| Boot | base | target 0 |
-| Set target to 1024 MiB | base + 1024 MiB | plugged 1024 |
-| Set target to 256 MiB | base + 256 MiB | plugged 256, mapped 256 |
+Reset discards queued commands. After VM exit, both operations return
+`BrokenPipe` for an enabled device.
 
 ## Kernel loading
 
