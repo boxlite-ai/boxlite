@@ -130,10 +130,6 @@ function App() {
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
       <Route
-        path={RoutePath.ACCOUNT_SETTINGS}
-        element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
-      />
-      <Route
         path={RoutePath.DASHBOARD}
         element={
           <Suspense fallback={<LoadingFallback />}>

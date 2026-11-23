@@ -54,7 +54,6 @@ export enum RoutePath {
 
   // User routes
   USER_INVITATIONS = '/dashboard/user/invitations',
-  ACCOUNT_SETTINGS = '/dashboard/user/account-settings',
 
   // Webhooks
   WEBHOOKS = '/dashboard/webhooks',

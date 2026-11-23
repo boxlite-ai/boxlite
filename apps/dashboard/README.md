@@ -115,7 +115,7 @@ contract and is not inferred from a saved use case.
 
 Registration offers Terms of Service and Privacy Policy links. On first entering the Console, a person can allow product analytics, choose **No thanks**, or continue without answering. Collection starts after an explicit grant. Earlier visits and interactions are discarded. An existing refusal suppresses the card on future visits.
 
-Open **Org → Management → Settings → Privacy Preferences** to change **Product analytics**. Each choice covers the signed-in account and organizations it created. A member’s interaction also requires the organization creator’s grant. The Console submits route templates and recognized control actions to the Cloud API. Raw URLs, referral parameters, terminal contents and control text are excluded. Functional feature flags remain available for every choice.
+Open **Org → Management → Settings → Privacy Preferences** at `/dashboard/settings?tab=settings` to change **Product analytics**. Each choice covers the signed-in account and organizations it created. A member’s interaction also requires the organization creator’s grant. The Console submits route templates and recognized control actions to the Cloud API. Raw URLs, referral parameters, terminal contents and control text are excluded. Functional feature flags remain available for every choice.
 
 See the [first-visit card](review-assets/product-analytics/first-console-visit.png) and [Settings switch](review-assets/product-analytics/settings.png).
 

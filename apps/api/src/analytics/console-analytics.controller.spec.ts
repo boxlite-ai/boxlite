@@ -91,6 +91,9 @@ describe('Console analytics HTTP boundary', () => {
     expect(
       (await request(events, 'POST', bearer, { ...page, page: '/dashboard/boxes/secret?token=secret' })).status,
     ).toBe(400)
+    expect((await request(events, 'POST', bearer, { ...page, page: '/dashboard/user/account-settings' })).status).toBe(
+      400,
+    )
     expect((await request(events, 'POST', bearer, { ...page, event: 'console_control_click' })).status).toBe(400)
     expect(capture).not.toHaveBeenCalled()
     expect(
