@@ -17,9 +17,10 @@ import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
+import { clearPendingPlanUpgrade, rememberPlanUpgrade } from '@/lib/pending-plan-upgrade'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { format } from 'date-fns'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -41,7 +42,20 @@ function BillingPlanChange() {
   const plansQuery = usePlansQuery()
   const upgradePlan = useUpgradePlanMutation()
   const downgradePlan = useDowngradePlanMutation()
-  const [leaving, setLeaving] = useState(false)
+  const [submission, setSubmission] = useState<'idle' | 'confirming' | 'redirecting'>('idle')
+  useEffect(() => {
+    // Back from Stripe abandons this checkout, including when the browser
+    // restores the confirmation page from its back/forward cache.
+    function resetConfirmation(event: PageTransitionEvent) {
+      if (event.persisted) {
+        clearPendingPlanUpgrade()
+        setSubmission('idle')
+      }
+    }
+    clearPendingPlanUpgrade()
+    window.addEventListener('pageshow', resetConfirmation)
+    return () => window.removeEventListener('pageshow', resetConfirmation)
+  }, [])
 
   // Members load in the background from an empty list
   // (SelectedOrganizationProvider.tsx:97-113), so a missing member means
@@ -110,19 +124,27 @@ function BillingPlanChange() {
     return <Navigate to={RoutePath.BILLING} replace />
   }
 
-  const pending = upgradePlan.isPending || downgradePlan.isPending || leaving
+  const pending = submission !== 'idle' || upgradePlan.isPending || downgradePlan.isPending
   // Only a downgrade defers, and a downgrade always has a live cycle to defer
   // into — but read it defensively rather than asserting the branch.
   const rollDay = planQuery.data ? format(planQuery.data.cycleTo, 'MMM d, yyyy') : 'the next billing cycle'
 
   const handleConfirm = async () => {
+    setSubmission('confirming')
     try {
       if (summary.action === 'upgrade') {
+        const { data: wallet } = await walletQuery.refetch({ throwOnError: true })
         const checkoutUrl = await upgradePlan.mutateAsync({ organizationId: selectedOrganization.id, planId })
         if (checkoutUrl) {
-          // Hold the pending state through the hand-off: the browser takes a
-          // moment to leave, and an idle-looking button invites a second click.
-          setLeaving(true)
+          if (wallet?.creditCardConnected === false && authenticatedUserOrganizationMember?.userId) {
+            const saved = rememberPlanUpgrade({
+              userId: authenticatedUserOrganizationMember.userId,
+              organizationId: selectedOrganization.id,
+              planId,
+            })
+            if (!saved) toast.info('After verifying your card, return to Plans to finish subscribing.')
+          }
+          setSubmission('redirecting')
           window.location.href = checkoutUrl
           return
         }
@@ -137,6 +159,7 @@ function BillingPlanChange() {
       // organization now holds.
       navigate(RoutePath.BILLING, { replace: true })
     } catch (error) {
+      setSubmission('idle')
       handleApiError(error, `Failed to ${summary.action} organization plan`)
     }
   }
@@ -152,6 +175,12 @@ function BillingPlanChange() {
             ))}
           </Panel>
           <PanelNote>{summary.effect}</PanelNote>
+          {summary.action === 'upgrade' && walletQuery.data?.creditCardConnected === false && (
+            <PanelNote>
+              After you verify your card, we’ll continue your subscription to {summary.target?.name ?? planId}{' '}
+              automatically.
+            </PanelNote>
+          )}
         </section>
 
         {(summary.quotaNote || summary.walletNote || summary.caveats.length > 0) && (
@@ -175,7 +204,7 @@ function BillingPlanChange() {
               className="inline-flex items-center gap-2"
             >
               {pending && <Spinner className="size-3.5" />}
-              {leaving ? 'Redirecting to Stripe…' : summary.confirmLabel}
+              {submission === 'redirecting' ? 'Redirecting to Stripe…' : summary.confirmLabel}
             </AsciiButton>
             {/* Cancelling mid-request would leave the user unsure whether the
                 change went through, so it waits with the confirm button. */}

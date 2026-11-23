@@ -1179,6 +1179,8 @@ test('every runner size states a data disk GCP will create and its machine can u
     'n4-standard-4': { iops: 30_000, throughputMiBps: 240 },
     'n4-standard-8': { iops: 30_000, throughputMiBps: 480 },
     'n4-standard-16': { iops: 80_000, throughputMiBps: 1_200 },
+    'n4-standard-32': { iops: 100_000, throughputMiBps: 1_600 },
+    'n4-standard-64': { iops: 160_000, throughputMiBps: 2_400 },
   }
   for (const [size, machine] of Object.entries(RUNNER_MACHINE)) {
     const disk = DATA_DISK[size as keyof typeof DATA_DISK]

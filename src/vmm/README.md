@@ -8,11 +8,11 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
-are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmControl`, `Error`
+and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
-`Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
+`Vm::new(config, console)` adds COM1, the CMOS RTC, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
 
@@ -27,18 +27,19 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
+| `hotplug` | `HotplugMemory` places a window after boot RAM, plugs 2 MiB blocks and maps 128 MiB slots |
 | `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
+| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory view and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
+| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1, the CMOS RTC and the i8042 reset, with `add_legacy_devices` |
 | `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it after the disks, so it never renumbers them |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
@@ -46,7 +47,28 @@ boxlite-vmm
 The Linux x86_64 native engine composes disks, reporting balloon, aggregate
 virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
 The adapter maps the runtime specification into `VmConfig`; optional devices
-are omitted when not requested. Disk order remains `vda` (container) then
+are omitted when not requested.
+
+The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
+publishes a live device by tag when it enters the transport, and
+`lookup_aggregate` returns its filesystem to host-side consumers. VM shutdown
+removes the registration, rejects mutations through cached handles, and clears
+the guest session. Device drop performs the same cleanup if shutdown did not run.
+Retained filesystem handles pin export roots until their final reference drops.
+`AggregateFs::register_fd` registers directory descriptors, and `remove` retires
+per-directory exports.
+A retired export's name stops resolving while its in-use nodes, handles and
+in-flight requests retain their backend; a re-registered name has a new identity
+and independent read-only policy.
+Registration validates that the supplied descriptor refers to a directory;
+host read/write permissions are checked by the kernel for each operation.
+A writable export may modify an existing writable file in a non-writable
+directory, while creating files there still fails with EACCES. The export's
+read-only policy separately rejects mutations with EROFS.
+Guest LOOKUP and accepted READDIRPLUS entries retain root inodes independently
+of open handles. FORGET releases those references; rejected READDIRPLUS entries
+and plain READDIR create no persistent lookup ownership.
+Disk order remains `vda` (container) then
 `vdb` (read-only guest root). The guest runs as PID 1, reports readiness over
 vsock and receives aggregate mount instructions before container startup.
 Linux arm64 and macOS arm64 remain separate M2 qualification gates; x86_64
@@ -113,11 +135,22 @@ MMIO hole leaves a maximum x86 RAM configuration of
 **64 TiB - 1 GiB (67,107,840 MiB)** before truncation.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
-vm-memory and registers it with the host VM. Three rules keep the backend's
+vm-memory and registers it with the host VM. These rules keep the backend's
 `map_memory` contract:
 
-- Host-side users clone the shared `Arc<GuestMemoryMmap>` and access guest
-  memory through vm-memory's volatile API, never through Rust references.
+- Host-side users clone the shared `GuestMemoryView`, vm-memory's
+  `GuestMemoryAtomic` over the region map, and access guest memory through
+  vm-memory's volatile API, never through Rust references.
+- A user loads one snapshot per unit of work and drops it before returning;
+  no device keeps one across events.
+- `VirtQueues::drain` and `complete` load one per call. Block, fs, console and
+  balloon load one per device callback, such as `on_event`, `activate` or
+  `quiesce`.
+- Net loads one per guest buffer read or write. Vsock loads one per TX intake
+  pass and one per RX buffer write.
+- The next event therefore sees a map that gained or lost a region. A
+  descriptor naming a removed region fails translation like any other invalid
+  address. A snapshot still held keeps its regions mapped until it drops.
 - `map` registers logical RAM regions from low to high. KVM slices each region
   into slots of at most `2^31−1` host pages and rolls back installed slices if
   a registration fails. `GuestRam` also rolls back attempted regions, including
@@ -126,6 +159,24 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
 - The backing is released after all registrations are removed or a freshly
   created host VM with exclusive ownership is closed before `run` starts.
   If registrations may still exist, `GuestRam` retains the backing.
+
+A map replaced while a worker event runs reaches the next event, not the
+current one:
+
+```mermaid
+sequenceDiagram
+  participant W as Virtio worker
+  participant V as GuestMemoryView
+  participant H as Map owner
+  W->>V: memory() at event start
+  V-->>W: snapshot S1 (regions A, B)
+  H->>V: replace with S2 (region A only)
+  Note over W: event still reads B through S1
+  W->>W: drop S1 at event end
+  Note over V: B stays mapped until its last reference drops
+  W->>V: memory() at next event start
+  V-->>W: snapshot S2: a descriptor into B fails translation
+```
 
 `Vm::new` validates the configuration, then opens and checks the KVM system fd
 and reads supported CPUID once. It preflights the RAM addresses and boot leaf
@@ -141,6 +192,39 @@ The `memory` and `vm` tests and the mock backend live in `tests/` and are includ
 as unit-test modules, which
 keeps them outside the counted sources and the coverage denominator; `config`
 and `error` keep inline test modules.
+
+`GuestRam` registers and releases only the boot regions it allocated. The
+shared view can gain hotplug regions, so `GuestRam` keeps its own boot map
+instead of reading registrations back from the view.
+
+## Hotplug memory
+
+`HotplugMemory` owns the window that grows and shrinks guest RAM at runtime.
+Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
+
+- The window starts at or above 4 GiB after all boot RAM. The base is rounded
+  up to the bundled Linux guest's memory block size, and capacity must be a
+  positive multiple of that size. A guest with 6 GiB of boot RAM and 1 GiB of
+  hotplug capacity has a window at `[7 GiB, 8 GiB)`.
+- The planner checks the end against KVM's GPA limit and Linux's pluggable
+  address limit. It checks capacity against KVM's slot budget after boot RAM.
+  E820 and the startup identity map describe the backed boot ranges.
+- The guest plugs 2 MiB blocks. A 128 MiB slot gets its own private anonymous
+  mapping and KVM registration when its first block is plugged.
+- Unplugging the last block of a slot removes its KVM registration, publishes
+  a view without it, then drops the mapping. A held snapshot keeps the mapping
+  alive until it drops, as the [Guest RAM](#guest-ram) diagram shows.
+- Publishing a removal cannot fail: a poisoned view lock is still used, and a
+  region already missing from the view counts as removed.
+- Unplugging blocks discards them with `MADV_DONTNEED` while other blocks in
+  that slot remain plugged. An emptied slot retained after a failed unmap
+  retains its contents.
+- A failed slot map unregisters the slots that plug added and leaves every
+  block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
+  leaks a slot whose unmap fails.
+
+The virtio-mem device and host control handle that drive it arrive next; the
+`hotplug` tests use the recording backend.
 
 ## Kernel loading
 
@@ -257,10 +341,11 @@ make test:integration:vmm:linux
 
 Each builds a KVM `Vm` with `prepare` on the
 [legacy devices](#legacy-devices-and-the-console) and runs it with `Vm::run`,
-with 256 MiB of RAM unless stated. The host VM is KVM behind a test wrapper
-that counts the edges devices raise on GSI 4 and can drop every interrupt. A
-watchdog stops a boot at its timeout, 30 seconds unless stated, so a failed
-boot reports the serial log so far.
+with 256 MiB of RAM unless stated. The CMOS RTC starts at
+`2026-01-02T03:04:05Z`. The host VM is KVM behind a test wrapper that counts
+the edges devices raise on GSI 4 and can drop every interrupt. A watchdog
+stops a boot at its timeout, 30 seconds unless stated, so a failed boot
+reports the serial log so far.
 
 - With `earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, one
   vCPU and no initramfs, the log must show the kernel version, the exact
@@ -282,9 +367,16 @@ boot reports the serial log so far.
   then reports CPU i, the log must show `exitcode=0x00000f00`.
 - With `console=ttyS0 panic=-1 reboot=k`, one vCPU and an `/init` that
   prints a line, waits for the tty to send it and restarts the machine, the
-  log must show the 16550A on IRQ 4, that line and
-  `reboot: Restarting system`, in that order, and GSI 4 must have been
-  raised.
+  log must show the 16550A on IRQ 4, `rtc_cmos rtc_cmos: registered as
+  rtc0`, that line and `reboot: Restarting system`, in that order, and must
+  not show `setting system clock`: kvm-clock keeps the boot time. GSI 4 must
+  have been raised.
+- With `console=ttyS0 panic=-1 reboot=k`, one vCPU and an `/init` that
+  mounts devtmpfs, turns on update interrupts on `/dev/rtc0` with
+  `RTC_UIE_ON`, as `hwclock` does, and waits up to 2 s for one, the log must
+  show `rtc0` registered, the line `/init` prints once one arrives, and
+  `reboot: Restarting system`, with no panic. Linux serves update
+  interrupts with the CMOS alarm, so the line proves the alarm raised IRQ 8.
 - The same boot with a console sink that takes nothing until the run has
   ended, and a 4 KiB queue, must still end with `GuestReset`. The queue drops
   the oldest bytes and counts them; the sink then gets the batch the worker
@@ -731,15 +823,26 @@ each one, which opens the image and attaches it in the slot `add_slot_device`
 took, and then announces that slot on the kernel command line.
 
 - **Slots.** `virtio::mmio::Slots` hands out `(window, line)` pairs in
-  order: window `i` is `0xd000_0000 + i * 4 KiB`, line `i` is GSI `5 + i`,
-  19 slots in all (the legacy range above COM1 and below the MSI space, as
-  Firecracker and libkrun allocate it). `Slot::cmdline_arg` renders the
+  order: window `i` is `0xd000_0000 + i * 4 KiB`, interrupt lines are GSI 5–7 and
+  9–23, 18 slots in all. GSI 8 stays reserved for the CMOS alarm, while MMIO
+  windows and device order remain consecutive. `Slot::cmdline_arg` renders the
   `virtio_mmio.device=4K@<base>:<gsi>` argument the kernel probes, and
   `announce` puts one per slot at the front under the command-line budget, so the
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
-  `/dev/vdb`, and so on.
-- **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
+  `/dev/vdb`, and so on. Production uses up to 13 slots with 8 disks, the
+  balloon, and optional aggregate filesystem, vsock, net and console devices.
+  The [M2 device plan](../../docs/contributing/architecture/vmm/README.md#devices-by-milestone)
+  adds rng for 14 devices within the 18-slot budget. IRQ 8 follows the
+  pinned Linux [RTC platform declaration](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/kernel/rtc.c#L114-L152),
+  and the upper GSI bound follows the 24-pin IOAPIC described in the
+  [Linux KVM IOAPIC source](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/include/uapi/asm/kvm.h#L77-L99).
+  The VM composition test uses the production attach and boot-loading paths
+  with eight distinct raw disks, with and without aggregate fs. It reads the
+  command line from guest RAM and checks consecutive MMIO windows, GSIs that
+  skip 8, disk capacities in configuration order, balloon/fs device IDs and
+  the real CMOS ports on a mock host VM; it does not boot a Linux guest.
+- **Configuration.** `DiskConfig { block_id, path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
   backing chain its header names. At most 8 disks; `blk::add_disk` fails with
   `Error::OpenDisk` for an image it cannot open and `add_all` fails with
@@ -753,7 +856,8 @@ took, and then announces that slot on the kernel command line.
   at most 128 MiB, and a read past the end returns zeros, while writes are
   refused.
 - **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
-  engine implements: `disk_info` once after open; `event_source` at every
+  engine implements: `disk_info` once after open; `resize_grow` to a larger
+  aligned size between requests, returning the new information; `event_source` at every
   activation, registered with the worker generation when it is `Some`;
   `submit(token, Request)` per parsed chain, answering `Done(CompletedRequest)`
   inline or `Pending`; `completions` on each `BackendReady` edge, drained
@@ -779,8 +883,26 @@ took, and then announces that slot on the kernel command line.
   and at most 128 MiB, so a conforming guest splits a larger range; imago
   zeroes what the format cannot discard, and a qcow2 image frees the
   clusters without punching the host file.
+- **Disk identity.** `block_id` is a nonempty host control ID, unique within
+  the VM. The native adapter preserves the ID assigned by BoxLite. IDs do not
+  affect attachment order or Linux device names. Invalid IDs fail VM creation
+  before host resources or images are opened.
+- **Online grow.** `vm.control().resize_disk("data", 2 << 30, timeout)`
+  grows the writable disk with `block_id: "data"` to 2 GiB. Targets must be
+  sector-aligned and at least the current capacity. A same-size request is a no-op.
+
+  After growth succeeds, the device worker updates guest capacity and raises a
+  configuration interrupt. A timeout ends the wait and the request can still complete.
+
+  On Linux, preflight rejects a Raw target or qcow2 estimate above the shim's
+  `RLIMIT_FSIZE` soft limit. The temporary qcow2 estimate adds 1 MiB per
+  started GiB of target capacity.
+
+  Fresh standalone samples from QEMU 8.2.2 (`preallocation=metadata`,
+  64 KiB clusters, 16-bit refcounts) added 384 KiB to file length at 1 GiB
+  and 10.25 MiB at 64 GiB. Existing image layouts can require more space.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
-  backend source, fails the device with `Fatal` if a request is still in
+  backend and control sources, fails the device with `Fatal` if a request is still in
   flight (no completion can arrive any more, and the guest may already
   reuse that memory), flushes, and forgets the activation. The imago
   backend finishes every request inline, so its table is always empty; a
@@ -1052,6 +1174,7 @@ windows, then adds the legacy devices:
 | Ports | Device | Behavior |
 | --- | --- | --- |
 | `0x3F8`–`0x3FF` | `com1`, vm-superio's 16550A | Output goes to the console queue; a pending, enabled THRE or RDA raises an edge on GSI 4; no input yet |
+| `0x70`–`0x71` | `cmos` | See [CMOS RTC](#cmos-rtc) |
 | `0x60`, `0x64` | `i8042`, vm-superio's controller | Reads 0; the first `0xFE` at `0x64` sends `GuestReset` |
 
 - vm-superio must be 0.8.2 or later. It raises THRE on every IER write, so
@@ -1070,6 +1193,23 @@ windows, then adds the legacy devices:
   worker holds included, as dropped.
 - A failed interrupt sends `DeviceFailed`, once.
 - The guest kernel has no i8042 driver, so the reset is all the device does.
+
+## CMOS RTC
+
+On x86_64, `CmosRtc` serves ports `0x70` (register select) and `0x71` (data).
+Linux exposes the clock as `/dev/rtc0` and takes its boot time from kvm-clock
+because `boot/kernel.config` disables `RTC_HCTOSYS`.
+
+- RTC time follows the host wall clock plus a guest-set offset. SET or a
+  divider reset freezes it. On release, the clock resumes half a second into
+  the written second, matching Linux's RTC write timing. Time registers read
+  in 24-hour BCD or binary.
+- Alarms match hours, minutes, and seconds in guest RTC time. The RTC latches
+  due matches in AF before rescheduling, even with AIE off. Enabling AIE with
+  AF set asserts IRQ 8. Reading register C clears the flags and rearms the
+  alarm. Clearing AIE lowers IRQ 8 and keeps AF.
+- Linux uses the alarm to emulate update interrupts for `hwclock`. A failed
+  IRQ update ends the VM with `DeviceFailed`.
 
 ## Build
 
@@ -1104,9 +1244,9 @@ port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through
 `KVM_IRQ_LINE`, skipping a repeated level. Another flat guest reads a claimed
 and an unclaimed port of a built chipset, and the device's line, armed by the
 build, reaches KVM. A third runs on the [legacy devices](#legacy-devices-and-the-console):
-it prints `OK` on COM1, reads an unclaimed port and unmapped MMIO as all
-ones, and runs no instruction after its i8042 reset. CI runs the same tests
-through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
+it prints `OK` on COM1, reads the CMOS seconds from a fixed clock, reads an
+unclaimed port and unmapped MMIO as all ones, and runs no instruction after
+its i8042 reset. CI runs the same tests through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
 and weekly, it also runs the [boot tests](#boot-tests) on the kernel it builds
 with `make vmm:boot:host`, through `make coverage:vmm:boot`, which needs
 `VMM_KERNEL` like `make test:integration:vmm:linux`. The Linux integration test

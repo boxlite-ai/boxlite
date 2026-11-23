@@ -10,7 +10,7 @@ use crate::litebox::ports::LivePublishedPorts;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::ContainerRootfsInitConfig;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::VolumeSpec;
+use crate::runtime::options::{MountSpec, VolumeSpec};
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::vmm::{PreparedKernel, controller::VmmHandler};
 use crate::volumes::{ContainerMount, GuestVolumeManager, VolumeShare, classify_volume_share};
@@ -31,6 +31,14 @@ pub const USE_OVERLAYFS: bool = true;
 /// When enabled, USE_OVERLAYFS is ignored.
 pub const USE_DISK_ROOTFS: bool = true;
 
+#[derive(Debug, Clone)]
+pub enum ResolvedShareKind {
+    Directory,
+    SingleFile { file_name: String },
+    ManagedDirectory,
+    ManagedSubDirectory { sub_path: String },
+}
+
 /// User-specified volume with resolved paths and generated tag.
 #[derive(Debug, Clone)]
 pub struct ResolvedVolume {
@@ -42,25 +50,68 @@ pub struct ResolvedVolume {
     pub owner_uid: u32,
     /// Owner GID of host directory (for auto-idmap in guest).
     pub owner_gid: u32,
-    /// For a single-file mount, the file's name (staged and bind-mounted on its
-    /// own); `None` for a whole-directory mount.
-    pub subpath: Option<String>,
+    pub kind: ResolvedShareKind,
 }
 
-pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<ResolvedVolume>> {
-    let mut resolved = Vec::with_capacity(volumes.len());
+fn managed_share_kind(mount: &crate::volumes::ResolvedLocalMount) -> ResolvedShareKind {
+    match &mount.payload {
+        crate::volumes::ResolvedLocalMountPayload::WholeVolume => {
+            ResolvedShareKind::ManagedDirectory
+        }
+        crate::volumes::ResolvedLocalMountPayload::SubDirectory { path } => {
+            ResolvedShareKind::ManagedSubDirectory {
+                sub_path: path.clone(),
+            }
+        }
+    }
+}
+
+fn managed_owner_path(kind: &ResolvedShareKind, resolved_path: &std::path::Path) -> PathBuf {
+    match kind {
+        ResolvedShareKind::ManagedSubDirectory { sub_path } => resolved_path.join(sub_path),
+        _ => resolved_path.to_path_buf(),
+    }
+}
+
+pub fn resolve_user_volumes(
+    volumes: &[VolumeSpec],
+    mounts: &[MountSpec],
+    store: &crate::volumes::LocalVolumeStore,
+) -> BoxliteResult<Vec<ResolvedVolume>> {
+    let options = crate::runtime::options::BoxOptions {
+        volumes: volumes.to_vec(),
+        mounts: mounts.to_vec(),
+        ..Default::default()
+    };
+    let managed = store.resolve_for_boot(&options)?;
+    let mut managed_by_id: std::collections::HashMap<_, _> = managed
+        .into_iter()
+        .map(|mount| (mount.volume_id.clone(), mount))
+        .collect();
+    let mut resolved = Vec::with_capacity(volumes.len() + mounts.len());
 
     for (i, vol) in volumes.iter().enumerate() {
-        // Managed volumes live on the server that owns the volume backend.
-        // Without this the reference falls through to the host-path checks
-        // below and surfaces as "host path does not exist: my-data", which
-        // points the caller at their own filesystem instead of at the
-        // runtime they used.
-        if let Some(reference) = &vol.managed_volume {
-            return Err(BoxliteError::Unsupported(format!(
-                "managed volume {reference:?} requires a REST runtime; the local runtime has no \
-                 volume backend to resolve it against"
-            )));
+        if let Some(selector) = &vol.managed_volume {
+            let mount = managed_by_id.remove(selector).ok_or_else(|| {
+                BoxliteError::Internal(format!("volume {selector} was not resolved for boot"))
+            })?;
+            let kind = managed_share_kind(&mount);
+            let resolved_path = mount.payload_root;
+            let owner_path = managed_owner_path(&kind, &resolved_path);
+            let metadata = std::fs::metadata(&owner_path).map_err(|error| {
+                BoxliteError::Config(format!("Failed to stat managed volume {selector}: {error}"))
+            })?;
+            use std::os::unix::fs::MetadataExt;
+            resolved.push(ResolvedVolume {
+                tag: format!("uservol{i}"),
+                host_path: resolved_path,
+                guest_path: mount.target,
+                read_only: mount.read_only,
+                owner_uid: metadata.uid(),
+                owner_gid: metadata.gid(),
+                kind,
+            });
+            continue;
         }
 
         let host_path = PathBuf::from(&vol.host_path);
@@ -82,9 +133,12 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
         // A directory is shared as-is; a single file keeps its own path here and
         // is staged into a dedicated share dir later (see vmm_spawn), so virtio-fs
         // never exposes the file's host siblings.
-        let (source_path, subpath) = match classify_volume_share(&resolved_path) {
-            Some(VolumeShare::Dir(dir)) => (dir, None),
-            Some(VolumeShare::File(name)) => (resolved_path.clone(), Some(name)),
+        let (source_path, kind) = match classify_volume_share(&resolved_path) {
+            Some(VolumeShare::Dir(dir)) => (dir, ResolvedShareKind::Directory),
+            Some(VolumeShare::File(file_name)) => (
+                resolved_path.clone(),
+                ResolvedShareKind::SingleFile { file_name },
+            ),
             None => {
                 return Err(BoxliteError::Config(format!(
                     "Volume host path is not a file or directory: {}",
@@ -111,7 +165,6 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
         tracing::debug!(
             tag = %tag,
             host_path = %source_path.display(),
-            subpath = ?subpath,
             guest_path = %vol.guest_path,
             read_only = vol.read_only,
             owner_uid,
@@ -126,8 +179,52 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
             read_only: vol.read_only,
             owner_uid,
             owner_gid,
-            subpath,
+            kind,
         });
+    }
+
+    for (i, mount) in mounts.iter().enumerate() {
+        let source = mount.source.as_deref().ok_or_else(|| {
+            BoxliteError::InvalidArgument(format!("mount to {:?} has no source", mount.target))
+        })?;
+        match mount.mount_type {
+            crate::runtime::options::MountType::Volume => {
+                let managed = managed_by_id.remove(source).ok_or_else(|| {
+                    BoxliteError::Internal(format!("volume {source} was not resolved for boot"))
+                })?;
+                let kind = managed_share_kind(&managed);
+                let resolved_path = managed.payload_root;
+                let owner_path = managed_owner_path(&kind, &resolved_path);
+                let metadata = std::fs::metadata(&owner_path).map_err(|error| {
+                    BoxliteError::Config(format!(
+                        "Failed to stat volume path '{}': {error}",
+                        resolved_path.display()
+                    ))
+                })?;
+                use std::os::unix::fs::MetadataExt;
+                resolved.push(ResolvedVolume {
+                    tag: format!("uservol{i}"),
+                    host_path: resolved_path,
+                    guest_path: managed.target,
+                    read_only: managed.read_only,
+                    owner_uid: metadata.uid(),
+                    owner_gid: metadata.gid(),
+                    kind,
+                });
+            }
+            crate::runtime::options::MountType::Bind => {
+                let bind = VolumeSpec {
+                    managed_volume: None,
+                    host_path: source.to_owned(),
+                    guest_path: mount.target.clone(),
+                    read_only: mount.read_only,
+                };
+                resolved.extend(resolve_user_volumes(&[bind], &[], store)?);
+            }
+        }
+    }
+    for (index, volume) in resolved.iter_mut().enumerate() {
+        volume.tag = format!("uservol{index}");
     }
 
     Ok(resolved)
@@ -393,8 +490,15 @@ mod tests {
             guest_path: "/data".to_string(),
             read_only: false,
         }];
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        let resolved = resolve_user_volumes(&volumes).unwrap();
+        let resolved = resolve_user_volumes(&volumes, &[], &runtime.local_volume_store).unwrap();
         assert_eq!(resolved.len(), 1);
 
         // owner_uid should be the current user's UID
@@ -405,38 +509,205 @@ mod tests {
         assert_eq!(resolved[0].owner_uid, expected_uid);
         assert_eq!(resolved[0].owner_gid, expected_gid);
         assert_eq!(resolved[0].tag, "uservol0");
-        assert_eq!(resolved[0].subpath, None);
+        assert!(matches!(resolved[0].kind, ResolvedShareKind::Directory));
     }
 
     #[test]
     fn resolve_volume_nonexistent_path_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let volumes = vec![VolumeSpec::bind_mount("/nonexistent/path/12345", "/data")];
 
-        let result = resolve_user_volumes(&volumes);
+        let result = resolve_user_volumes(&volumes, &[], &runtime.local_volume_store);
         assert!(result.is_err());
     }
 
-    /// The local runtime has no volume backend, so a managed volume has to say
-    /// so. Without the guard the reference falls through to the host-path
-    /// checks and reports "host path does not exist: my-data", which sends the
-    /// caller looking for a directory they never asked for.
     #[test]
-    fn resolve_managed_volume_reports_the_missing_backend() {
-        let volumes = vec![VolumeSpec::managed_volume("my-data", "/data")];
+    fn resolve_typed_bind_directory_uses_host_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mount = crate::runtime::options::MountSpec {
+            read_only: true,
+            ..crate::runtime::options::MountSpec::bind_mount(
+                tmp.path().to_string_lossy().to_string(),
+                "/data",
+            )
+        };
 
-        let error = resolve_user_volumes(&volumes)
-            .expect_err("the local runtime cannot resolve a managed volume");
+        let resolved = resolve_user_volumes(&[], &[mount], &runtime.local_volume_store).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_path, tmp.path().canonicalize().unwrap());
+        assert_eq!(resolved[0].guest_path, "/data");
+        assert!(resolved[0].read_only);
+        assert_eq!(resolved[0].tag, "uservol0");
+        assert!(matches!(resolved[0].kind, ResolvedShareKind::Directory));
+    }
 
-        assert!(
-            matches!(error, BoxliteError::Unsupported(_)),
-            "{error:?} should be Unsupported, not a config error about a path"
+    #[test]
+    fn resolve_typed_bind_single_file_preserves_file_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("app.conf");
+        std::fs::write(&file_path, b"key=value\n").unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mount = crate::runtime::options::MountSpec::bind_mount(
+            file_path.to_string_lossy().to_string(),
+            "/etc/app.conf",
         );
-        let message = error.to_string();
-        assert!(message.contains("my-data"), "{message}");
-        assert!(message.contains("REST runtime"), "{message}");
-        assert!(
-            !message.contains("host path"),
-            "the error must not blame a host path: {message}"
+
+        let resolved = resolve_user_volumes(&[], &[mount], &runtime.local_volume_store).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].host_path, file_path.canonicalize().unwrap());
+        assert_eq!(resolved[0].guest_path, "/etc/app.conf");
+        assert_eq!(resolved[0].tag, "uservol0");
+        assert!(matches!(
+            resolved[0].kind,
+            ResolvedShareKind::SingleFile { ref file_name } if file_name == "app.conf"
+        ));
+    }
+
+    #[test]
+    fn resolve_managed_volume_uses_the_local_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let volume = runtime.local_volume_store.create(Some("my-data")).unwrap();
+        let options = crate::runtime::options::BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume(&volume.id, "/data")],
+            ..Default::default()
+        };
+
+        let resolved = resolve_user_volumes(
+            &options.volumes,
+            &options.mounts,
+            &runtime.local_volume_store,
+        )
+        .expect("resolve a managed volume through the local store");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].guest_path, "/data");
+        let expected = runtime
+            .layout
+            .volumes_dir()
+            .canonicalize()
+            .unwrap()
+            .join(&volume.id)
+            .join("_data");
+        assert_eq!(resolved[0].host_path, expected);
+        assert!(matches!(
+            resolved[0].kind,
+            ResolvedShareKind::ManagedDirectory
+        ));
+    }
+
+    #[test]
+    fn resolve_typed_mount_subdirectory_records_the_payload_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        std::fs::create_dir_all(
+            runtime
+                .layout
+                .volumes_dir()
+                .join(&volume.id)
+                .join("_data")
+                .join("team/backend"),
+        )
+        .unwrap();
+        let mount = crate::runtime::options::MountSpec {
+            sub_path: Some("team/backend".to_string()),
+            ..crate::runtime::options::MountSpec::volume_mount(&volume.id, "/workspace")
+        };
+
+        let resolved = resolve_user_volumes(&[], &[mount], &runtime.local_volume_store).unwrap();
+        assert!(matches!(
+            resolved[0].kind,
+            ResolvedShareKind::ManagedSubDirectory { ref sub_path }
+                if sub_path == "team/backend"
+        ));
+    }
+
+    #[test]
+    fn resolve_typed_mount_subdirectory_uses_the_selected_directory_owner() {
+        use std::os::unix::fs::MetadataExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let volume = runtime
+            .local_volume_store
+            .create(Some("workspace"))
+            .unwrap();
+        let payload = runtime.layout.volumes_dir().join(&volume.id).join("_data");
+        let subdirectory = payload.join("team/backend");
+        std::fs::create_dir_all(&subdirectory).unwrap();
+        let mount = crate::runtime::options::MountSpec {
+            sub_path: Some("team/backend".to_string()),
+            ..crate::runtime::options::MountSpec::volume_mount(&volume.id, "/workspace")
+        };
+
+        let resolved = resolve_user_volumes(
+            &[],
+            std::slice::from_ref(&mount),
+            &runtime.local_volume_store,
+        )
+        .unwrap();
+        assert_eq!(
+            managed_owner_path(&resolved[0].kind, &resolved[0].host_path),
+            subdirectory.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolved[0].owner_gid,
+            std::fs::metadata(&subdirectory).unwrap().gid()
+        );
+
+        let whole = crate::runtime::options::MountSpec {
+            sub_path: None,
+            ..mount
+        };
+        let resolved = resolve_user_volumes(&[], &[whole], &runtime.local_volume_store).unwrap();
+        assert_eq!(
+            managed_owner_path(&resolved[0].kind, &resolved[0].host_path),
+            payload.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolved[0].owner_gid,
+            std::fs::metadata(payload).unwrap().gid()
         );
     }
 
@@ -452,12 +723,22 @@ mod tests {
             guest_path: "/etc/app.conf".to_string(),
             read_only: true,
         }];
+        let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
+            crate::runtime::options::BoxliteOptions {
+                home_dir: tmp.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        let resolved = resolve_user_volumes(&volumes).unwrap();
+        let resolved = resolve_user_volumes(&volumes, &[], &runtime.local_volume_store).unwrap();
         assert_eq!(resolved.len(), 1);
         // Keeps the file's own path (staged into a share dir later) plus its name.
         assert_eq!(resolved[0].host_path, file_path.canonicalize().unwrap());
-        assert_eq!(resolved[0].subpath, Some("app.conf".to_string()));
+        assert!(matches!(
+            resolved[0].kind,
+            ResolvedShareKind::SingleFile { ref file_name } if file_name == "app.conf"
+        ));
         assert_eq!(resolved[0].guest_path, "/etc/app.conf");
     }
 

@@ -28,7 +28,7 @@ inputs:
       Build commands to run inside the container after the prologue. Written
       literally — no host-side expansion — so $VARS resolve in the container, the
       same as under the quoted heredoc each call site used before. Empty runs the
-      prologue alone.
+      prologue alone. BOXLITE_CI_TARGET contains the target input.
     required: false
     default: ''
 
@@ -119,5 +119,6 @@ runs:
           "${SCCACHE_DOCKER_ARGS[@]}" \
           -w /work \
           -e CARGO_HOME=/work/.cargo-manylinux \
+          -e "BOXLITE_CI_TARGET=$TARGET" \
           "quay.io/pypa/manylinux_2_28_$image_arch" \
           bash /tmp/build.sh

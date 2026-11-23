@@ -97,10 +97,11 @@ jobs:
     # it, so `contents: read` is restated. `pull-requests: read` is what lets a
     # request's merge resolve below, and it is granted here rather than at
     # workflow level so the jobs that reach a cloud role never carry it — this
-    # is the only job that reads the API, and it binds no Environment.
-    # `id-token` is not restated: nothing here federates.
+    # is the only job that reads pull requests, and it binds no Environment.
+    # The approval notice reads this run's display title through the Actions API.
     permissions:
       contents: read
+      actions: read
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
@@ -171,10 +172,12 @@ jobs:
           [ -z "$version" ] || line="release $version"
           [ -z "$pr" ] || line="pull request #$pr"
 
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'pr=%s\n' "$pr" >> "$GITHUB_OUTPUT"
-          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
-          printf 'line=%s\n' "$line" >> "$GITHUB_OUTPUT"
+          {
+            printf 'version=%s\n' "$version"
+            printf 'pr=%s\n' "$pr"
+            printf 'candidate=%s\n' "$candidate"
+            printf 'line=%s\n' "$line"
+          } >> "$GITHUB_OUTPUT"
           echo "${STAGE}: ${line}"
 
       # A pull request becomes the commit it would merge to, not its head.
@@ -347,6 +350,24 @@ jobs:
               *) echo '::error title=components::Unsupported artifact selection'; exit 1 ;;
             esac
           fi
+
+      - name: Notify dev reviewers
+        if: inputs.apply && inputs.stage == 'dev'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          APPROVAL_PHASE: ${{ steps.classify.outputs.version != '' && 'Release deployment approval' || 'Commit preparation approval' }}
+        run: node apps/infra/scripts/release-pipeline.mjs approval
+
+      - name: Notify prod reviewers
+        if: inputs.apply && inputs.stage == 'prod'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          APPROVAL_PHASE: Release deployment approval
+        run: node apps/infra/scripts/release-pipeline.mjs approval
 
   # Each commit artifact plans/builds on its own runner; releases use one apply leg.
   plan:
@@ -537,15 +558,35 @@ jobs:
           apply: ${{ inputs.apply }}
           confirm: ${{ inputs.confirm }}
 
+  notify-deploy:
+    name: Notify reviewers of the commit deployment
+    continue-on-error: true
+    needs: [resolve, plan]
+    if: inputs.apply && inputs.stage == 'dev' && needs.resolve.outputs.version == '' && needs.plan.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Notify reviewers
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          APPROVAL_PHASE: Commit deployment approval
+        run: node apps/infra/scripts/release-pipeline.mjs approval
+
   deploy:
     name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
     permissions:
       contents: read
       id-token: write
       packages: read
-    needs: [resolve, plan]
+    needs: [resolve, plan, notify-deploy]
     if: >-
-      ${{ !cancelled() && !failure() && needs.plan.result == 'success' && needs.resolve.outputs.version == ''
+      ${{ !cancelled() && needs.resolve.result == 'success' && needs.plan.result == 'success' && needs.resolve.outputs.version == ''
       && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest

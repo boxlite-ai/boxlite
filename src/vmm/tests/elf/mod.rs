@@ -4,6 +4,7 @@
 //! Tests for the library-backed ELF adapter and guest visibility.
 
 use std::io::{self, Cursor};
+use vm_memory::GuestAddressSpace as _;
 
 use vm_memory::{Bytes, GuestAddress};
 
@@ -85,7 +86,8 @@ fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<LoadedKernel> {
 #[test]
 fn loads_physical_bytes_and_returns_the_kernel_entry() {
     let ram = ram(RAM_SIZE);
-    let memory = ram.memory().as_ref();
+    let memory = ram.memory().memory();
+    let memory = &*memory;
     let image = fixture();
 
     let kernel = load(memory, &image).unwrap();
@@ -115,7 +117,7 @@ fn reports_the_lowest_loadable_physical_address_not_the_entry() {
     let lowest_paddr = 0xf_f000;
     put64(&mut image, header(1) + 24, lowest_paddr);
 
-    let kernel = load(ram.memory().as_ref(), &image).unwrap();
+    let kernel = load(ram.boot_memory().as_ref(), &image).unwrap();
     assert_eq!(kernel.entry, ENTRY);
     assert_eq!(kernel.start, lowest_paddr);
 }
@@ -139,7 +141,7 @@ fn zero_memsz_load_segments_do_not_widen_kernel_bounds() {
     put64(&mut image, 32, phoff as u64);
     put16(&mut image, 56, (SEGMENTS.len() + 2) as u16);
 
-    let kernel = load(ram.memory().as_ref(), &image).unwrap();
+    let kernel = load(ram.boot_memory().as_ref(), &image).unwrap();
     assert_eq!(kernel.entry, ENTRY);
     assert_eq!(kernel.start, 0x10_0000);
     assert_eq!(kernel.end, 0x10_3080);
@@ -151,12 +153,12 @@ fn rejects_invalid_elf64_headers_and_overflowing_segments() {
     for (offset, value) in [(0, 0), (4, 1)] {
         let mut image = fixture();
         image[offset] = value;
-        let error = load(ram.memory().as_ref(), &image).unwrap_err();
+        let error = load(ram.boot_memory().as_ref(), &image).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
     let mut image = fixture();
     put64(&mut image, header(2) + 24, u64::MAX);
-    let error = load(ram.memory().as_ref(), &image).unwrap_err();
+    let error = load(ram.boot_memory().as_ref(), &image).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert_eq!(error.to_string(), "ELF64 segment end overflows");
 }
@@ -166,10 +168,10 @@ fn reports_truncated_headers_and_preserves_the_library_error_for_truncated_paylo
     let valid = fixture();
     let ram = ram(RAM_SIZE);
     for image in [&[][..], &valid[..header(2)]] {
-        let error = load(ram.memory().as_ref(), image).unwrap_err();
+        let error = load(ram.boot_memory().as_ref(), image).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     }
-    let error = load(ram.memory().as_ref(), &valid[..valid.len() - 1]).unwrap_err();
+    let error = load(ram.boot_memory().as_ref(), &valid[..valid.len() - 1]).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::Other);
     assert!(
         error
@@ -241,7 +243,8 @@ fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
 
     // RAM is declared before the VM and vCPU so it outlives them during unwinding.
     let ram = ram(RAM_SIZE);
-    let memory = ram.memory().as_ref();
+    let memory = ram.memory().memory();
+    let memory = &*memory;
     let mut kernel = std::fs::File::open(&path).expect("open VMM_KERNEL");
     let kernel = load_elf(memory, &mut kernel).unwrap();
     assert_eq!(kernel.entry, expected_entry);

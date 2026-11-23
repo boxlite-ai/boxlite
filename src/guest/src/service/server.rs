@@ -45,6 +45,9 @@ pub(crate) struct GuestServer {
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
     pub frozen_mounts: Mutex<Vec<PathBuf>>,
 
+    /// The listener verifies that clock-sync requests come from the host.
+    pub(super) allow_clock_sync: bool,
+
     /// Set when a host-driven Shutdown RPC is in progress. The reaper's
     /// init-exit action checks this to avoid powering the VM off underneath a
     /// host-orchestrated teardown.
@@ -75,6 +78,7 @@ impl GuestServer {
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),
             frozen_mounts: Mutex::new(Vec::new()),
+            allow_clock_sync: false,
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             init_exits: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -87,7 +91,11 @@ impl GuestServer {
     ///
     /// If `notify_uri` is provided, connects to that URI after the server
     /// is ready to serve, signaling readiness to the host.
-    pub async fn run(self, listen_uri: String, notify_uri: Option<String>) -> BoxliteResult<()> {
+    pub async fn run(
+        mut self,
+        listen_uri: String,
+        notify_uri: Option<String>,
+    ) -> BoxliteResult<()> {
         info!("Starting tonic gRPC server");
 
         // Parse the listen URI to determine transport type
@@ -99,6 +107,9 @@ impl GuestServer {
         })?;
 
         info!("Parsed transport from URI: {:?}", transport);
+
+        // Only the vsock listener verifies the host CID before serving RPCs.
+        self.allow_clock_sync = matches!(&transport, BoxTransport::Vsock { .. });
 
         // Wrap self in Arc for sharing across services
         let server = Arc::new(self);

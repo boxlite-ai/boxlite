@@ -7,8 +7,8 @@
 //! hypervisor. It releases the backing once every registration is removed or
 //! the VM and its vCPUs are closed. A `GuestRam` dropped while a registration may
 //! still exist leaks the backing, so the host VM never references freed memory.
-//! Host-side users of guest memory hold clones of the shared [`Arc`] and go
-//! through vm-memory's volatile access API, never plain references.
+//! Devices hold clones of the shared [`GuestMemoryView`] and load snapshots
+//! for guest access through vm-memory's volatile API.
 
 use std::{io, ptr::NonNull, sync::Arc};
 
@@ -20,6 +20,14 @@ use crate::error::{Error, Result};
 /// The guest memory type every host-side user shares. Dirty-page tracking
 /// (M8) changes this alias rather than every holder.
 pub(crate) type GuestMemoryMmap = vm_memory::GuestMemoryMmap<()>;
+
+/// The replaceable guest memory map host-side users share.
+///
+/// [`GuestAddressSpace::memory`] loads the current snapshot. A caller loads it
+/// once per unit of work, such as one worker event, and drops it before
+/// returning, so a later replacement of the map becomes visible to the next
+/// unit. A held snapshot keeps every region it names mapped until it drops.
+pub(crate) type GuestMemoryView = vm_memory::GuestMemoryAtomic<GuestMemoryMmap>;
 
 /// Bytes per MiB.
 const MIB: u64 = 1 << 20;
@@ -258,7 +266,10 @@ fn interior_pages(start: usize, len: usize, page_size: usize) -> (usize, usize) 
 /// Guest RAM owned by the VMM.
 #[derive(Debug)]
 pub(crate) struct GuestRam {
-    memory: Arc<GuestMemoryMmap>,
+    memory: GuestMemoryView,
+    /// The boot RAM map. `GuestRam` registers and releases exactly these
+    /// regions, whatever later views add or remove.
+    boot_memory: Arc<GuestMemoryMmap>,
     /// Regions `0..mapped`, in ascending address order, may still have
     /// mappings with the host VM.
     mapped: usize,
@@ -271,7 +282,7 @@ impl GuestRam {
     /// each region: fresh owned MAP_PRIVATE | MAP_ANONYMOUS mappings, without
     /// files, raw pointers or hugetlb. Distinct live allocations have disjoint
     /// host virtual ranges; this constructor creates no second GPA/HVA view of
-    /// one allocation. Arc clones retain the same mapping. Kernel zero-page
+    /// one allocation. Snapshots retain the same mapping. Kernel zero-page
     /// sharing or COW does not create another VMM mapping. Reporting rejects
     /// other backing kinds instead of extending this ownership contract.
     pub(crate) fn new(ranges: &[(GuestAddress, usize)]) -> Result<Self> {
@@ -281,15 +292,22 @@ impl GuestRam {
                 bytes,
                 source: io::Error::other(source),
             })?;
+        let boot_memory = Arc::new(memory);
         Ok(Self {
-            memory: Arc::new(memory),
+            memory: GuestMemoryView::from(Arc::clone(&boot_memory)),
+            boot_memory,
             mapped: 0,
         })
     }
 
-    /// The shared guest memory every host-side user clones.
-    pub(crate) fn memory(&self) -> &Arc<GuestMemoryMmap> {
+    /// The shared guest memory view every host-side user clones.
+    pub(crate) fn memory(&self) -> &GuestMemoryView {
         &self.memory
+    }
+
+    /// The map used by the boot loader and host VM registrations.
+    pub(crate) fn boot_memory(&self) -> &Arc<GuestMemoryMmap> {
+        &self.boot_memory
     }
 
     /// The guest RAM ranges this instance backs, in ascending guest order.
@@ -298,14 +316,14 @@ impl GuestRam {
         expect(dead_code, reason = "Only Linux x86_64 prepares boot data yet.")
     )]
     pub(crate) fn ranges(&self) -> impl Iterator<Item = (GuestAddress, usize)> + '_ {
-        self.memory
+        self.boot_memory()
             .iter()
             .map(|region| (region.start_addr(), region.len() as usize))
     }
 
     /// Each RAM range as the hypervisor registers it, in ascending guest order.
     pub(crate) fn regions(&self) -> impl Iterator<Item = MemoryRegion> + '_ {
-        self.memory.iter().map(|region| MemoryRegion {
+        self.boot_memory().iter().map(|region| MemoryRegion {
             guest_addr: region.start_addr().0,
             // vm-memory rejects a failed mmap, so a region pointer is never null.
             host_addr: NonNull::new(region.as_ptr()).expect("mmap returned a null mapping"),
@@ -375,7 +393,7 @@ impl Drop for GuestRam {
         if self.mapped > 0 {
             // The host VM may still reference the range; leaking beats freeing
             // memory the guest can still write.
-            std::mem::forget(Arc::clone(&self.memory));
+            std::mem::forget(Arc::clone(&self.boot_memory));
         }
     }
 }

@@ -6,6 +6,7 @@
 import { RoutePath } from '@/enums/RoutePath'
 import { CI_CALLBACK_PATH, clearCiConnectSession } from './ci-connect'
 import { ORGANIZATION_SESSION_KEY } from './organization-session'
+import { clearPendingPlanUpgrade } from './pending-plan-upgrade'
 
 const SIGN_IN_INTENT_KEY = 'boxlite-just-logged-out'
 type SignInIntent = { signedOut: boolean; returnTo: string }
@@ -48,6 +49,7 @@ export function getSignInIntent(): SignInIntent | null {
 }
 
 export function markJustLoggedOut(returnTo?: unknown) {
+  clearPendingPlanUpgrade()
   sessionStorage.setItem(SIGN_IN_INTENT_KEY, JSON.stringify({ signedOut: true, returnTo: safeReturnTo(returnTo) }))
   sessionStorage.removeItem(ORGANIZATION_SESSION_KEY)
   clearCiConnectSession()

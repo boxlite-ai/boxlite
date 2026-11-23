@@ -195,7 +195,12 @@ These records define SDK data types. The
 [REST design](../contributing/investigations/2026-10-28-agent-rest-api-design.md)
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
-headers. Agent HTTP routes and REST client support are unavailable.
+headers. The OpenAPI contract specifies nine agent HTTP operations, retry-key forwarding,
+SSE events, and HTTP 204 close/interrupt responses. Runtime routes and the REST
+client are unavailable. The OpenAPI components
+define strict request objects and additive response records, including fractional
+retention durations; implementations must validate known response fields while
+accepting additional server fields.
 
 ### Node agent JSON numbers
 

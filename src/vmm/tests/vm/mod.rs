@@ -18,7 +18,7 @@ use std::{
 
 use boxlite_hypervisor::{Error as HypervisorError, MemoryRegion, Vm as HostVm};
 use tracing::{Event, Level, Metadata, Subscriber, field::Field, span};
-use vm_memory::{GuestAddress, GuestMemoryBackend};
+use vm_memory::{GuestAddress, GuestAddressSpace, GuestMemoryBackend};
 
 use super::{BootRegisters, Vm};
 use crate::{
@@ -100,7 +100,7 @@ fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
         panic!("one region")
     };
     assert_eq!(start.0, RAM_START);
-    let host_addr = vm.ram.memory().get_host_address(start).unwrap() as usize;
+    let host_addr = vm.ram.memory().memory().get_host_address(start).unwrap() as usize;
     let map = Call::Map {
         guest_addr: start.0,
         host_addr,
@@ -126,7 +126,7 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
 
     let mut vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
     let log = vm.host_vm.as_deref().unwrap().log();
-    let memory = Arc::downgrade(vm.ram.memory());
+    let memory = Arc::downgrade(vm.ram.boot_memory());
     vm.workers = Some(VirtioWorkers::with_runtime(Arc::new(
         SharedRuntime::new(
             vm.sender.clone(),
@@ -139,7 +139,7 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
     )));
     let workers = vm.workers.as_ref().unwrap();
     crate::virtio::fs::worker_tests::with_blocked_vm_read(
-        vm.ram.memory().clone(),
+        vm.ram.boot_memory().clone(),
         workers,
         &vm.events.lock().unwrap(),
         |release| {
@@ -183,7 +183,7 @@ fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
 
     let mut vm = bare(config(1, 1), || Ok(MockVm::new())).unwrap();
     let log = vm.host_vm.as_deref().unwrap().log();
-    let memory = vm.ram.memory().clone();
+    let memory = vm.ram.boot_memory().clone();
     let backing = Arc::downgrade(&memory);
     let events = EventLoop::new().unwrap();
     let runtime = Arc::new(
@@ -235,9 +235,10 @@ fn a_rejected_vm_mapping_releases_the_backing() {
         |_, ctx| {
             let host_addr = ctx
                 .memory
+                .memory()
                 .get_host_address(GuestAddress(RAM_START))
                 .unwrap() as usize;
-            backing = Some((Arc::downgrade(ctx.memory), host_addr));
+            backing = Some((Arc::downgrade(&ctx.memory.memory().into_inner()), host_addr));
             Ok(())
         },
     )
@@ -417,7 +418,9 @@ fn failed_vm_mapping_releases_backing_after_failed_rollback() {
             },
             |_, _| panic!("a rejected map must not reach boot"),
             |chipset, ctx| {
-                backing.set(Arc::downgrade(ctx.memory)).unwrap();
+                backing
+                    .set(Arc::downgrade(&ctx.memory.memory().into_inner()))
+                    .unwrap();
                 // The device's interrupt line holds a strong reference to the host VM.
                 chipset.add("device", |resources| {
                     Ok(MappingTestDevice {
@@ -463,7 +466,7 @@ fn failed_boot_keeps_backing_while_an_irq_line_owns_the_host_vm() {
     let mut irq = None;
 
     let error = with_fresh_backend(config(1, 16), backend, failed_boot, |chipset, ctx| {
-        backing = Some(Arc::downgrade(ctx.memory));
+        backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
         chipset.add("device", |resources| {
             irq = Some(resources.line(4));
             Ok(MappingTestDevice { _irq: None })
@@ -491,7 +494,7 @@ fn failed_boot_keeps_backing_without_a_fresh_backend() {
         || Ok(backend),
         failed_boot,
         |_, ctx| {
-            backing = Some(Arc::downgrade(ctx.memory));
+            backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
             Ok(())
         },
     )
@@ -603,7 +606,9 @@ fn failed_boot_releases_backing_after_failed_unmap() {
 
     let (result, warnings) = capture_warnings(|| {
         with_fresh_backend(config(1, 16), backend, failed_boot, |_, ctx| {
-            backing.set(Arc::downgrade(ctx.memory)).unwrap();
+            backing
+                .set(Arc::downgrade(&ctx.memory.memory().into_inner()))
+                .unwrap();
             Ok(())
         })
     });
@@ -683,7 +688,7 @@ fn failed_boot_keeps_registration_and_backing_when_workers_fail_to_join() {
             |_| Ok(VirtioWorkers::with_runtime(runtime.clone())),
             failed_boot,
             |_, ctx, _| {
-                backing = Some(Arc::downgrade(ctx.memory));
+                backing = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
                 Ok(())
             },
         )
@@ -721,7 +726,9 @@ fn panicking_boot_unmaps_ram_and_releases_backing_after_host_vm_closes() {
             backend,
             |_, _| panic!("boot panic"),
             |chipset, ctx| {
-                backing.set(Arc::downgrade(ctx.memory)).unwrap();
+                backing
+                    .set(Arc::downgrade(&ctx.memory.memory().into_inner()))
+                    .unwrap();
                 chipset.add("device", |resources| {
                     Ok(MappingTestDevice {
                         _irq: Some(resources.line(4)),
@@ -821,7 +828,7 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
     let prepared = KvmVm::prepare().unwrap();
     preflight_x86(config.memory_mib, prepared.supported_cpuid(), BOOT_LEAF).unwrap();
     let vm = bare(config, move || KvmVm::from_prepared(prepared)).unwrap();
-    let memory = Arc::clone(vm.ram.memory());
+    let memory = Arc::clone(vm.ram.boot_memory());
     let last = GuestAddress(MMIO_HOLE_START - 1);
     // mov al,[0xBFFFFFFF]; mov dx,0x3f8; out dx,al; hlt
     let program = [
@@ -969,7 +976,7 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     let prepared = KvmVm::prepare().unwrap();
     let leaf = preflight_x86(config.memory_mib, prepared.supported_cpuid(), BOOT_LEAF).unwrap();
     let vm = bare(config, move || KvmVm::from_prepared(prepared)).unwrap();
-    let memory = Arc::clone(vm.ram.memory());
+    let memory = Arc::clone(vm.ram.boot_memory());
     memory.write_slice(&program, GuestAddress(ENTRY)).unwrap();
     memory
         .write_obj(PARAMS_MARKER, GuestAddress(BOOT_PARAMS))
@@ -1463,7 +1470,7 @@ mod lifecycle {
                 || Ok(MockVm::with_scripts(vec![driver()])),
                 |_, _| Ok(BootRegisters::default()),
                 |chipset, ctx| {
-                    memory = Some(Arc::downgrade(ctx.memory));
+                    memory = Some(Arc::downgrade(&ctx.memory.memory().into_inner()));
                     add(chipset, ctx, ResetOnKick::shared(Box::new(|| {})))
                 },
             )
@@ -1521,6 +1528,7 @@ mod lifecycle {
             assert_eq!(
                 vm.ram
                     .memory()
+                    .memory()
                     .read_obj::<u16>(GuestAddress(0x3002))
                     .unwrap(),
                 1u16.to_le()
@@ -1533,7 +1541,7 @@ mod lifecycle {
                 // A writable TX descriptor is rejected by the final scan.
                 let (vm, sink) = console_vm(2, step);
                 let log = vm.host_vm.as_deref().unwrap().log();
-                let memory = Arc::downgrade(vm.ram.memory());
+                let memory = Arc::downgrade(vm.ram.boot_memory());
                 let (exit, vm) = run(vm);
                 let error = exit.unwrap_err();
                 if clean {
@@ -1609,12 +1617,15 @@ mod lifecycle {
                 |_, _| Ok(BootRegisters::default()),
                 |chipset, ctx| {
                     ctx.memory
+                        .memory()
                         .write_slice(b"final", GuestAddress(0x4000))
                         .unwrap();
                     ctx.memory
+                        .memory()
                         .write_obj(Descriptor::new(0x4000, 5, flags, 0), GuestAddress(0x1000))
                         .unwrap();
                     ctx.memory
+                        .memory()
                         .write_obj(1u16.to_le(), GuestAddress(0x2002))
                         .unwrap();
                     add(chipset, ctx, console)
@@ -1755,7 +1766,7 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     let mut vm = Vm::with_backend(
         config(2, 2),
         boxlite_hypervisor::KvmVm::new,
-        |ram, _| Ok(flat_guest::load(ram.memory(), &program)),
+        |ram, _| Ok(flat_guest::load(&ram.memory().memory(), &program)),
         |chipset, _| {
             chipset.add("i8042", |resources| {
                 resources.pio(0x64, 1);
@@ -1766,6 +1777,121 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     .unwrap();
 
     assert_eq!(vm.run().unwrap(), VmExit::GuestReset);
+}
+
+/// Exercises the production composition and boot loader at the disk limit;
+/// the backend is mocked, but none of the attached devices are test doubles.
+/// Eight disks, the balloon and the aggregate filesystem fill the slots up
+/// to and across the RTC's line, so every virtio GSI must land past GSI 8.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn rtc_coexists_with_max_disks_balloon_and_aggregate_filesystem() {
+    use boxlite_hypervisor::VcpuExit;
+    use linux_loader::loader::bootparam::boot_params;
+    use vm_memory::{Bytes, GuestAddress};
+
+    use crate::{
+        config::{DiskConfig, DiskFormat, MAX_DISKS},
+        devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES},
+        x86_boot_layout::PageSize,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let kernel = directory.path().join("kernel.elf");
+    std::fs::write(&kernel, crate::boot::elf::tests::fixture()).unwrap();
+    let disks: Vec<_> = (0..MAX_DISKS)
+        .map(|index| {
+            let block_id = format!("disk-{index}");
+            let path = directory.path().join(&block_id);
+            std::fs::File::create(&path).unwrap().set_len(4096).unwrap();
+            DiskConfig {
+                block_id,
+                path,
+                format: DiskFormat::Raw,
+                read_only: false,
+            }
+        })
+        .collect();
+    let mut configuration = config(1, 2);
+    configuration.kernel = kernel;
+    configuration.cmdline = "console=ttyS0".into();
+    configuration.disks = disks;
+    configuration.filesystem = Some(crate::FsConfig {
+        tag: "aggregate-test".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "BoxLiteShared".into(),
+            path: directory.path().to_owned(),
+            read_only: false,
+        }],
+    });
+    let (writer, mut console) =
+        ConsoleWorker::spawn(Box::new(io::sink()), DEFAULT_QUEUE_BYTES).unwrap();
+    let leaf = PageSize::Mib.checked(false).unwrap();
+    let vm = Vm::with_devices(
+        configuration,
+        || Ok(MockVm::new()),
+        |ram, config| crate::boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
+        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+    )
+    .expect("real RTC and all configured virtio devices must compose without conflicts");
+
+    let memory = vm.ram.memory().memory();
+    let params: boot_params = memory.read_obj(GuestAddress(vm.boot_regs.rsi)).unwrap();
+    let mut line = vec![0; params.hdr.cmdline_size as usize];
+    memory
+        .read_slice(&mut line, GuestAddress(params.hdr.cmd_line_ptr.into()))
+        .unwrap();
+    let line = std::ffi::CStr::from_bytes_with_nul(&line)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let (announcements, _) = line.split_once("console=ttyS0").unwrap();
+    let announcements: Vec<_> = announcements.split_whitespace().collect();
+    assert_eq!(announcements.len(), MAX_DISKS + 2);
+    let gsis = [5, 6, 7, 9, 10, 11, 12, 13, 14, 15];
+    let chipset = vm.chipset.as_ref().unwrap();
+    for (index, argument) in announcements.iter().enumerate() {
+        let base = 0xd000_0000 + index as u64 * 0x1000;
+        assert_eq!(
+            *argument,
+            format!("virtio_mmio.device=4K@{base:#x}:{}", gsis[index])
+        );
+        let read = |offset, bytes: &mut [u8]| {
+            assert!(
+                chipset
+                    .dispatch(VcpuExit::MmioRead {
+                        guest_addr: base + offset,
+                        bytes,
+                    })
+                    .is_none()
+            );
+        };
+        let mut id = [0; 4];
+        read(8, &mut id);
+        assert_eq!(
+            u32::from_le_bytes(id),
+            if index < MAX_DISKS {
+                2
+            } else if index == MAX_DISKS {
+                5
+            } else {
+                26
+            }
+        );
+    }
+    // Register D's valid-RAM bit identifies the real CMOS device at its ports.
+    chipset.dispatch(VcpuExit::IoOut {
+        port: 0x70,
+        bytes: &[0x0d],
+    });
+    let mut status = [0];
+    chipset.dispatch(VcpuExit::IoIn {
+        port: 0x71,
+        bytes: &mut status,
+    });
+    assert_eq!(status, [0x80]);
+    drop(vm);
+    console.finish();
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

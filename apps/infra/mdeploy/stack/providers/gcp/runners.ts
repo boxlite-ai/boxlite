@@ -55,7 +55,13 @@ import { volumeConditionFor } from './storage.ts'
  * AMD-based ones other than N4D, and a host on one of those accepts work and
  * fails every box.
  */
-export const MACHINE = { small: 'n4-standard-4', medium: 'n4-standard-8', large: 'n4-standard-16' } as const
+export const MACHINE = {
+  small: 'n4-standard-4',
+  medium: 'n4-standard-8',
+  large: 'n4-standard-16',
+  xlarge: 'n4-standard-32',
+  '2xlarge': 'n4-standard-64',
+} as const
 
 /**
  * The only disk type N4 takes.
@@ -80,10 +86,13 @@ export const DISK_TYPE = 'hyperdisk-balanced'
  * because a default is computed once at create and a disk grown later keeps it.
  * Overriding capacity does not change these performance presets.
  */
+const standardDataDisk = { sizeGb: 200, iops: 3_600, throughputMiBps: 290 } as const
 export const DATA_DISK = {
   small: { sizeGb: 200, iops: 3_600, throughputMiBps: 240 },
-  medium: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
-  large: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
+  medium: standardDataDisk,
+  large: standardDataDisk,
+  xlarge: standardDataDisk,
+  '2xlarge': standardDataDisk,
 } as const
 
 /** What the data disk is attached as, so a host finds it at `/dev/disk/by-id/google-<this>`. */
@@ -495,7 +504,7 @@ udevadm trigger --name-match=kvm || true`,
           name: slot.nameTag,
           project,
           zone,
-          machineType: MACHINE[request.size],
+          machineType: request.machineTypes?.[request.size] ?? MACHINE[request.size],
           // Explicitly, or the device is absent on a machine that can host it.
           advancedMachineFeatures: { enableNestedVirtualization: request.nestedVirtualization },
           bootDisk: {

@@ -48,16 +48,18 @@ Do not disable unrelated plugins.
 
 ## API key in Claude Code
 
-After the same explicit key setup, add a local-scope entry with a literal placeholder:
+After the same explicit key setup, add a user-scope entry with a literal placeholder. This keeps the connection private to your Claude user account and makes it available across projects.
 
 ```sh
 test -n "${BOXLITE_API_KEY:-}"
-claude mcp add-json --scope local boxlite-api '{"type":"http","url":"https://api.boxlite.ai/mcp","headers":{"Authorization":"Bearer ${BOXLITE_API_KEY}"}}'
+claude mcp add-json --scope user boxlite-api '{"type":"http","url":"https://api.boxlite.ai/mcp","headers":{"Authorization":"Bearer ${BOXLITE_API_KEY}"}}'
 ```
 
 Run the second command only after the first succeeds; single quotes prevent expansion of the key into argv.
 Verify in `/mcp` that `boxlite-api` is active and the bundled OAuth entry is deduplicated or disabled.
 Never write an expanded header into shared configuration, plugin caches, repositories, or review packages.
+
+If a local entry already uses this name, verify the selected connection before transferring because Claude gives the local entry precedence in the original project. A project-only connection can be used directly by its name in the current session.
 
 ## Verify and switch
 

@@ -48,7 +48,7 @@ impl BoxImpl {
     /// Three-phase flow (snapshot-as-base):
     ///   A. Inside quiesce bracket (VM paused): create disk layer (rename + COW child).
     ///   B. Outside quiesce bracket (VM resumed): create N thin overlay headers.
-    ///   C. Provision each clone and increment layer ref count.
+    ///   C. Provision each clone atomically with its layer dependency.
     pub(crate) async fn clone_boxes(
         &self,
         _options: crate::runtime::options::CloneOptions,
@@ -68,7 +68,10 @@ impl BoxImpl {
         }
 
         let t0 = Instant::now();
-        self.with_disk_admission(async {
+        let source_admission =
+            Arc::new(crate::lock::OwnedLockGuard::new_async(self.disk_locker()?).await);
+        self.ensure_box_exists()?;
+        (async {
             let rt = Arc::clone(&self.runtime);
             let src_disks = self.config.box_home.join("disks");
             let src_container = src_disks.join(disk_filenames::CONTAINER_DISK);
@@ -132,7 +135,7 @@ impl BoxImpl {
 
             // Phase C: Provision each clone and record base disk refs.
             // Each clone's disk is a copy of this one, so it runs the same build.
-            // Read before the loop: the guard must not be held across an await.
+            // Read before the loop: the state lock must not be held across an await.
             let resolved_image = self.state.read().resolved_image.clone();
             let copy_options = self.options_for_copy()?;
             let mut clones = Vec::with_capacity(count);
@@ -146,22 +149,12 @@ impl BoxImpl {
                         copy_options.clone(),
                         BoxStatus::Stopped,
                         resolved_image.clone(),
+                        Some(crate::runtime::rt_impl::CloneDependency {
+                            base_disk_id: layer.id.clone(),
+                            source_admission: Arc::clone(&source_admission),
+                        }),
                     )
                     .await?;
-
-                // Record that this clone depends on the shared base disk.
-                if let Err(e) = rt
-                    .base_disk_mgr
-                    .store()
-                    .add_ref(&layer.id, litebox.id().as_ref())
-                {
-                    tracing::warn!(
-                        clone_id = %litebox.id(),
-                        base_disk_id = %layer.id,
-                        error = %e,
-                        "Failed to record base disk ref for clone"
-                    );
-                }
 
                 clones.push(litebox);
             }

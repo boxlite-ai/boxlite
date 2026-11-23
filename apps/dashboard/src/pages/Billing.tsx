@@ -9,6 +9,7 @@ import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlansSection } from '@/components/billing/PlansSection'
 import { PlanSection } from '@/components/billing/PlanSection'
+import { PlanUpgradeReturn } from '@/components/billing/PlanUpgradeReturn'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -17,6 +18,8 @@ import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
 import { Link, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { readPendingPlanUpgrade } from '@/lib/pending-plan-upgrade'
+import { useCallback, useState } from 'react'
 
 const TAB_PANE = 'py-6'
 
@@ -85,6 +88,8 @@ function BillingComingSoon() {
 function Billing() {
   usePageTitle('Billing')
   const config = useConfig()
+  const [pendingUpgrade, setPendingUpgrade] = useState(readPendingPlanUpgrade)
+  const finishUpgradeReturn = useCallback(() => setPendingUpgrade(null), [])
   // Controlled, so the page-level balance warning can send the user to Wallet.
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
@@ -99,6 +104,9 @@ function Billing() {
 
   if (!config.billingApiUrl) {
     return <BillingComingSoon />
+  }
+  if (pendingUpgrade) {
+    return <PlanUpgradeReturn selection={pendingUpgrade} onFinish={finishUpgradeReturn} />
   }
 
   return (

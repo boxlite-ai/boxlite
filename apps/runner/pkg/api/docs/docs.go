@@ -996,6 +996,27 @@ const docTemplate = `{
                 }
             }
         },
+        "dto.FilestoreRef": {
+            "type": "object",
+            "required": [
+                "instance",
+                "server",
+                "export"
+            ],
+            "properties": {
+                "instance": {
+                    "type": "string"
+                },
+                "server": {
+                    "description": "NFS server address resolved by the API",
+                    "type": "string"
+                },
+                "export": {
+                    "description": "NFS export path on the server",
+                    "type": "string"
+                }
+            }
+        },
         "dto.SecretDTO": {
             "type": "object",
             "required": [
@@ -1030,6 +1051,9 @@ const docTemplate = `{
         "dto.VolumeDTO": {
             "type": "object",
             "properties": {
+                "filestore": {
+                    "$ref": "#/definitions/dto.FilestoreRef"
+                },
                 "mountPath": {
                     "type": "string"
                 },

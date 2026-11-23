@@ -372,9 +372,10 @@ fn activation(
 ) -> ActivationContext {
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let queues = QUEUES.iter().map(|&max| Queue::new(max).unwrap()).collect();
-    let queues = VirtQueues::prepare(queues, QUEUES, false, false, Arc::clone(&memory)).unwrap();
+    let queues =
+        VirtQueues::prepare(queues, QUEUES, false, false, Arc::clone(&memory).into()).unwrap();
     ActivationContext {
-        memory,
+        memory: memory.into(),
         queues,
         interrupt,
         events: worker.events,
@@ -1296,7 +1297,8 @@ fn a_fake_runtime_drives_the_transport() {
         shared,
         interrupt,
         MmioResources {
-            memory: Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap()),
+            memory: Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap())
+                .into(),
             sender: events.sender(),
             worker,
         },
@@ -1335,7 +1337,8 @@ fn transport(dev: &Dev) -> MmioTransport {
         device,
         Arc::clone(&dev.interrupt),
         MmioResources {
-            memory: Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap()),
+            memory: Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap())
+                .into(),
             sender: dev.sender.clone(),
             worker: Arc::clone(&dev.worker),
         },
