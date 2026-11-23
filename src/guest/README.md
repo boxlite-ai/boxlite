@@ -46,9 +46,9 @@ the mounted tree rather than the directory underneath it, preventing mount-ID
 reuse while the record is attached. The agent reads that tree's checked
 `statx(STATX_MNT_ID)` identity before publishing it, because a mount keeps its ID
 when it moves. Before retry success or detach, another child opens the destination
-without following links and compares its mount ID with the retained tree. An
-mount therefore fails without removing the replacement or forgetting the
-original record. This ownership follows Linux's
+without following links and compares its mount ID with the retained tree. A
+replacement at the original path leaves the old record intact while its mount
+still exists. This ownership follows Linux's
 [`open_detached_copy`, `do_move_mount`, and `dissolve_on_fput`](https://github.com/torvalds/linux/blob/v6.12/fs/namespace.c):
 moving changes the mount's namespace, while the open file retains its reference.
 
@@ -62,6 +62,12 @@ Detached records and tombstones stay for the agent's lifetime, so their count fo
 the Detach requests the host has issued; each holds a key, a path, and two flags.
 Mount and Detach hold the same per-container write lock through syscall execution
 and bookkeeping, in an owned task that survives RPC caller cancellation.
+
+When the mount helper exits without reporting its result after being told to
+proceed, the agent returns the confirmation error and retains the mount identity
+and destination. A later detach can remove that tree by its original identity.
+If the detach result is uncertain, the agent uses `statmount` to check whether
+that tree is absent from its original namespace before clearing the record.
 
 These are lower-level delivery operations. The caller coordinates guest
 acknowledgment with host export retirement and reconciles unknown RPC outcomes.

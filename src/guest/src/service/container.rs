@@ -864,24 +864,25 @@ impl ContainerService for GuestServer {
         let attach = tokio::spawn(async move {
             let mut attacher = attacher.write_owned().await;
             let attacher = tokio::task::spawn_blocking(move || {
-                let added = if export_key.is_empty() {
+                let (added, confirmation) = if export_key.is_empty() {
                     attacher.attach(&source, &target, &mount_point, read_only)?;
-                    true
+                    (true, Ok(()))
                 } else {
-                    attacher.attach_runtime(
+                    let attempt = attacher.attach_runtime(
                         &export_key,
                         &source,
                         &target,
                         &mount_point,
                         read_only,
-                    )?
+                    )?;
+                    (attempt.added, attempt.confirmation)
                 };
-                Ok::<_, BoxliteError>((attacher, added))
+                Ok::<_, BoxliteError>((attacher, added, confirmation))
             })
             .await
             .map_err(|error| Status::internal(format!("attach task failed: {error}")))?
             .map_err(mount_status)?;
-            let (attacher, added) = attacher;
+            let (attacher, added, confirmation) = attacher;
             if added {
                 container_arc
                     .lock()
@@ -889,7 +890,7 @@ impl ContainerService for GuestServer {
                     .record_mount_destination(destination);
             }
             drop(attacher);
-            Ok::<_, Status>(())
+            confirmation.map_err(mount_status)
         });
         attach
             .await

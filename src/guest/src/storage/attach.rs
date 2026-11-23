@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::File;
 use std::io;
+use std::num::NonZeroU64;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
@@ -32,6 +33,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::fcntl::OFlag;
 use nix::libc;
 use nix::unistd::Pid;
+use rustix::fs::StatxFlags;
 
 use super::idmap::sys;
 
@@ -46,6 +48,7 @@ const KILL_GRACE: Duration = Duration::from_millis(500);
 const NR_PIDFD_SEND_SIGNAL: libc::c_long = 424;
 const NR_CLONE3: libc::c_long = 435;
 const NR_CLOSE_RANGE: libc::c_long = 436;
+const NR_STATMOUNT: libc::c_long = 457;
 const P_PIDFD: libc::idtype_t = 3;
 
 /// Accept only an absolute path of normal components other than `/`, shorter
@@ -96,16 +99,29 @@ struct RuntimeMount {
     source: PathBuf,
     destination: PathBuf,
     read_only: bool,
-    attached: bool,
-    // open_tree's descriptor references the moved mount itself. Keeping it
-    // alive prevents reuse of its mount ID, including after external unmount.
+    namespace_id: Option<NonZeroU64>,
+    // Retain the tree while it may still be published, even if confirmation was lost.
     tree: Option<MountedTree>,
 }
 
 #[derive(Debug)]
 struct MountedTree {
-    _fd: OwnedFd,
+    fd: OwnedFd,
     id: u64,
+}
+
+/// The destination must be recorded even when a move may have succeeded without a report.
+#[derive(Debug)]
+pub(crate) struct RuntimeAttach {
+    pub(crate) added: bool,
+    pub(crate) confirmation: BoxliteResult<()>,
+}
+
+#[cfg(test)]
+impl RuntimeAttach {
+    fn confirmed(self) -> BoxliteResult<bool> {
+        self.confirmation.map(|()| self.added)
+    }
 }
 
 /// The mount namespace of a process in the container, opened at once so the
@@ -127,11 +143,23 @@ impl Target {
         })?;
         Ok(Self { pid, namespace })
     }
+
+    fn namespace_id(&self) -> Option<NonZeroU64> {
+        let mut id = 0u64;
+        // SAFETY: the namespace descriptor is owned and the ioctl writes one u64.
+        if unsafe { libc::ioctl(self.namespace.as_raw_fd(), libc::NS_GET_MNTNS_ID, &mut id) } == 0 {
+            NonZeroU64::new(id)
+        } else {
+            None
+        }
+    }
 }
 
 impl Attacher {
     pub(crate) fn runtime_attached(&self, key: &str) -> bool {
-        self.runtime.get(key).is_some_and(|record| record.attached)
+        self.runtime
+            .get(key)
+            .is_some_and(|record| record.tree.is_some())
     }
     /// The caller holds the container's attacher write lock across the syscall
     /// and its metadata update. Tombstones outlive canceled RPC callers.
@@ -142,45 +170,52 @@ impl Attacher {
         target: &Target,
         destination: &Path,
         read_only: bool,
-    ) -> BoxliteResult<bool> {
+    ) -> BoxliteResult<RuntimeAttach> {
         if let Some(record) = self.runtime.get(key) {
             if record.destination != destination
-                || (record.attached && (record.source != source || record.read_only != read_only))
+                || (record.tree.is_some()
+                    && (record.source != source || record.read_only != read_only))
             {
                 return Err(BoxliteError::InvalidArgument(
                     "mount incarnation does not match request".into(),
                 ));
             }
-            if !record.attached {
+            let Some(tree) = &record.tree else {
                 return Err(BoxliteError::InvalidState(
                     "mount incarnation has been detached".into(),
                 ));
-            }
-            let id = record.tree.as_ref().expect("attached tree").id;
-            self.check_runtime(target, destination, Mode::Verify(id))?;
-            return Ok(false);
+            };
+            self.check_runtime(target, destination, Mode::Verify(tree.id))?;
+            return Ok(RuntimeAttach {
+                added: false,
+                confirmation: Ok(()),
+            });
         }
         if self
             .runtime
             .values()
-            .any(|record| record.attached && record.destination == destination)
+            .any(|record| record.tree.is_some() && record.destination == destination)
         {
             return Err(BoxliteError::InvalidState(
                 "destination already has a runtime mount".into(),
             ));
         }
-        let tree = self.attach_tree(source, target, destination, read_only)?;
+        let namespace_id = target.namespace_id();
+        let (tree, confirmation) = self.attach_tree(source, target, destination, read_only)?;
         self.runtime.insert(
             key.to_owned(),
             RuntimeMount {
                 source: source.to_owned(),
                 destination: destination.to_owned(),
                 read_only,
-                attached: true,
+                namespace_id,
                 tree: Some(tree),
             },
         );
-        Ok(true)
+        Ok(RuntimeAttach {
+            added: true,
+            confirmation,
+        })
     }
 
     pub(crate) fn detach_runtime(
@@ -195,7 +230,7 @@ impl Attacher {
                     "mount incarnation destination mismatch".into(),
                 ));
             }
-            if !record.attached {
+            if record.tree.is_none() {
                 return Ok(false);
             }
         } else {
@@ -205,14 +240,14 @@ impl Attacher {
                     source: PathBuf::new(),
                     destination: destination.to_owned(),
                     read_only: false,
-                    attached: false,
+                    namespace_id: None,
                     tree: None,
                 },
             );
             return Ok(false);
         }
         if self.runtime.values().any(|record| {
-            record.attached
+            record.tree.is_some()
                 && record.destination != destination
                 && record.destination.starts_with(destination)
         }) {
@@ -228,9 +263,18 @@ impl Attacher {
             .as_ref()
             .expect("attached tree")
             .id;
-        self.check_runtime(target, destination, Mode::Detach(id))?;
+        if let Err(error) = self.check_runtime(target, destination, Mode::Detach(id)) {
+            let record = &self.runtime[key];
+            let tree = record.tree.as_ref().expect("attached tree");
+            // A different tree at the path does not prove the original was detached.
+            let absent = record.namespace_id.is_some_and(|namespace_id| {
+                matches!(tree.is_mounted_in(namespace_id.get()), Ok(false))
+            });
+            if !absent {
+                return Err(error);
+            }
+        }
         let record = self.runtime.get_mut(key).expect("checked incarnation");
-        record.attached = false;
         record.tree = None;
         Ok(true)
     }
@@ -247,8 +291,8 @@ impl Attacher {
         destination: &Path,
         read_only: bool,
     ) -> BoxliteResult<()> {
-        self.attach_tree(source, target, destination, read_only)
-            .map(|_| ())
+        let (_, confirmation) = self.attach_tree(source, target, destination, read_only)?;
+        confirmation
     }
 
     fn attach_tree(
@@ -257,12 +301,12 @@ impl Attacher {
         target: &Target,
         destination: &Path,
         read_only: bool,
-    ) -> BoxliteResult<MountedTree> {
+    ) -> BoxliteResult<(MountedTree, BoxliteResult<()>)> {
         validate_destination(destination)?;
         if self
             .runtime
             .values()
-            .any(|record| record.attached && record.destination.starts_with(destination))
+            .any(|record| record.tree.is_some() && record.destination.starts_with(destination))
         {
             return Err(BoxliteError::InvalidState(
                 "destination would cover a runtime mount".into(),
@@ -286,11 +330,11 @@ impl Attacher {
             Stall::No,
             Mode::Attach,
         )?;
-        let report = match child.report_within(ATTACH_DEADLINE) {
-            Some(report) if report.stage == Some(Stage::Ready) => child.go(),
+        let (report, after_go) = match child.report_within(ATTACH_DEADLINE) {
+            Some(report) if report.stage == Some(Stage::Ready) => (child.go(), true),
             Some(report) => {
                 child.reap();
-                report
+                (report, false)
             }
             None => {
                 self.straggler = child.kill();
@@ -301,8 +345,13 @@ impl Attacher {
                 )));
             }
         };
+        let tree = MountedTree { fd: tree, id };
+        if after_go && report.stage.is_none() {
+            // The child has exited, but it may have moved this tree before exiting.
+            return Ok((tree, report.into_result(target.pid, destination)));
+        }
         report.into_result(target.pid, destination)?;
-        Ok(MountedTree { _fd: tree, id })
+        Ok((tree, Ok(())))
     }
 
     /// Detach a runtime mount at `destination` from `target`'s namespace with
@@ -394,15 +443,61 @@ fn clone_detached(source: &Path, read_only: bool) -> BoxliteResult<OwnedFd> {
     Ok(tree)
 }
 
+impl MountedTree {
+    fn is_mounted_in(&self, namespace_id: u64) -> io::Result<bool> {
+        // statmount takes the non-recycled ID introduced by STATX_MNT_ID_UNIQUE.
+        const UNIQUE_ID: StatxFlags = StatxFlags::from_bits_retain(0x4000);
+        #[repr(C)]
+        struct MountIdRequest {
+            size: u32,
+            namespace_fd: u32,
+            mount_id: u64,
+            mask: u64,
+            namespace_id: u64,
+        }
+        let request = MountIdRequest {
+            size: std::mem::size_of::<MountIdRequest>() as u32,
+            namespace_fd: 0,
+            mount_id: statx_mount_id(self.fd.as_raw_fd(), UNIQUE_ID)
+                .map_err(io::Error::from_raw_os_error)?,
+            mask: 0,
+            namespace_id,
+        };
+        let mut size = 0u32;
+        // SAFETY: the request matches Linux mnt_id_req. With no fields requested,
+        // statmount accepts the header's size field as the entire output buffer.
+        let rc = unsafe {
+            libc::syscall(
+                NR_STATMOUNT,
+                &request,
+                &mut size,
+                std::mem::size_of::<u32>(),
+                0u32,
+            )
+        };
+        if rc == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            return Ok(false);
+        }
+        Err(error)
+    }
+}
+
 /// Descriptor-based identity: of a detached clone in the agent, or of a mount point in the child.
 /// STATX_MNT_ID is reusable only after the last mount reference is released.
 fn mount_identity(fd: RawFd) -> Result<u64, i32> {
-    use rustix::fs::{statx, AtFlags, StatxFlags};
+    statx_mount_id(fd, StatxFlags::MNT_ID)
+}
+
+fn statx_mount_id(fd: RawFd, flag: StatxFlags) -> Result<u64, i32> {
+    use rustix::fs::{statx, AtFlags};
     // SAFETY: the caller keeps this descriptor alive for the syscall.
     let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-    let stat = statx(fd, c"", AtFlags::EMPTY_PATH, StatxFlags::MNT_ID)
-        .map_err(|error| error.raw_os_error())?;
-    if !StatxFlags::from_bits_retain(stat.stx_mask).contains(StatxFlags::MNT_ID) {
+    let stat = statx(fd, c"", AtFlags::EMPTY_PATH, flag).map_err(|error| error.raw_os_error())?;
+    if !StatxFlags::from_bits_retain(stat.stx_mask).contains(flag) {
         return Err(libc::EOPNOTSUPP);
     }
     Ok(stat.stx_mnt_id)
@@ -422,13 +517,19 @@ fn c_string(value: &OsStr) -> BoxliteResult<CString> {
         .map_err(|_| BoxliteError::InvalidArgument(format!("path has a NUL byte: {:?}", value)))
 }
 
-/// Whether the child blocks before it joins the namespace. Only tests block,
-/// standing in for a container path that never answers.
+/// Test-only interruptions of the child before readiness or after the operation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stall {
     No,
     #[cfg(test)]
     BeforeReady,
+    #[cfg(test)]
+    AfterOperation,
+}
+
+#[cfg(test)]
+thread_local! {
+    static DROP_FINAL_REPORT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `clone3` arguments up to `tls` (`CLONE_ARGS_SIZE_VER0`).
@@ -470,6 +571,12 @@ impl Child {
         stall: Stall,
         mode: Mode,
     ) -> BoxliteResult<Self> {
+        #[cfg(test)]
+        let stall = if DROP_FINAL_REPORT.take() {
+            Stall::AfterOperation
+        } else {
+            stall
+        };
         let pipe = || {
             nix::unistd::pipe2(OFlag::O_CLOEXEC)
                 .map_err(|error| BoxliteError::Storage(format!("create a pipe: {error}")))
@@ -629,6 +736,13 @@ fn run_child(
     mode: &Mode,
 ) -> ! {
     if let Some(report) = attach_in_child(keep, fds, components, stall, mode) {
+        #[cfg(test)]
+        if stall == Stall::AfterOperation
+            && matches!(report.stage, Some(Stage::Attached | Stage::Detached))
+        {
+            // SAFETY: exit after the real system call without sending its result.
+            unsafe { libc::_exit(1) }
+        }
         report.send(fds.reports);
     }
     // SAFETY: leave without destructors or exit handlers.
@@ -1112,6 +1226,66 @@ mod tests {
 
     #[test]
     #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
+    fn privileged_detach_can_recover_an_unconfirmed_attachment() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("marker"), b"mounted").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("mount");
+        let holder = NamespaceHolder::spawn();
+        let target = Target::open(holder.pid).unwrap();
+        let mut attacher = Attacher::default();
+
+        DROP_FINAL_REPORT.set(true);
+        let error = attacher
+            .attach_runtime("unconfirmed", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Internal(_)));
+        let marker = holder.view(&destination).join("marker");
+        assert_eq!(fs::read(&marker).unwrap(), b"mounted");
+
+        attacher
+            .detach_runtime("unconfirmed", &target, &destination)
+            .unwrap();
+        assert!(!marker.exists(), "detach must remove the unconfirmed mount");
+    }
+
+    #[test]
+    #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
+    fn privileged_detach_confirms_absence_after_its_result_is_lost() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("marker"), b"mounted").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("mount");
+        let holder = NamespaceHolder::spawn();
+        let target = Target::open(holder.pid).unwrap();
+        let mut attacher = Attacher::default();
+
+        attacher
+            .attach_runtime("original", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
+            .unwrap();
+        DROP_FINAL_REPORT.set(true);
+        let result = attacher.detach_runtime("original", &target, &destination);
+        let marker = holder.view(&destination).join("marker");
+        assert!(
+            !marker.exists(),
+            "the kernel has already detached the mount"
+        );
+        assert!(result.expect("detach must confirm that the mount is absent"));
+
+        assert!(attacher
+            .attach_runtime("replacement", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
+            .unwrap());
+        attacher
+            .detach_runtime("original", &target, &destination)
+            .unwrap();
+        assert_eq!(fs::read(marker).unwrap(), b"mounted");
+    }
+
+    #[test]
+    #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
     fn privileged_incarnation_replay_and_replacement_are_safe() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"runtime").unwrap();
@@ -1129,9 +1303,11 @@ mod tests {
         assert!(!attacher.runtime.contains_key("failed"));
         assert!(attacher
             .attach_runtime("old", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap());
         assert!(!attacher
             .attach_runtime("old", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap());
         assert!(attacher
             .attach_runtime("old", source.path(), &target, &destination, true)
@@ -1142,6 +1318,7 @@ mod tests {
         assert!(!holder.view(&destination).join("marker").exists());
         assert!(attacher
             .attach_runtime("new", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap());
         assert!(!attacher
             .detach_runtime("old", &target, &destination)
@@ -1153,6 +1330,7 @@ mod tests {
         let nested = destination.join("nested");
         assert!(attacher
             .attach_runtime("child", source.path(), &target, &nested, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap());
         assert!(attacher
             .detach_runtime("new", &target, &destination)
@@ -1175,9 +1353,10 @@ mod tests {
         let destination = ancestor.join("mount");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
-        let tree = Attacher::default()
+        let (tree, confirmation) = Attacher::default()
             .attach_tree(source.path(), &target, &destination, false)
             .unwrap();
+        confirmation.unwrap();
         let parts = components(&destination).unwrap();
         let child = Child::spawn(
             &target.namespace,
@@ -1294,6 +1473,7 @@ mod tests {
         // A writable delivery binds writable: writes land on the host source.
         attacher
             .attach_runtime("rw", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap();
         let seen = holder.view(&destination);
         fs::write(seen.join("written"), b"container bytes").unwrap();
@@ -1354,6 +1534,7 @@ mod tests {
         let mut attacher = Attacher::default();
         attacher
             .attach_runtime("open", source.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap();
         let mut descriptor = File::open(holder.view(&destination).join("payload")).unwrap();
         let directory = File::open(holder.view(&destination)).unwrap();
@@ -1387,6 +1568,7 @@ mod tests {
         let mut attacher = Attacher::default();
         assert!(attacher
             .attach_runtime("original", original.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap());
         let id = attacher.runtime["original"].tree.as_ref().unwrap().id;
         let mounted = File::open(holder.view(&destination)).unwrap();
@@ -1397,13 +1579,16 @@ mod tests {
         );
         fs::rename(&ancestor, &renamed).unwrap();
         // A different attacher models a mount installed outside this registry.
-        let replacement_tree = Attacher::default()
+        let (replacement_tree, confirmation) = Attacher::default()
             .attach_tree(replacement.path(), &target, &destination, false)
             .unwrap();
+        confirmation.unwrap();
         assert_ne!(replacement_tree.id, id);
         for result in [
             attacher.detach_runtime("original", &target, &destination),
-            attacher.attach_runtime("original", original.path(), &target, &destination, false),
+            attacher
+                .attach_runtime("original", original.path(), &target, &destination, false)
+                .and_then(RuntimeAttach::confirmed),
         ] {
             assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
         }
@@ -1425,6 +1610,7 @@ mod tests {
         fs::rename(&renamed, &ancestor).unwrap();
         assert!(!attacher
             .attach_runtime("original", original.path(), &target, &destination, false)
+            .and_then(RuntimeAttach::confirmed)
             .unwrap());
         assert!(attacher
             .detach_runtime("original", &target, &destination)
