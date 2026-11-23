@@ -434,8 +434,9 @@ worker slot synchronously.
   - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
     vCPU and waits at a start gate until every vCPU is configured; a thread
     that fails to start aborts the gate.
-  - It then loops: run, dispatch the exit through the chipset, run again.
-  - An idle vCPU waits inside the host, never in a VMM thread. KVM's in-kernel
+  - Before each guest entry, a vCPU checks the pause and stop state. It waits
+    on a condition variable while parked.
+  - When the VM is running, idle vCPUs wait inside the host. KVM's in-kernel
     irqchip waits out `HLT`; with the in-kernel GIC, HVF waits out `WFI` inside
     `hv_vcpu_run` and wakes the vCPU for its vtimer and for SPIs set from any
     thread, as an M5 Pro on macOS 27 showed
@@ -465,8 +466,9 @@ worker slot synchronously.
     cleanup; quiesce success does not imply snapshot support or delivery of
     buffered network traffic.
 - **The `run()` thread.**
-  - It waits on one poller for stop requests, vCPU outcomes and device
-    failures.
+  - It waits on one `EventLoop` poller for control wakeups, stop requests,
+    vCPU outcomes and device failures. The `RECHECK` interval is one second,
+    so the mailbox and terminal queue are revisited even if a wakeup is lost.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.
@@ -498,14 +500,34 @@ sink to take the rest, and bytes it never takes are counted as dropped and
 logged.
 
 The driver holds exclusive access to `Vm` throughout `run`. `VmControl`
-provides backend-independent runtime controls. External threads use `status()`,
-`stop()`, and `resize_disk()` without holding the VM itself.
-`StopHandle::stop` uses the same latch.
+provides backend-independent runtime controls. External threads use
+`status()`, `stop()`, `pause()`, `wait_paused(timeout)`, `resume()`, and
+`resize_disk()` without holding the VM itself. `StopHandle::stop` uses the
+same stop latch.
 
-`VmStatus` starts at `Created`, advances to `Running` as the driver starts,
-and becomes `Stopping` on a stop request or when the driver processes a
-terminal event. A stop in `Created` goes directly to `Stopping`, so the
-first `run` skips vCPU creation and takes the usual cleanup path.
+`VmStatus` normally moves from `Created` to `Running`. A device-less VM
+can reserve its first pause in `Created`. It keeps that status until
+`run` claims the reservation and enters `Pausing` before releasing the
+vCPU start gate. Every vCPU parks before its first guest entry.
+
+During execution, `pause()` posts a command in a single-slot mailbox.
+The driver accepts it in `Running`, enters `Pausing`, and kicks the vCPUs.
+At `checkpoint`, each vCPU owner completes pending I/O, calls
+`notify_guest_stopped` on the backend, and acknowledges the current pause
+epoch. The driver publishes `Paused` after one acknowledgement from each vCPU.
+`resume()` uses the same slot and epoch to reopen guest entry and return to
+`Running`. The mailbox lock serializes admission against concurrent clones
+and timeout withdrawal. A pure poller wake prompts the driver to check the
+mailbox. Terminal events use the same poller and keep their queue priority.
+
+`pause()` waits up to five seconds when called in `Running`. A timeout
+withdraws a queued command. An accepted pause keeps collecting
+acknowledgements. `wait_paused(timeout)` observes the reserved or accepted
+epoch and its own timeout leaves the pause in place.
+
+A stop or terminal event moves the VM to `Stopping`, releases parked vCPUs,
+and wakes pending control calls with `TerminalOutcome`. A stop in `Created`
+lets the first `run` skip vCPU creation and take the usual cleanup path.
 The first terminal event determines the outcome of an active run.
 
 On teardown, the driver joins all scoped vCPUs, shuts down virtio workers,

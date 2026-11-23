@@ -18,6 +18,7 @@ use crate::{
     cpu_features::{BOOT_MSRS, vcpu_cpuid},
     error::{Error, Result},
     events::{Event, EventSender},
+    lifecycle::Lifecycle,
 };
 
 /// Holds the workers until every vCPU is configured, so no vCPU runs before
@@ -55,7 +56,8 @@ pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) boot_regs: &'a X86BootRegisters,
     pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
-    /// The kick handle of every configured vCPU, for the thread that stops them.
+    pub(crate) lifecycle: &'a Lifecycle,
+    /// The configured vCPUs' kick handles, used for pause and stop.
     pub(crate) kicks: &'a Mutex<Vec<<H::Vcpu as Vcpu>::Handle>>,
     pub(crate) gate: &'a StartGate,
 }
@@ -106,8 +108,8 @@ impl<H: X86Vm> Workers<'_, H> {
     /// pending access.
     fn run_guest(&self, vcpu: &mut H::Vcpu, id: u8) -> Result<Option<Event>> {
         loop {
-            // Checked before every entry: a stop that lands earlier still
-            // returns from the next entry at once, since its kick is pending.
+            self.lifecycle.checkpoint(id, vcpu)?;
+            // A stop may have released this worker from its checkpoint.
             if self.sender.is_stopping() {
                 vcpu.complete_pending_io()?;
                 return Ok(None);
