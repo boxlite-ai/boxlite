@@ -507,7 +507,28 @@ A confirmed assignment remains available during a failed message poll. A planner
 
 While disconnected, the listener credits each committed reservation against that observation, including across partial passes. A reservation that the execution queue could not dispatch keeps its original identity and target until its Box creation intent is durable. New GitHub statistics, including zero, supersede the old target.
 
-If the host proves that a reserved Box was never created, the journal returns its quota and the current observation regains one assignment credit. After creation backoff, the planner can replace that reservation during the same polling outage. An uncertain create keeps its credit for recovery of the original Box. A delayed rejection cannot reopen an observation superseded by new GitHub statistics. Credits live in the listener process. After a restart the next session supplies fresh statistics and the journal supplies the existing reservations.
+During a polling outage, the listener counts candidates together for each Scale Set. A matching no-creation proof returns quota through the journal. Releasing a Box that exited before JIT delivery can also uncover demand.
+
+After creation backoff the planner replaces only the shortfall. For one assignment and two candidates, a rejection and a completed job need zero replacements. A JIT delivery with an unknown result keeps its credit because the runner may have accepted work.
+
+A held slot stays undispatched once completed workers cover the last confirmed assignment.
+
+Credits live in the listener process. A new GitHub assignment count, including zero, supersedes the previous observation. After a restart the new session supplies fresh statistics and the journal supplies existing reservations.
+
+A long poll carrying fresh assignment statistics also starts a new verification period. When a poll returns without fresh statistics and assigned demand is positive, a count at least 50 seconds old can trigger one optional statistics GET.
+
+Stale sets on an owner take turns on their existing polls, sharing one optional read in flight and waiting at least five seconds between reads. Service rate-limit deadlines suppress optional reads across those sets. An empty set adds no polling traffic for this check.
+
+Permission denials and token propagation retries stay local to the affected set. GitHub rate-limit headers or a recognized rate-limit error defer optional reads across the owner.
+
+For example, two sets on one owner have positive assignments and receive empty poll responses after their counts expire.
+
+```text
+Set A poll -> optional statistics GET -> HTTP 429, Retry-After: 60
+Set B poll during cooldown            -> skip optional GET
+Retry deadline passes; Set B polls    -> one optional GET
+Next waiting set                      -> eligible 5 seconds after that GET ends
+```
 
 For a failed poll, inspect `reason` first. An HTTP response supplies `httpStatus`; a rejected message also identifies its failing field and the observed value type. A connection failure can supply a recognized `transportCode`. GitHub's validated request ID, numeric `retryAfterSeconds`, quota headers and recognized error message are recorded when present. The listener's `retryAt` includes its own backoff, so that timestamp alone cannot establish provider throttling.
 

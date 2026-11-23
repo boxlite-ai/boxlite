@@ -527,6 +527,7 @@ export class Listener {
           service: backend.scaleSets,
           charged: (id) => runtime.pool.chargedInSet(id),
           creationReady: (label) => runtime.pool.creationReady(label),
+          releaseSupply: (row) => runtime.pool.releaseSupply(row),
           authority: backend.scaleSetAuthority.bind(backend),
           policy,
           observe: (event) => this.observe(event),

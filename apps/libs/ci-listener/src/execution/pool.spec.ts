@@ -234,6 +234,116 @@ describe('CI shared worker lifecycle', () => {
       clock.mockRestore()
     }
   })
+  describe.each([0, 1])('one offline assignment with two reservations and rejected journal row %i', (rejectedIndex) => {
+    it.each(['queued', 'worked'])('retries only unserved demand when the other reservation is %s', async (other) => {
+      const [check] = await state.read(['journal/format'], lease)
+      const target = {
+        id: 9,
+        labels: ['boxlite'],
+        held: 0,
+        assigned: 1,
+        check,
+        delivery: { covered: 0, waitingForDispatch: true, offline: true },
+      }
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      for (let i = 0; i < 2; i++)
+        await journal.reserve(lease, key, null, capacity, { labels: target.labels, scaleSet: 9 })
+      const {
+        rows: [first, second],
+      } = await journal.workers(lease, key, '')
+      const [rejected, alternative] = rejectedIndex === 0 ? [first, second] : [second, first]
+      const effect = randomUUID()
+      await journal.advance(lease, rejected.record.key, rejected.record.version, {
+        box: { phase: 'requested', id: null },
+        effect: { id: effect, kind: 'box-create' },
+      })
+      if (other === 'worked') {
+        await journal.advance(lease, alternative.record.key, alternative.record.version, {
+          box: { phase: 'requested', id: null },
+          effect: { id: randomUUID(), kind: 'box-create' },
+        })
+        boxes.set(alternative.value.name, { box_id: 'surviving-box', status: 'running' })
+        known.add(alternative.value.name)
+      }
+      const get = jest.mocked(backend.workers.get).getMockImplementation()!
+      jest.mocked(backend.workers.get).mockImplementation(async (name, ...args) => {
+        if (name === rejected.value.name) throw new ConfirmedWorkerCreationRejected(effect, 'before-persistence', 503)
+        return get(name, ...args)
+      })
+      const balance = () => pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+      await balance()
+      if (other === 'worked') {
+        const row = await byName(alternative.value.name)
+        expect(row.value.delivery).toBe('done')
+        await journal.advance(lease, row.record.key, row.record.version, {
+          runner: { ...row.value.runner, worked: true },
+        })
+        await finishBox()
+      }
+      expect(await journal.used(definition.organization)).toBe(0)
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3000)
+      try {
+        await balance()
+        expect(backend.workers.create).toHaveBeenCalledTimes(other === 'queued' ? 1 : 0)
+      } finally {
+        clock.mockRestore()
+      }
+    })
+  })
+  it('replaces an offline Box that exited before runner registration', async () => {
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      assigned: 1,
+      held: 0,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: true },
+    }
+    const create = jest.mocked(backend.workers.create).getMockImplementation()!
+    jest.mocked(backend.workers.create).mockImplementationOnce(async (launch) => {
+      const result = await create(launch)
+      boxes.get(launch.name)!.status = 'stopped'
+      return result
+    })
+    const balance = () => pool.balanceScaleSets(lease, [target], limits, new AbortController().signal)
+    await balance()
+    await reconcile()
+    expect(await journal.used(definition.organization)).toBe(0)
+    expect(backend.workers.deliverJit).not.toHaveBeenCalled()
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3000)
+    try {
+      await balance()
+      expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+  it('keeps a held slot undispatched after its offline peer finished the last assignment', async () => {
+    const [check] = await state.read(['journal/format'], lease)
+    const target = {
+      id: 9,
+      labels: ['boxlite'],
+      assigned: 1,
+      held: 1,
+      check,
+      delivery: { covered: 0, waitingForDispatch: true, offline: true },
+    }
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    for (let i = 0; i < 2; i++)
+      await journal.reserve(lease, key, null, capacity, { labels: target.labels, scaleSet: 9 })
+    const balance = () => pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+    await balance()
+    expect(boxes.size).toBe(1)
+    const worker = await byName([...boxes.keys()][0])
+    await journal.advance(lease, worker.record.key, worker.record.version, {
+      runner: { ...worker.value.runner, worked: true },
+    })
+    await finishBox()
+    await balance()
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(await journal.used(definition.organization)).toBe(1)
+  })
   it('uses each disconnected assignment once when quota frees during backoff', async () => {
     const [check] = await state.read(['journal/format'], lease)
     const target = {

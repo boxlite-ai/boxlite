@@ -17,6 +17,7 @@ export class GitHubRequestError extends Error {
     readonly status: number | undefined,
     readonly uncertain: boolean,
     readonly retryAt?: number,
+    readonly rateLimited = false,
   ) {
     super('GitHub request failed')
   }
@@ -76,7 +77,7 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       body: options.json === undefined ? undefined : JSON.stringify(options.json),
     })
     status = response.status
-    retryAt = githubRetryAt(response)
+    if (!response.ok) retryAt = await githubErrorRetryAt(response)
     if (!response.ok || options.response === 'empty' || options.response === 'no-content') {
       await response.body?.cancel()
       if (!response.ok || (options.response === 'no-content' && status !== 204))
@@ -111,11 +112,34 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       status,
       attempted && method !== 'GET' && (status === undefined || status >= 500 || (status >= 200 && status < 300)),
       retryAt,
+      retryAt !== undefined,
     )
   }
 }
 
-export function githubRetryAt(response: Response): number | undefined {
+/** Report selected response fields only. GitHub messages can interpolate repository names, URLs and credentials. */
+export async function githubErrorMessage(response: Response): Promise<string | undefined> {
+  try {
+    const data: unknown = JSON.parse(await readGitHubBody(response, 8192))
+    if (data === null || typeof data !== 'object' || !('message' in data) || typeof data.message !== 'string')
+      return undefined
+    if (/^API rate limit exceeded\b/i.test(data.message)) return 'API rate limit exceeded'
+    if (/secondary rate limit/i.test(data.message)) return 'Secondary rate limit exceeded'
+    if (['Bad credentials', 'Not Found', 'Resource not accessible by integration'].includes(data.message))
+      return data.message
+  } catch {
+    /* A missing or unreadable error body does not change the observed status. */
+  }
+  return undefined
+}
+
+export async function githubErrorRetryAt(response: Response): Promise<number | undefined> {
+  const fromHeaders = githubRetryAt(response)
+  if (fromHeaders !== undefined || response.status !== 403) return fromHeaders
+  return githubRetryAt(response, await githubErrorMessage(response))
+}
+
+export function githubRetryAt(response: Response, githubMessage?: string): number | undefined {
   let retryAt: number | undefined
   if (response.status === 403 || response.status === 429) {
     const after = response.headers.get('retry-after'),
@@ -123,7 +147,11 @@ export function githubRetryAt(response: Response): number | undefined {
     if (after && /^\d{1,10}$/.test(after)) retryAt = Date.now() + Number(after) * 1000
     if (response.headers.get('x-ratelimit-remaining') === '0' && reset && /^\d{1,12}$/.test(reset))
       retryAt = Math.max(retryAt ?? 0, Number(reset) * 1000)
-    if (response.status === 429 && retryAt === undefined) retryAt = Date.now() + 60000
+    const limited =
+      response.status === 429 ||
+      githubMessage === 'API rate limit exceeded' ||
+      githubMessage === 'Secondary rate limit exceeded'
+    if (limited && retryAt === undefined) retryAt = Date.now() + 60000
   }
   return retryAt
 }

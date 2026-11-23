@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { GitHubRequestError, githubRetryAt, readGitHubBody } from './github'
+import { GitHubRequestError, githubRetryAt } from './github'
 import { object } from './execution/model'
 
 type PollReason =
@@ -45,21 +45,6 @@ const networkCodes = new Set([
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
 ])
 
-/** Report selected response fields only. GitHub messages can interpolate repository names, URLs and credentials. */
-export async function githubPollMessage(response: Response): Promise<string | undefined> {
-  try {
-    const data: unknown = JSON.parse(await readGitHubBody(response, 8192))
-    if (!object(data) || typeof data.message !== 'string') return undefined
-    if (/^API rate limit exceeded\b/i.test(data.message)) return 'API rate limit exceeded'
-    if (/secondary rate limit/i.test(data.message)) return 'Secondary rate limit exceeded'
-    if (['Bad credentials', 'Not Found', 'Resource not accessible by integration'].includes(data.message))
-      return data.message
-  } catch {
-    /* A missing or unreadable error body does not change the observed status. */
-  }
-  return undefined
-}
-
 export class ScaleSetPollError extends GitHubRequestError {
   readonly details: {
     reason: PollReason
@@ -72,10 +57,13 @@ export class ScaleSetPollError extends GitHubRequestError {
     valueType?: string
   }
   constructor(reason: PollReason, response?: Response, cause?: unknown, githubMessage?: string) {
+    const upstream = cause instanceof GitHubRequestError ? cause : undefined
+    const retryAt = response ? githubRetryAt(response, githubMessage) : upstream?.retryAt
     super(
-      response?.status ?? (cause instanceof GitHubRequestError ? cause.status : undefined),
+      response?.status ?? upstream?.status,
       false,
-      response ? githubRetryAt(response) : cause instanceof GitHubRequestError ? cause.retryAt : undefined,
+      retryAt,
+      response ? retryAt !== undefined : upstream?.rateLimited,
     )
     this.details = { reason }
     if (cause instanceof PollMessageError) this.details.valueType = cause.valueType

@@ -1,7 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
 import { CapacityPolicy } from './capacity'
-import { ExecutionJournal } from './execution/journal'
+import { AllocationRow, ExecutionJournal } from './execution/journal'
 import { ExecutionScope, object, positive, retryCapacity, scopeKey } from './execution/model'
 import { GitHubRequestError } from './github'
 import { DEFAULT_RESOURCE_LABEL, selectRunnerLabels } from './resource-labels'
@@ -13,6 +13,29 @@ import { ExecutionLease, ListenerState, StateChange, StateCheck } from './state/
 /** One owner-wide limit for account setup and message processing. Network waits release their permit. */
 export class ScaleSetWork {
   private active = 0
+  private readonly staleLanes = new Set<object>()
+  private refreshing = false
+  private refreshAfter = 0
+  deferStatistics(until: number): void {
+    this.refreshAfter = Math.max(this.refreshAfter, until)
+  }
+  cancelStatisticsRefresh(lane: object): void {
+    this.staleLanes.delete(lane)
+  }
+  async refreshStatistics<T>(lane: object, read: () => Promise<T>): Promise<T | undefined> {
+    // Polls may return in the same order each time. Give each stale lane a turn.
+    this.staleLanes.add(lane)
+    if (this.refreshing || Date.now() < this.refreshAfter || this.staleLanes.values().next().value !== lane)
+      return undefined
+    this.staleLanes.delete(lane)
+    this.refreshing = true
+    try {
+      return await read()
+    } finally {
+      this.refreshing = false
+      this.deferStatistics(Date.now() + 5000)
+    }
+  }
   private readonly waiting: (() => void)[] = []
   constructor(private readonly limit = 8) {}
   async run<T>(signal: AbortSignal, task: () => Promise<T>): Promise<T> {
@@ -35,7 +58,7 @@ export interface ScaleTarget {
   assigned: number
   held: number
   check: StateCheck
-  delivery: { covered: number; waitingForDispatch: boolean; offline: boolean; pendingCreations?: Set<string> }
+  delivery: { covered: number; waitingForDispatch: boolean; offline: boolean; candidates?: Set<string>; spent?: number }
 }
 interface Lane {
   label: string
@@ -58,6 +81,7 @@ interface SetRecord {
 }
 // Limit outstanding acquisitions awaiting assignment, independently of running workers.
 const acquisitionWindow = 1024
+const statisticsIntervalMs = 50_000
 
 // Assigned jobs can also be counted as acquired. Only the remainder can need a separate hold.
 function unassignedAcquisitions(acquired: number | undefined, assigned: number): number {
@@ -104,6 +128,7 @@ interface SetHost {
   service: ActionsScaleSets
   creationReady(label: string): boolean
   charged(id: number): number
+  releaseSupply(row: AllocationRow): void
   authority(signal: AbortSignal): Promise<ReadonlySet<string>>
   policy(signal: AbortSignal): Promise<CapacityPolicy>
   observe?(event: ScaleSetEvent): void
@@ -136,10 +161,10 @@ export class ScaleSetController {
     if (this.signal.aborted) return []
     const active: ScaleTarget[] = []
     for (const [label, target] of this.confirmed) {
-      const { offline, covered, waitingForDispatch, pendingCreations } = target.delivery
+      const { offline, covered, waitingForDispatch, candidates } = target.delivery
       if (offline && covered >= target.assigned && !waitingForDispatch) {
-        // A rejected create can reopen this observation without another poll or planning pass.
-        if (!pendingCreations?.size) this.confirmed.delete(label)
+        // A durable release can reopen uncovered demand without another poll.
+        if (!candidates?.size) this.confirmed.delete(label)
       } else active.push(target)
     }
     return active
@@ -277,6 +302,7 @@ export class ScaleSetController {
         [check],
       )
       await this.journal.release(this.lease, candidate.key, absent.record.version)
+      this.host.releaseSupply(absent)
     }
   }
   private async retrySlots(id: number, assigned: number, held: number) {
@@ -395,6 +421,7 @@ export class ScaleSetController {
     if (signal.aborted) return false
     let session: ScaleSetSession | undefined
     let retryAt = 0
+    let readingOptionalStatistics = false
     try {
       const start = await this.work.run(signal, () => this.start(key, labels, signal, log))
       session = start.session
@@ -402,6 +429,26 @@ export class ScaleSetController {
       let row = start.row
       const previous = readRecord(row)
       const pendingRequests = new Map(previous.pending.map(({ id, phase }) => [id, phase]))
+      let freshStatistics = true
+      const publish = (assigned: number, held: number, previous: SetRecord) => {
+        const delivery = !freshStatistics && lane.target?.assigned === assigned ? lane.target.delivery : undefined
+        lane.target = {
+          id: start.id,
+          labels,
+          assigned,
+          held,
+          check: { key, version: row.version },
+          delivery: delivery ?? {
+            covered: 0,
+            waitingForDispatch:
+              assigned > 0 || held > 0 || previous.assigned > 0 || previous.held > 0 || this.host.charged(start.id) > 0,
+            offline: false,
+          },
+        }
+        freshStatistics = false
+        this.confirmed.set(lane.label, lane.target)
+        this.host.wake()
+      }
       const save = async (
         assigned: number,
         message: number | null,
@@ -430,28 +477,22 @@ export class ScaleSetController {
           const saved = await log.during('persist-target', () => this.state.commit(this.lease, changes, checks))
           row = saved.find((record) => record.key === key)!
         } else await this.journal.check(this.lease)
-        lane.target = {
-          id: start.id,
-          labels,
-          assigned,
-          held,
-          check: { key, version: row.version },
-          delivery: {
-            covered: 0,
-            waitingForDispatch:
-              assigned > 0 || held > 0 || old.assigned > 0 || old.held > 0 || this.host.charged(start.id) > 0,
-            offline: false,
-          },
-        }
-        this.confirmed.set(lane.label, lane.target)
-        this.host.wake()
+        publish(assigned, held, old)
+      }
+      let assignedVerifiedAt = Date.now()
+      const readStatistics = async () => {
+        const result = await log.during('statistics', () => this.host.service.currentStatistics(start.id, signal))
+        assignedVerifiedAt = Date.now()
+        freshStatistics = true
+        this.work.cancelStatisticsRefresh(lane)
+        return result
       }
       let verifyAfter = 0
       const verifyAcquisitions = async (assigned: number, held: number, idle = false) => {
         const uncertain = [...pendingRequests].filter(([, phase]) => phase === 'verify')
         if (!uncertain.length && !idle) return { assigned, held }
-        const current = await log.during('statistics', () => this.host.service.currentStatistics(start.id, signal))
-        verifyAfter = Date.now() + 50_000
+        const current = await readStatistics()
+        verifyAfter = assignedVerifiedAt + statisticsIntervalMs
         // Confirmed requests already account for part of the service total. An
         // assigned job may be one of them, so only deduct the guaranteed overlap.
         const confirmed = [...pendingRequests.values()].filter((phase) => phase === 'accepted').length
@@ -534,6 +575,11 @@ export class ScaleSetController {
           pendingRequests.set(id, 'verify')
           missing = true
         }
+        if (message?.assigned !== undefined) {
+          assignedVerifiedAt = Date.now()
+          freshStatistics = true
+          this.work.cancelStatisticsRefresh(lane)
+        }
         let refreshedAssigned: number | undefined
         const idleWithHolds = !message && lane.target!.held > 0
         if (
@@ -547,6 +593,22 @@ export class ScaleSetController {
             const prior = readRecord(row)
             await save(next.assigned, prior.message, prior.session, next.held)
           })
+        } else if (lane.target!.assigned > 0 && Date.now() - assignedVerifiedAt >= statisticsIntervalMs) {
+          await this.work.run(signal, async () => {
+            const current = await this.work.refreshStatistics(lane, async () => {
+              readingOptionalStatistics = true
+              const statistics = await readStatistics()
+              readingOptionalStatistics = false
+              return statistics
+            })
+            if (!current) return
+            refreshedAssigned = current.assigned
+            if (!message) {
+              const prior = readRecord(row)
+              if (current.assigned === prior.assigned) publish(current.assigned, prior.held, prior)
+              else await save(current.assigned, prior.message, prior.session, prior.held)
+            }
+          })
         }
         if (!message) {
           if (this.waiting.size && !lane.target!.held && !lane.target!.assigned && !this.host.charged(start.id))
@@ -557,9 +619,8 @@ export class ScaleSetController {
           // A crash after acquisition can leave a message with pre-acquisition statistics.
           // Resolve a conflicting first delivery against the current set before acquiring again.
           let assigned = refreshedAssigned ?? message.assigned ?? lane.target!.assigned
-          if (last === undefined && assigned !== lane.target!.assigned)
-            assigned = (await log.during('statistics', () => this.host.service.currentStatistics(start.id, signal)))
-              .assigned
+          if (refreshedAssigned === undefined && last === undefined && assigned !== lane.target!.assigned)
+            assigned = (await readStatistics()).assigned
           // Statistics can account for an assignment before its ID arrives. Removing
           // that ID narrows the pending candidates without consuming a second hold.
           for (const id of message.settledRequests) pendingRequests.delete(String(id))
@@ -693,13 +754,19 @@ export class ScaleSetController {
       }
     } catch (error) {
       const failure = log.failure(error)
+      const optionalReadUnavailable =
+        readingOptionalStatistics &&
+        error instanceof GitHubRequestError &&
+        (error.status === undefined || error.status >= 500 || error.status === 429 || error.retryAt !== undefined)
+      if (error instanceof GitHubRequestError && error.rateLimited && error.retryAt !== undefined)
+        this.work.deferStatistics(error.retryAt)
       if (
         signal.aborted ||
         error instanceof LeaseLost ||
         error instanceof StateCorrupt ||
         error instanceof ScaleSetRemoved ||
         failure.stage === 'authority' ||
-        (lane.target && failure.stage !== 'poll')
+        (lane.target && failure.stage !== 'poll' && !optionalReadUnavailable)
       ) {
         this.confirmed.delete(lane.label)
       } else if (lane.target) {
@@ -716,6 +783,7 @@ export class ScaleSetController {
       }
       this.host.report(error, failure)
     } finally {
+      this.work.cancelStatisticsRefresh(lane)
       if (session)
         try {
           await session.close()

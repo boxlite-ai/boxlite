@@ -153,9 +153,9 @@ export class WorkerPool {
   private readonly setCharges = new Map<number, number>()
   private readonly jit = new Map<string, JitRegistration>()
   private readonly sessions = new Set<RunnerSession>()
-  private readonly pendingDeliveries = new Map<number, ScaleTarget['delivery']>()
-  // The scope planner is serialized; execution can reject a row after its journal page was read.
-  private rejectedSinceScan?: Set<string>
+  private readonly pendingDeliveries = new Map<number, ScaleTarget>()
+  // The scope planner is serialized; execution can release a row after its journal page was read.
+  private releasedSinceScan?: Set<string>
   private executionAfter = 0
   private readonly idleRetryAt = new Map<string, number>()
   private readonly declinedRetirements = new Map<number, Set<string>>()
@@ -189,21 +189,34 @@ export class WorkerPool {
   chargedInSet(id: number): number {
     return this.setCharges.get(id) ?? 0
   }
-  private trackCreation(target: ScaleTarget, key: string): void {
+  private trackSupply(target: ScaleTarget, key: string): void {
     const delivery = target.delivery
-    if (!delivery.pendingCreations?.size) {
-      delivery.pendingCreations ??= new Set()
-      this.pendingDeliveries.set(target.id, delivery)
+    if ((delivery.spent ?? 0) >= target.assigned) return
+    if (!delivery.candidates) {
+      delivery.candidates = new Set()
+      this.pendingDeliveries.set(target.id, target)
     }
-    delivery.pendingCreations.add(key)
+    if (delivery.candidates.has(key)) return
+    delivery.candidates.add(key)
+    delivery.covered = Math.min(target.assigned, (delivery.spent ?? 0) + delivery.candidates.size)
   }
-  private settleCreation(row: AllocationRow, rejected: boolean): void {
+  /** Update this observation only after the matching journal reservation has been released. */
+  releaseSupply(row: AllocationRow): void {
     const set = row.value.supply?.scaleSet
     if (!set) return
-    const delivery = this.pendingDeliveries.get(set)
-    if (!delivery?.pendingCreations?.delete(row.record.key)) return
-    if (rejected) delivery.covered--
-    if (!delivery.pendingCreations.size) this.pendingDeliveries.delete(set)
+    this.releasedSinceScan ??= new Set()
+    this.releasedSinceScan.add(row.record.key)
+    const target = this.pendingDeliveries.get(set)
+    if (!target) return
+    const delivery = target.delivery
+    if (!delivery.candidates?.delete(row.record.key)) return
+    // A JIT delivery with a lost reply may already have served an assignment.
+    if (row.value.delivery !== 'none' || row.value.runner.worked) delivery.spent = (delivery.spent ?? 0) + 1
+    delivery.covered = Math.min(target.assigned, (delivery.spent ?? 0) + delivery.candidates.size)
+    if (!delivery.candidates.size || delivery.spent === target.assigned) {
+      this.pendingDeliveries.delete(set)
+      delivery.candidates = undefined
+    }
   }
   /** Reconcile the assigned count including charged reservations which have not reached GitHub yet. */
   async balanceScaleSets(
@@ -213,7 +226,7 @@ export class WorkerPool {
     signal: AbortSignal,
     drain?: StateCheck,
   ): Promise<void> {
-    this.rejectedSinceScan = undefined
+    this.releasedSinceScan = undefined
     const scope = await this.journal.scope(lease, this.scopeKey)
     const backend = await this.backend(scope.scope, lease)
     const rows: AllocationRow[] = []
@@ -258,35 +271,22 @@ export class WorkerPool {
           row.value.supply?.scaleSet === target.id &&
           !row.value.closing &&
           row.value.box.phase !== 'absent' &&
-          !this.rejectedSinceScan?.has(row.record.key),
+          !this.releasedSinceScan?.has(row.record.key),
       )
       // Keep an acquired slot charged while its service assignment is pending.
       // Count dispatched workers first so a queued reservation cannot start a surplus Box.
       const undispatched: AllocationRow[] = []
-      let known = 0
+      const delivery = target.delivery
+      const previous = this.pendingDeliveries.get(target.id)
+      if (previous && previous.delivery !== delivery) this.pendingDeliveries.delete(target.id)
       for (const row of original) {
         if (row.value.box.phase === 'none') undispatched.push(row)
-        else if (row.value.box.phase === 'known') known++
-      }
-      // These credits follow this observation across a failed poll, including grants from interrupted passes.
-      const delivery = target.delivery
-      const previousDelivery = this.pendingDeliveries.get(target.id)
-      if (previousDelivery && previousDelivery !== delivery) this.pendingDeliveries.delete(target.id)
-      const floor = Math.min(original.length, target.assigned)
-      if (delivery.covered < floor) {
-        // Known Boxes already cover assignments. Only unconfirmed creates can return a credit.
-        let refundable = Math.min(floor - delivery.covered, floor - known - (delivery.pendingCreations?.size ?? 0))
-        for (const row of original) {
-          if (refundable <= 0) break
-          if (row.value.box.phase === 'known' || delivery.pendingCreations?.has(row.record.key)) continue
-          this.trackCreation(target, row.record.key)
-          refundable--
-        }
-        delivery.covered = floor
+        this.trackSupply(target, row.record.key)
       }
       if (!undispatched.length) fullyDispatched.add(target)
       const ready = this.creationReady(selection.label)
-      const grants = ready ? Math.max(0, target.assigned - (original.length - undispatched.length)) : 0
+      const remaining = target.assigned - (delivery.offline ? (delivery.spent ?? 0) : 0)
+      const grants = ready ? Math.max(0, remaining - (original.length - undispatched.length)) : 0
       for (const row of undispatched.slice(grants)) waitingForAssignment.add(row.record.key)
       const proof = [...(policy.checks ?? []), target.check]
       checks.set(target.id, proof)
@@ -334,10 +334,7 @@ export class WorkerPool {
           { labels: target.labels, scaleSet: target.id },
         )
         if (!row) break
-        if (delivery.covered < target.assigned) {
-          delivery.covered++
-          this.trackCreation(target, row.record.key)
-        }
+        this.trackSupply(target, row.record.key)
         delivery.waitingForDispatch = true
         fullyDispatched.delete(target)
         const next = await this.journal.scope(lease, this.scopeKey)
@@ -552,11 +549,6 @@ export class WorkerPool {
     const update = async (change: AllocationChange) => {
       const previous = row.value
       row = await this.journal.advance(lease, row.record.key, row.record.version, change)
-      if (
-        previous.box.phase !== row.value.box.phase &&
-        (row.value.box.phase === 'known' || row.value.box.phase === 'absent')
-      )
-        this.settleCreation(row, false)
       if (previous.box.phase !== 'known' && row.value.box.phase === 'known')
         this.event(scope, row, 'ci-worker-box-known', 'info')
       if (previous.runner.phase !== 'known' && row.value.runner.phase === 'known')
@@ -661,9 +653,7 @@ export class WorkerPool {
     } catch (error) {
       if (!(error instanceof ConfirmedWorkerCreationRejected)) throw error
       await this.journal.rejectCreation(lease, row.record.key, row.record.version, error.rejectedCreationEffect)
-      this.rejectedSinceScan ??= new Set()
-      this.rejectedSinceScan.add(row.record.key)
-      this.settleCreation(row, true)
+      this.releaseSupply(row)
       this.creationRejected(
         selectRunnerLabels(row.value.supply?.labels ?? selection?.labels ?? this.settings.labels, this.settings.labels)!
           .label,
@@ -827,6 +817,7 @@ export class WorkerPool {
     }
     if (row.value.runner.phase === 'absent') {
       await this.journal.release(lease, row.record.key, row.record.version)
+      this.releaseSupply(row)
       this.idleRetryAt.delete(row.record.key)
       if (row.value.supply?.scaleSet !== undefined) this.forgetDecline(row.value.supply.scaleSet, row.record.key)
       this.event(scope, row, 'ci-worker-released', 'info')

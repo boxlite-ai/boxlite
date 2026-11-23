@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { githubPollMessage, PollMessageError, ScaleSetPollError } from './scale-set-poll-error'
-import { GitHubRequestError, githubRetryAt, readGitHubBody } from './github'
+import { PollMessageError, ScaleSetPollError } from './scale-set-poll-error'
+import { githubErrorMessage, githubErrorRetryAt, GitHubRequestError, readGitHubBody } from './github'
 import { object, positive } from './execution/model'
 import { JitRegistration, RunnerEffect, RunnerIdentity } from './runners'
 
@@ -150,11 +150,12 @@ async function request(url: URL, authorization: string, call: Call = {}): Promis
     const status = response.status
     if (!response.ok || status === 204 || (call.poll && status === 202)) {
       if (call.poll && status !== 202)
-        throw new ScaleSetPollError('http', response, undefined, await githubPollMessage(response))
+        throw new ScaleSetPollError('http', response, undefined, await githubErrorMessage(response))
+      const retryAt = !response.ok ? await githubErrorRetryAt(response) : undefined
       await response.body?.cancel()
       if (status === 204 && method === 'DELETE') return undefined
       if (status === 202 && call.poll) return null
-      throw new GitHubRequestError(status, method !== 'GET' && status >= 500, githubRetryAt(response))
+      throw new GitHubRequestError(status, method !== 'GET' && status >= 500, retryAt, retryAt !== undefined)
     }
     if (method === 'DELETE') {
       await response.body?.cancel()
@@ -263,7 +264,7 @@ export class ActionsScaleSets {
       ) {
         const retryAt = error.retryAt ?? Date.now() + 1000 * 2 ** attempt.attempts
         attempt.attempts++
-        attempt.retry = new GitHubRequestError(error.status, false, retryAt)
+        attempt.retry = new GitHubRequestError(error.status, false, retryAt, error.rateLimited)
         throw attempt.retry
       }
       this.registrationAttempt = undefined

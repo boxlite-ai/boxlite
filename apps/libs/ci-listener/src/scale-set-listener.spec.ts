@@ -56,7 +56,7 @@ class ActionsFixture {
     this.waiter?.()
   }
   private waiter?: () => void
-  publish(id: number, assigned: number, offers: number[] = [], extra: object[] = []) {
+  publish(id: number, assigned: number | undefined, offers: number[] = [], extra: object[] = []) {
     const events = [
       ...extra,
       ...offers.map((runnerRequestId) => ({
@@ -69,12 +69,12 @@ class ActionsFixture {
     ]
     this.publishRaw(id, assigned, JSON.stringify(events))
   }
-  publishRaw(id: number, assigned: number, body: string) {
-    this.target = assigned
+  publishRaw(id: number, assigned: number | undefined, body: string) {
+    if (assigned !== undefined) this.target = assigned
     this.messages.push({
       messageId: id,
       messageType: 'RunnerScaleSetJobMessages',
-      statistics: { totalAssignedJobs: assigned },
+      statistics: assigned === undefined ? undefined : { totalAssignedJobs: assigned },
       body,
     })
     this.waiter?.()
@@ -252,6 +252,14 @@ const scenarios = [
   'starts confirmed jobs when the planner first reads after the poll fails',
   'retries a confirmed create rejection after the offline target has left planning',
   'honors a newer zero before a delayed create rejection',
+  'retries an offline assignment after a statless cancellation releases the other candidate',
+  'refreshes stale assigned demand on the existing poll without querying idle or fresh sets',
+  'keeps statistics permission denial local to the affected set',
+  'honors a secondary statistics rate limit without retry headers',
+  'distinguishes registration backoff for 401',
+  'distinguishes registration backoff for 403',
+  'distinguishes registration backoff for a provider cooldown',
+  'distinguishes registration backoff for a REST secondary limit',
   'cancels disconnected reservations when GitHub confirms zero before dispatch',
   'backs off failed Box startup',
   'backs off a Box exit without a status code',
@@ -450,6 +458,139 @@ for (const storage of ['sqlite', 'postgres'])
         try {
           await journal.initialize()
           if (
+            scenario === 'refreshes stale assigned demand on the existing poll without querying idle or fresh sets' ||
+            scenario === 'keeps statistics permission denial local to the affected set' ||
+            scenario === 'honors a secondary statistics rate limit without retry headers' ||
+            scenario.startsWith('distinguishes registration backoff')
+          ) {
+            const denied = scenario === 'keeps statistics permission denial local to the affected set'
+            const secondary = scenario === 'honors a secondary statistics rate limit without retry headers'
+            if (denied || secondary)
+              fetch.mockImplementation(async (input, opts = {}) => {
+                if (new URL(String(input)).pathname.endsWith('/runnerscalesets/9') && fixture.throttledSets.has(9)) {
+                  fixture.throttledSets.set(9, fixture.throttledSets.get(9)! + 1)
+                  return Response.json(
+                    {
+                      message: denied
+                        ? 'Resource not accessible by integration'
+                        : 'You have exceeded a secondary rate limit.',
+                    },
+                    { status: 403 },
+                  )
+                }
+                return fixture.fetch(input, opts)
+              })
+            const owner = (await state.acquire(randomUUID(), 300000))!
+            await journal.define(owner, scope)
+            fixture.target = 1
+            const work = new ScaleSetWork()
+            const controller = new ScaleSetController(
+              state,
+              owner,
+              decodeScope(scope),
+              ['boxlite'],
+              journal,
+              work,
+              {
+                service: new GitHubExecutionBackend(
+                  state,
+                  owner,
+                  scope,
+                  source,
+                  { workers, authorize: async () => {} },
+                  ['boxlite'],
+                ).scaleSets,
+                authority: async () => new Set(['repo']),
+                charged: () => 0,
+                releaseSupply: () => {},
+                creationReady: () => true,
+                policy: async () => ({ limits: [{ domain: 'organization' as const, maximum: 2 }] }),
+                report: (error) => errors.push(String(error)),
+                wake: () => {},
+              },
+              new AbortController().signal,
+            )
+            stop = () => controller.close()
+            const now = Date.now.bind(Date)
+            let elapsed = 0
+            const clock = jest.spyOn(Date, 'now').mockImplementation(() => now() + elapsed)
+            const calls = (path: string) => fixture.requests.filter((value) => value === 'GET ' + path).length
+            const poll = async () => {
+              const before = calls('/messages')
+              fixture.idle()
+              await until(() => calls('/messages') > before)
+            }
+            try {
+              if (scenario.startsWith('distinguishes registration backoff')) {
+                const rest = scenario.endsWith('REST secondary limit')
+                const limited = rest || scenario.endsWith('provider cooldown')
+                const failurePath = rest
+                  ? '/repos/owner/repo/actions/runners/registration-token'
+                  : '/actions/runner-registration'
+                const status = scenario.endsWith('401') ? 401 : 403
+                fetch.mockImplementation(async (input, opts = {}) => {
+                  if (new URL(String(input)).pathname !== failurePath) return fixture.fetch(input, opts)
+                  if (rest) return Response.json({ message: 'You have exceeded a secondary rate limit.' }, { status })
+                  return new Response(null, { status, headers: limited ? { 'retry-after': '60' } : undefined })
+                })
+                await controller.restore()
+                await until(() => errors.length > 0)
+                const peer = jest.fn(async () => 'fresh')
+                expect(await work.refreshStatistics(peer, peer)).toBe(limited ? undefined : 'fresh')
+                expect(peer).toHaveBeenCalledTimes(limited ? 0 : 1)
+                return
+              }
+              await controller.restore()
+              await until(() => calls('/messages') > 0)
+              const stats = () => calls('/tenant/_apis/runtime/runnerscalesets/9')
+              const initial = stats()
+              await poll()
+              expect(stats()).toBe(initial)
+              elapsed += 51_000
+              fixture.publish(1, 1)
+              await until(() => fixture.acknowledged.includes(1))
+              await poll()
+              expect(stats()).toBe(initial)
+              elapsed += 51_000
+              await poll()
+              expect(stats()).toBe(initial + 1)
+              await poll()
+              expect(stats()).toBe(initial + 1)
+              fixture.target = 0
+              elapsed += 51_000
+              await poll()
+              expect(controller.targets().map((target) => target.assigned)).toEqual([0])
+              elapsed += 51_000
+              await poll()
+              expect(stats()).toBe(initial + 2)
+              fixture.publish(2, 1)
+              await until(() => fixture.acknowledged.includes(2))
+              elapsed += 51_000
+              fixture.throttledSets.set(9, 0)
+              fixture.idle()
+              await until(() => errors.length > 0)
+              expect(fixture.throttledSets.get(9)).toBe(1)
+              const anotherSet = jest.fn(async () => 'refreshed')
+              if (denied) {
+                expect(controller.targets()).toHaveLength(0)
+                elapsed += 5100
+                expect(await work.refreshStatistics(anotherSet, anotherSet)).toBe('refreshed')
+                return
+              }
+              expect(controller.targets()).toEqual([
+                expect.objectContaining({ assigned: 1, delivery: expect.objectContaining({ offline: true }) }),
+              ])
+              elapsed += 59_000
+              expect(await work.refreshStatistics(anotherSet, anotherSet)).toBeUndefined()
+              expect(anotherSet).not.toHaveBeenCalled()
+              elapsed += 1100
+              expect(await work.refreshStatistics(anotherSet, anotherSet)).toBe('refreshed')
+            } finally {
+              clock.mockRestore()
+            }
+            return
+          }
+          if (
             scenario === 'rejects a charged retry when its assigned Box becomes absent' ||
             scenario === 'rejects a charged retry when its assigned Box starts closing' ||
             scenario === 'rejects a charged retry when its last reserved worker starts'
@@ -480,6 +621,7 @@ for (const storage of ['sqlite', 'postgres'])
                 service: new ActionsScaleSets('https://github.com/owner/repo', async () => 'local-token'),
                 authority: async () => new Set(['repo']),
                 charged: () => 1,
+                releaseSupply: () => {},
                 creationReady: () => true,
                 policy: async () => policy,
                 report: (error) => errors.push(String(error)),
@@ -591,6 +733,7 @@ for (const storage of ['sqlite', 'postgres'])
                 authority: async () => new Set(['repo']),
                 creationReady: () => true,
                 charged: () => 0,
+                releaseSupply: () => {},
                 policy: async () => ({ limits: [] }),
                 report: jest.fn(),
                 wake: jest.fn(),
@@ -682,6 +825,40 @@ for (const storage of ['sqlite', 'postgres'])
             )
             await scans.finish(claim, { success: true, intervalMs: 60_000 })
           }
+          if (scenario === 'retries an offline assignment after a statless cancellation releases the other candidate') {
+            let reject!: () => void
+            const outcome = new Promise<void>((resolve) => {
+              reject = resolve
+            })
+            jest.mocked(workers.create).mockImplementationOnce(async ({ name }) => {
+              const row = await journal.allocation(policyOwner!, 'worker/' + name.slice(7))
+              await outcome
+              throw new ConfirmedWorkerCreationRejected(row!.value.effect!.id, 'before-persistence', 503)
+            })
+            fetch.mockImplementation(async (input, opts = {}) => {
+              if (new URL(String(input)).pathname === '/messages' && fixture.acknowledged.includes(3))
+                return new Response(null, { status: 429, headers: { 'retry-after': '60' } })
+              return fixture.fetch(input, opts)
+            })
+            try {
+              stop = start()
+              await until(() => fixture.sessions.length === 1)
+              fixture.publish(1, 0, [123, 124])
+              await until(() => fixture.acknowledged.includes(1))
+              fixture.publish(2, 1, [], [{ messageType: 'JobAssigned', runnerRequestId: 123 }])
+              await until(() => jest.mocked(workers.create).mock.calls.length === 1)
+              fixture.publish(3, undefined, [], [{ messageType: 'JobCompleted', runnerRequestId: 124 }])
+              await until(() => report.mock.calls.some((call) => call[1] === 'scale-set-session'))
+              expect(await journal.used(scope.organization)).toBe(1)
+              reject()
+              await until(() => delivered.size === 1)
+              expect(workers.create).toHaveBeenCalledTimes(2)
+              expect(fixture.sessions).toHaveLength(1)
+            } finally {
+              reject()
+            }
+            return
+          }
           if (
             scenario === 'retries a confirmed create rejection after the offline target has left planning' ||
             scenario === 'honors a newer zero before a delayed create rejection'
@@ -691,11 +868,14 @@ for (const storage of ['sqlite', 'postgres'])
             let pollFailed = false
             let idle = false
             let sawZero = false
+            let eligibleAt = Infinity
+            let nextAssigned: number[] | undefined
             const targets = ScaleSetController.prototype.targets
             const reads = jest.spyOn(ScaleSetController.prototype, 'targets').mockImplementation(function (
               this: ScaleSetController,
             ) {
               const result = targets.call(this)
+              if (Date.now() >= eligibleAt) nextAssigned = result.map((target) => target.assigned)
               if (pollFailed && result.length === 0) idle = true
               if (fixture.sessions.length > 1 && result.some((target) => target.assigned === 0)) sawZero = true
               return result
@@ -719,7 +899,9 @@ for (const storage of ['sqlite', 'postgres'])
               stop = start()
               await until(() => observe.mock.calls.some(([event]) => event.event === 'ci-worker-create-rejected'))
               if (cancel) {
-                await delay(1150)
+                eligibleAt = Date.now() + 1100
+                await until(() => nextAssigned !== undefined)
+                expect(nextAssigned).not.toContain(1)
                 expect(workers.create).toHaveBeenCalledTimes(1)
                 expect(await journal.used(scope.organization)).toBe(0)
               } else {
@@ -1517,6 +1699,23 @@ for (const storage of ['sqlite', 'postgres'])
     )
   })
 
+it('gives stale sets a turn when their polls repeatedly return together', async () => {
+  const work = new ScaleSetWork()
+  const first = jest.fn(async () => 'first')
+  const second = jest.fn(async () => 'second')
+  const now = Date.now()
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+  try {
+    expect(await work.refreshStatistics(first, first)).toBe('first')
+    expect(await work.refreshStatistics(second, second)).toBeUndefined()
+    clock.mockReturnValue(now + 60_000)
+    expect(await work.refreshStatistics(first, first)).toBeUndefined()
+    expect(await work.refreshStatistics(second, second)).toBe('second')
+  } finally {
+    clock.mockRestore()
+  }
+})
+
 it('reserves one shared global slot for concurrent offers to two tenants', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'ci-set-global-'))
   const db = new SqliteStateDatabase(directory)
@@ -1567,6 +1766,7 @@ it('reserves one shared global slot for concurrent offers to two tenants', async
           authority: async () => new Set(['repo']),
           creationReady: () => true,
           charged: () => 0,
+          releaseSupply: () => {},
           policy: async () => ({ limits: [{ domain: 'global', maximum: 1 }] }),
           report: () => {},
           wake: () => {},
