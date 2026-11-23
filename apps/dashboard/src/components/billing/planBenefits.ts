@@ -7,9 +7,9 @@ type BenefitRow = { label: string; values: readonly [string | null, string | nul
 type BenefitGroup = { title: string; rows: BenefitRow[] }
 
 export const PLAN_PRESENTATION = [
-  { name: 'Pay as you go', priceCents: 0, bonusCents: null },
-  { name: 'Starter', priceCents: 500, bonusCents: 2000 },
-  { name: 'Team', priceCents: 10000, bonusCents: 40000 },
+  { name: 'Pay as you go', priceCents: 0 },
+  { name: 'Starter', priceCents: 500 },
+  { name: 'Team', priceCents: 10000 },
 ] as const
 
 // Names identify the legacy and replacement tiers; API order is not an identity.
@@ -30,12 +30,25 @@ export function planTierIndex(name: string): number {
   }
 }
 
+export const PLAN_BOX_LIMITS = [
+  { cpu: 1, memory: 2, disk: 10 },
+  { cpu: 2, memory: 4, disk: 20 },
+  { cpu: 16, memory: 32, disk: 100 },
+] as const
+
 export const PLAN_BENEFITS: BenefitGroup[] = [
   {
     title: 'Resource limits',
     rows: [
       { label: 'Max Boxes', values: ['20', '40', '1,000'] },
-      { label: 'Max Box size', values: ['1C · 2G · 10G', '2C · 4G · 20G', '16C · 32G · 100G'] },
+      {
+        label: 'Max Box size',
+        values: PLAN_BOX_LIMITS.map(({ cpu, memory, disk }) => `${cpu}C · ${memory}G · ${disk}G`) as [
+          string,
+          string,
+          string,
+        ],
+      },
       { label: 'Max concurrency', values: ['2', '4', '1,000'] },
     ],
   },

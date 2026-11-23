@@ -74,6 +74,19 @@ function RouteProbe() {
 }
 
 describe('billing surface contracts', () => {
+  it('uses catalog money for the subscription value comparison', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison plans={catalog} />
+      </MemoryRouter>,
+    )
+    expect(host.querySelector('thead')?.textContent).toContain('$149')
+    const quota = [...host.querySelectorAll('tr')].find(
+      (tr) => tr.querySelector('th')?.textContent === 'Included usage value',
+    )
+    expect(quota?.textContent).toContain('$250')
+  })
+
   it('compares documented limits, prices and bonuses without inventing billing cycles', () => {
     const host = render(
       <MemoryRouter>
@@ -83,9 +96,9 @@ describe('billing surface contracts', () => {
     const row = (label: string) =>
       [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === label)!
     expect(host.querySelector('thead')?.textContent).toContain('Starter')
-    expect(host.querySelector('thead')?.textContent).toContain('Starter$5')
+    expect(host.querySelector('thead')?.textContent).toContain('Starter$149')
     expect(host.querySelector('thead')?.textContent).not.toContain('/ month')
-    expect(row('Bonus amount').textContent).toContain('—Not specified$20$400')
+    expect(row('Included usage value').textContent).toContain('$30$250$900')
     expect(row('Max Box size').textContent).toContain('1C · 2G · 10G')
     expect([...row('Max concurrency').querySelectorAll('td')].map((td) => td.textContent)).toEqual([
       '2',
@@ -118,7 +131,7 @@ describe('billing surface contracts', () => {
       </MemoryRouter>,
     )
     const headers = host.querySelectorAll('thead th')
-    expect(headers[1].textContent).toContain('Team$100')
+    expect(headers[1].textContent).toContain('Team$499')
     expect(headers[2].textContent).toContain('Pay as you go')
     expect(headers[3].textContent).toContain('Unrecognized$12.34')
     const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === 'Hosted secrets')!
@@ -155,7 +168,7 @@ describe('billing surface contracts', () => {
         <PlanComparison plans={catalog} />
       </MemoryRouter>,
     )
-    for (const label of ['Usage funding', 'Bonus amount', 'Trial eligibility', 'Volumes']) {
+    for (const label of ['Usage funding', 'Trial eligibility', 'Volumes']) {
       const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === label)!
       expect(row.querySelector('[aria-hidden="true"]')?.textContent).toBe('—')
       expect(row.querySelector('.sr-only')?.textContent).toBe('Not specified')
@@ -195,7 +208,7 @@ describe('billing surface contracts', () => {
         <RouteProbe />
       </MemoryRouter>,
     )
-    expect(host.querySelector('thead')?.textContent).toContain('Starter$5')
+    expect(host.querySelector('thead')?.textContent).toContain('Starter$149')
     expect(host.querySelectorAll('thead a[href="https://boxlite.ai/contact"]')).toHaveLength(3)
     expect([...host.querySelectorAll('thead button')].every((button) => button.disabled)).toBe(true)
     expect(host.querySelector('output')?.textContent).toBe('/')
@@ -208,7 +221,7 @@ describe('billing surface contracts', () => {
       </MemoryRouter>,
     )
     const starter = host.querySelectorAll('thead th')[1]
-    expect(starter.textContent).toContain('Starter$5')
+    expect(starter.textContent).toContain(`Starter$${priceMonthlyCents / 100}`)
     if (priceMonthlyCents === 500) {
       expect(starter.querySelector('a')).toBeNull()
       const button = starter.querySelector('button')!
