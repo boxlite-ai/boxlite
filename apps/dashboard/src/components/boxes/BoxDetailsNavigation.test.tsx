@@ -277,6 +277,35 @@ describe('BoxTerminal page', () => {
     expect(mocks.terminalMounts).toHaveBeenCalledOnce()
   })
 
+  it.each([BoxState.STOPPING, BoxState.CREATING, BoxState.ERROR])(
+    'keeps unavailable terminal states non-actionable: %s',
+    async (state) => {
+      mocks.box = { ...mocks.box, state } as Box
+      await renderPage()
+      expect(document.body.textContent).toContain('The terminal is available when this Box is running.')
+      expect(
+        [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Start Box'),
+      ).toBe(false)
+      expect(mocks.start).not.toHaveBeenCalled()
+      expect(mocks.terminalMounts).not.toHaveBeenCalled()
+    },
+  )
+
+  it('clears a failed-start notice when an external state update starts the Box', async () => {
+    mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
+    mocks.start.mockRejectedValueOnce(new Error('Unavailable'))
+    await renderPage()
+    await act(async () => buttonNamed('Start Box').click())
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    mocks.box = { ...mocks.box, state: BoxState.STARTING } as Box
+    await renderPage()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
+    await renderPage()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    expect(buttonNamed('Start Box').disabled).toBe(false)
+  })
+
   it('retains the Overview start action', async () => {
     mocks.box = { ...mocks.box, state: BoxState.STOPPED } as Box
     await renderPage('overview')
