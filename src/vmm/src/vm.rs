@@ -97,8 +97,8 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Validates `config` and preflights the RAM layout and boot leaf against
-    /// KVM before spawning the console worker and building the VM.
+    /// Validates `config` and preflights the boot layout and any hotplug window
+    /// against KVM before spawning the console worker and building the VM.
     /// `devices::add_all` adds the legacy devices and one virtio-blk device
     /// per disk, taking each disk's virtio-mmio slot and naming it on the
     /// command line; `config.cmdline` must leave room for those arguments,
@@ -106,40 +106,11 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// COM1 output goes to `console` through a queue, so a slow sink never
     /// stalls the guest.
     pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::{
-            boot,
-            cpu_features::{X86MemoryCaps, preflight_x86},
-            devices::console::DEFAULT_QUEUE_BYTES,
-            hotplug::HotplugWindow,
-        };
+        use crate::{boot, devices::console::DEFAULT_QUEUE_BYTES};
 
         config.validate()?;
         let prepared = boxlite_hypervisor::KvmVm::prepare()?;
-        let leaf = preflight_x86(
-            config.memory_mib,
-            prepared.supported_cpuid(),
-            boot::BOOT_LEAF,
-        )?;
-        let hotplug_window = if config.hotplug_mib == 0 {
-            None
-        } else {
-            let ranges = ram_ranges(config.memory_mib);
-            let caps = X86MemoryCaps::from_cpuid(prepared.supported_cpuid())
-                .map_err(Error::HostMemoryCapability)?;
-            let available_slots = prepared.memory_slots_after(ranges.iter().map(|&(_, size)| size));
-            Some(
-                HotplugWindow::plan(
-                    &ranges,
-                    config.hotplug_mib,
-                    caps.physical_end,
-                    available_slots,
-                )
-                .map_err(|source| Error::PlanHotplugMemory {
-                    capacity_mib: config.hotplug_mib,
-                    source,
-                })?,
-            )
-        };
+        let (leaf, hotplug_window) = boot::preflight(&config, &prepared)?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
         let mut vm = Self::build(

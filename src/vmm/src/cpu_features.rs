@@ -10,12 +10,16 @@
 use std::io;
 
 use boxlite_hypervisor::{X86CpuidEntry, X86Msr};
+#[cfg(any(test, target_os = "linux"))]
+use vm_memory::GuestAddress;
 
 use crate::config::MAX_VCPUS;
+#[cfg(test)]
+use crate::memory::ram_ranges;
 #[cfg(any(test, target_os = "linux"))]
 use crate::{
     error::{Error, Result},
-    memory::{check_ram_end, ram_ranges},
+    memory::check_ram_end,
     x86_boot_layout::{CheckedBootLeaf, IDENTITY_END, PageSize},
 };
 
@@ -113,29 +117,38 @@ impl X86MemoryCaps {
             pdpe1gb,
         })
     }
+
+    /// Checks backed GPAs and the requested boot leaf before allocating RAM.
+    pub(crate) fn check_boot_leaf(
+        &self,
+        memory_mib: u32,
+        ranges: &[(GuestAddress, usize)],
+        requested_leaf: PageSize,
+    ) -> Result<CheckedBootLeaf> {
+        let mut limits = [
+            (self.physical_end, "KVM GPA"),
+            (IDENTITY_END, "four-level identity map"),
+        ];
+        // Report the tighter limit, keeping KVM first if the limits are equal.
+        limits.sort_by_key(|&(end, _)| end);
+        for (end, name) in limits {
+            check_ram_end(memory_mib, ranges, end, name)?;
+        }
+        requested_leaf
+            .checked(self.pdpe1gb)
+            .map_err(Error::HostMemoryCapability)
+    }
 }
 
-/// Checks backed GPAs and the requested boot leaf before allocating RAM.
-#[cfg(any(test, target_os = "linux"))]
+/// Checks the boot layout for tests that supply their own CPUID or page size.
+#[cfg(test)]
 pub(crate) fn preflight_x86(
     memory_mib: u32,
     entries: &[X86CpuidEntry],
     requested_leaf: PageSize,
 ) -> Result<CheckedBootLeaf> {
     let caps = X86MemoryCaps::from_cpuid(entries).map_err(Error::HostMemoryCapability)?;
-    let ranges = ram_ranges(memory_mib);
-    let mut limits = [
-        (caps.physical_end, "KVM GPA"),
-        (IDENTITY_END, "four-level identity map"),
-    ];
-    // Report the tighter limit, keeping KVM first if the limits are equal.
-    limits.sort_by_key(|&(end, _)| end);
-    for (end, name) in limits {
-        check_ram_end(memory_mib, &ranges, end, name)?;
-    }
-    requested_leaf
-        .checked(caps.pdpe1gb)
-        .map_err(Error::HostMemoryCapability)
+    caps.check_boot_leaf(memory_mib, &ram_ranges(memory_mib), requested_leaf)
 }
 
 /// The CPUID of vCPU `index` of `count`: `supported` with APIC ID `index`, one

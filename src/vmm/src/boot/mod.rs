@@ -18,6 +18,8 @@ use crate::{
     memory::{GuestMemoryMmap, GuestRam},
     x86_boot_layout::{self, CheckedBootLeaf, PageSize},
 };
+#[cfg(target_os = "linux")]
+use crate::{cpu_features::X86MemoryCaps, hotplug::HotplugWindow, memory::ram_ranges};
 
 pub(crate) mod elf;
 pub(crate) mod entry;
@@ -27,6 +29,35 @@ pub(crate) mod params;
 
 /// Internal leaf-size switch; any selected size must pass host preflight before use.
 pub(crate) const BOOT_LEAF: PageSize = PageSize::Mib;
+
+/// Checks boot RAM and plans the optional hotplug window against the same host
+/// limits and backed ranges before VM construction.
+#[cfg(target_os = "linux")]
+pub(crate) fn preflight(
+    config: &VmConfig,
+    kvm: &boxlite_hypervisor::PreparedKvm,
+) -> Result<(CheckedBootLeaf, Option<HotplugWindow>)> {
+    let caps =
+        X86MemoryCaps::from_cpuid(kvm.supported_cpuid()).map_err(Error::HostMemoryCapability)?;
+    let ranges = ram_ranges(config.memory_mib);
+    let leaf = caps.check_boot_leaf(config.memory_mib, &ranges, BOOT_LEAF)?;
+    if config.hotplug_mib == 0 {
+        return Ok((leaf, None));
+    }
+
+    let available_slots = kvm.memory_slots_after(ranges.iter().map(|&(_, size)| size));
+    let window = HotplugWindow::plan(
+        &ranges,
+        config.hotplug_mib,
+        caps.physical_end,
+        available_slots,
+    )
+    .map_err(|source| Error::PlanHotplugMemory {
+        capacity_mib: config.hotplug_mib,
+        source,
+    })?;
+    Ok((leaf, Some(window)))
+}
 
 /// The boot data the vCPU workers apply once [`prepare`] has filled guest RAM.
 #[derive(Debug)]

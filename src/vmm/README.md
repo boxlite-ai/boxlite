@@ -283,9 +283,12 @@ With `VmConfig.hotplug_mib` set, `devices::add_all` appends a virtio-mem
 device (ID 24, one request queue) after the other devices. Its host operations
 use the `VmControl` returned by `vm.control()` and run on the virtio worker.
 
-`Vm::new` plans the window before allocating boot RAM. It uses KVM's
-guest physical address limit and deducts the slots occupied by boot RAM,
-including any region split across multiple KVM slots.
+`Vm::new` runs the x86 boot preflight before allocating RAM or creating the
+host VM. The preflight checks the boot layout and plans the optional hotplug
+window from the same boot RAM ranges and KVM guest physical address limit.
+
+It deducts the slots occupied by boot RAM, including any region split across
+multiple KVM slots. Device construction receives the checked window.
 
 Use a kernel command line without a standalone `--` separator when enabling
 online resize, so the appended memory policy arguments reach the kernel.
@@ -331,11 +334,11 @@ through `Vm::new` on KVM. Both have 1024 MiB of hotplug capacity, grow by
 1024 MiB, write 640 MiB and shrink the target to 256 MiB. The 6 GiB
 configuration puts the hotplug window after high boot RAM at 7 GiB.
 
-| Step | Guest `totalram` | Host `status()` |
+| Step | Guest `totalram` | Host `memory_status()` |
 | --- | --- | --- |
 | Boot | base | target 0 |
-| `request(1024)` | base + 1024 MiB | plugged 1024 |
-| `request(256)` | base + 256 MiB | plugged 256, mapped 256 |
+| Set target to 1024 MiB | base + 1024 MiB | plugged 1024 |
+| Set target to 256 MiB | base + 256 MiB | plugged 256, mapped 256 |
 
 ## Kernel loading
 
