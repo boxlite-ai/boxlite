@@ -72,6 +72,19 @@ func TestEndpointValidation(t *testing.T) {
 	}
 }
 
+func TestEndpointTransportSecurity(t *testing.T) {
+	for _, endpoint := range []string{"http://api-internal/introspect", "http://192.0.2.1/introspect", "http://[2001:db8::1]/introspect", "http://localhost/introspect", "http://127.0.0.1.example.com/introspect"} {
+		if _, err := newClient(endpoint); err == nil {
+			t.Errorf("accepted plaintext endpoint %s", endpoint)
+		}
+	}
+	for _, endpoint := range []string{"https://api-internal/introspect", "http://127.0.0.1/introspect", "http://[::1]/introspect"} {
+		if _, err := newClient(endpoint); err != nil {
+			t.Errorf("rejected secure or literal loopback endpoint %s: %v", endpoint, err)
+		}
+	}
+}
+
 func TestResponseSizeBoundary(t *testing.T) {
 	for _, size := range []int{65536, 65537} {
 		body := `{"active":false}`

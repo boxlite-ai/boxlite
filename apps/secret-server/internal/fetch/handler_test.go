@@ -48,10 +48,10 @@ func (s *memoryStore) load(context.Context, []string) (map[string]secret, error)
 	s.loads++
 	return s.rows, s.loadErr
 }
-func (s *memoryStore) record(ctx context.Context, a audit) error {
+func (s *memoryStore) record(ctx context.Context, entries ...audit) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.audits = append(s.audits, a)
+	s.audits = append(s.audits, entries...)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

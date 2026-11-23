@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -36,6 +37,9 @@ func newClient(endpoint string) (*apiClient, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("invalid introspection endpoint")
+	}
+	if ip, _ := netip.ParseAddr(u.Hostname()); u.Scheme == "http" && !ip.IsLoopback() {
+		return nil, errors.New("introspection requires HTTPS outside literal loopback")
 	}
 	return &apiClient{endpoint: endpoint, http: http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }

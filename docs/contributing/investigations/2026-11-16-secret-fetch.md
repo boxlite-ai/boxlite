@@ -40,6 +40,7 @@ runner proof -> attested runner ID -> consuming introspection
 `POST /internal/v1/fetch` accepts only a credential. It takes identity from
 `attest.Verifier`, never a body field. Introspection receives the credential and
 attested runner ID, with a three-second timeout, no redirects and no retries.
+HTTPS is required except for literal loopback IPs in local tests.
 Active replies must contain valid identifiers, a nonexpired expiry and a complete
 grant list. An inactive reply grants nothing. Repeated grants are rejected.
 
@@ -54,7 +55,8 @@ with fixed public codes. No response contains partial secrets, upstream errors,
 credentials or proofs. A deleted row has no available name to include.
 
 Audit entries contain only credential, runner, box and secret identifiers plus
-the outcome. Audit writes have a separate bounded context so request cancellation
+the outcome. One SQL statement inserts each batch atomically; a failed row rolls
+back the complete batch. Audit writes have a separate bounded context so request cancellation
 does not erase the attempt. Write failures increment a counter and emit a fixed
 log message, without changing the fetch outcome.
 

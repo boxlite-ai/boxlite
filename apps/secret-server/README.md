@@ -277,7 +277,7 @@ attestation selector and the **full internal introspection URL**:
 
 ```go
 handler, err := fetch.New(pool, cipher, selector,
-    "http://api-internal/internal/v1/credentials/introspect", logger)
+    "https://api-internal/internal/v1/credentials/introspect", logger)
 if err != nil {
     return err
 }
@@ -295,6 +295,8 @@ The handler verifies identity before contacting the API, then sends
 and runner binding (BUI-1385); the client makes one request with a three-second
 limit and never follows redirects, retries or caches authorization.
 The MVP API route has no caller authentication and must remain internal-only.
+Introspection requires HTTPS, except for literal loopback IPs used by local tests.
+Hostnames such as `localhost` do not qualify for the plaintext exception.
 
 ```text
 proof -> consuming introspection -> check all organizations and box scopes
@@ -334,7 +336,8 @@ Resource bounds are 4 KiB request bodies, 64 KiB API replies, 64 grants,
 stored payloads before transfer. No unbounded request queue is created.
 
 Audit attempts use a separate 100 ms context for the complete outcome, with at
-most 16 concurrent audit operations. Success records one row per secret; empty
+most 16 concurrent audit operations. Each batch uses one atomic SQL insert, so
+a failed row cannot leave a partially persisted batch. Success records one row per secret; empty
 success and failure record one row. Unknown identifiers remain null.
 Audit failures preserve the response outcome, emit a fixed error log and increment
 `Handler.AuditFailures()` for telemetry collection. Credentials, proofs, values,

@@ -82,6 +82,28 @@ func TestIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM secret_access_log WHERE result='ok'").Scan(&count); err != nil || count != 2 {
 		t.Fatalf("audit count %d %v", count, err)
 	}
+	t.Run("audit batch is atomic", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `CREATE FUNCTION reject_second_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.secret_id = '33333333-3333-3333-3333-333333333333'::uuid THEN RAISE EXCEPTION 'rejected audit'; END IF; RETURN NEW; END $$`); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, err := pool.Exec(ctx, "DROP FUNCTION reject_second_audit() CASCADE")
+			if err != nil {
+				t.Error(err)
+			}
+		})
+		if _, err := pool.Exec(ctx, "CREATE TRIGGER reject_second_audit BEFORE INSERT ON secret_access_log FOR EACH ROW EXECUTE FUNCTION reject_second_audit()"); err != nil {
+			t.Fatal(err)
+		}
+		before := h.AuditFailures()
+		h.record(ctx, audit{SecretID: first, Result: "ok"}, audit{SecretID: second, Result: "ok"})
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM secret_access_log WHERE result='ok'").Scan(&count); err != nil || count != 2 {
+			t.Fatalf("partial audit batch persisted: count=%d error=%v", count, err)
+		}
+		if got := h.AuditFailures() - before; got != 2 {
+			t.Fatalf("failed audit rows=%d, want 2", got)
+		}
+	})
 	for _, result := range []string{"api_unavailable", "scope_mismatch", "store_unavailable", "attestation_unavailable"} {
 		if err := h.store.record(ctx, audit{Result: result}); err != nil {
 			t.Fatal(result, err)

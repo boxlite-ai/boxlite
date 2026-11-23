@@ -190,10 +190,8 @@ func (h *Handler) record(ctx context.Context, entries ...audit) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 100*time.Millisecond)
 	defer cancel()
-	for _, a := range entries {
-		if h.store.record(ctx, a) != nil {
-			h.auditFailure(1)
-		}
+	if h.store.record(ctx, entries...) != nil {
+		h.auditFailure(len(entries))
 	}
 }
 func (h *Handler) auditFailure(count int) {

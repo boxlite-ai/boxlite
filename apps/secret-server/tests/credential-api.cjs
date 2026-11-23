@@ -82,7 +82,7 @@ async function main() {
       }
     })
     child.once('error', reject)
-    child.once('exit', (code) => resolve(code ?? 1))
+    child.once('close', (code) => resolve(code ?? 1))
   })
   if (exit !== 0 || !passed) throw new Error('Go credential integration test failed or did not run')
   console.log(`Credential API integration verified against ${apiCommit}`)

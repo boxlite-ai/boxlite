@@ -28,7 +28,7 @@ type secret struct {
 type audit struct{ CredentialID, RunnerID, BoxID, SecretID, Result string }
 type store interface {
 	load(context.Context, []string) (map[string]secret, error)
-	record(context.Context, audit) error
+	record(context.Context, ...audit) error
 }
 type postgres struct{ pool *pgxpool.Pool }
 
@@ -59,9 +59,11 @@ func (p postgres) load(ctx context.Context, ids []string) (map[string]secret, er
 	}
 	return result, rows.Err()
 }
-func (p postgres) record(ctx context.Context, a audit) error {
+func (p postgres) record(ctx context.Context, entries ...audit) error {
+	body, _ := json.Marshal(entries)
 	_, err := p.pool.Exec(ctx, `INSERT INTO secret_access_log (credential_id,runner_id,box_id,secret_id,result)
- VALUES (NULLIF($1,'')::uuid,NULLIF($2,''),NULLIF($3,''),NULLIF($4,'')::uuid,$5)`, a.CredentialID, a.RunnerID, a.BoxID, a.SecretID, a.Result)
+ SELECT NULLIF(a->>'CredentialID','')::uuid,NULLIF(a->>'RunnerID',''),NULLIF(a->>'BoxID',''),
+ NULLIF(a->>'SecretID','')::uuid,a->>'Result' FROM jsonb_array_elements($1::jsonb) a`, body)
 	return err
 }
 func (s secret) envelope() (encryption.Envelope, error) {
