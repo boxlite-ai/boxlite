@@ -56,6 +56,8 @@ mod hotplug;
 mod irq;
 pub(crate) mod lifecycle;
 mod memory;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod snapshot;
 #[cfg(any(test, target_arch = "x86_64"))]
 mod vcpu;
 #[cfg_attr(

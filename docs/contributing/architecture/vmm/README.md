@@ -585,6 +585,28 @@ setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
 - **SIGTERM.** The shim asks the guest to shut down over gRPC and re-raises
   the signal to end the process.
 
+### Snapshot export
+
+`VmControl::export(state_path, memory_path)` reserves the control slot for a
+paused device-less VM on Linux x86_64. Once all vCPUs have completed pending
+I/O and parked, the driver saves the VM platform state. If this fails, the
+driver releases the slot and returns the error without dispatching vCPU capture.
+On success, each vCPU saves its state on its owning thread. The driver collects
+all replies, including failures, and writes the platform state and ID-ordered
+vCPU records only if every capture succeeds.
+
+The state file has a 32-byte little-endian header containing the eight-byte
+magic `BXLVMST1`, `u32` version `1`, `u32` vCPU count, `u64` RAM length, and
+`u64` machine-state length. Postcard encodes the following vCPU and platform
+state. The memory file contains raw RAM from offset zero in `ram.ranges()`
+order, skipping `[3 GiB, 4 GiB)`. Its length equals the header's RAM length.
+
+The driver creates both files exclusively with mode `0600`, checks for stop
+between chunks of up to 1 MiB, and commits after both flushes succeed.
+A terminal event before commit yields `TerminalOutcome`. Cleanup checks the
+device and inode against each open file before unlinking its path. Existing
+targets return `AlreadyExists` and retain their contents.
+
 ### Where the engine plugs in (M2)
 
 - **Engine choice.** The `native-vmm` experimental token gates

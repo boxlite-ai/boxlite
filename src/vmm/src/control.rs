@@ -3,7 +3,7 @@
 
 //! Runtime controls for a VM.
 
-use std::{collections::HashMap, io, sync::Arc, time::Duration};
+use std::{collections::HashMap, io, path::Path, sync::Arc, time::Duration};
 
 use crate::{
     MemoryStatus,
@@ -45,6 +45,30 @@ impl VmControl {
     /// Reopens guest entry for a paused VM after the run driver accepts it.
     pub fn resume(&self) -> Result<()> {
         self.lifecycle.resume()
+    }
+
+    /// Exports a paused device-less VM on Linux x86_64 to new state and raw RAM files.
+    /// Both files are created with mode `0600` and kept only if the export succeeds.
+    pub fn export(
+        &self,
+        state_path: impl AsRef<Path>,
+        memory_path: impl AsRef<Path>,
+    ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            self.lifecycle
+                .submit_export(state_path.as_ref(), memory_path.as_ref())?
+                .recv()
+                .unwrap_or_else(|_| Err(crate::lifecycle::export_terminated()))
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            let _ = (state_path, memory_path);
+            Err(crate::Error::Control {
+                operation: "export",
+                reason: crate::ControlReason::Unsupported,
+            })
+        }
     }
 
     /// Waits for the current pause epoch, including a reserved or queued pause.
@@ -150,3 +174,7 @@ impl ControlRegistry {
         Ok(requests)
     }
 }
+
+#[cfg(all(test, not(all(target_os = "linux", target_arch = "x86_64"))))]
+#[path = "../tests/snapshot/image.rs"]
+mod snapshot_tests;

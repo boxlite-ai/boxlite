@@ -821,6 +821,8 @@ dependencies = [
  "libc",
  "linux-loader",
  "mio 1.2.0",
+ "postcard",
+ "serde",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
