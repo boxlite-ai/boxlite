@@ -47,13 +47,7 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     let box_name = match &direction {
         Direction::HostToBox { box_name, .. } | Direction::BoxToHost { box_name, .. } => box_name,
     };
-    let (handle, status) = match copy_target(&rt, box_name).await {
-        Ok(target) => target,
-        Err(error) => {
-            shutdown_without_handles(&rt).await;
-            return Err(error);
-        }
-    };
+    let (handle, status) = copy_target(&rt, box_name).await?;
 
     // Let the copy decide whether it can boot the box. An explicit start
     // would bypass the guard against running the user's main command again.
@@ -67,17 +61,9 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     };
 
     let stopped = stop_after_copy(&handle, status).await;
-    drop(handle);
-    shutdown_without_handles(&rt).await;
     copied?;
     stopped?;
     Ok(())
-}
-
-async fn shutdown_without_handles(rt: &BoxliteRuntime) {
-    // With the handle gone, async shutdown cancels the runtime token without
-    // stopping a box. Drop then skips its database-wide shutdown scan.
-    let _ = rt.shutdown(None).await;
 }
 
 async fn stop_after_copy(
@@ -350,7 +336,7 @@ mod tests {
         let handle = rt
             .create(
                 boxlite::BoxOptions {
-                    detach: false,
+                    detach: true,
                     auto_delete: Some(0),
                     ..Default::default()
                 },
