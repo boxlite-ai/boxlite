@@ -96,16 +96,6 @@ pub struct VsockConfig {
     pub connect: Vec<(u32, PathBuf)>,
 }
 
-/// Selects mount-control traffic on an existing host listener.
-/// Other prefixes retain the listener's raw guest forwarding behavior.
-#[cfg(unix)]
-#[derive(Clone, Debug)]
-pub struct VsockControl {
-    pub port: u32,
-    pub control_prefix: u8,
-    pub connections: std::sync::mpsc::SyncSender<std::os::unix::net::UnixStream>,
-}
-
 /// A virtio-net interface connected to a Linux gvproxy stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetConfig {

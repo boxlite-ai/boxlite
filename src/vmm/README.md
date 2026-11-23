@@ -80,38 +80,35 @@ adapter depends on `boxlite-vmm`.
 
 ## Host directory delivery
 
-Linux x86_64 native Boxes receive additional directories through their existing
-`box.sock`. `VsockControl` reserves the `BOXLITE-MOUNT/1\n` preface for host
-control; other first bytes retain raw forwarding to the guest agent. Listeners
-without control routing preserve their original behavior. Undecided sockets
-have a separate bounded budget and a monotonic timer expires them, preventing
-idle protocol selection from occupying guest flow slots. The x86_64 shim
-seccomp policies allow only monotonic, nonblocking, close-on-exec timer creation.
+On Linux x86_64 native Boxes, the host delivers directory descriptors to the
+shim on `vmm.sock`. The host-only socket uses mode `0600`. Mount requests also
+check the peer UID. Each connection carries one version 1 request and reply,
+with a four-byte little-endian length and up to 64 KiB of JSON. Registration
+accepts one directory FD via `SCM_RIGHTS`. Guest RPCs use `box.sock`.
 
 ```mermaid
 sequenceDiagram
-    participant Host as Host control client
-    participant Shim as Shim on box.sock
+    participant Host as Host client
+    participant Shim as Shim on vmm.sock
     participant FS as Aggregate virtio-fs
-    participant Guest as Guest container service
-    Host->>Shim: Full control preface
-    Shim-->>Host: OK
-    Host->>Shim: Register metadata + directory FD (SCM_RIGHTS)
-    Shim->>FS: Register checked directory with unique export key
+    participant Guest as Guest agent on box.sock
+    Host->>Shim: Register with directory FD
+    Shim->>FS: Publish directory export
     Shim-->>Host: Preparing record
     Host->>Guest: Mount(export key, device tag, destination, mode)
     Guest-->>Host: Mount complete
     Host->>Shim: Set state Mounted
 ```
 
-The control protocol owns internal `ControlMount` records and states. Registration
-reserves a target, allocates an incarnation, registers its FD and publishes a
-`Preparing` record atomically. A lost reply leaves an observable record. Each
-mutation has its own server critical section; clients never retain a global
-lock while waiting on guest RPC. Eight active handlers and a bounded queue
-limit resources. Framing supports partial I/O, validates ancillary descriptors
-on all bytes, and applies overall handshake/frame deadlines. List admission
-accounts for serialized JSON bytes, including escaping and later state changes.
+Registration reserves a target, allocates an export identity, and publishes a
+`Preparing` record before replying. A new connection can query the record if
+the reply is lost. List admission accounts for serialized JSON bytes,
+including escaping and later state changes.
+
+The kernel queues connections for the serial control thread. The client has
+one deadline for connect, queue wait, and I/O, including time behind a disk
+resize. The frame reader owns received descriptors before validating the
+request, so rejection releases them.
 
 Aggregate Mount and Detach reject containers whose capability bounding set
 includes `CAP_SYS_ADMIN`, before any namespace or mount mutation. The configured
@@ -124,13 +121,9 @@ directory references survive detach; repeating an old detach does not remove a
 replacement. Descendant mounts must be detached first. A detach received before
 its corresponding mount retains a tombstone that rejects that delayed mount.
 
-For example, a delivered source can appear at `/workspace` after container
-startup, disappear on detach, then be replaced at the same destination while
-an existing file descriptor continues reading the original source. Run
-`make test:integration:vmm:mount-delivery` with `VMM_KERNEL` set to a compatible
-kernel to exercise these primitives through a native shim with jailer/seccomp.
-`make test:unit:vmm FILTER=vsock`, `make test:unit:rust FILTER=mount_control`,
-and `make test:guest-perms` cover their individual boundaries.
+Run `make test:unit:rust FILTER=vmm_socket` for frame and record checks.
+Run `make test:integration:vmm:mount-delivery` with a compatible `VMM_KERNEL`
+to register, attach, and retire a directory through the native shim and guest.
 
 The host control client is blocking and belongs in `spawn_blocking` when used
 from async code. Its caller must mark an incarnation `Detaching` before requesting

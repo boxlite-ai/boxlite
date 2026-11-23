@@ -8,6 +8,7 @@ use std::{fs::File, io, path::PathBuf, time::Duration};
 use crate::experimental::custom_kernel::KernelFormat;
 use crate::rootfs::guest::Strategy;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::vmm::controller::mount_control::Registry;
 use crate::vmm::vmm_socket::{self, ControlError, ControlOp, ControlReply, ControlResponse};
 use crate::vmm::{
     DiskFormat, InstanceSpec, Vmm, VmmConfig, VmmInstance, VmmKind, engine::VmmInstanceImpl,
@@ -52,36 +53,11 @@ impl VmmInstanceImpl for NativeVmmInstance {
             })?),
             None => Box::new(io::sink()),
         };
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let (control, server) = if self.config.vsock.is_some() {
-            let (connections, receiver) = std::sync::mpsc::sync_channel(32);
-            let server = std::thread::Builder::new()
-                .name("mount-control".into())
-                .spawn(move || {
-                    crate::vmm::controller::mount_control::serve(
-                        receiver,
-                        boxlite_shared::constants::mount_tags::AGGREGATE.into(),
-                    );
-                })
-                .map_err(|error| BoxliteError::Engine(format!("spawn mount control: {error}")))?;
-            (
-                Some(boxlite_vmm::VsockControl {
-                    port: boxlite_shared::constants::network::GUEST_AGENT_PORT,
-                    control_prefix: boxlite_shared::constants::mount_tags::MOUNT_CONTROL_PREFACE[0],
-                    connections,
-                }),
-                Some(server),
-            )
-        } else {
-            (None, None)
-        };
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        let control = None;
-        let mut vm = Vm::new(self.config, sink, control).map_err(map_vmm_error)?;
+        let mut mounts = self.config.vsock.is_some().then(Registry::default);
+        let mut vm = Vm::new(self.config, sink).map_err(map_vmm_error)?;
         let vm_control = vm.control();
-        // Without the channel the box still runs; it only cannot grow online.
-        if let Err(error) = vmm_socket::serve(&self.vmm_socket_path, move |op| {
-            handle_control_op(&vm_control, op)
+        if let Err(error) = vmm_socket::serve(&self.vmm_socket_path, move |op, directory| {
+            handle_control_op(&vm_control, mounts.as_mut(), op, directory)
         }) {
             tracing::warn!(
                 %error,
@@ -89,16 +65,7 @@ impl VmmInstanceImpl for NativeVmmInstance {
                 "VMM control socket unavailable"
             );
         }
-        let result = vm.run().map_err(map_vmm_error);
-        // Closing the device's sender ends admission before waiting for the server.
-        drop(vm);
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        if let Some(server) = server {
-            server
-                .join()
-                .map_err(|_| BoxliteError::Engine("mount control panicked".into()))?;
-        }
-        let exit = result?;
+        let exit = vm.run().map_err(map_vmm_error)?;
         tracing::info!(?exit, "native VM ended");
         Ok(())
     }
@@ -107,8 +74,13 @@ impl VmmInstanceImpl for NativeVmmInstance {
 /// How long a grow may wait for the block device's worker.
 const GROW_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Serves one control operation against the VM's disks.
-pub(crate) fn handle_control_op(vm: &VmControl, op: ControlOp) -> ControlResponse {
+/// Serves host requests against this VM and its mount records.
+fn handle_control_op(
+    vm: &VmControl,
+    mounts: Option<&mut Registry>,
+    op: ControlOp,
+    directory: Option<File>,
+) -> ControlResponse {
     match op {
         ControlOp::ResizeDisk { block_id, bytes } => vm
             .resize_disk(&block_id, bytes, GROW_TIMEOUT)
@@ -119,6 +91,14 @@ pub(crate) fn handle_control_op(vm: &VmControl, op: ControlOp) -> ControlRespons
                 }
                 _ => ControlError::Failed(error.to_string()),
             }),
+        op => mounts
+            .ok_or_else(|| ControlError::Unsupported("guest transport is unavailable".into()))?
+            .request(
+                boxlite_shared::constants::mount_tags::AGGREGATE,
+                op,
+                directory,
+            )
+            .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap_or(libc::EIO))),
     }
 }
 

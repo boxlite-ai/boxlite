@@ -105,11 +105,7 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// about 35 bytes each, under `config::MAX_CMDLINE_BYTES`. The guest's
     /// COM1 output goes to `console` through a queue, so a slow sink never
     /// stalls the guest.
-    pub fn new(
-        config: VmConfig,
-        console: Box<dyn std::io::Write + Send>,
-        control: Option<crate::VsockControl>,
-    ) -> Result<Self> {
+    pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
         use crate::{boot, cpu_features::preflight_x86, devices::console::DEFAULT_QUEUE_BYTES};
 
         config.validate()?;
@@ -127,7 +123,7 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             true,
             VirtioWorkers::new,
             move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
-            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer, control),
+            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)

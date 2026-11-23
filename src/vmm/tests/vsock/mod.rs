@@ -24,8 +24,6 @@ use std::{
 use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestAddress};
 
-#[cfg(target_os = "linux")]
-mod control;
 mod deferred;
 mod scheduling;
 

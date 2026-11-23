@@ -404,7 +404,7 @@ fn boots_linux_with_a_raw_virtio_disk_through_the_public_api() {
         format: DiskFormat::Raw,
         read_only: false,
     }];
-    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).expect("create the VM");
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
 
     let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
 
@@ -438,7 +438,7 @@ fn boots_linux_with_a_qcow2_virtio_disk_over_a_backing_file() {
         format: DiskFormat::Qcow2,
         read_only: false,
     }];
-    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).expect("create the VM");
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
 
     let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
     drop(vm);
@@ -507,7 +507,7 @@ fn the_guest_sees_a_disk_grown_while_it_runs() {
         format: DiskFormat::Qcow2,
         read_only: false,
     }];
-    let mut vm = crate::Vm::new(config, Box::new(log.clone()), None).expect("create the VM");
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
     let control = vm.control();
     assert_eq!(
         control

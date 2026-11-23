@@ -8,45 +8,20 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-pub(super) fn deadline() -> Instant {
-    Instant::now() + Duration::from_secs(5)
-}
-
-pub(super) fn configure(stream: &UnixStream) -> io::Result<()> {
-    // Routed sockets arrive nonblocking; framing uses deadline-bound blocking I/O.
-    stream.set_nonblocking(false)?;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    unsafe {
-        let enabled: libc::c_int = 1;
-        if libc::setsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_NOSIGPIPE,
-            (&enabled as *const libc::c_int).cast(),
-            size_of::<libc::c_int>() as _,
-        ) < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))
-}
-
 fn remaining(end: Instant) -> io::Result<Duration> {
     end.checked_duration_since(Instant::now())
         .filter(|d| !d.is_zero())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "mount control frame deadline"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "VMM control deadline"))
 }
 
 pub(super) fn connect(path: &Path, end: Instant) -> io::Result<UnixStream> {
-    // Reserve the trailing NUL; abstract namespace sockets are not control paths.
     let bytes = path.as_os_str().as_bytes();
+    // SAFETY: a zeroed address has a NUL-terminated pathname buffer.
     let mut address: libc::sockaddr_un = unsafe { zeroed() };
     if bytes.is_empty() || bytes.contains(&0) || bytes.len() >= address.sun_path.len() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "mount control socket path",
+            "VMM control socket path",
         ));
     }
     address.sun_family = libc::AF_UNIX as _;
@@ -55,82 +30,28 @@ pub(super) fn connect(path: &Path, end: Instant) -> io::Result<UnixStream> {
     }
     let length =
         (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        address.sun_len = length as u8;
+    // SAFETY: socket has scalar arguments and returns a fresh fd on success.
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
     }
-    #[cfg(target_os = "linux")]
-    let flags = libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK;
-    #[cfg(not(target_os = "linux"))]
-    let flags = libc::SOCK_STREAM;
-    let stream = loop {
-        remaining(end)?;
-        let fd = unsafe { libc::socket(libc::AF_UNIX, flags, 0) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // Own the descriptor before any fallible operation.
-        let stream = unsafe { UnixStream::from_raw_fd(fd) };
-        #[cfg(not(target_os = "linux"))]
-        {
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            stream.set_nonblocking(true)?;
-        }
-        let result =
-            unsafe { libc::connect(fd, (&address as *const libc::sockaddr_un).cast(), length) };
-        if result == 0 {
-            remaining(end)?;
-            return Ok(stream);
-        }
+    // SAFETY: this stream takes ownership of the fresh socket.
+    let stream = unsafe { UnixStream::from_raw_fd(fd) };
+    // Linux applies SO_SNDTIMEO to a blocking connect waiting on the listener backlog.
+    stream.set_write_timeout(Some(remaining(end)?))?;
+    // SAFETY: the initialized address covers `length` bytes, including the trailing NUL.
+    if unsafe { libc::connect(fd, (&address as *const libc::sockaddr_un).cast(), length) } < 0 {
         let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            // AF_UNIX backlog saturation need not initiate a connection. Its
-            // writable status cannot establish completion. Close failed sockets
-            // before retrying: their state is unspecified across platforms.
-            Some(libc::EAGAIN) => {
-                drop(stream);
-                std::thread::sleep(remaining(end)?.min(Duration::from_millis(50)));
-            }
-            Some(libc::EINPROGRESS) | Some(libc::EINTR) => break stream,
-            _ => return Err(error),
-        }
-    };
-    let fd = stream.as_raw_fd();
-    loop {
-        let timeout = remaining(end)?
-            .as_millis()
-            .saturating_add(1)
-            .min(i32::MAX as u128) as i32;
-        let mut poll = libc::pollfd {
-            fd,
-            events: libc::POLLOUT,
-            revents: 0,
+        return if error.kind() == io::ErrorKind::WouldBlock {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "VMM control connect deadline",
+            ))
+        } else {
+            Err(error)
         };
-        let result = unsafe { libc::poll(&mut poll, 1, timeout) };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error);
-        }
-        remaining(end)?;
-        if result == 0 {
-            continue;
-        }
-        if let Some(error) = stream.take_error()? {
-            return Err(error);
-        }
-        // SO_ERROR is meaningful only after readiness of a pending connection.
-        if poll.revents & libc::POLLNVAL != 0 {
-            return Err(io::Error::from_raw_os_error(libc::EBADF));
-        }
-        return Ok(stream);
     }
+    Ok(stream)
 }
 
 // cmsghdr alignment is required even when the byte capacity is sufficient.
@@ -146,7 +67,7 @@ pub(super) fn send_frame(
     fd: Option<RawFd>,
     end: Instant,
 ) -> io::Result<()> {
-    if payload.len() > MAX_FRAME {
+    if payload.len() > MAX_FRAME as usize {
         return Err(io::Error::from_raw_os_error(libc::EMSGSIZE));
     }
     send_parts(
@@ -158,16 +79,7 @@ pub(super) fn send_frame(
     )
 }
 
-pub(super) fn send_bytes(
-    stream: &UnixStream,
-    bytes: &[u8],
-    fd: Option<RawFd>,
-    end: Instant,
-) -> io::Result<()> {
-    send_parts(stream, bytes, &[], fd, end)
-}
-
-fn send_parts(
+pub(super) fn send_parts(
     stream: &UnixStream,
     head: &[u8],
     body: &[u8],
@@ -211,11 +123,7 @@ fn send_parts(
                 std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), fd);
             }
         }
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        let flags = 0;
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        let flags = libc::MSG_NOSIGNAL;
-        let sent = unsafe { libc::sendmsg(stream.as_raw_fd(), &msg, flags) };
+        let sent = unsafe { libc::sendmsg(stream.as_raw_fd(), &msg, libc::MSG_NOSIGNAL) };
         if sent < 0 {
             let error = io::Error::last_os_error();
             if error.kind() == io::ErrorKind::Interrupted {
@@ -224,10 +132,7 @@ fn send_parts(
             return Err(error);
         }
         if sent == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "mount control send",
-            ));
+            return Err(io::Error::new(io::ErrorKind::WriteZero, "VMM control send"));
         }
         offset += sent as usize;
         // A positive send transferred ancillary ownership even on a short write.
@@ -239,7 +144,7 @@ fn send_parts(
 pub(super) fn receive_exact(
     stream: &UnixStream,
     bytes: &mut [u8],
-    files: &mut Vec<File>,
+    file: &mut Option<File>,
     end: Instant,
 ) -> io::Result<()> {
     let mut offset = 0;
@@ -258,11 +163,8 @@ pub(super) fn receive_exact(
         msg.msg_iovlen = 1;
         msg.msg_control = control.bytes.as_mut_ptr().cast();
         msg.msg_controllen = control.bytes.len() as _;
-        #[cfg(target_os = "linux")]
-        let flags = libc::MSG_CMSG_CLOEXEC;
-        #[cfg(not(target_os = "linux"))]
-        let flags = 0;
-        let received = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, flags) };
+        let received =
+            unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
         if received < 0 {
             let error = io::Error::last_os_error();
             if error.kind() == io::ErrorKind::Interrupted {
@@ -271,8 +173,6 @@ pub(super) fn receive_exact(
             return Err(error);
         }
         let mut invalid = false;
-        #[cfg(not(target_os = "linux"))]
-        let first_new = files.len();
         unsafe {
             let mut header = libc::CMSG_FIRSTHDR(&msg);
             while !header.is_null() {
@@ -290,7 +190,13 @@ pub(super) fn receive_exact(
                         let fd = std::ptr::read_unaligned(
                             libc::CMSG_DATA(header).cast::<RawFd>().add(index),
                         );
-                        files.push(File::from_raw_fd(fd));
+                        // Own each descriptor even when this frame will be rejected.
+                        let received = File::from_raw_fd(fd);
+                        if file.is_some() {
+                            invalid = true;
+                        } else {
+                            *file = Some(received);
+                        }
                     }
                     invalid |= !(length - base).is_multiple_of(size_of::<RawFd>());
                 } else {
@@ -299,27 +205,16 @@ pub(super) fn receive_exact(
                 header = libc::CMSG_NXTHDR(&msg, header);
             }
         }
-        // Own every delivered FD before checking truncation or descriptor flags.
-        #[cfg(not(target_os = "linux"))]
-        for file in &files[first_new..] {
-            let old = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
-            if old < 0
-                || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, old | libc::FD_CLOEXEC) }
-                    < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-        }
-        if invalid || msg.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0 || files.len() > 1 {
+        if invalid || msg.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "mount control ancillary data",
+                "VMM control ancillary data",
             ));
         }
         if received == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "mount control frame",
+                "VMM control frame",
             ));
         }
         offset += received as usize;
@@ -327,15 +222,41 @@ pub(super) fn receive_exact(
     Ok(())
 }
 
-pub(super) fn receive_frame(stream: &UnixStream, end: Instant) -> io::Result<(Vec<u8>, Vec<File>)> {
-    let mut files = Vec::new();
+pub(super) fn receive_frame(
+    stream: &UnixStream,
+    end: Instant,
+) -> io::Result<(Vec<u8>, Option<File>)> {
+    let mut file = None;
     let mut header = [0; 4];
-    receive_exact(stream, &mut header, &mut files, end)?;
-    let length = u32::from_le_bytes(header) as usize;
-    if length == 0 || length > MAX_FRAME {
+    receive_exact(stream, &mut header, &mut file, end)?;
+    let length = u32::from_le_bytes(header);
+    if length > MAX_FRAME {
         return Err(io::Error::from_raw_os_error(libc::EMSGSIZE));
     }
-    let mut payload = vec![0; length];
-    receive_exact(stream, &mut payload, &mut files, end)?;
-    Ok((payload, files))
+    let mut payload = vec![0; length as usize];
+    receive_exact(stream, &mut payload, &mut file, end)?;
+    Ok((payload, file))
+}
+
+pub(super) fn same_user(stream: &UnixStream) -> io::Result<bool> {
+    // SAFETY: ucred is initialized before getsockopt writes to it.
+    let mut credentials: libc::ucred = unsafe { zeroed() };
+    let mut length = size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: credentials and length are writable for the supplied size.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut length,
+        )
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(
+        length as usize == size_of::<libc::ucred>()
+            && credentials.uid == unsafe { libc::geteuid() },
+    )
 }

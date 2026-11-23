@@ -15,7 +15,7 @@
 //! - Caller-controlled GuestSession creation
 
 mod handler;
-#[cfg(unix)]
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub mod mount_control;
 mod shim;
 mod spawn;

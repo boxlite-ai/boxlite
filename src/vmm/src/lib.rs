@@ -83,8 +83,6 @@ mod vm;
 mod x86_boot_layout;
 
 pub use chipset::{BusKind, Conflict};
-#[cfg(unix)]
-pub use config::VsockControl;
 pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };

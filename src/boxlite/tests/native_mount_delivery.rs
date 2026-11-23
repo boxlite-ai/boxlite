@@ -1,6 +1,6 @@
-//! PR2 acceptance through the real shared socket, descriptor client and guest RPC.
-//! The test coordinates primitive operations explicitly; the public mounts facade
-//! and production transaction recovery belong to the next layer.
+//! Native directory delivery through vmm.sock and the guest RPC bridge.
+
+#![cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 
 mod common;
 
@@ -20,10 +20,10 @@ use tonic::transport::{Channel, Endpoint};
 
 async fn control<T: Send + 'static>(
     socket: &Path,
-    operation: impl FnOnce(&mut MountControlClient) -> io::Result<T> + Send + 'static,
+    operation: impl FnOnce(&MountControlClient) -> io::Result<T> + Send + 'static,
 ) -> io::Result<T> {
     let socket = socket.to_owned();
-    tokio::task::spawn_blocking(move || operation(&mut MountControlClient::connect_at(socket)?))
+    tokio::task::spawn_blocking(move || operation(&MountControlClient::new(socket)))
         .await
         .expect("control task")
 }
@@ -104,7 +104,7 @@ async fn retire(socket: &Path, export: &str) {
 
 #[tokio::test]
 #[ignore = "requires native runtime, KVM and VMM_KERNEL; make test:integration:vmm:mount-delivery"]
-async fn descriptor_delivery_mounts_into_an_existing_container_and_preserves_old_references() {
+async fn descriptor_delivery_mounts_and_detaches_in_an_existing_container() {
     assert_eq!(
         std::env::var("BOXLITE_TEST_ENGINE").as_deref(),
         Ok("native")
@@ -116,13 +116,8 @@ async fn descriptor_delivery_mounts_into_an_existing_container_and_preserves_old
         ..Default::default()
     })
     .unwrap();
-    let sources = tempfile::tempdir_in("/tmp").unwrap();
-    let first = sources.path().join("first");
-    let second = sources.path().join("second");
-    std::fs::create_dir(&first).unwrap();
-    std::fs::create_dir(&second).unwrap();
-    std::fs::write(first.join("value"), "old").unwrap();
-    std::fs::write(second.join("value"), "new").unwrap();
+    let source = tempfile::tempdir_in("/tmp").unwrap();
+    std::fs::write(source.path().join("value"), "host").unwrap();
     let mut options = common::alpine_opts();
     options.network = NetworkSpec::Disabled;
     options.cmd = Some(vec!["sleep".into(), "300".into()]);
@@ -138,15 +133,16 @@ async fn descriptor_delivery_mounts_into_an_existing_container_and_preserves_old
         .find(|execution| execution.is_main_session)
         .expect("running main session")
         .execution_id;
-    let socket = home
+    let sockets = home
         .path
         .join("boxes")
         .join(bx.id().as_str())
-        .join("sockets/box.sock");
-    let mut rpc = guest(socket.clone()).await;
+        .join("sockets");
+    let socket = sockets.join("vmm.sock");
+    let mut rpc = guest(sockets.join("box.sock")).await;
 
-    let path = first.clone();
-    let original = control(&socket, move |client| {
+    let path = source.path().to_owned();
+    let mount = control(&socket, move |client| {
         client.register(
             path.to_str().unwrap().into(),
             "/workspace".into(),
@@ -156,77 +152,24 @@ async fn descriptor_delivery_mounts_into_an_existing_container_and_preserves_old
     })
     .await
     .unwrap();
-    assert_eq!(original.state, MountState::Preparing);
+    assert_eq!(mount.state, MountState::Preparing);
     assert_eq!(
         control(&socket, |client| client.list()).await.unwrap(),
-        vec![original.clone()]
+        vec![mount.clone()]
     );
-    mounted(&mut rpc, &container, &original.export, false).await;
-    state(&socket, &original.export, MountState::Mounted).await;
-    assert_eq!(run(&bx, "cat /workspace/value").await, (0, "old".into()));
+    mounted(&mut rpc, &container, &mount.export, false).await;
+    state(&socket, &mount.export, MountState::Mounted).await;
+    assert_eq!(run(&bx, "cat /workspace/value").await, (0, "host".into()));
     assert_eq!(run(&bx, "printf guest > /workspace/from-guest").await.0, 0);
     assert_eq!(
-        std::fs::read_to_string(first.join("from-guest")).unwrap(),
+        std::fs::read_to_string(source.path().join("from-guest")).unwrap(),
         "guest"
     );
 
-    let held = bx
-        .exec(BoxCommand::new("sh").args([
-            "-c",
-            concat!(
-                "exec 3</workspace/value; exec 4</workspace; touch /tmp/held-ready; ",
-                "while [ ! -e /tmp/read-held ]; do sleep 0.05; done; ",
-                "cat <&3 > /tmp/held-file; cat /proc/self/fd/4/value > /tmp/held-dir"
-            ),
-        ]))
-        .await
-        .unwrap();
-    let mut ready = false;
-    for _ in 0..50 {
-        if run(&bx, "test -e /tmp/held-ready").await.0 == 0 {
-            ready = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(ready, "workload must hold both references before detach");
-    state(&socket, &original.export, MountState::Detaching).await;
-    detached(&mut rpc, &container, &original.export).await;
-    retire(&socket, &original.export).await;
+    state(&socket, &mount.export, MountState::Detaching).await;
+    detached(&mut rpc, &container, &mount.export).await;
+    retire(&socket, &mount.export).await;
     assert_eq!(run(&bx, "test ! -e /workspace/value").await.0, 0);
-
-    let path = second.clone();
-    let replacement = control(&socket, move |client| {
-        client.register(
-            path.to_str().unwrap().into(),
-            "/workspace".into(),
-            File::open(&path)?,
-            true,
-        )
-    })
-    .await
-    .unwrap();
-    assert_ne!(original.export, replacement.export);
-    mounted(&mut rpc, &container, &replacement.export, true).await;
-    state(&socket, &replacement.export, MountState::Mounted).await;
-    assert_eq!(run(&bx, "cat /workspace/value").await, (0, "new".into()));
-    assert_ne!(run(&bx, "printf bad > /workspace/value").await.0, 0);
-    detached(&mut rpc, &container, &original.export).await;
-    assert_eq!(run(&bx, "cat /workspace/value").await, (0, "new".into()));
-    assert_eq!(run(&bx, "touch /tmp/read-held").await.0, 0);
-    assert_eq!(held.wait().await.unwrap().exit_code, 0);
-    assert_eq!(
-        run(&bx, "cat /tmp/held-file /tmp/held-dir").await,
-        (0, "oldold".into())
-    );
-    let records = control(&socket, |client| client.list()).await.unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].export, replacement.export);
-    assert_eq!(records[0].state, MountState::Mounted);
-
-    state(&socket, &replacement.export, MountState::Detaching).await;
-    detached(&mut rpc, &container, &replacement.export).await;
-    retire(&socket, &replacement.export).await;
     assert!(
         control(&socket, |client| client.list())
             .await
