@@ -1588,3 +1588,7 @@ For mock layout review, open `/dashboard/boxes/mock-box-stopped` and its
 `/terminal` route. Compare desktop, ultrawide, narrow and zoom-equivalent CSS
 viewports with expanded and collapsed navigation. Mock fixtures verify layout
 and action wiring, not guest connectivity.
+
+## Subscription cancellation
+
+Owners can cancel from Billing Overview or the Plans current-plan card using one shared dialog with optional feedback. See [subscription cancellation](docs/subscription-cancellation.md) for the request contract, retry behavior, release dependency and local mock review instructions.

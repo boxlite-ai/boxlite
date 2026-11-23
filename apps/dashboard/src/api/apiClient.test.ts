@@ -757,3 +757,23 @@ describe('tunnel request boundaries', () => {
     expect(requests).toHaveLength(1)
   })
 })
+
+it('saves cancellation feedback on the selected organization with a bounded PUT', async () => {
+  const requests: any[] = []
+  const api = await makeClient(vi.fn(), 204, undefined, requests)
+  const feedback = { reasons: ['other'], intent: null, note: 'A custom reason' }
+  await api.saveCancellationFeedback('org/one', feedback)
+  expect(requests[0]).toMatchObject({
+    method: 'put',
+    url: '/organizations/org%2Fone/cancellation-feedback',
+    timeout: 10_000,
+  })
+  expect(JSON.parse(requests[0].data)).toEqual(feedback)
+})
+
+it('does not treat an unexpected feedback response as saved', async () => {
+  const api = await makeClient(vi.fn(), 200, '<html>not an API response</html>')
+  await expect(api.saveCancellationFeedback('org', { reasons: ['pricing'], intent: null, note: '' })).rejects.toThrow(
+    'not confirmed',
+  )
+})

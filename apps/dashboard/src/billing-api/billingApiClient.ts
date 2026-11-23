@@ -94,8 +94,11 @@ export class BillingApiClient {
     return response.data?.message || 'Coupon redeemed successfully'
   }
 
-  public async getOrganizationPlan(organizationId: string): Promise<OrganizationPlan | null> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/plan`)
+  public async getOrganizationPlan(organizationId: string, timeout?: number): Promise<OrganizationPlan | null> {
+    const response = await this.axiosInstance.get(
+      `/organization/${organizationId}/plan`,
+      timeout ? { timeout } : undefined,
+    )
     // {} (no `plan` key) means no live plan — the server never sends a bare null.
     const plan = response.data?.plan
     if (!plan) {
@@ -140,8 +143,12 @@ export class BillingApiClient {
     return response.data?.url
   }
 
-  public async downgradePlan(organizationId: string, planId: string | null): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/plan/downgrade`, { planId })
+  public async downgradePlan(organizationId: string, planId: string | null, timeout?: number): Promise<void> {
+    await this.axiosInstance.post(
+      `/organization/${organizationId}/plan/downgrade`,
+      { planId },
+      timeout ? { timeout } : undefined,
+    )
   }
 
   public async withdrawPendingPlan(organizationId: string): Promise<void> {

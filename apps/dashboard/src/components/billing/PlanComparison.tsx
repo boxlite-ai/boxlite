@@ -67,12 +67,14 @@ export function PlanComparison({
   plans,
   organizationPlan,
   canManage = true,
+  subscriptionAction,
   trialOffers,
   checkingTrials = false,
 }: {
   plans: Plan[]
   organizationPlan?: OrganizationPlan | null
   canManage?: boolean
+  subscriptionAction?: ReactNode
   trialOffers?: PlanTrialEligibility[]
   checkingTrials?: boolean
 }) {
@@ -198,6 +200,7 @@ export function PlanComparison({
                           </span>
                         )}
                       </div>
+                      {canManage && plan.id === currentId && subscriptionAction}
                     </div>
                   </th>
                 )

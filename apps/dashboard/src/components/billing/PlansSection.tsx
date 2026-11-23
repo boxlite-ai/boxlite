@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { PlanComparison } from './PlanComparison'
+import { SubscriptionCancellationAction } from './SubscriptionCancellation'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useOwnerPlanQuery, useOwnerTrialEligibilityQuery } from '@/hooks/queries/billingQueries'
@@ -87,6 +88,15 @@ export function PlansSection() {
           canManage={canManage}
           trialOffers={trialOffers}
           checkingTrials={checkingTrials}
+          subscriptionAction={
+            canManage && subscription.data && selectedOrganization ? (
+              <SubscriptionCancellationAction
+                plan={subscription.data}
+                organizationId={selectedOrganization.id}
+                compact
+              />
+            ) : undefined
+          }
         />
       )}
     </section>

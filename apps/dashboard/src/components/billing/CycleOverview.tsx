@@ -14,6 +14,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { formatAmount, formatWholeDollars } from '@/lib/utils'
 import { differenceInCalendarDays } from 'date-fns'
 import { toast } from 'sonner'
+import { SubscriptionCancellationAction } from './SubscriptionCancellation'
 
 /**
  * How this organization is being billed right now, and the figures that follow
@@ -133,6 +134,9 @@ export function CycleOverview({
         {scheduled && organizationPlan && (
           <ScheduledChangeNote scheduled={scheduled} organizationId={organizationId} planId={organizationPlan.planId} />
         )}
+        {organizationPlan && organizationId && (
+          <SubscriptionCancellationAction plan={organizationPlan} organizationId={organizationId} />
+        )}
       </Panel>
     </section>
   )
@@ -179,7 +183,7 @@ function ScheduledChangeNote({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-[22px] py-4">
       <PanelNote>{scheduled.text}</PanelNote>
-      {organizationId && (
+      {organizationId && scheduled.keepLabel && (
         <AsciiButton
           disabled={keepPlan.isPending}
           onClick={handleKeep}
